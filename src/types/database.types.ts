@@ -505,6 +505,16 @@ export type Database = {
     }
     Functions: {
       cleanup_expired_invitations: { Args: never; Returns: number }
+      create_trip_with_participant: {
+        Args: {
+          p_end_date: string
+          p_location: string
+          p_name: string
+          p_start_date: string
+          p_status: Database["public"]["Enums"]["trip_status"]
+        }
+        Returns: string
+      }
       generate_invitation_code: { Args: never; Returns: string }
       get_recent_failed_attempts: {
         Args: { hours_back?: number }

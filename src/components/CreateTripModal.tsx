@@ -1,7 +1,7 @@
 import { useState, FormEvent, useEffect } from 'react'
 import { Modal, Button, Input, Select } from './ui'
 import { supabase } from '../lib/supabase'
-import { Trip, TripInsert } from '../types'
+import { Trip } from '../types'
 
 interface CreateTripModalProps {
   isOpen: boolean
@@ -90,43 +90,21 @@ export function CreateTripModal({
           return
         }
       } else {
-        // Create new trip
-        const tripData: TripInsert = {
-          name: name.trim(),
-          location: location.trim(),
-          start_date: startDate,
-          end_date: endDate,
-          status,
-          created_by: authData.user.id,
-        }
-
-        const { data: newTrip, error: createError } = await supabase
-          .from('trips')
-          .insert(tripData)
-          .select('id')
-          .single()
+        // Create new trip using database function to avoid RLS recursion
+        const { error: createError } = await supabase
+          .rpc('create_trip_with_participant', {
+            p_name: name.trim(),
+            p_location: location.trim(),
+            p_start_date: startDate,
+            p_end_date: endDate,
+            p_status: status,
+          })
 
         if (createError) {
           console.error('Trip creation error:', createError)
           setError(createError.message)
           setLoading(false)
           return
-        }
-
-        // Add creator as participant with organizer role
-        if (newTrip) {
-          const { error: participantError } = await supabase
-            .from('trip_participants')
-            .insert({
-              trip_id: newTrip.id,
-              user_id: authData.user.id,
-              role: 'organizer',
-            })
-
-          if (participantError) {
-            console.error('Participant creation error:', participantError)
-            // Don't fail the whole operation, just log it
-          }
         }
       }
 

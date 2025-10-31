@@ -6,6 +6,7 @@ import { Signup } from './pages/Signup'
 import { ForgotPassword } from './pages/ForgotPassword'
 import { ResetPassword } from './pages/ResetPassword'
 import { Dashboard } from './pages/Dashboard'
+import { TripDetail } from './pages/TripDetail'
 import { ComponentShowcase } from './pages/ComponentShowcase'
 
 function App() {
@@ -25,6 +26,17 @@ function App() {
           element={
             <ProtectedRoute>
               <Dashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route path="/dashboard" element={<Navigate to="/" replace />} />
+
+        {/* Trip Detail Route */}
+        <Route
+          path="/trips/:tripId"
+          element={
+            <ProtectedRoute>
+              <TripDetail />
             </ProtectedRoute>
           }
         />

@@ -1,0 +1,85 @@
+# Secrets and Environment Variables
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+credentials.json
+serviceAccountKey.json
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build Output
+dist/
+build/
+.vite/
+*.tsbuildinfo
+
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+test-results/
+playwright-report/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Temporary Files
+*.tmp
+*.temp
+.cache/
+.parcel-cache/
+
+# IDE and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.vim/
+*.sublime-project
+*.sublime-workspace
+
+# OS Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Claude Code
+.claude/
+.claude.json
+
+# Personal/Internal Documentation
+CLAUDE.md
+PROGRESS.md
+PROJECT_PLAN.md
+QUICK_START.md
+
+# Supabase Local
+supabase/.branches
+supabase/.temp
+.supabase/
+
+# Development Uploads (for testing file uploads locally)
+uploads/
+receipts/
+temp-uploads/
+
+# Optional: Personal Notes (uncomment if needed)
+# PERSONAL_NOTES.md
+# scratch/
+# notes/

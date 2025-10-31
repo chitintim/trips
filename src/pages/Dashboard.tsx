@@ -3,6 +3,7 @@ import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
 import { Button, Card, EmptyState, Badge, Spinner } from '../components/ui'
 import { ProfileModal } from '../components/ProfileModal'
+import { CreateInvitationModal } from '../components/CreateInvitationModal'
 import { User, Trip, Invitation } from '../types'
 
 type AdminTab = 'trips' | 'users' | 'invitations'
@@ -413,23 +414,38 @@ function UsersTab() {
 // Invitations management tab (admin only)
 function InvitationsTab() {
   const [invitations, setInvitations] = useState<Invitation[]>([])
+  const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
 
   useEffect(() => {
-    fetchInvitations()
+    fetchData()
   }, [])
 
-  const fetchInvitations = async () => {
+  const fetchData = async () => {
     setLoading(true)
-    const { data, error } = await supabase
+
+    // Fetch invitations
+    const { data: invitationsData } = await supabase
       .from('invitations')
       .select('*')
       .order('created_at', { ascending: false })
 
-    if (!error && data) {
-      setInvitations(data)
-    }
+    // Fetch trips for dropdown
+    const { data: tripsData } = await supabase
+      .from('trips')
+      .select('*')
+      .order('start_date', { ascending: false })
+
+    if (invitationsData) setInvitations(invitationsData)
+    if (tripsData) setTrips(tripsData)
+
     setLoading(false)
+  }
+
+  const copyInvitationLink = (code: string) => {
+    const link = `${window.location.origin}/trips/signup?code=${code}`
+    navigator.clipboard.writeText(link)
   }
 
   if (loading) {
@@ -457,7 +473,7 @@ function InvitationsTab() {
             Create and manage invitation codes
           </p>
         </div>
-        <Button variant="primary">
+        <Button variant="primary" onClick={() => setCreateModalOpen(true)}>
           + Create Invitation
         </Button>
       </div>
@@ -470,7 +486,7 @@ function InvitationsTab() {
               title="No invitations created yet"
               description="Create invitation codes to allow new users to join your trips!"
               action={
-                <Button variant="primary">
+                <Button variant="primary" onClick={() => setCreateModalOpen(true)}>
                   Create First Invitation
                 </Button>
               }
@@ -531,7 +547,11 @@ function InvitationsTab() {
                           {new Date(invitation.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right">
-                          <Button variant="ghost" size="sm">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => copyInvitationLink(invitation.code)}
+                          >
                             Copy Link
                           </Button>
                         </td>
@@ -544,6 +564,14 @@ function InvitationsTab() {
           </Card.Content>
         </Card>
       )}
+
+      {/* Create Invitation Modal */}
+      <CreateInvitationModal
+        isOpen={createModalOpen}
+        onClose={() => setCreateModalOpen(false)}
+        trips={trips}
+        onSuccess={fetchData}
+      />
     </>
   )
 }

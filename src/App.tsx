@@ -10,7 +10,7 @@ import { ComponentShowcase } from './pages/ComponentShowcase'
 
 function App() {
   return (
-    <Router>
+    <Router basename="/trips">
       <AuthCallback />
       <Routes>
         {/* Public Routes */}

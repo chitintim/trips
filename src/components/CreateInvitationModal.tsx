@@ -49,14 +49,12 @@ export function CreateInvitationModal({
       const expiresAt = new Date()
       expiresAt.setDate(expiresAt.getDate() + parseInt(expiresInDays))
 
+      // Use database function to avoid RLS ambiguity
       const { data, error: createError } = await supabase
-        .from('invitations')
-        .insert({
-          created_by: authData.user.id,
-          trip_id: tripId || null,
-          expires_at: expiresAt.toISOString(),
+        .rpc('create_invitation', {
+          p_trip_id: tripId || null,
+          p_expires_at: expiresAt.toISOString(),
         })
-        .select('id, code, created_by, trip_id, expires_at, created_at')
         .single()
 
       if (createError) {

@@ -505,6 +505,20 @@ export type Database = {
     }
     Functions: {
       cleanup_expired_invitations: { Args: never; Returns: number }
+      create_invitation: {
+        Args: {
+          p_trip_id: string | null
+          p_expires_at: string
+        }
+        Returns: {
+          id: string
+          code: string
+          created_by: string
+          trip_id: string | null
+          expires_at: string
+          created_at: string
+        }[]
+      }
       create_trip_with_participant: {
         Args: {
           p_end_date: string

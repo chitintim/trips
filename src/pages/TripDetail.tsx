@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { Button, Card, Badge, Spinner, EmptyState, Avatar } from '../components/ui'
+import { Button, Card, Badge, Spinner, EmptyState } from '../components/ui'
 import { Trip, User, TripParticipant } from '../types'
 
 type TripTab = 'overview' | 'planning' | 'expenses' | 'chat'
@@ -22,7 +22,10 @@ export function TripDetail() {
   const [isAdmin, setIsAdmin] = useState(false)
 
   useEffect(() => {
-    if (!tripId) return
+    if (!tripId) {
+      setLoading(false)
+      return
+    }
     fetchTripData()
   }, [tripId])
 
@@ -44,6 +47,11 @@ export function TripDetail() {
   }
 
   const fetchTripData = async () => {
+    if (!tripId) {
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
 
     // Fetch trip details

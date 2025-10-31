@@ -6,6 +6,7 @@ import { Button, Card, EmptyState, Badge, Spinner } from '../components/ui'
 import { ProfileModal } from '../components/ProfileModal'
 import { CreateInvitationModal } from '../components/CreateInvitationModal'
 import { CreateTripModal } from '../components/CreateTripModal'
+import { ViewUserTripsModal } from '../components/ViewUserTripsModal'
 import { User, Trip, Invitation } from '../types'
 
 type AdminTab = 'trips' | 'users' | 'invitations'
@@ -345,6 +346,8 @@ function TripsTab() {
 function UsersTab() {
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
+  const [selectedUser, setSelectedUser] = useState<User | null>(null)
+  const [viewTripsModalOpen, setViewTripsModalOpen] = useState(false)
 
   useEffect(() => {
     fetchUsers()
@@ -361,6 +364,11 @@ function UsersTab() {
       setUsers(data)
     }
     setLoading(false)
+  }
+
+  const handleViewUserTrips = (user: User) => {
+    setSelectedUser(user)
+    setViewTripsModalOpen(true)
   }
 
   if (loading) {
@@ -436,7 +444,11 @@ function UsersTab() {
                       {new Date(user.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
-                      <Button variant="ghost" size="sm">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleViewUserTrips(user)}
+                      >
                         View Trips
                       </Button>
                     </td>
@@ -447,6 +459,15 @@ function UsersTab() {
           </div>
         </Card.Content>
       </Card>
+
+      {/* View User Trips Modal */}
+      {selectedUser && (
+        <ViewUserTripsModal
+          isOpen={viewTripsModalOpen}
+          onClose={() => setViewTripsModalOpen(false)}
+          user={selectedUser}
+        />
+      )}
     </>
   )
 }

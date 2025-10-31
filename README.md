@@ -97,17 +97,20 @@ See [CLAUDE.md](./CLAUDE.md) for the complete database schema and RLS policies.
 
 ## Current Status
 
-**Phase 3 Complete ✅** - Authentication System Ready!
-**Progress**: 60% overall (Phases 1-3 complete)
-**Next**: Build trip management features (Phase 4)
+**Phase 4A Complete ✅** - Admin Dashboard Live!
+**Progress**: 70% overall (Phases 1-4A complete)
+**Next**: Trip creation modal and trip detail pages (Phase 4B)
 
 **What's Working:**
 - ✅ Complete authentication system (login, signup, password reset)
 - ✅ Invitation-based signup with custom avatar builder
+- ✅ Admin dashboard with 3 tabs (Trips, Users, Invitations)
+- ✅ Profile editing for all users
+- ✅ Invitation creation with copy-to-clipboard
+- ✅ Enhanced security (20-char codes, attempt logging)
 - ✅ 14 UI components with Winter Clean theme
-- ✅ 10 database tables with 46 RLS policies
-- ✅ Protected routes and dashboard
-- ✅ Welcome screen with animations
+- ✅ 11 database tables with 48 RLS policies
+- ✅ GitHub Pages deployment: **https://chitintim.github.io/trips/**
 
 See [PROGRESS.md](./PROGRESS.md) for detailed status.
 

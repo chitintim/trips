@@ -11,6 +11,7 @@ export type Comment = Tables<'comments'>
 export type Expense = Tables<'expenses'>
 export type ExpenseSplit = Tables<'expense_splits'>
 export type Invitation = Tables<'invitations'>
+export type InvitationAttempt = Tables<'invitation_attempts'>
 
 // Insert types (for creating new records)
 export type UserInsert = TablesInsert<'users'>
@@ -23,6 +24,7 @@ export type CommentInsert = TablesInsert<'comments'>
 export type ExpenseInsert = TablesInsert<'expenses'>
 export type ExpenseSplitInsert = TablesInsert<'expense_splits'>
 export type InvitationInsert = TablesInsert<'invitations'>
+export type InvitationAttemptInsert = TablesInsert<'invitation_attempts'>
 
 // Update types (for updating records)
 export type UserUpdate = TablesUpdate<'users'>
@@ -35,6 +37,7 @@ export type CommentUpdate = TablesUpdate<'comments'>
 export type ExpenseUpdate = TablesUpdate<'expenses'>
 export type ExpenseSplitUpdate = TablesUpdate<'expense_splits'>
 export type InvitationUpdate = TablesUpdate<'invitations'>
+export type InvitationAttemptUpdate = TablesUpdate<'invitation_attempts'>
 
 // Enum types
 export type UserRole = Enums<'user_role'>

@@ -38,7 +38,7 @@ export function Login() {
         {/* Logo/Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            🎿 Ski Trip Planner
+            🎿 Tim's Super Trip Planner
           </h1>
           <p className="text-gray-600">
             Welcome back! Sign in to continue.
@@ -122,7 +122,7 @@ export function Login() {
 
         {/* Footer Note */}
         <p className="text-center text-xs text-gray-500 mt-6">
-          This app is invitation-only. Contact your trip organizer for an access code.
+          This app is invitation-only. Contact Tim for an access code.
         </p>
       </div>
     </div>

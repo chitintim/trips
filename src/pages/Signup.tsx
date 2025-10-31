@@ -42,12 +42,24 @@ export function Signup() {
     setValidatingCode(true)
 
     try {
+      const codeToValidate = invitationCode.trim()
+
       // Query invitation by code
       const { data, error } = await supabase
         .from('invitations')
         .select('*')
-        .eq('code', invitationCode.trim())
+        .eq('code', codeToValidate)
         .maybeSingle()
+
+      // Log the attempt for security monitoring
+      const attemptSuccess = !!(data && !data.used_by && (!data.expires_at || new Date(data.expires_at) >= new Date()))
+      await supabase
+        .from('invitation_attempts')
+        .insert({
+          code_attempted: codeToValidate,
+          success: attemptSuccess,
+          user_agent: navigator.userAgent,
+        })
 
       if (error) {
         setCodeError('Error validating code. Please try again.')
@@ -189,7 +201,7 @@ export function Signup() {
         {/* Logo/Header */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            🎿 Ski Trip Planner
+            🎿 Tim's Super Trip Planner
           </h1>
           <p className="text-gray-600">
             {step === 'invitation'
@@ -204,7 +216,7 @@ export function Signup() {
             <Card.Header>
               <Card.Title>Invitation Required</Card.Title>
               <Card.Description>
-                This app is invitation-only. Enter the code provided by your trip organizer.
+                This app is invitation-only. Enter the code provided by Tim.
               </Card.Description>
             </Card.Header>
 
@@ -354,7 +366,7 @@ export function Signup() {
         {/* Footer Note */}
         {step === 'invitation' && (
           <p className="text-center text-xs text-gray-500 mt-6">
-            Don't have an invitation code? Contact your trip organizer.
+            Don't have an invitation code? Contact Tim.
           </p>
         )}
       </div>

@@ -165,6 +165,33 @@ export type Database = {
           },
         ]
       }
+      invitation_attempts: {
+        Row: {
+          code_attempted: string
+          created_at: string | null
+          id: string
+          ip_address: unknown
+          success: boolean | null
+          user_agent: string | null
+        }
+        Insert: {
+          code_attempted: string
+          created_at?: string | null
+          id?: string
+          ip_address?: unknown
+          success?: boolean | null
+          user_agent?: string | null
+        }
+        Update: {
+          code_attempted?: string
+          created_at?: string | null
+          id?: string
+          ip_address?: unknown
+          success?: boolean | null
+          user_agent?: string | null
+        }
+        Relationships: []
+      }
       invitations: {
         Row: {
           code: string
@@ -477,7 +504,17 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_expired_invitations: { Args: never; Returns: number }
       generate_invitation_code: { Args: never; Returns: string }
+      get_recent_failed_attempts: {
+        Args: { hours_back?: number }
+        Returns: {
+          attempt_count: number
+          code_attempted: string
+          ip_addresses: string[]
+          last_attempt: string
+        }[]
+      }
     }
     Enums: {
       participant_role: "organizer" | "participant"

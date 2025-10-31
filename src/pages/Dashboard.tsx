@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
 import { Button, Card, EmptyState, Badge, Spinner } from '../components/ui'
+import { ProfileModal } from '../components/ProfileModal'
 import { User, Trip, Invitation } from '../types'
 
 type AdminTab = 'trips' | 'users' | 'invitations'
@@ -11,24 +12,29 @@ export function Dashboard() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [activeTab, setActiveTab] = useState<AdminTab>('trips')
   const [loading, setLoading] = useState(true)
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [currentUser, setCurrentUser] = useState<User | null>(null)
 
-  // Check if user is admin
+  // Fetch user data and check admin status
   useEffect(() => {
-    const checkAdminStatus = async () => {
-      if (!user) return
-
-      const { data } = await supabase
-        .from('users')
-        .select('role')
-        .eq('id', user.id)
-        .single()
-
-      setIsAdmin(data?.role === 'admin')
-      setLoading(false)
-    }
-
-    checkAdminStatus()
+    fetchUserData()
   }, [user])
+
+  const fetchUserData = async () => {
+    if (!user) return
+
+    const { data } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', user.id)
+      .single()
+
+    if (data) {
+      setCurrentUser(data)
+      setIsAdmin(data.role === 'admin')
+    }
+    setLoading(false)
+  }
 
   const handleSignOut = async () => {
     await signOut()
@@ -62,9 +68,24 @@ export function Dashboard() {
               </div>
             </div>
             <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600">
-                {user?.email}
-              </span>
+              {currentUser && (
+                <button
+                  onClick={() => setProfileModalOpen(true)}
+                  className="flex items-center gap-2 text-sm text-gray-700 hover:text-gray-900 transition-colors"
+                >
+                  <div
+                    className="w-8 h-8 rounded-full flex items-center justify-center text-base"
+                    style={{
+                      backgroundColor: (currentUser.avatar_data as any)?.bgColor || '#0ea5e9',
+                    }}
+                  >
+                    {(currentUser.avatar_data as any)?.emoji || '😊'}
+                  </div>
+                  <span className="hidden sm:inline">
+                    {currentUser.full_name || user?.email}
+                  </span>
+                </button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -129,6 +150,16 @@ export function Dashboard() {
           <MemberView />
         )}
       </main>
+
+      {/* Profile Modal */}
+      {currentUser && (
+        <ProfileModal
+          isOpen={profileModalOpen}
+          onClose={() => setProfileModalOpen(false)}
+          user={currentUser}
+          onUpdate={fetchUserData}
+        />
+      )}
     </div>
   )
 }

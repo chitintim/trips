@@ -23,10 +23,13 @@ export function AddParticipantModal({
   const [role, setRole] = useState<'organizer' | 'participant'>('participant')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
       fetchUsers()
+      setError(null)
+      setSuccess(false)
     }
   }, [isOpen])
 
@@ -76,12 +79,18 @@ export function AddParticipantModal({
       }
 
       setLoading(false)
-      onSuccess()
-      onClose()
+      setSuccess(true)
 
-      // Reset form
-      setSelectedUserId('')
-      setRole('participant')
+      // Wait a moment to show success, then refresh and close
+      setTimeout(() => {
+        onSuccess()
+        onClose()
+
+        // Reset form
+        setSelectedUserId('')
+        setRole('participant')
+        setSuccess(false)
+      }, 800)
     } catch (err) {
       console.error('Unexpected error:', err)
       setError('An unexpected error occurred')
@@ -113,12 +122,19 @@ export function AddParticipantModal({
           </div>
         )}
 
+        {success && (
+          <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg p-3 text-sm flex items-center gap-2">
+            <span className="text-lg">✓</span>
+            <span>Participant added successfully!</span>
+          </div>
+        )}
+
         {/* User Selection */}
         <Select
           label="Select User"
           value={selectedUserId}
           onChange={(e) => setSelectedUserId(e.target.value)}
-          disabled={loading}
+          disabled={loading || success}
           options={users.map((user) => ({
             value: user.id,
             label: user.full_name || user.email,
@@ -131,7 +147,7 @@ export function AddParticipantModal({
           label="Role"
           value={role}
           onChange={(e) => setRole(e.target.value as 'organizer' | 'participant')}
-          disabled={loading}
+          disabled={loading || success}
           options={[
             { value: 'participant', label: '👤 Participant - Can view and make selections' },
             { value: 'organizer', label: '⭐ Organizer - Can manage trip settings' },
@@ -145,11 +161,11 @@ export function AddParticipantModal({
             type="button"
             variant="outline"
             onClick={onClose}
-            disabled={loading}
+            disabled={loading || success}
           >
             Cancel
           </Button>
-          <Button type="submit" variant="primary" isLoading={loading}>
+          <Button type="submit" variant="primary" isLoading={loading} disabled={success}>
             Add Participant
           </Button>
         </div>

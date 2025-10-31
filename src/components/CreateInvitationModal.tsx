@@ -30,9 +30,18 @@ export function CreateInvitationModal({
     setLoading(true)
 
     try {
-      const { data: authData } = await supabase.auth.getUser()
-      if (!authData.user) {
-        setError('Not authenticated')
+      const { data: authData, error: authError } = await supabase.auth.getUser()
+
+      if (authError) {
+        console.error('Auth error:', authError)
+        setError('Authentication error. Please try logging in again.')
+        setLoading(false)
+        return
+      }
+
+      if (!authData?.user) {
+        setError('Not authenticated. Please log in.')
+        setLoading(false)
         return
       }
 
@@ -47,16 +56,25 @@ export function CreateInvitationModal({
           trip_id: tripId || null,
           expires_at: expiresAt.toISOString(),
         })
-        .select()
+        .select('id, code, created_by, trip_id, expires_at, created_at')
         .single()
 
       if (createError) {
+        console.error('Invitation creation error:', createError)
         setError(createError.message)
+        setLoading(false)
+        return
+      }
+
+      if (!data) {
+        setError('Failed to create invitation')
+        setLoading(false)
         return
       }
 
       setCreatedCode(data.code)
       setSuccess(true)
+      setLoading(false)
       onSuccess()
 
       // Reset form after delay
@@ -67,8 +85,8 @@ export function CreateInvitationModal({
         setExpiresInDays('7')
       }, 5000)
     } catch (err) {
+      console.error('Unexpected error:', err)
       setError('An unexpected error occurred')
-    } finally {
       setLoading(false)
     }
   }

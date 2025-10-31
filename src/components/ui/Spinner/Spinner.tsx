@@ -36,7 +36,7 @@ export const Spinner = forwardRef<HTMLDivElement, SpinnerProps>(
     },
     ref
   ) => {
-    // Size styles for dots
+    // Size styles
     const containerSizeStyles = {
       xs: 'gap-0.5',
       sm: 'gap-1',
@@ -45,23 +45,6 @@ export const Spinner = forwardRef<HTMLDivElement, SpinnerProps>(
       xl: 'gap-2.5',
     }
 
-    const dotSizeStyles = {
-      xs: 'w-1 h-1',
-      sm: 'w-1.5 h-1.5',
-      md: 'w-2 h-2',
-      lg: 'w-2.5 h-2.5',
-      xl: 'w-3 h-3',
-    }
-
-    // Color styles
-    const colorStyles = {
-      primary: 'bg-primary-600',
-      secondary: 'bg-secondary-600',
-      white: 'bg-white',
-      neutral: 'bg-neutral-600',
-    }
-
-    // Snowflake size based on spinner size
     const snowflakeSizeStyles = {
       xs: 'text-xs',
       sm: 'text-sm',

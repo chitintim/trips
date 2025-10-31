@@ -126,14 +126,14 @@ export const Modal = forwardRef<HTMLDivElement, ModalProps>(
         {/* Modal content */}
         <div
           ref={modalRef}
-          className={`relative w-full bg-white rounded-lg shadow-2xl ${className}`}
+          className={`relative w-full bg-white rounded-lg shadow-2xl max-h-[90vh] flex flex-col ${className}`}
           style={{ maxWidth: sizeStyles[size] }}
           tabIndex={-1}
           {...props}
         >
           {/* Header */}
           {(title || showCloseButton) && (
-            <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200 flex-shrink-0">
               {/* Title */}
               {title && (
                 <h2
@@ -171,8 +171,8 @@ export const Modal = forwardRef<HTMLDivElement, ModalProps>(
             </div>
           )}
 
-          {/* Body */}
-          <div className="px-6 py-6">
+          {/* Body - Scrollable */}
+          <div className="px-6 py-6 overflow-y-auto flex-1">
             {children}
           </div>
         </div>

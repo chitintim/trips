@@ -448,6 +448,33 @@ function InvitationsTab() {
     navigator.clipboard.writeText(link)
   }
 
+  const handleDeleteInvitation = async (invitation: Invitation) => {
+    const status = getInvitationStatus(invitation)
+    const confirmMessage =
+      status === 'used'
+        ? `Delete used invitation code "${invitation.code}"?\n\nThis invitation was already used and can be safely removed.`
+        : status === 'expired'
+        ? `Delete expired invitation code "${invitation.code}"?\n\nThis invitation has expired and can be safely removed.`
+        : `⚠️ Delete ACTIVE invitation code "${invitation.code}"?\n\nWARNING: This invitation is still active and can be used to sign up. Once deleted, the code will no longer work.\n\nAre you sure you want to delete it?`
+
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    const { error } = await supabase
+      .from('invitations')
+      .delete()
+      .eq('id', invitation.id)
+
+    if (error) {
+      alert(`Error deleting invitation: ${error.message}`)
+      return
+    }
+
+    // Refresh the list
+    fetchData()
+  }
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -547,13 +574,23 @@ function InvitationsTab() {
                           {new Date(invitation.created_at).toLocaleDateString()}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => copyInvitationLink(invitation.code)}
-                          >
-                            Copy Link
-                          </Button>
+                          <div className="flex gap-2 justify-end">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => copyInvitationLink(invitation.code)}
+                            >
+                              Copy Link
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDeleteInvitation(invitation)}
+                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              Delete
+                            </Button>
+                          </div>
                         </td>
                       </tr>
                     )

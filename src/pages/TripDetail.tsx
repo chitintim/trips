@@ -334,6 +334,45 @@ function TripOverviewTab({
   trip: Trip
   participants: ParticipantWithUser[]
 }) {
+  const { user } = useAuth()
+  const [isAdmin, setIsAdmin] = useState(false)
+
+  useEffect(() => {
+    checkAdminStatus()
+  }, [user])
+
+  const checkAdminStatus = async () => {
+    if (!user) return
+    const { data } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if (data) {
+      setIsAdmin(data.role === 'admin')
+    }
+  }
+
+  const handleRemoveParticipant = async (participant: ParticipantWithUser) => {
+    if (!window.confirm(`Remove ${participant.user.full_name || participant.user.email} from this trip?`)) {
+      return
+    }
+
+    const { error } = await supabase
+      .from('trip_participants')
+      .delete()
+      .eq('trip_id', trip.id)
+      .eq('user_id', participant.user_id)
+
+    if (error) {
+      alert(`Error removing participant: ${error.message}`)
+      return
+    }
+
+    // Refresh the page to show updated participants
+    window.location.reload()
+  }
   return (
     <div className="space-y-6">
       {/* Trip Details Card */}
@@ -427,9 +466,21 @@ function TripOverviewTab({
                     <div className="text-sm text-gray-500">{participant.user.email}</div>
                   </div>
                 </div>
-                <Badge variant={participant.role === 'organizer' ? 'primary' : 'neutral'}>
-                  {participant.role}
-                </Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={participant.role === 'organizer' ? 'primary' : 'neutral'}>
+                    {participant.role}
+                  </Badge>
+                  {isAdmin && participant.user_id !== user?.id && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleRemoveParticipant(participant)}
+                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                    >
+                      Remove
+                    </Button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

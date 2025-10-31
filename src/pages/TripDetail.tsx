@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Card, Badge, Spinner, EmptyState } from '../components/ui'
+import { CreateTripModal, AddParticipantModal } from '../components'
 import { Trip, User, TripParticipant } from '../types'
 
 type TripTab = 'overview' | 'planning' | 'expenses' | 'chat'
@@ -20,6 +21,8 @@ export function TripDetail() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<TripTab>('overview')
   const [isAdmin, setIsAdmin] = useState(false)
+  const [editModalOpen, setEditModalOpen] = useState(false)
+  const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
 
   useEffect(() => {
     if (!tripId) {
@@ -81,6 +84,37 @@ export function TripDetail() {
     setLoading(false)
   }
 
+  const handleEditTrip = () => {
+    setEditModalOpen(true)
+  }
+
+  const handleDeleteTrip = async () => {
+    if (!trip) return
+
+    const confirmMessage = `⚠️ Delete "${trip.name}"?\n\nThis will permanently delete the trip and all associated data including:\n- Planning sections\n- Options and selections\n- Comments\n- Expense records\n\nThis action CANNOT be undone!\n\nAre you absolutely sure?`
+
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    const { error } = await supabase
+      .from('trips')
+      .delete()
+      .eq('id', trip.id)
+
+    if (error) {
+      alert(`Error deleting trip: ${error.message}`)
+      return
+    }
+
+    // Navigate back to dashboard
+    navigate('/dashboard')
+  }
+
+  const handleAddParticipant = () => {
+    setAddParticipantModalOpen(true)
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -140,10 +174,15 @@ export function TripDetail() {
             </Button>
             {isAdmin && (
               <div className="flex gap-2">
-                <Button variant="outline" size="sm">
+                <Button variant="outline" size="sm" onClick={handleEditTrip}>
                   Edit Trip
                 </Button>
-                <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 hover:bg-red-50">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDeleteTrip}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                >
                   Delete Trip
                 </Button>
               </div>
@@ -176,8 +215,13 @@ export function TripDetail() {
 
           {/* Participants */}
           <div className="mb-4">
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-medium text-gray-700">Participants ({participants.length})</h3>
+              {isAdmin && (
+                <Button variant="ghost" size="sm" onClick={handleAddParticipant}>
+                  + Add Participant
+                </Button>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               {participants.map((participant) => (
@@ -259,6 +303,25 @@ export function TripDetail() {
         {activeTab === 'expenses' && <ComingSoonTab title="Expenses" description="Expense tracking, receipt uploads, and splits will be available here." />}
         {activeTab === 'chat' && <ComingSoonTab title="Chat" description="Trip chat and comments will be available here." />}
       </div>
+
+      {/* Admin Modals */}
+      {trip && (
+        <>
+          <CreateTripModal
+            isOpen={editModalOpen}
+            onClose={() => setEditModalOpen(false)}
+            onSuccess={fetchTripData}
+            editTrip={trip}
+          />
+          <AddParticipantModal
+            isOpen={addParticipantModalOpen}
+            onClose={() => setAddParticipantModalOpen(false)}
+            tripId={trip.id}
+            existingParticipantIds={participants.map((p) => p.user_id)}
+            onSuccess={fetchTripData}
+          />
+        </>
+      )}
     </div>
   )
 }

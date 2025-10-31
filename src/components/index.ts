@@ -61,3 +61,11 @@ export type { HeaderProps, HeaderNavItemProps } from './layout/Header'
 
 export { BottomNav } from './layout/BottomNav'
 export type { BottomNavProps, BottomNavItemProps } from './layout/BottomNav'
+
+// ============================================================================
+// FEATURE COMPONENTS
+// ============================================================================
+
+export { CreateTripModal } from './CreateTripModal'
+export { CreateInvitationModal } from './CreateInvitationModal'
+export { ProfileModal } from './ProfileModal'

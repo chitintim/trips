@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
 import { Button, Card, EmptyState, Badge, Spinner } from '../components/ui'
 import { ProfileModal } from '../components/ProfileModal'
 import { CreateInvitationModal } from '../components/CreateInvitationModal'
+import { CreateTripModal } from '../components/CreateTripModal'
 import { User, Trip, Invitation } from '../types'
 
 type AdminTab = 'trips' | 'users' | 'invitations'
@@ -193,8 +195,11 @@ function MemberView() {
 
 // Trips management tab (admin only)
 function TripsTab() {
+  const navigate = useNavigate()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const [editingTrip, setEditingTrip] = useState<Trip | null>(null)
 
   useEffect(() => {
     fetchTrips()
@@ -211,6 +216,25 @@ function TripsTab() {
       setTrips(data)
     }
     setLoading(false)
+  }
+
+  const handleCreateTrip = () => {
+    setEditingTrip(null)
+    setCreateModalOpen(true)
+  }
+
+  const handleEditTrip = (trip: Trip) => {
+    setEditingTrip(trip)
+    setCreateModalOpen(true)
+  }
+
+  const handleViewTrip = (tripId: string) => {
+    navigate(`/trips/${tripId}`)
+  }
+
+  const handleModalClose = () => {
+    setCreateModalOpen(false)
+    setEditingTrip(null)
   }
 
   if (loading) {
@@ -232,7 +256,7 @@ function TripsTab() {
             Manage all your ski trip adventures
           </p>
         </div>
-        <Button variant="primary">
+        <Button variant="primary" onClick={handleCreateTrip}>
           + Create Trip
         </Button>
       </div>
@@ -245,7 +269,7 @@ function TripsTab() {
               title="No trips created yet"
               description="Create your first trip to get started organizing your ski adventure!"
               action={
-                <Button variant="primary">
+                <Button variant="primary" onClick={handleCreateTrip}>
                   Create Your First Trip
                 </Button>
               }
@@ -284,10 +308,18 @@ function TripsTab() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" size="sm">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleEditTrip(trip)}
+                    >
                       Edit
                     </Button>
-                    <Button variant="outline" size="sm">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleViewTrip(trip.id)}
+                    >
                       View
                     </Button>
                   </div>
@@ -297,6 +329,14 @@ function TripsTab() {
           ))}
         </div>
       )}
+
+      {/* Create/Edit Trip Modal */}
+      <CreateTripModal
+        isOpen={createModalOpen}
+        onClose={handleModalClose}
+        onSuccess={fetchTrips}
+        editTrip={editingTrip}
+      />
     </>
   )
 }

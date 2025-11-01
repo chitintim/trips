@@ -187,6 +187,21 @@ export function Welcome({ firstName, avatarData, tripId, onContinue }: WelcomePr
             </p>
           )}
 
+          {/* Email Verification Notice */}
+          <div className="bg-sky-50 border border-sky-200 rounded-lg p-4 mb-6">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">📧</span>
+              <div className="text-left flex-1">
+                <p className="text-sm font-medium text-sky-900 mb-1">
+                  Check your inbox
+                </p>
+                <p className="text-xs text-sky-700">
+                  We've sent you a verification email. Please check your inbox and click the link to verify your account.
+                </p>
+              </div>
+            </div>
+          </div>
+
           {/* Continue Button */}
           <Button
             variant="primary"
@@ -194,7 +209,7 @@ export function Welcome({ firstName, avatarData, tripId, onContinue }: WelcomePr
             fullWidth
             onClick={onContinue}
           >
-            Let's Go! 🎿
+            Got it! 👍
           </Button>
         </div>
 

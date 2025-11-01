@@ -52,7 +52,7 @@ export function CreateInvitationModal({
       // Use database function to avoid RLS ambiguity
       const { data, error: createError } = await supabase
         .rpc('create_invitation', {
-          p_trip_id: tripId || null,
+          p_trip_id: tripId as string,
           p_expires_at: expiresAt.toISOString(),
         })
         .single()

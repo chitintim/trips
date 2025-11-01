@@ -259,9 +259,12 @@ export type Database = {
           currency: string | null
           description: string | null
           id: string
+          locked: boolean
           metadata: Json | null
           price: number | null
+          price_type: Database["public"]["Enums"]["price_type"]
           section_id: string
+          status: Database["public"]["Enums"]["option_status"]
           title: string
           updated_at: string
         }
@@ -270,9 +273,12 @@ export type Database = {
           currency?: string | null
           description?: string | null
           id?: string
+          locked?: boolean
           metadata?: Json | null
           price?: number | null
+          price_type?: Database["public"]["Enums"]["price_type"]
           section_id: string
+          status?: Database["public"]["Enums"]["option_status"]
           title: string
           updated_at?: string
         }
@@ -281,9 +287,12 @@ export type Database = {
           currency?: string | null
           description?: string | null
           id?: string
+          locked?: boolean
           metadata?: Json | null
           price?: number | null
+          price_type?: Database["public"]["Enums"]["price_type"]
           section_id?: string
+          status?: Database["public"]["Enums"]["option_status"]
           title?: string
           updated_at?: string
         }
@@ -506,17 +515,14 @@ export type Database = {
     Functions: {
       cleanup_expired_invitations: { Args: never; Returns: number }
       create_invitation: {
-        Args: {
-          p_trip_id: string | null
-          p_expires_at: string
-        }
+        Args: { p_expires_at: string; p_trip_id: string }
         Returns: {
-          id: string
           code: string
-          created_by: string
-          trip_id: string | null
-          expires_at: string
           created_at: string
+          created_by: string
+          expires_at: string
+          id: string
+          trip_id: string
         }[]
       }
       create_trip_with_participant: {
@@ -541,7 +547,9 @@ export type Database = {
       }
     }
     Enums: {
+      option_status: "draft" | "available" | "booking" | "booked" | "cancelled"
       participant_role: "organizer" | "participant"
+      price_type: "per_person_fixed" | "total_split" | "per_person_tiered"
       section_status: "not_started" | "in_progress" | "completed"
       section_type:
         | "accommodation"
@@ -680,7 +688,9 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      option_status: ["draft", "available", "booking", "booked", "cancelled"],
       participant_role: ["organizer", "participant"],
+      price_type: ["per_person_fixed", "total_split", "per_person_tiered"],
       section_status: ["not_started", "in_progress", "completed"],
       section_type: [
         "accommodation",

@@ -299,7 +299,7 @@ export function TripDetail() {
       {/* Tab Content */}
       <div className="max-w-6xl mx-auto px-4 py-8">
         {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} />}
-        {activeTab === 'planning' && <ComingSoonTab title="Planning" description="Planning sections, options, and selections will be available here." />}
+        {activeTab === 'planning' && <PlanningTab trip={trip} participants={participants} />}
         {activeTab === 'expenses' && <ComingSoonTab title="Expenses" description="Expense tracking, receipt uploads, and splits will be available here." />}
         {activeTab === 'chat' && <ComingSoonTab title="Chat" description="Trip chat and comments will be available here." />}
       </div>
@@ -484,6 +484,450 @@ function TripOverviewTab({
               </div>
             ))}
           </div>
+        </Card.Content>
+      </Card>
+    </div>
+  )
+}
+
+// Planning Tab Component
+function PlanningTab({
+  trip,
+  participants,
+}: {
+  trip: Trip
+  participants: ParticipantWithUser[]
+}) {
+  const { user } = useAuth()
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [sections, setSections] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    checkAdminStatus()
+    fetchPlanningSections()
+  }, [trip.id])
+
+  const checkAdminStatus = async () => {
+    if (!user) return
+    const { data } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    if (data) {
+      setIsAdmin(data.role === 'admin')
+    }
+  }
+
+  const fetchPlanningSections = async () => {
+    setLoading(true)
+
+    // Fetch sections with their options and selections
+    const { data: sectionsData, error } = await supabase
+      .from('planning_sections')
+      .select(`
+        *,
+        options (
+          *,
+          selections (
+            *,
+            user:user_id (*)
+          )
+        )
+      `)
+      .eq('trip_id', trip.id)
+      .order('order_index', { ascending: true })
+
+    if (!error && sectionsData) {
+      setSections(sectionsData)
+    }
+
+    setLoading(false)
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Spinner size="lg" />
+      </div>
+    )
+  }
+
+  if (sections.length === 0) {
+    return (
+      <Card>
+        <Card.Content className="py-12">
+          <EmptyState
+            icon="📋"
+            title="No planning sections yet"
+            description={isAdmin ? "Start by creating planning sections like Accommodation, Flights, or Transport." : "The trip organizer will add planning sections soon."}
+          />
+        </Card.Content>
+      </Card>
+    )
+  }
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      {/* Main Content */}
+      <div className="lg:col-span-2 space-y-6">
+        {sections.map((section) => (
+          <PlanningSectionCard
+            key={section.id}
+            section={section}
+            trip={trip}
+            participants={participants}
+            isAdmin={isAdmin}
+            onUpdate={fetchPlanningSections}
+          />
+        ))}
+      </div>
+
+      {/* Selection Summary Sidebar */}
+      <div className="lg:col-span-1">
+        <SelectionSummary
+          sections={sections}
+          userId={user?.id || ''}
+        />
+      </div>
+    </div>
+  )
+}
+
+// Planning Section Card Component
+function PlanningSectionCard({
+  section,
+  trip,
+  participants,
+  isAdmin,
+  onUpdate,
+}: {
+  section: any
+  trip: Trip
+  participants: ParticipantWithUser[]
+  isAdmin: boolean
+  onUpdate: () => void
+}) {
+  const options = section.options || []
+  const availableOptions = options.filter((opt: any) => opt.status !== 'draft' && opt.status !== 'cancelled')
+
+  // Calculate how many people have made selections in this section
+  const participantIds = participants.map(p => p.user_id)
+  const selectionsCount = new Set(
+    options.flatMap((opt: any) =>
+      (opt.selections || [])
+        .filter((sel: any) => participantIds.includes(sel.user_id))
+        .map((sel: any) => sel.user_id)
+    )
+  ).size
+
+  return (
+    <Card>
+      <Card.Header>
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-1">
+              <Card.Title>{section.title}</Card.Title>
+              <Badge
+                variant={
+                  section.status === 'completed'
+                    ? 'success'
+                    : section.status === 'in_progress'
+                    ? 'info'
+                    : 'neutral'
+                }
+              >
+                {section.status.replace('_', ' ')}
+              </Badge>
+            </div>
+            {section.description && (
+              <Card.Description>{section.description}</Card.Description>
+            )}
+            <div className="mt-2 text-sm text-gray-600">
+              {selectionsCount} of {participants.length} people made selections
+            </div>
+          </div>
+        </div>
+      </Card.Header>
+      <Card.Content>
+        {availableOptions.length === 0 ? (
+          <EmptyState
+            icon="📝"
+            title="No options yet"
+            description={isAdmin ? "Add options for this section" : "No options available yet"}
+          />
+        ) : (
+          <div className="space-y-4">
+            {availableOptions.map((option: any) => (
+              <OptionCard
+                key={option.id}
+                option={option}
+                trip={trip}
+                participants={participants}
+                isAdmin={isAdmin}
+                isLocked={trip.status === 'booked' || option.locked}
+                onUpdate={onUpdate}
+              />
+            ))}
+          </div>
+        )}
+      </Card.Content>
+    </Card>
+  )
+}
+
+// Option Card Component
+function OptionCard({
+  option,
+  isLocked,
+  onUpdate,
+}: {
+  option: any
+  trip: Trip
+  participants: ParticipantWithUser[]
+  isAdmin: boolean
+  isLocked: boolean
+  onUpdate: () => void
+}) {
+  const { user } = useAuth()
+  const selections = option.selections || []
+  const userSelection = selections.find((sel: any) => sel.user_id === user?.id)
+  const isSelected = !!userSelection
+
+  // Calculate price based on price_type
+  const calculatePrice = () => {
+    if (!option.price) return null
+
+    if (option.price_type === 'total_split') {
+      const numSelectors = selections.length
+      if (numSelectors === 0) return option.price
+      return option.price / numSelectors
+    }
+
+    return option.price
+  }
+
+  const price = calculatePrice()
+  const currency = option.currency || 'EUR'
+
+  const handleToggleSelection = async () => {
+    if (isLocked) {
+      alert('This option is locked and cannot be changed.')
+      return
+    }
+
+    if (!user) return
+
+    if (isSelected) {
+      // Remove selection
+      const { error } = await supabase
+        .from('selections')
+        .delete()
+        .eq('id', userSelection.id)
+
+      if (error) {
+        alert(`Error removing selection: ${error.message}`)
+        return
+      }
+    } else {
+      // Add selection
+      const { error } = await supabase
+        .from('selections')
+        .insert({
+          option_id: option.id,
+          user_id: user.id,
+          metadata: {}
+        })
+
+      if (error) {
+        alert(`Error adding selection: ${error.message}`)
+        return
+      }
+    }
+
+    onUpdate()
+  }
+
+  return (
+    <div
+      className={`border rounded-lg p-4 transition-all ${
+        isSelected
+          ? 'border-sky-500 bg-sky-50'
+          : 'border-gray-200 hover:border-gray-300'
+      } ${isLocked ? 'opacity-75' : ''}`}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <div className="flex items-center gap-2 mb-2">
+            <h4 className="font-medium text-gray-900">{option.title}</h4>
+            {option.status && (
+              <Badge
+                variant={
+                  option.status === 'booked'
+                    ? 'success'
+                    : option.status === 'booking'
+                    ? 'info'
+                    : 'neutral'
+                }
+                className="text-xs"
+              >
+                {option.status}
+              </Badge>
+            )}
+            {isLocked && (
+              <span className="text-xs text-gray-500">🔒 Locked</span>
+            )}
+          </div>
+
+          {option.description && (
+            <p className="text-sm text-gray-600 mb-3">{option.description}</p>
+          )}
+
+          {/* Price Display */}
+          {price !== null && (
+            <div className="mb-3">
+              <span className="text-lg font-bold text-gray-900">
+                {currency} {price.toFixed(2)}
+              </span>
+              {option.price_type === 'total_split' && selections.length > 0 && (
+                <span className="text-sm text-gray-600 ml-2">
+                  (Total: {currency} {option.price.toFixed(2)} ÷ {selections.length} {selections.length === 1 ? 'person' : 'people'})
+                </span>
+              )}
+              {option.price_type === 'per_person_fixed' && (
+                <span className="text-sm text-gray-600 ml-2">per person</span>
+              )}
+            </div>
+          )}
+
+          {/* Social Proof - Who Selected This */}
+          {selections.length > 0 && (
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-sm text-gray-600">Selected by:</span>
+              <div className="flex items-center gap-1">
+                {selections.slice(0, 5).map((sel: any) => (
+                  <div
+                    key={sel.id}
+                    className="w-7 h-7 rounded-full flex items-center justify-center text-sm"
+                    style={{
+                      backgroundColor: (sel.user?.avatar_data as any)?.bgColor || '#0ea5e9',
+                    }}
+                    title={sel.user?.full_name || sel.user?.email}
+                  >
+                    {(sel.user?.avatar_data as any)?.emoji || '😊'}
+                  </div>
+                ))}
+                {selections.length > 5 && (
+                  <span className="text-sm text-gray-600 ml-1">
+                    +{selections.length - 5} more
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Selection Button */}
+        <div>
+          <Button
+            variant={isSelected ? 'primary' : 'outline'}
+            size="sm"
+            onClick={handleToggleSelection}
+            disabled={isLocked}
+          >
+            {isSelected ? '✓ Selected' : 'Select'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Selection Summary Sidebar Component
+function SelectionSummary({
+  sections,
+  userId,
+}: {
+  sections: any[]
+  userId: string
+}) {
+  // Get all user's selections across all sections
+  const userSelections = sections.flatMap(section =>
+    (section.options || []).flatMap((option: any) =>
+      (option.selections || [])
+        .filter((sel: any) => sel.user_id === userId)
+        .map((sel: any) => ({ ...sel, option }))
+    )
+  )
+
+  // Calculate total cost
+  const totalCost = userSelections.reduce((sum, selection) => {
+    const option = selection.option
+    if (!option.price) return sum
+
+    if (option.price_type === 'total_split') {
+      const numSelectors = (option.selections || []).length
+      return sum + (numSelectors > 0 ? option.price / numSelectors : option.price)
+    }
+
+    return sum + option.price
+  }, 0)
+
+  const currency = userSelections[0]?.option?.currency || 'EUR'
+
+  return (
+    <div className="sticky top-4">
+      <Card>
+        <Card.Header>
+          <Card.Title>Your Selections</Card.Title>
+          <Card.Description>
+            {userSelections.length} {userSelections.length === 1 ? 'item' : 'items'} selected
+          </Card.Description>
+        </Card.Header>
+        <Card.Content>
+          {userSelections.length === 0 ? (
+            <EmptyState
+              icon="📝"
+              title="No selections yet"
+              description="Select options from the planning sections"
+            />
+          ) : (
+            <div className="space-y-3">
+              {userSelections.map((selection) => {
+                const option = selection.option
+                const price = option.price_type === 'total_split'
+                  ? (option.selections || []).length > 0
+                    ? option.price / (option.selections || []).length
+                    : option.price
+                  : option.price
+
+                return (
+                  <div key={selection.id} className="pb-3 border-b border-gray-200 last:border-0">
+                    <div className="font-medium text-sm text-gray-900 mb-1">
+                      {option.title}
+                    </div>
+                    {option.price && (
+                      <div className="text-sm text-gray-600">
+                        {option.currency || currency} {price.toFixed(2)}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+
+              {/* Total */}
+              <div className="pt-3 border-t-2 border-gray-300">
+                <div className="flex justify-between items-center">
+                  <span className="font-bold text-gray-900">Total:</span>
+                  <span className="font-bold text-lg text-sky-600">
+                    {currency} {totalCost.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
         </Card.Content>
       </Card>
     </div>

@@ -12,10 +12,12 @@ import { User, Trip, Invitation } from '../types'
 type AdminTab = 'trips' | 'users' | 'invitations'
 
 export function Dashboard() {
+  const navigate = useNavigate()
   const { user, signOut } = useAuth()
   const [isAdmin, setIsAdmin] = useState(false)
   const [activeTab, setActiveTab] = useState<AdminTab>('trips')
   const [loading, setLoading] = useState(true)
+  const [signingOut, setSigningOut] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [currentUser, setCurrentUser] = useState<User | null>(null)
 
@@ -41,7 +43,32 @@ export function Dashboard() {
   }
 
   const handleSignOut = async () => {
-    await signOut()
+    // Confirm before signing out
+    if (!window.confirm('Are you sure you want to sign out?')) {
+      return
+    }
+
+    try {
+      setSigningOut(true)
+      const { error } = await signOut()
+
+      if (error) {
+        console.error('Sign out error:', error)
+        alert('Failed to sign out. Please try again.')
+        setSigningOut(false)
+        return
+      }
+
+      // Force navigation to login page
+      navigate('/login', { replace: true })
+
+      // Also reload the page to clear any cached state
+      window.location.href = '/trips/login'
+    } catch (err) {
+      console.error('Unexpected sign out error:', err)
+      alert('Failed to sign out. Please try again.')
+      setSigningOut(false)
+    }
   }
 
   if (loading) {
@@ -94,8 +121,10 @@ export function Dashboard() {
                 variant="outline"
                 size="sm"
                 onClick={handleSignOut}
+                disabled={signingOut}
+                isLoading={signingOut}
               >
-                Sign Out
+                {signingOut ? 'Signing out...' : 'Sign Out'}
               </Button>
             </div>
           </div>
@@ -170,6 +199,56 @@ export function Dashboard() {
 
 // Member view (non-admin users)
 function MemberView() {
+  const navigate = useNavigate()
+  const [trips, setTrips] = useState<Trip[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetchMyTrips()
+  }, [])
+
+  const fetchMyTrips = async () => {
+    setLoading(true)
+    const { data, error } = await supabase
+      .from('trips')
+      .select('*')
+      .order('start_date', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching my trips:', error)
+      alert(`Error loading trips: ${error.message}`)
+    }
+
+    if (data) {
+      console.log('Fetched my trips:', data)
+      setTrips(data)
+    }
+    setLoading(false)
+  }
+
+  const handleViewTrip = (tripId: string) => {
+    navigate(`/trips/${tripId}`)
+  }
+
+  const formatDateRange = (startDate: string, endDate: string) => {
+    const start = new Date(startDate)
+    const end = new Date(endDate)
+    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+
+    if (start.getFullYear() === end.getFullYear()) {
+      return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', options)}, ${start.getFullYear()}`
+    }
+    return `${start.toLocaleDateString('en-US', { ...options, year: 'numeric' })} - ${end.toLocaleDateString('en-US', { ...options, year: 'numeric' })}`
+  }
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Spinner size="lg" />
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="mb-6">
@@ -181,15 +260,63 @@ function MemberView() {
         </p>
       </div>
 
-      <Card>
-        <Card.Content className="py-12">
-          <EmptyState
-            icon="🎿"
-            title="No trips yet"
-            description="You haven't been added to any trips yet. Tim will add you soon!"
-          />
-        </Card.Content>
-      </Card>
+      {trips.length === 0 ? (
+        <Card>
+          <Card.Content className="py-12">
+            <EmptyState
+              icon="🎿"
+              title="No trips yet"
+              description="You haven't been added to any trips yet. Tim will add you soon!"
+            />
+          </Card.Content>
+        </Card>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {trips.map((trip) => (
+            <Card key={trip.id} className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleViewTrip(trip.id)}>
+              <Card.Header>
+                <div className="flex items-start justify-between">
+                  <Card.Title className="text-lg">{trip.name}</Card.Title>
+                  <Badge
+                    variant={
+                      trip.status === 'booked'
+                        ? 'success'
+                        : trip.status === 'booking'
+                        ? 'info'
+                        : 'warning'
+                    }
+                  >
+                    {trip.status}
+                  </Badge>
+                </div>
+                <Card.Description className="mt-2">
+                  <div className="flex flex-col gap-1 text-sm">
+                    <span className="flex items-center gap-1">
+                      <span>📍</span> {trip.location}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <span>📅</span> {formatDateRange(trip.start_date, trip.end_date)}
+                    </span>
+                  </div>
+                </Card.Description>
+              </Card.Header>
+              <Card.Footer>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  className="w-full"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleViewTrip(trip.id)
+                  }}
+                >
+                  View Trip Details
+                </Button>
+              </Card.Footer>
+            </Card>
+          ))}
+        </div>
+      )}
     </>
   )
 }
@@ -213,7 +340,13 @@ function TripsTab() {
       .select('*')
       .order('start_date', { ascending: false })
 
-    if (!error && data) {
+    if (error) {
+      console.error('Error fetching trips:', error)
+      alert(`Error loading trips: ${error.message}`)
+    }
+
+    if (data) {
+      console.log('Fetched trips:', data)
       setTrips(data)
     }
     setLoading(false)

@@ -45,6 +45,8 @@ export type TripStatus = Enums<'trip_status'>
 export type ParticipantRole = Enums<'participant_role'>
 export type SectionType = Enums<'section_type'>
 export type SectionStatus = Enums<'section_status'>
+export type OptionStatus = Enums<'option_status'>
+export type PriceType = Enums<'price_type'>
 
 // Extended types with relationships
 export interface TripWithCreator extends Trip {
@@ -128,6 +130,9 @@ export interface CreateOptionForm {
   description?: string
   price?: number
   currency?: string
+  price_type?: PriceType
+  status?: OptionStatus
+  locked?: boolean
   metadata?: Record<string, any>
 }
 

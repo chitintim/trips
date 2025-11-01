@@ -12,7 +12,6 @@ import { User, Trip, Invitation } from '../types'
 type AdminTab = 'trips' | 'users' | 'invitations'
 
 export function Dashboard() {
-  const navigate = useNavigate()
   const { user, signOut } = useAuth()
   const [isAdmin, setIsAdmin] = useState(false)
   const [activeTab, setActiveTab] = useState<AdminTab>('trips')

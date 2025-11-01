@@ -4,6 +4,8 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Card, Badge, Spinner, EmptyState } from '../components/ui'
 import { CreateTripModal, AddParticipantModal } from '../components'
+import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
+import { CreateOptionModal } from '../components/CreateOptionModal'
 import { Trip, User, TripParticipant } from '../types'
 
 type TripTab = 'overview' | 'planning' | 'expenses' | 'chat'
@@ -502,6 +504,9 @@ function PlanningTab({
   const [isAdmin, setIsAdmin] = useState(false)
   const [sections, setSections] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [createSectionModalOpen, setCreateSectionModalOpen] = useState(false)
+  const [createOptionModalOpen, setCreateOptionModalOpen] = useState(false)
+  const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null)
 
   useEffect(() => {
     checkAdminStatus()
@@ -557,42 +562,104 @@ function PlanningTab({
 
   if (sections.length === 0) {
     return (
-      <Card>
-        <Card.Content className="py-12">
-          <EmptyState
-            icon="📋"
-            title="No planning sections yet"
-            description={isAdmin ? "Start by creating planning sections like Accommodation, Flights, or Transport." : "The trip organizer will add planning sections soon."}
-          />
-        </Card.Content>
-      </Card>
+      <>
+        <Card>
+          <Card.Content className="py-12">
+            <EmptyState
+              icon="📋"
+              title="No planning sections yet"
+              description={isAdmin ? "Start by creating planning sections like Accommodation, Flights, or Transport." : "The trip organizer will add planning sections soon."}
+              action={
+                isAdmin ? (
+                  <Button
+                    variant="primary"
+                    onClick={() => setCreateSectionModalOpen(true)}
+                  >
+                    + Create Section
+                  </Button>
+                ) : undefined
+              }
+            />
+          </Card.Content>
+        </Card>
+
+        {/* Create Section Modal */}
+        <CreatePlanningSectionModal
+          isOpen={createSectionModalOpen}
+          onClose={() => setCreateSectionModalOpen(false)}
+          tripId={trip.id}
+          onSuccess={fetchPlanningSections}
+        />
+      </>
     )
   }
 
+  const handleCreateOption = (sectionId: string) => {
+    setSelectedSectionId(sectionId)
+    setCreateOptionModalOpen(true)
+  }
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      {/* Main Content */}
-      <div className="lg:col-span-2 space-y-6">
-        {sections.map((section) => (
-          <PlanningSectionCard
-            key={section.id}
-            section={section}
-            trip={trip}
-            participants={participants}
-            isAdmin={isAdmin}
-            onUpdate={fetchPlanningSections}
-          />
-        ))}
+    <>
+      <div className="space-y-6">
+        {/* Header with Create Section Button */}
+        {isAdmin && (
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              onClick={() => setCreateSectionModalOpen(true)}
+            >
+              + Create Section
+            </Button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          {/* Main Content */}
+          <div className="lg:col-span-2 space-y-6">
+            {sections.map((section) => (
+              <PlanningSectionCard
+                key={section.id}
+                section={section}
+                trip={trip}
+                participants={participants}
+                isAdmin={isAdmin}
+                onUpdate={fetchPlanningSections}
+                onCreateOption={handleCreateOption}
+              />
+            ))}
+          </div>
+
+          {/* Selection Summary Sidebar */}
+          <div className="lg:col-span-1">
+            <SelectionSummary
+              sections={sections}
+              userId={user?.id || ''}
+            />
+          </div>
+        </div>
       </div>
 
-      {/* Selection Summary Sidebar */}
-      <div className="lg:col-span-1">
-        <SelectionSummary
-          sections={sections}
-          userId={user?.id || ''}
+      {/* Modals */}
+      <CreatePlanningSectionModal
+        isOpen={createSectionModalOpen}
+        onClose={() => setCreateSectionModalOpen(false)}
+        tripId={trip.id}
+        onSuccess={fetchPlanningSections}
+      />
+
+      {selectedSectionId && (
+        <CreateOptionModal
+          isOpen={createOptionModalOpen}
+          onClose={() => {
+            setCreateOptionModalOpen(false)
+            setSelectedSectionId(null)
+          }}
+          sectionId={selectedSectionId}
+          onSuccess={fetchPlanningSections}
         />
-      </div>
-    </div>
+      )}
+    </>
   )
 }
 
@@ -603,12 +670,14 @@ function PlanningSectionCard({
   participants,
   isAdmin,
   onUpdate,
+  onCreateOption,
 }: {
   section: any
   trip: Trip
   participants: ParticipantWithUser[]
   isAdmin: boolean
   onUpdate: () => void
+  onCreateOption: (sectionId: string) => void
 }) {
   const options = section.options || []
   const availableOptions = options.filter((opt: any) => opt.status !== 'draft' && opt.status !== 'cancelled')
@@ -649,6 +718,15 @@ function PlanningSectionCard({
               {selectionsCount} of {participants.length} people made selections
             </div>
           </div>
+          {isAdmin && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onCreateOption(section.id)}
+            >
+              + Add Option
+            </Button>
+          )}
         </div>
       </Card.Header>
       <Card.Content>
@@ -657,6 +735,17 @@ function PlanningSectionCard({
             icon="📝"
             title="No options yet"
             description={isAdmin ? "Add options for this section" : "No options available yet"}
+            action={
+              isAdmin ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={() => onCreateOption(section.id)}
+                >
+                  + Add Option
+                </Button>
+              ) : undefined
+            }
           />
         ) : (
           <div className="space-y-4">

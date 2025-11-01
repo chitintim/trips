@@ -510,6 +510,9 @@ function PlanningTab({
 
   useEffect(() => {
     checkAdminStatus()
+  }, [trip.id, user])
+
+  useEffect(() => {
     fetchPlanningSections()
   }, [trip.id])
 

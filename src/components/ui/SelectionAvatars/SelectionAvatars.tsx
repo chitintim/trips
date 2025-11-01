@@ -100,7 +100,7 @@ export function SelectionAvatars({
               <span className="relative">
                 {emoji}
                 {accessory && (
-                  <span className="absolute -top-1 -right-1 text-xs">
+                  <span className="absolute -top-1 right-0 text-xs">
                     {accessory}
                   </span>
                 )}

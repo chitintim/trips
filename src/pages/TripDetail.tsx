@@ -292,7 +292,7 @@ export function TripDetail() {
                     <span className="relative">
                       {(participant.user.avatar_data as any)?.emoji || '😊'}
                       {(participant.user.avatar_data as any)?.accessory && (
-                        <span className="absolute -top-0.5 -right-0.5 text-[0.5rem]">
+                        <span className="absolute -top-0.5 right-0 text-[0.5rem]">
                           {(participant.user.avatar_data as any)?.accessory}
                         </span>
                       )}
@@ -537,7 +537,7 @@ function TripOverviewTab({
                     <span className="relative">
                       {(participant.user.avatar_data as any)?.emoji || '😊'}
                       {(participant.user.avatar_data as any)?.accessory && (
-                        <span className="absolute -top-1 -right-1 text-xs">
+                        <span className="absolute -top-1 right-0 text-xs">
                           {(participant.user.avatar_data as any)?.accessory}
                         </span>
                       )}

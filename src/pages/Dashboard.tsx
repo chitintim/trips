@@ -112,7 +112,7 @@ export function Dashboard() {
                     <span className="relative">
                       {(currentUser.avatar_data as any)?.emoji || '😊'}
                       {(currentUser.avatar_data as any)?.accessory && (
-                        <span className="absolute -top-1 -right-1 text-xs">
+                        <span className="absolute -top-1 right-0 text-xs">
                           {(currentUser.avatar_data as any)?.accessory}
                         </span>
                       )}
@@ -567,7 +567,7 @@ function UsersTab() {
                           <span className="relative">
                             {(user.avatar_data as any)?.emoji || '😊'}
                             {(user.avatar_data as any)?.accessory && (
-                              <span className="absolute -top-1 -right-1 text-xs">
+                              <span className="absolute -top-1 right-0 text-xs">
                                 {(user.avatar_data as any)?.accessory}
                               </span>
                             )}

@@ -753,6 +753,7 @@ function PlanningSectionCard({
               <OptionCard
                 key={option.id}
                 option={option}
+                section={section}
                 trip={trip}
                 participants={participants}
                 isAdmin={isAdmin}
@@ -770,10 +771,12 @@ function PlanningSectionCard({
 // Option Card Component
 function OptionCard({
   option,
+  section,
   isLocked,
   onUpdate,
 }: {
   option: any
+  section: any
   trip: Trip
   participants: ParticipantWithUser[]
   isAdmin: boolean
@@ -821,7 +824,25 @@ function OptionCard({
         return
       }
     } else {
-      // Add selection
+      // For single-choice sections, remove other selections in this section first
+      if (!section.allow_multiple_selections) {
+        // Get all option IDs in this section
+        const sectionOptionIds = (section.options || []).map((opt: any) => opt.id)
+
+        // Delete all user's selections in this section
+        const { error: deleteError } = await supabase
+          .from('selections')
+          .delete()
+          .eq('user_id', user.id)
+          .in('option_id', sectionOptionIds)
+
+        if (deleteError) {
+          alert(`Error clearing previous selection: ${deleteError.message}`)
+          return
+        }
+      }
+
+      // Add new selection
       const { error } = await supabase
         .from('selections')
         .insert({

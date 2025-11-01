@@ -117,20 +117,21 @@ export const Modal = forwardRef<HTMLDivElement, ModalProps>(
 
     return (
       <div
-        className="fixed inset-0 z-modal flex items-center justify-center p-4 bg-black bg-opacity-50 backdrop-blur-sm"
+        className="fixed inset-0 z-modal overflow-y-auto bg-black bg-opacity-50 backdrop-blur-sm"
         onClick={handleBackdropClick}
         role="dialog"
         aria-modal="true"
         aria-labelledby={title ? 'modal-title' : undefined}
       >
-        {/* Modal content */}
-        <div
-          ref={modalRef}
-          className={`relative w-full bg-white rounded-lg shadow-2xl max-h-[90vh] flex flex-col ${className}`}
-          style={{ maxWidth: sizeStyles[size] }}
-          tabIndex={-1}
-          {...props}
-        >
+        <div className="flex min-h-full items-center justify-center p-4">
+          {/* Modal content */}
+          <div
+            ref={modalRef}
+            className={`relative w-full bg-white rounded-lg shadow-2xl max-h-[90vh] flex flex-col my-8 ${className}`}
+            style={{ maxWidth: sizeStyles[size] }}
+            tabIndex={-1}
+            {...props}
+          >
           {/* Header */}
           {(title || showCloseButton) && (
             <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-200 flex-shrink-0">
@@ -171,9 +172,10 @@ export const Modal = forwardRef<HTMLDivElement, ModalProps>(
             </div>
           )}
 
-          {/* Body - Scrollable */}
-          <div className="px-6 py-6 overflow-y-auto flex-1">
-            {children}
+            {/* Body - Scrollable */}
+            <div className="px-6 py-6 overflow-y-auto flex-1">
+              {children}
+            </div>
           </div>
         </div>
       </div>

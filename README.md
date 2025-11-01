@@ -7,7 +7,8 @@ A personal, invitation-only trip planning application for organizing ski trips w
 - **Trip Management**: Create and manage multiple ski trips
 - **Collaboration**: Real-time updates when team members make selections
 - **Planning Sections**: Organize accommodation, flights, transport, equipment, and more
-- **Expense Tracking**: Upload receipts with AI-powered parsing and split costs
+- **Expense Tracking**: Multi-currency expenses with flexible splitting (even/custom/percentage), receipt uploads with HEIC conversion, and debt minimization
+- **Balance Tracking**: See who owes what with optimized settlement suggestions
 - **Secure**: Row-level security ensures users only see their trips
 
 ## Tech Stack
@@ -88,31 +89,49 @@ The app uses the following main tables:
 - **options** - Choices within planning sections with dynamic pricing
 - **selections** - User selections and votes
 - **comments** - Collaboration and discussion
-- **expenses** - Trip expenses with receipt storage
-- **expense_splits** - Who owes what for each expense
+- **expenses** - Trip expenses with multi-currency support, FX conversion, and receipt storage
+- **expense_splits** - Flexible splitting (equal/custom/percentage)
+- **settlements** - Payment tracking between users
 - **invitations** - Secure invitation codes for signup
 - **trip_notes** - Notes and announcements for trips
 
 ## Current Status
 
+**Phase 7 Complete ✅** - Full Expense Tracking with Multi-Currency & Receipt Uploads!
 **Phase 5 Complete ✅** - Full Planning System with Optimistic Updates!
-**Progress**: 90% overall (Core features complete)
-**Next**: Real-time collaboration (Phase 6) or Expense tracking (Phase 7)
+**Phase 8 Complete ✅** - Enhanced Invitation System with Status Tracking!
+**Progress**: 95% overall (Core features complete)
+**Next**: Real-time collaboration (Phase 6) or Polish & UX (Phase 9)
 
 **What's Working:**
-- ✅ Complete authentication system with invitation-based signup
+- ✅ **Complete authentication system** with invitation-based signup
+  - Multi-step signup flow (invitation validation → account creation → welcome)
+  - Email verification with automatic status tracking
+  - Invitation lifecycle management (active→pending→completed)
+  - Auto-fill invitation codes from URL
+  - SECURITY DEFINER functions for RLS bypass
 - ✅ Custom emoji avatar builder
 - ✅ Admin dashboard (Trips, Users, Invitations management)
 - ✅ **Full trip planning system** with sections, options, and selections
 - ✅ **Dynamic pricing** (per-person, split, tiered)
 - ✅ **Optimistic UI updates** - instant selections with zero scroll jumping
+- ✅ **Expense tracking** with comprehensive features:
+  - Multi-currency support (GBP, EUR, USD, CHF, JPY, AUD, CAD) with automatic FX conversion
+  - Three split types: equal, custom amounts, percentage-based
+  - Receipt uploads with HEIC/HEIF conversion and compression (70-80% reduction)
+  - Balance tracking showing net positions
+  - Debt minimization algorithm for optimal settlements
+  - Category filtering (accommodation, transport, food, activities, equipment, other)
+  - Admin delete capabilities
 - ✅ **Notes & Announcements** with filtering by category
 - ✅ **Auto-redirect for single-trip users** with session tracking
-- ✅ **Edit/delete** for sections and options
+- ✅ **Edit/delete** for sections, options, and expenses
 - ✅ Markdown support for option descriptions
 - ✅ Selection avatars showing participant choices
 - ✅ Mobile-optimized responsive design
-- ✅ **12 database tables** with comprehensive RLS policies
+- ✅ **14 database tables** with comprehensive RLS policies
+- ✅ **Supabase Storage** for receipt uploads (3MB limit, RLS protected)
+- ✅ **10+ SECURITY DEFINER functions** for complex operations
 - ✅ **Character limits** on all text fields for data protection
 - ✅ GitHub Pages deployment: **https://chitintim.github.io/trips/**
 

@@ -4,7 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Card, Badge, Spinner, EmptyState, SelectionAvatars } from '../components/ui'
-import { CreateTripModal, AddParticipantModal, TripNotesSection } from '../components'
+import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab } from '../components'
 import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
 import { CreateOptionModal } from '../components/CreateOptionModal'
 import { Trip, User, TripParticipant } from '../types'
@@ -345,7 +345,7 @@ export function TripDetail() {
       <div className="max-w-6xl mx-auto px-4 py-8">
         {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} />}
         {activeTab === 'planning' && <PlanningTab trip={trip} participants={participants} />}
-        {activeTab === 'expenses' && <ComingSoonTab title="Expenses" description="Expense tracking, receipt uploads, and splits will be available here." />}
+        {activeTab === 'expenses' && <ExpensesTab tripId={trip.id} participants={participants} />}
       </div>
 
       {/* Admin Modals */}
@@ -1284,17 +1284,3 @@ function SelectionSummary({
   )
 }
 
-// Coming Soon Tab Placeholder
-function ComingSoonTab({ title, description }: { title: string; description: string }) {
-  return (
-    <Card>
-      <Card.Content className="py-12">
-        <EmptyState
-          icon="🚧"
-          title={`${title} - Coming Soon`}
-          description={description}
-        />
-      </Card.Content>
-    </Card>
-  )
-}

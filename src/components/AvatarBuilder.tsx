@@ -18,7 +18,7 @@ export function AvatarBuilder({ value, onChange, disabled }: AvatarBuilderProps)
           <span className="relative">
             {value.emoji}
             {value.accessory && (
-              <span className="absolute -top-2 -right-2 text-2xl">
+              <span className="absolute -top-2 left-1/2 -translate-x-1/2 text-2xl">
                 {value.accessory}
               </span>
             )}

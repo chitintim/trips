@@ -201,6 +201,7 @@ export type Database = {
           expires_at: string | null
           id: string
           max_uses: number | null
+          status: Database["public"]["Enums"]["invitation_status"] | null
           trip_id: string | null
           used_at: string | null
           used_by: string | null
@@ -213,6 +214,7 @@ export type Database = {
           expires_at?: string | null
           id?: string
           max_uses?: number | null
+          status?: Database["public"]["Enums"]["invitation_status"] | null
           trip_id?: string | null
           used_at?: string | null
           used_by?: string | null
@@ -225,6 +227,7 @@ export type Database = {
           expires_at?: string | null
           id?: string
           max_uses?: number | null
+          status?: Database["public"]["Enums"]["invitation_status"] | null
           trip_id?: string | null
           used_at?: string | null
           used_by?: string | null
@@ -593,8 +596,17 @@ export type Database = {
           last_attempt: string
         }[]
       }
+      mark_invitation_used: {
+        Args: { p_invitation_id: string; p_user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
+      invitation_status:
+        | "active"
+        | "pending_verification"
+        | "completed"
+        | "expired"
       note_type: "announcement" | "note" | "reminder" | "question" | "info"
       option_status: "draft" | "available" | "booking" | "booked" | "cancelled"
       participant_role: "organizer" | "participant"
@@ -737,6 +749,12 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      invitation_status: [
+        "active",
+        "pending_verification",
+        "completed",
+        "expired",
+      ],
       note_type: ["announcement", "note", "reminder", "question", "info"],
       option_status: ["draft", "available", "booking", "booked", "cancelled"],
       participant_role: ["organizer", "participant"],

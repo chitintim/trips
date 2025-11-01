@@ -153,16 +153,14 @@ export function Signup() {
         // Don't fail signup, just log it
       }
 
-      // Mark invitation as used
-      const { error: invitationError } = await supabase
-        .from('invitations')
-        .update({
-          used_by: user.id,
-          used_at: new Date().toISOString(),
+      // Mark invitation as used using database function (bypasses RLS)
+      const { data: invitationMarked, error: invitationError } = await supabase
+        .rpc('mark_invitation_used', {
+          p_invitation_id: invitation.id,
+          p_user_id: user.id,
         })
-        .eq('id', invitation.id)
 
-      if (invitationError) {
+      if (invitationError || !invitationMarked) {
         console.error('Invitation update error:', invitationError)
         // Don't fail signup, just log it
       }

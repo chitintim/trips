@@ -51,6 +51,7 @@ export type SectionStatus = Enums<'section_status'>
 export type OptionStatus = Enums<'option_status'>
 export type PriceType = Enums<'price_type'>
 export type NoteType = Enums<'note_type'>
+export type InvitationStatus = Enums<'invitation_status'>
 
 // Extended types with relationships
 export interface TripWithCreator extends Trip {

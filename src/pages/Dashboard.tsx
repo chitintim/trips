@@ -658,8 +658,10 @@ function InvitationsTab() {
   const handleDeleteInvitation = async (invitation: Invitation) => {
     const status = getInvitationStatus(invitation)
     const confirmMessage =
-      status === 'used'
-        ? `Delete used invitation code "${invitation.code}"?\n\nThis invitation was already used and can be safely removed.`
+      status === 'completed'
+        ? `Delete completed invitation code "${invitation.code}"?\n\nThis invitation was used and the user has verified their email. Safe to remove.`
+        : status === 'pending_verification'
+        ? `Delete invitation code "${invitation.code}"?\n\nUser has signed up but hasn't verified their email yet. Are you sure?`
         : status === 'expired'
         ? `Delete expired invitation code "${invitation.code}"?\n\nThis invitation has expired and can be safely removed.`
         : `⚠️ Delete ACTIVE invitation code "${invitation.code}"?\n\nWARNING: This invitation is still active and can be used to sign up. Once deleted, the code will no longer work.\n\nAre you sure you want to delete it?`
@@ -690,8 +692,13 @@ function InvitationsTab() {
     )
   }
 
-  const getInvitationStatus = (inv: Invitation) => {
-    if (inv.used_by) return 'used'
+  const getInvitationStatus = (inv: Invitation): 'active' | 'pending_verification' | 'completed' | 'expired' => {
+    // Use the database status if available
+    if (inv.status) {
+      return inv.status
+    }
+    // Fallback for old data without status
+    if (inv.used_by) return 'completed'
     if (inv.expires_at && new Date(inv.expires_at) < new Date()) return 'expired'
     return 'active'
   }
@@ -762,14 +769,16 @@ function InvitationsTab() {
                         <td className="px-6 py-4 whitespace-nowrap">
                           <Badge
                             variant={
-                              status === 'used'
+                              status === 'completed'
                                 ? 'neutral'
                                 : status === 'expired'
                                 ? 'error'
+                                : status === 'pending_verification'
+                                ? 'warning'
                                 : 'success'
                             }
                           >
-                            {status}
+                            {status === 'pending_verification' ? 'Pending Email' : status === 'completed' ? 'Completed' : status}
                           </Badge>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">

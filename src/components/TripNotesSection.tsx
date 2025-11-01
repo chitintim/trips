@@ -25,6 +25,7 @@ export function TripNotesSection({ tripId, isOrganizer }: TripNotesSectionProps)
   const [showAddForm, setShowAddForm] = useState(false)
   const [noteType, setNoteType] = useState<NoteType>('note')
   const [content, setContent] = useState('')
+  const [filterType, setFilterType] = useState<NoteType | 'all'>('all')
 
   useEffect(() => {
     fetchNotes()
@@ -128,24 +129,66 @@ export function TripNotesSection({ tripId, isOrganizer }: TripNotesSectionProps)
     )
   }
 
+  // Filter notes based on selected type
+  const filteredNotes = filterType === 'all'
+    ? notes
+    : notes.filter(note => note.note_type === filterType)
+
   return (
     <Card>
       <Card.Header>
-        <div className="flex items-center justify-between">
-          <div>
-            <Card.Title>Notes & Announcements</Card.Title>
-            <Card.Description>
-              Share information, reminders, and questions with the group
-            </Card.Description>
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Card.Title>Notes & Announcements</Card.Title>
+              <Card.Description>
+                Share information, reminders, and questions with the group
+              </Card.Description>
+            </div>
+            {!showAddForm && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setShowAddForm(true)}
+              >
+                + Add Note
+              </Button>
+            )}
           </div>
-          {!showAddForm && (
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => setShowAddForm(true)}
-            >
-              + Add Note
-            </Button>
+
+          {/* Filter Dropdown */}
+          {notes.length > 0 && (
+            <div className="flex items-center gap-2">
+              <label htmlFor="note-filter" className="text-sm font-medium text-gray-700">
+                Filter:
+              </label>
+              <select
+                id="note-filter"
+                value={filterType}
+                onChange={(e) => setFilterType(e.target.value as NoteType | 'all')}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-sky-500 bg-white"
+              >
+                <option value="all">All Types ({notes.length})</option>
+                {(Object.keys(NOTE_TYPE_CONFIG) as NoteType[]).map((type) => {
+                  const config = NOTE_TYPE_CONFIG[type]
+                  const count = notes.filter(n => n.note_type === type).length
+                  if (count === 0) return null
+                  return (
+                    <option key={type} value={type}>
+                      {config.icon} {config.label} ({count})
+                    </option>
+                  )
+                })}
+              </select>
+              {filterType !== 'all' && (
+                <button
+                  onClick={() => setFilterType('all')}
+                  className="text-xs text-sky-600 hover:text-sky-700 underline"
+                >
+                  Clear filter
+                </button>
+              )}
+            </div>
           )}
         </div>
       </Card.Header>
@@ -232,9 +275,15 @@ export function TripNotesSection({ tripId, isOrganizer }: TripNotesSectionProps)
             title="No notes yet"
             description="Be the first to add a note or announcement for this trip"
           />
+        ) : filteredNotes.length === 0 ? (
+          <EmptyState
+            icon="🔍"
+            title="No notes found"
+            description={`No ${filterType} notes to display`}
+          />
         ) : (
           <div className="space-y-3">
-            {notes.map((note) => {
+            {filteredNotes.map((note) => {
               const config = NOTE_TYPE_CONFIG[note.note_type]
               const isOwnNote = user?.id === note.user_id
               const canDelete = isOwnNote || isOrganizer

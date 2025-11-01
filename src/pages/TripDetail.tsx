@@ -1017,8 +1017,8 @@ function OptionCard({
 
     if (!user) return
 
-    // Save current scroll position
-    const scrollY = window.scrollY
+    // Save current scroll position more reliably
+    const scrollY = window.pageYOffset || document.documentElement.scrollTop
 
     if (isSelected) {
       // Remove selection
@@ -1065,15 +1065,27 @@ function OptionCard({
       }
     }
 
-    // Update and restore scroll position
+    // Store scroll position in sessionStorage as backup
+    sessionStorage.setItem('tripDetailScrollY', scrollY.toString())
+
+    // Update sections data
     onUpdate()
 
-    // Restore scroll position - use requestAnimationFrame for iOS Safari compatibility
-    requestAnimationFrame(() => {
+    // Restore scroll position with multiple fallbacks for maximum compatibility
+    // Use setTimeout to ensure DOM has updated
+    setTimeout(() => {
+      const savedScroll = parseInt(sessionStorage.getItem('tripDetailScrollY') || '0')
+
+      // Try multiple methods for cross-browser compatibility
+      window.scrollTo(0, savedScroll)
+      document.documentElement.scrollTop = savedScroll
+      document.body.scrollTop = savedScroll
+
+      // Additional frame for iOS Safari
       requestAnimationFrame(() => {
-        window.scrollTo({ top: scrollY, behavior: 'instant' })
+        window.scrollTo(0, savedScroll)
       })
-    })
+    }, 50)
   }
 
   return (

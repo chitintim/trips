@@ -147,104 +147,155 @@ export function TripDetail() {
     )
   }
 
+  // Smart date formatting: only repeat month/year when they differ
   const formatDateRange = (startDate: string, endDate: string) => {
     const start = new Date(startDate)
     const end = new Date(endDate)
-    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric', year: 'numeric' }
 
-    return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', options)}`
+    const startMonth = start.toLocaleDateString('en-US', { month: 'short' })
+    const endMonth = end.toLocaleDateString('en-US', { month: 'short' })
+    const startDay = start.getDate()
+    const endDay = end.getDate()
+    const startYear = start.getFullYear()
+    const endYear = end.getFullYear()
+
+    // Same month and year: "Jan 20-27, 2025"
+    if (startMonth === endMonth && startYear === endYear) {
+      return `${startMonth} ${startDay}-${endDay}, ${startYear}`
+    }
+
+    // Same year, different months: "Jan 20 - Feb 5, 2025"
+    if (startYear === endYear) {
+      return `${startMonth} ${startDay} - ${endMonth} ${endDay}, ${startYear}`
+    }
+
+    // Different years: "Dec 28, 2024 - Jan 3, 2025"
+    return `${startMonth} ${startDay}, ${startYear} - ${endMonth} ${endDay}, ${endYear}`
   }
 
-  const getDuration = (startDate: string, endDate: string) => {
+  // Countdown to trip
+  const getCountdown = (startDate: string) => {
     const start = new Date(startDate)
-    const end = new Date(endDate)
-    const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
-    return `${days} ${days === 1 ? 'day' : 'days'}`
+    const now = new Date()
+    const diffTime = start.getTime() - now.getTime()
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+    if (diffDays < 0) {
+      return '🎿 Trip in progress!'
+    } else if (diffDays === 0) {
+      return '🎿 Trip starts today!'
+    } else if (diffDays === 1) {
+      return '🎿 Trip starts tomorrow!'
+    } else if (diffDays <= 7) {
+      return `${diffDays} days until trip`
+    } else if (diffDays <= 30) {
+      const weeks = Math.floor(diffDays / 7)
+      return `${weeks} ${weeks === 1 ? 'week' : 'weeks'} until trip`
+    } else {
+      const months = Math.floor(diffDays / 30)
+      return `${months} ${months === 1 ? 'month' : 'months'} until trip`
+    }
   }
 
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 sticky top-0 z-sticky">
-        <div className="max-w-6xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between mb-4">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => navigate('/dashboard')}
-            >
-              ← Back to Dashboard
-            </Button>
+        <div className="max-w-6xl mx-auto px-4 py-3">
+          {/* Trip Title Row */}
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              <button
+                onClick={() => navigate('/dashboard')}
+                className="text-gray-500 hover:text-gray-700 transition-colors flex-shrink-0"
+                aria-label="Back to Dashboard"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{trip.name}</h1>
+              <Badge
+                variant={
+                  trip.status === 'booked'
+                    ? 'success'
+                    : trip.status === 'booking'
+                    ? 'info'
+                    : 'warning'
+                }
+                className="flex-shrink-0"
+              >
+                {trip.status}
+              </Badge>
+            </div>
             {isAdmin && (
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={handleEditTrip}>
-                  Edit Trip
+              <div className="flex gap-1 flex-shrink-0">
+                <Button variant="outline" size="sm" onClick={handleEditTrip} className="hidden sm:inline-flex">
+                  Edit
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={handleDeleteTrip}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50 hidden sm:inline-flex"
                 >
-                  Delete Trip
+                  Delete
+                </Button>
+                {/* Mobile: Compact menu button */}
+                <Button variant="outline" size="sm" onClick={handleEditTrip} className="sm:hidden">
+                  •••
                 </Button>
               </div>
             )}
           </div>
 
-          <div className="flex items-start justify-between mb-4">
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-2">
-                <h1 className="text-3xl font-bold text-gray-900">{trip.name}</h1>
-                <Badge
-                  variant={
-                    trip.status === 'booked'
-                      ? 'success'
-                      : trip.status === 'booking'
-                      ? 'info'
-                      : 'warning'
-                  }
-                >
-                  {trip.status}
-                </Badge>
-              </div>
-              <div className="flex items-center gap-4 text-gray-600">
-                <span>📍 {trip.location}</span>
-                <span>📅 {formatDateRange(trip.start_date, trip.end_date)}</span>
-                <span>⏱️ {getDuration(trip.start_date, trip.end_date)}</span>
-              </div>
-            </div>
+          {/* Trip Details Row */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600 mb-3">
+            <span className="flex items-center gap-1">
+              <span className="text-base">📍</span>
+              {trip.location}
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="text-base">📅</span>
+              {formatDateRange(trip.start_date, trip.end_date)}
+            </span>
+            <span className="flex items-center gap-1 text-sky-600 font-medium">
+              {getCountdown(trip.start_date)}
+            </span>
           </div>
 
           {/* Participants */}
-          <div className="mb-4">
+          <div className="mb-3">
             <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-medium text-gray-700">Participants ({participants.length})</h3>
+              <h3 className="text-xs sm:text-sm font-medium text-gray-700">
+                👥 {participants.length} {participants.length === 1 ? 'Participant' : 'Participants'}
+              </h3>
               {isAdmin && (
-                <Button variant="ghost" size="sm" onClick={handleAddParticipant}>
-                  + Add Participant
+                <Button variant="ghost" size="sm" onClick={handleAddParticipant} className="text-xs">
+                  + Add
                 </Button>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               {participants.map((participant) => (
                 <div
                   key={participant.user_id}
-                  className="flex items-center gap-2 bg-gray-100 rounded-full px-3 py-1"
+                  className="flex items-center gap-1.5 bg-gray-100 rounded-full px-2 py-1"
+                  title={participant.user.full_name || participant.user.email}
                 >
                   <div
-                    className="w-8 h-8 rounded-full flex items-center justify-center text-lg"
+                    className="w-6 h-6 rounded-full flex items-center justify-center text-sm"
                     style={{
                       backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
                     }}
                   >
                     {(participant.user.avatar_data as any)?.emoji || '😊'}
                   </div>
-                  <span className="text-sm font-medium text-gray-900">
+                  <span className="text-xs sm:text-sm font-medium text-gray-900 max-w-[120px] sm:max-w-none truncate">
                     {participant.user.full_name || participant.user.email}
                   </span>
                   {participant.role === 'organizer' && (
-                    <Badge variant="secondary" className="text-xs">
+                    <Badge variant="secondary" className="text-xs hidden sm:inline-flex">
                       Organizer
                     </Badge>
                   )}

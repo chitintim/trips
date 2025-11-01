@@ -4,12 +4,12 @@ import ReactMarkdown from 'react-markdown'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Card, Badge, Spinner, EmptyState, SelectionAvatars } from '../components/ui'
-import { CreateTripModal, AddParticipantModal } from '../components'
+import { CreateTripModal, AddParticipantModal, TripNotesSection } from '../components'
 import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
 import { CreateOptionModal } from '../components/CreateOptionModal'
 import { Trip, User, TripParticipant } from '../types'
 
-type TripTab = 'overview' | 'planning' | 'expenses' | 'chat'
+type TripTab = 'overview' | 'planning' | 'expenses'
 
 interface ParticipantWithUser extends TripParticipant {
   user: User
@@ -336,16 +336,6 @@ export function TripDetail() {
             >
               💰 Expenses
             </button>
-            <button
-              onClick={() => setActiveTab('chat')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'chat'
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              💬 Chat
-            </button>
           </nav>
         </div>
       </div>
@@ -355,7 +345,6 @@ export function TripDetail() {
         {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} />}
         {activeTab === 'planning' && <PlanningTab trip={trip} participants={participants} />}
         {activeTab === 'expenses' && <ComingSoonTab title="Expenses" description="Expense tracking, receipt uploads, and splits will be available here." />}
-        {activeTab === 'chat' && <ComingSoonTab title="Chat" description="Trip chat and comments will be available here." />}
       </div>
 
       {/* Admin Modals */}
@@ -390,9 +379,11 @@ function TripOverviewTab({
 }) {
   const { user } = useAuth()
   const [isAdmin, setIsAdmin] = useState(false)
+  const [isOrganizer, setIsOrganizer] = useState(false)
 
   useEffect(() => {
     checkAdminStatus()
+    checkOrganizerStatus()
   }, [user])
 
   const checkAdminStatus = async () => {
@@ -406,6 +397,31 @@ function TripOverviewTab({
     if (data) {
       setIsAdmin(data.role === 'admin')
     }
+  }
+
+  const checkOrganizerStatus = async () => {
+    if (!user) return
+
+    // Check if user is system admin, trip creator, or trip organizer
+    const { data: userData } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    const isSystemAdmin = userData?.role === 'admin'
+
+    const { data: participantData } = await supabase
+      .from('trip_participants')
+      .select('role')
+      .eq('trip_id', trip.id)
+      .eq('user_id', user.id)
+      .single()
+
+    const isTripOrganizer = participantData?.role === 'organizer'
+    const isTripCreator = trip.created_by === user.id
+
+    setIsOrganizer(isSystemAdmin || isTripCreator || isTripOrganizer)
   }
 
   const handleRemoveParticipant = async (participant: ParticipantWithUser) => {
@@ -540,6 +556,9 @@ function TripOverviewTab({
           </div>
         </Card.Content>
       </Card>
+
+      {/* Notes & Announcements */}
+      <TripNotesSection tripId={trip.id} isOrganizer={isOrganizer} />
     </div>
   )
 }

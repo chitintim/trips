@@ -77,42 +77,44 @@ src/
 - `npm run preview` - Preview production build
 - `npm run lint` - Run ESLint
 
-## Documentation
-
-- **[QUICK_START.md](./QUICK_START.md)** - Quick reference for developers and Claude Code
-- **[CLAUDE.md](./CLAUDE.md)** - Complete technical specification
-- **[PROJECT_PLAN.md](./PROJECT_PLAN.md)** - Detailed 11-phase development plan
-- **[PROGRESS.md](./PROGRESS.md)** - Current implementation status and progress tracking
-- **[ROADMAP.md](./.github/ROADMAP.md)** - Release timeline and future features
-
 ## Database Schema
 
 The app uses the following main tables:
 
-- **users** - User profiles (extends Supabase auth.users)
-- **trips** - Trip information
-- **trip_participants** - Links users to trips with roles
-
-See [CLAUDE.md](./CLAUDE.md) for the complete database schema and RLS policies.
+- **users** - User profiles (extends auth.users) with custom avatar data
+- **trips** - Trip information and dates
+- **trip_participants** - Links users to trips with roles (organizer/participant)
+- **planning_sections** - Trip planning categories (accommodation, flights, transport, etc.)
+- **options** - Choices within planning sections with dynamic pricing
+- **selections** - User selections and votes
+- **comments** - Collaboration and discussion
+- **expenses** - Trip expenses with receipt storage
+- **expense_splits** - Who owes what for each expense
+- **invitations** - Secure invitation codes for signup
+- **trip_notes** - Notes and announcements for trips
 
 ## Current Status
 
-**Phase 4A Complete ✅** - Admin Dashboard Live!
-**Progress**: 70% overall (Phases 1-4A complete)
-**Next**: Trip creation modal and trip detail pages (Phase 4B)
+**Phase 5 Complete ✅** - Full Planning System with Optimistic Updates!
+**Progress**: 90% overall (Core features complete)
+**Next**: Real-time collaboration (Phase 6) or Expense tracking (Phase 7)
 
 **What's Working:**
-- ✅ Complete authentication system (login, signup, password reset)
-- ✅ Invitation-based signup with custom avatar builder
-- ✅ Admin dashboard with 3 tabs (Trips, Users, Invitations)
-- ✅ Profile editing for all users
-- ✅ Invitation creation with copy-to-clipboard
-- ✅ Enhanced security (20-char codes, attempt logging)
-- ✅ 14 UI components with Winter Clean theme
-- ✅ 11 database tables with 48 RLS policies
+- ✅ Complete authentication system with invitation-based signup
+- ✅ Custom emoji avatar builder
+- ✅ Admin dashboard (Trips, Users, Invitations management)
+- ✅ **Full trip planning system** with sections, options, and selections
+- ✅ **Dynamic pricing** (per-person, split, tiered)
+- ✅ **Optimistic UI updates** - instant selections with zero scroll jumping
+- ✅ **Notes & Announcements** with filtering by category
+- ✅ **Auto-redirect for single-trip users** with session tracking
+- ✅ **Edit/delete** for sections and options
+- ✅ Markdown support for option descriptions
+- ✅ Selection avatars showing participant choices
+- ✅ Mobile-optimized responsive design
+- ✅ **12 database tables** with comprehensive RLS policies
+- ✅ **Character limits** on all text fields for data protection
 - ✅ GitHub Pages deployment: **https://chitintim.github.io/trips/**
-
-See [PROGRESS.md](./PROGRESS.md) for detailed status.
 
 ## Authentication
 

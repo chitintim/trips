@@ -201,10 +201,32 @@ function MemberView() {
   const navigate = useNavigate()
   const [trips, setTrips] = useState<Trip[]>([])
   const [loading, setLoading] = useState(true)
+  const [redirecting, setRedirecting] = useState(false)
 
   useEffect(() => {
     fetchMyTrips()
   }, [])
+
+  // Auto-redirect if user has only one trip (only once per session)
+  useEffect(() => {
+    if (!loading && trips.length === 1 && !redirecting) {
+      // Check if we've already redirected this session
+      const hasRedirected = sessionStorage.getItem('hasAutoRedirectedToTrip')
+
+      if (!hasRedirected) {
+        setRedirecting(true)
+        // Mark that we've redirected this session
+        sessionStorage.setItem('hasAutoRedirectedToTrip', 'true')
+
+        // Show a brief message before redirecting
+        const timer = setTimeout(() => {
+          navigate(`/trips/${trips[0].id}`)
+        }, 1500)
+
+        return () => clearTimeout(timer)
+      }
+    }
+  }, [loading, trips, redirecting, navigate])
 
   const fetchMyTrips = async () => {
     setLoading(true)
@@ -245,6 +267,26 @@ function MemberView() {
       <div className="flex justify-center py-12">
         <Spinner size="lg" />
       </div>
+    )
+  }
+
+  // Show redirecting message when auto-redirecting to single trip
+  if (redirecting && trips.length === 1) {
+    return (
+      <Card>
+        <Card.Content className="py-12">
+          <div className="text-center space-y-4">
+            <div className="text-4xl mb-4">🎿</div>
+            <h2 className="text-xl font-semibold text-gray-900">
+              Taking you to {trips[0].name}...
+            </h2>
+            <p className="text-gray-600">
+              You have one trip. Redirecting you now!
+            </p>
+            <Spinner size="lg" />
+          </div>
+        </Card.Content>
+      </Card>
     )
   }
 

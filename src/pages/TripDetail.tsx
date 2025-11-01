@@ -186,14 +186,8 @@ export function TripDetail() {
       return '🎿 Trip starts today!'
     } else if (diffDays === 1) {
       return '🎿 Trip starts tomorrow!'
-    } else if (diffDays <= 7) {
-      return `${diffDays} days until trip`
-    } else if (diffDays <= 30) {
-      const weeks = Math.floor(diffDays / 7)
-      return `${weeks} ${weeks === 1 ? 'week' : 'weeks'} until trip`
     } else {
-      const months = Math.floor(diffDays / 30)
-      return `${months} ${months === 1 ? 'month' : 'months'} until trip`
+      return `${diffDays} days until trip`
     }
   }
 

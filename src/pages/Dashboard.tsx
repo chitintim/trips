@@ -50,23 +50,23 @@ export function Dashboard() {
 
     try {
       setSigningOut(true)
+
+      // Call Supabase sign out
       const { error } = await signOut()
 
       if (error) {
         console.error('Sign out error:', error)
-        alert('Failed to sign out. Please try again.')
+        alert(`Sign out failed: ${error.message}`)
         setSigningOut(false)
         return
       }
 
-      // Force navigation to login page
-      navigate('/login', { replace: true })
-
-      // Also reload the page to clear any cached state
-      window.location.href = '/trips/login'
-    } catch (err) {
+      // Sign out succeeded - force full page reload to clear state
+      // Using window.location.href works better on mobile Safari
+      window.location.href = window.location.origin + '/trips/login'
+    } catch (err: any) {
       console.error('Unexpected sign out error:', err)
-      alert('Failed to sign out. Please try again.')
+      alert(`Unexpected error: ${err?.message || 'Please try again'}`)
       setSigningOut(false)
     }
   }

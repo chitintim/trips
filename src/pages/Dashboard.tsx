@@ -209,24 +209,27 @@ function MemberView() {
 
   // Auto-redirect if user has only one trip (only once per session)
   useEffect(() => {
-    if (!loading && trips.length === 1 && !redirecting) {
+    if (!loading && trips.length === 1) {
       // Check if we've already redirected this session
       const hasRedirected = sessionStorage.getItem('hasAutoRedirectedToTrip')
 
-      if (!hasRedirected) {
-        setRedirecting(true)
+      if (!hasRedirected && trips[0]?.id) {
+        console.log('Auto-redirecting to trip:', trips[0].id)
         // Mark that we've redirected this session
         sessionStorage.setItem('hasAutoRedirectedToTrip', 'true')
+        setRedirecting(true)
 
         // Show a brief message before redirecting
-        const timer = setTimeout(() => {
-          navigate(`/trips/${trips[0].id}`)
+        setTimeout(() => {
+          console.log('Navigating to:', `/${trips[0].id}`)
+          navigate(`/${trips[0].id}`)
         }, 1500)
 
-        return () => clearTimeout(timer)
+        // Don't clear timeout on re-render - let it complete
+        return () => {}
       }
     }
-  }, [loading, trips, redirecting, navigate])
+  }, [loading, trips, navigate])
 
   const fetchMyTrips = async () => {
     setLoading(true)
@@ -248,7 +251,7 @@ function MemberView() {
   }
 
   const handleViewTrip = (tripId: string) => {
-    navigate(`/trips/${tripId}`)
+    navigate(`/${tripId}`)
   }
 
   const formatDateRange = (startDate: string, endDate: string) => {
@@ -404,7 +407,7 @@ function TripsTab() {
   }
 
   const handleViewTrip = (tripId: string) => {
-    navigate(`/trips/${tripId}`)
+    navigate(`/${tripId}`)
   }
 
   const handleModalClose = () => {

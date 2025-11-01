@@ -822,9 +822,10 @@ function PlanningSectionCard({
   return (
     <Card>
       <Card.Header>
-        <div className="flex items-start justify-between">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1 flex-wrap">
+        <div className="space-y-3">
+          {/* Title row with Edit/Delete buttons */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
               <Card.Title>{section.title}</Card.Title>
               <Badge
                 variant={
@@ -837,25 +838,29 @@ function PlanningSectionCard({
               >
                 {section.status.replace('_', ' ')}
               </Badge>
-              {isAdmin && (
-                <div className="flex gap-1 ml-auto">
-                  <button
-                    onClick={() => onEditSection(section)}
-                    className="text-xs text-sky-600 hover:text-sky-700 px-2 py-1 rounded hover:bg-sky-50 transition-colors"
-                    title="Edit section"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => onDeleteSection(section)}
-                    className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors"
-                    title="Delete section"
-                  >
-                    Delete
-                  </button>
-                </div>
-              )}
             </div>
+            {isAdmin && (
+              <div className="flex gap-1 flex-shrink-0">
+                <button
+                  onClick={() => onEditSection(section)}
+                  className="text-xs text-sky-600 hover:text-sky-700 px-2 py-1 rounded hover:bg-sky-50 transition-colors whitespace-nowrap"
+                  title="Edit section"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => onDeleteSection(section)}
+                  className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors whitespace-nowrap"
+                  title="Delete section"
+                >
+                  Delete
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Description and stats */}
+          <div>
             {section.description && (
               <Card.Description>{section.description}</Card.Description>
             )}
@@ -863,15 +868,18 @@ function PlanningSectionCard({
               {selectionsCount} of {participants.length} people made selections
             </div>
           </div>
+
+          {/* Add Option button */}
           {isAdmin && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => onCreateOption(section.id)}
-              className="ml-2"
-            >
-              + Add Option
-            </Button>
+            <div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onCreateOption(section.id)}
+              >
+                + Add Option
+              </Button>
+            </div>
           )}
         </div>
       </Card.Header>
@@ -1041,11 +1049,12 @@ function OptionCard({
     // Update and restore scroll position
     onUpdate()
 
-    // Restore scroll position after the component re-renders
-    // Use setTimeout to ensure the DOM has updated
-    setTimeout(() => {
-      window.scrollTo(0, scrollY)
-    }, 0)
+    // Restore scroll position - use requestAnimationFrame for iOS Safari compatibility
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: scrollY, behavior: 'instant' })
+      })
+    })
   }
 
   return (

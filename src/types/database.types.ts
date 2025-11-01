@@ -428,6 +428,51 @@ export type Database = {
           },
         ]
       }
+      trip_notes: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          note_type: Database["public"]["Enums"]["note_type"]
+          trip_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          note_type?: Database["public"]["Enums"]["note_type"]
+          trip_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          note_type?: Database["public"]["Enums"]["note_type"]
+          trip_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_notes_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_notes_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       trips: {
         Row: {
           created_at: string
@@ -550,6 +595,7 @@ export type Database = {
       }
     }
     Enums: {
+      note_type: "announcement" | "note" | "reminder" | "question" | "info"
       option_status: "draft" | "available" | "booking" | "booked" | "cancelled"
       participant_role: "organizer" | "participant"
       price_type: "per_person_fixed" | "total_split" | "per_person_tiered"
@@ -691,6 +737,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      note_type: ["announcement", "note", "reminder", "question", "info"],
       option_status: ["draft", "available", "booking", "booked", "cancelled"],
       participant_role: ["organizer", "participant"],
       price_type: ["per_person_fixed", "total_split", "per_person_tiered"],

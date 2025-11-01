@@ -12,6 +12,7 @@ export type Expense = Tables<'expenses'>
 export type ExpenseSplit = Tables<'expense_splits'>
 export type Invitation = Tables<'invitations'>
 export type InvitationAttempt = Tables<'invitation_attempts'>
+export type TripNote = Tables<'trip_notes'>
 
 // Insert types (for creating new records)
 export type UserInsert = TablesInsert<'users'>
@@ -25,6 +26,7 @@ export type ExpenseInsert = TablesInsert<'expenses'>
 export type ExpenseSplitInsert = TablesInsert<'expense_splits'>
 export type InvitationInsert = TablesInsert<'invitations'>
 export type InvitationAttemptInsert = TablesInsert<'invitation_attempts'>
+export type TripNoteInsert = TablesInsert<'trip_notes'>
 
 // Update types (for updating records)
 export type UserUpdate = TablesUpdate<'users'>
@@ -38,6 +40,7 @@ export type ExpenseUpdate = TablesUpdate<'expenses'>
 export type ExpenseSplitUpdate = TablesUpdate<'expense_splits'>
 export type InvitationUpdate = TablesUpdate<'invitations'>
 export type InvitationAttemptUpdate = TablesUpdate<'invitation_attempts'>
+export type TripNoteUpdate = TablesUpdate<'trip_notes'>
 
 // Enum types
 export type UserRole = Enums<'user_role'>
@@ -47,6 +50,7 @@ export type SectionType = Enums<'section_type'>
 export type SectionStatus = Enums<'section_status'>
 export type OptionStatus = Enums<'option_status'>
 export type PriceType = Enums<'price_type'>
+export type NoteType = Enums<'note_type'>
 
 // Extended types with relationships
 export interface TripWithCreator extends Trip {
@@ -91,6 +95,10 @@ export interface ExpenseWithSplits extends Expense {
 
 export interface ExpenseSplitWithDetails extends ExpenseSplit {
   expense?: Expense
+  user?: User
+}
+
+export interface TripNoteWithUser extends TripNote {
   user?: User
 }
 
@@ -165,6 +173,12 @@ export interface CreateInvitationForm {
   trip_id?: string // Optional - admin can assign later
   max_uses?: number
   expires_at?: string
+}
+
+export interface CreateTripNoteForm {
+  trip_id: string
+  note_type: NoteType
+  content: string
 }
 
 // Avatar types

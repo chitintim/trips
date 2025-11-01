@@ -308,6 +308,7 @@ export type Database = {
       }
       planning_sections: {
         Row: {
+          allow_multiple_selections: boolean
           created_at: string
           description: string | null
           id: string
@@ -319,6 +320,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          allow_multiple_selections?: boolean
           created_at?: string
           description?: string | null
           id?: string
@@ -330,6 +332,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          allow_multiple_selections?: boolean
           created_at?: string
           description?: string | null
           id?: string

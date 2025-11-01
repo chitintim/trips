@@ -14,3 +14,6 @@ export { Modal } from './Modal'
 export { Toast } from './Toast'
 export { Spinner } from './Spinner'
 export { EmptyState } from './EmptyState'
+
+// Social Components
+export { SelectionAvatars } from './SelectionAvatars'

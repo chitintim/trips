@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import ReactMarkdown from 'react-markdown'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { Button, Card, Badge, Spinner, EmptyState } from '../components/ui'
+import { Button, Card, Badge, Spinner, EmptyState, SelectionAvatars } from '../components/ui'
 import { CreateTripModal, AddParticipantModal } from '../components'
 import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
 import { CreateOptionModal } from '../components/CreateOptionModal'
@@ -918,7 +919,25 @@ function OptionCard({
           </div>
 
           {option.description && (
-            <p className="text-sm text-gray-600 mb-3">{option.description}</p>
+            <div className="text-sm text-gray-600 mb-3 markdown-content">
+              <ReactMarkdown
+                components={{
+                  h1: ({ children }) => <h1 className="text-lg font-semibold text-gray-900 mb-2">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-base font-semibold text-gray-900 mb-2">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-sm font-semibold text-gray-900 mb-1">{children}</h3>,
+                  p: ({ children }) => <p className="my-2">{children}</p>,
+                  ul: ({ children }) => <ul className="list-disc list-inside my-2 space-y-1">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal list-inside my-2 space-y-1">{children}</ol>,
+                  li: ({ children }) => <li className="my-0.5">{children}</li>,
+                  a: ({ href, children }) => <a href={href} className="text-sky-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                  strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
+                  em: ({ children }) => <em className="italic">{children}</em>,
+                  code: ({ children }) => <code className="bg-gray-100 px-1 py-0.5 rounded text-xs font-mono">{children}</code>,
+                }}
+              >
+                {option.description}
+              </ReactMarkdown>
+            </div>
           )}
 
           {/* Price Display */}
@@ -942,25 +961,11 @@ function OptionCard({
           {selections.length > 0 && (
             <div className="flex items-center gap-2 mb-3">
               <span className="text-sm text-gray-600">Selected by:</span>
-              <div className="flex items-center gap-1">
-                {selections.slice(0, 5).map((sel: any) => (
-                  <div
-                    key={sel.id}
-                    className="w-7 h-7 rounded-full flex items-center justify-center text-sm"
-                    style={{
-                      backgroundColor: (sel.user?.avatar_data as any)?.bgColor || '#0ea5e9',
-                    }}
-                    title={sel.user?.full_name || sel.user?.email}
-                  >
-                    {(sel.user?.avatar_data as any)?.emoji || '😊'}
-                  </div>
-                ))}
-                {selections.length > 5 && (
-                  <span className="text-sm text-gray-600 ml-1">
-                    +{selections.length - 5} more
-                  </span>
-                )}
-              </div>
+              <SelectionAvatars
+                selections={selections}
+                maxAvatars={3}
+                size="sm"
+              />
             </div>
           )}
         </div>

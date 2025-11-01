@@ -560,6 +560,7 @@ function PlanningTab({
   const [createOptionModalOpen, setCreateOptionModalOpen] = useState(false)
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null)
   const [editingOption, setEditingOption] = useState<any | null>(null)
+  const [editingSection, setEditingSection] = useState<any | null>(null)
 
   useEffect(() => {
     checkAdminStatus()
@@ -665,9 +666,13 @@ function PlanningTab({
         {/* Create Section Modal */}
         <CreatePlanningSectionModal
           isOpen={createSectionModalOpen}
-          onClose={() => setCreateSectionModalOpen(false)}
+          onClose={() => {
+            setCreateSectionModalOpen(false)
+            setEditingSection(null)
+          }}
           tripId={trip.id}
           onSuccess={fetchPlanningSections}
+          section={editingSection}
         />
       </>
     )
@@ -706,6 +711,38 @@ function PlanningTab({
                 isAdmin={isAdmin}
                 onUpdate={fetchPlanningSections}
                 onCreateOption={handleCreateOption}
+                onEditSection={(sec) => {
+                  setEditingSection(sec)
+                  setCreateSectionModalOpen(true)
+                }}
+                onDeleteSection={async (sec) => {
+                  const optionCount = (sec.options || []).length
+                  const totalSelections = (sec.options || []).reduce(
+                    (sum: number, opt: any) => sum + (opt.selections || []).length,
+                    0
+                  )
+
+                  let confirmMessage = `Delete section "${sec.title}"?`
+
+                  if (optionCount > 0) {
+                    confirmMessage = `⚠️ Warning: Delete section "${sec.title}"?\n\nThis section has ${optionCount} ${optionCount === 1 ? 'option' : 'options'}${totalSelections > 0 ? ` with ${totalSelections} total ${totalSelections === 1 ? 'selection' : 'selections'}` : ''}.\n\nAll options and selections will be permanently deleted.\n\nThis action CANNOT be undone!`
+                  }
+
+                  if (!window.confirm(confirmMessage)) {
+                    return
+                  }
+
+                  const { error } = await supabase
+                    .from('planning_sections')
+                    .delete()
+                    .eq('id', sec.id)
+
+                  if (error) {
+                    alert(`Error deleting section: ${error.message}`)
+                  } else {
+                    fetchPlanningSections()
+                  }
+                }}
               />
             ))}
           </div>
@@ -723,9 +760,13 @@ function PlanningTab({
       {/* Modals */}
       <CreatePlanningSectionModal
         isOpen={createSectionModalOpen}
-        onClose={() => setCreateSectionModalOpen(false)}
+        onClose={() => {
+          setCreateSectionModalOpen(false)
+          setEditingSection(null)
+        }}
         tripId={trip.id}
         onSuccess={fetchPlanningSections}
+        section={editingSection}
       />
 
       {selectedSectionId && (
@@ -753,6 +794,8 @@ function PlanningSectionCard({
   isAdmin,
   onUpdate,
   onCreateOption,
+  onEditSection,
+  onDeleteSection,
 }: {
   section: any
   trip: Trip
@@ -760,6 +803,8 @@ function PlanningSectionCard({
   isAdmin: boolean
   onUpdate: () => void
   onCreateOption: (sectionId: string, option?: any) => void
+  onEditSection: (section: any) => void
+  onDeleteSection: (section: any) => void
 }) {
   const options = section.options || []
   const availableOptions = options.filter((opt: any) => opt.status !== 'draft' && opt.status !== 'cancelled')
@@ -779,7 +824,7 @@ function PlanningSectionCard({
       <Card.Header>
         <div className="flex items-start justify-between">
           <div className="flex-1">
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
               <Card.Title>{section.title}</Card.Title>
               <Badge
                 variant={
@@ -792,6 +837,24 @@ function PlanningSectionCard({
               >
                 {section.status.replace('_', ' ')}
               </Badge>
+              {isAdmin && (
+                <div className="flex gap-1 ml-auto">
+                  <button
+                    onClick={() => onEditSection(section)}
+                    className="text-xs text-sky-600 hover:text-sky-700 px-2 py-1 rounded hover:bg-sky-50 transition-colors"
+                    title="Edit section"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => onDeleteSection(section)}
+                    className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                    title="Delete section"
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
             </div>
             {section.description && (
               <Card.Description>{section.description}</Card.Description>
@@ -805,6 +868,7 @@ function PlanningSectionCard({
               variant="outline"
               size="sm"
               onClick={() => onCreateOption(section.id)}
+              className="ml-2"
             >
               + Add Option
             </Button>
@@ -926,6 +990,9 @@ function OptionCard({
 
     if (!user) return
 
+    // Save current scroll position
+    const scrollY = window.scrollY
+
     if (isSelected) {
       // Remove selection
       const { error } = await supabase
@@ -971,7 +1038,14 @@ function OptionCard({
       }
     }
 
+    // Update and restore scroll position
     onUpdate()
+
+    // Restore scroll position after the component re-renders
+    // Use setTimeout to ensure the DOM has updated
+    setTimeout(() => {
+      window.scrollTo(0, scrollY)
+    }, 0)
   }
 
   return (

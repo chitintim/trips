@@ -315,7 +315,7 @@ export function TripDetail() {
                   : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
               }`}
             >
-              📋 Overview
+              👥 People
             </button>
             <button
               onClick={() => setActiveTab('planning')}
@@ -446,68 +446,6 @@ function TripOverviewTab({
   }
   return (
     <div className="space-y-6">
-      {/* Trip Details Card */}
-      <Card>
-        <Card.Header>
-          <Card.Title>Trip Details</Card.Title>
-          <Card.Description>Basic information about this trip</Card.Description>
-        </Card.Header>
-        <Card.Content>
-          <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <dt className="text-sm font-medium text-gray-500 mb-1">Trip Name</dt>
-              <dd className="text-base text-gray-900">{trip.name}</dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-500 mb-1">Location</dt>
-              <dd className="text-base text-gray-900">{trip.location}</dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-500 mb-1">Start Date</dt>
-              <dd className="text-base text-gray-900">
-                {new Date(trip.start_date).toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric',
-                })}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-500 mb-1">End Date</dt>
-              <dd className="text-base text-gray-900">
-                {new Date(trip.end_date).toLocaleDateString('en-US', {
-                  weekday: 'long',
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric',
-                })}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-500 mb-1">Status</dt>
-              <dd className="text-base text-gray-900">
-                <Badge
-                  variant={
-                    trip.status === 'booked'
-                      ? 'success'
-                      : trip.status === 'booking'
-                      ? 'info'
-                      : 'warning'
-                  }
-                >
-                  {trip.status}
-                </Badge>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-sm font-medium text-gray-500 mb-1">Participants</dt>
-              <dd className="text-base text-gray-900">{participants.length} people</dd>
-            </div>
-          </dl>
-        </Card.Content>
-      </Card>
-
       {/* Participants Card */}
       <Card>
         <Card.Header>

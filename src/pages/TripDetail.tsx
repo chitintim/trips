@@ -559,6 +559,7 @@ function PlanningTab({
   const [createSectionModalOpen, setCreateSectionModalOpen] = useState(false)
   const [createOptionModalOpen, setCreateOptionModalOpen] = useState(false)
   const [selectedSectionId, setSelectedSectionId] = useState<string | null>(null)
+  const [editingOption, setEditingOption] = useState<any | null>(null)
 
   useEffect(() => {
     checkAdminStatus()
@@ -672,8 +673,9 @@ function PlanningTab({
     )
   }
 
-  const handleCreateOption = (sectionId: string) => {
+  const handleCreateOption = (sectionId: string, option?: any) => {
     setSelectedSectionId(sectionId)
+    setEditingOption(option || null)
     setCreateOptionModalOpen(true)
   }
 
@@ -732,8 +734,10 @@ function PlanningTab({
           onClose={() => {
             setCreateOptionModalOpen(false)
             setSelectedSectionId(null)
+            setEditingOption(null)
           }}
           sectionId={selectedSectionId}
+          option={editingOption}
           onSuccess={fetchPlanningSections}
         />
       )}
@@ -755,7 +759,7 @@ function PlanningSectionCard({
   participants: ParticipantWithUser[]
   isAdmin: boolean
   onUpdate: () => void
-  onCreateOption: (sectionId: string) => void
+  onCreateOption: (sectionId: string, option?: any) => void
 }) {
   const options = section.options || []
   const availableOptions = options.filter((opt: any) => opt.status !== 'draft' && opt.status !== 'cancelled')
@@ -837,6 +841,33 @@ function PlanningSectionCard({
                 isAdmin={isAdmin}
                 isLocked={trip.status === 'booked' || option.locked}
                 onUpdate={onUpdate}
+                onEdit={(opt) => {
+                  // Will implement in parent
+                  onCreateOption(section.id, opt)
+                }}
+                onDelete={async (opt) => {
+                  const selectionCount = (opt.selections || []).length
+                  let confirmMessage = `Delete "${opt.title}"?`
+
+                  if (selectionCount > 0) {
+                    confirmMessage = `⚠️ Warning: Delete "${opt.title}"?\n\n${selectionCount} ${selectionCount === 1 ? 'person has' : 'people have'} selected this option. Their selections will be permanently deleted.\n\nThis action CANNOT be undone!`
+                  }
+
+                  if (!window.confirm(confirmMessage)) {
+                    return
+                  }
+
+                  const { error } = await supabase
+                    .from('options')
+                    .delete()
+                    .eq('id', opt.id)
+
+                  if (error) {
+                    alert(`Error deleting option: ${error.message}`)
+                  } else {
+                    onUpdate()
+                  }
+                }}
               />
             ))}
           </div>
@@ -850,8 +881,11 @@ function PlanningSectionCard({
 function OptionCard({
   option,
   section,
+  isAdmin,
   isLocked,
   onUpdate,
+  onEdit,
+  onDelete,
 }: {
   option: any
   section: any
@@ -860,6 +894,8 @@ function OptionCard({
   isAdmin: boolean
   isLocked: boolean
   onUpdate: () => void
+  onEdit: (option: any) => void
+  onDelete: (option: any) => void
 }) {
   const { user } = useAuth()
   const selections = option.selections || []
@@ -948,7 +984,7 @@ function OptionCard({
     >
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             <h4 className="font-medium text-gray-900">{option.title}</h4>
             {option.status && (
               <Badge
@@ -966,6 +1002,24 @@ function OptionCard({
             )}
             {isLocked && (
               <span className="text-xs text-gray-500">🔒 Locked</span>
+            )}
+            {isAdmin && (
+              <div className="flex gap-1 ml-auto">
+                <button
+                  onClick={() => onEdit(option)}
+                  className="text-xs text-sky-600 hover:text-sky-700 px-2 py-1 rounded hover:bg-sky-50 transition-colors"
+                  title="Edit option"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => onDelete(option)}
+                  className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors"
+                  title="Delete option"
+                >
+                  Delete
+                </button>
+              </div>
             )}
           </div>
 

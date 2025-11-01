@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useEffect } from 'react'
 import { Modal, Button, Input, TextArea, Select } from './ui'
 import { supabase } from '../lib/supabase'
 import { OptionStatus, PriceType } from '../types'
@@ -8,6 +8,10 @@ interface CreateOptionModalProps {
   onClose: () => void
   sectionId: string
   onSuccess: () => void
+  /**
+   * Optional: Option to edit (if provided, modal is in edit mode)
+   */
+  option?: any
 }
 
 const OPTION_STATUS_OPTIONS = [
@@ -34,7 +38,10 @@ export function CreateOptionModal({
   onClose,
   sectionId,
   onSuccess,
+  option,
 }: CreateOptionModalProps) {
+  const isEditMode = !!option
+
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [price, setPrice] = useState('')
@@ -45,6 +52,27 @@ export function CreateOptionModal({
   const [metadataFields, setMetadataFields] = useState<MetadataField[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Populate form when editing
+  useEffect(() => {
+    if (option && isOpen) {
+      setTitle(option.title || '')
+      setDescription(option.description || '')
+      setPrice(option.price ? String(option.price) : '')
+      setCurrency(option.currency || 'EUR')
+      setPriceType(option.price_type || 'per_person_fixed')
+      setStatus(option.status || 'available')
+      setLocked(option.locked || false)
+
+      // Convert metadata object to array of fields
+      const metadata = option.metadata || {}
+      const fields = Object.entries(metadata).map(([key, value]) => ({
+        key,
+        value: String(value)
+      }))
+      setMetadataFields(fields)
+    }
+  }, [option, isOpen])
 
   const resetForm = () => {
     setTitle('')
@@ -91,25 +119,43 @@ export function CreateOptionModal({
         }
       })
 
-      const { error: insertError } = await supabase
-        .from('options')
-        .insert({
-          section_id: sectionId,
-          title,
-          description: description || null,
-          price: price ? parseFloat(price) : null,
-          currency: price ? currency : null,
-          price_type: priceType,
-          status,
-          locked,
-          metadata: Object.keys(metadata).length > 0 ? metadata : null,
-        })
+      const optionData = {
+        section_id: sectionId,
+        title,
+        description: description || null,
+        price: price ? parseFloat(price) : null,
+        currency: price ? currency : null,
+        price_type: priceType,
+        status,
+        locked,
+        metadata: Object.keys(metadata).length > 0 ? metadata : null,
+      }
 
-      if (insertError) {
-        console.error('Error creating option:', insertError)
-        setError(insertError.message)
-        setLoading(false)
-        return
+      if (isEditMode && option) {
+        // UPDATE existing option
+        const { error: updateError } = await supabase
+          .from('options')
+          .update(optionData)
+          .eq('id', option.id)
+
+        if (updateError) {
+          console.error('Error updating option:', updateError)
+          setError(updateError.message)
+          setLoading(false)
+          return
+        }
+      } else {
+        // INSERT new option
+        const { error: insertError } = await supabase
+          .from('options')
+          .insert(optionData)
+
+        if (insertError) {
+          console.error('Error creating option:', insertError)
+          setError(insertError.message)
+          setLoading(false)
+          return
+        }
       }
 
       setLoading(false)
@@ -123,7 +169,7 @@ export function CreateOptionModal({
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Create Option">
+    <Modal isOpen={isOpen} onClose={handleClose} title={isEditMode ? "Edit Option" : "Create Option"}>
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
@@ -283,7 +329,7 @@ export function CreateOptionModal({
             Cancel
           </Button>
           <Button type="submit" variant="primary" isLoading={loading}>
-            Create Option
+            {isEditMode ? 'Save Changes' : 'Create Option'}
           </Button>
         </div>
       </form>

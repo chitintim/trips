@@ -703,6 +703,47 @@ function PlanningTab({
     setCreateOptionModalOpen(true)
   }
 
+  // Optimistic update for selections (avoids full refetch and scroll jumping)
+  const handleSelectionUpdate = (sectionId: string, optionId: string, userId: string, action: 'add' | 'remove', newSelection?: any) => {
+    setSections(prevSections => {
+      return prevSections.map(section => {
+        if (section.id !== sectionId) return section
+
+        return {
+          ...section,
+          options: section.options.map((option: any) => {
+            if (action === 'remove' && option.id === optionId) {
+              return {
+                ...option,
+                selections: option.selections.filter((s: any) => s.user_id !== userId)
+              }
+            }
+
+            if (action === 'add') {
+              // For single-choice sections, remove user's other selections
+              if (!section.allow_multiple_selections && option.id !== optionId) {
+                return {
+                  ...option,
+                  selections: option.selections.filter((s: any) => s.user_id !== userId)
+                }
+              }
+
+              // Add selection to the target option
+              if (option.id === optionId && newSelection) {
+                return {
+                  ...option,
+                  selections: [...option.selections, newSelection]
+                }
+              }
+            }
+
+            return option
+          })
+        }
+      })
+    })
+  }
+
   return (
     <>
       <div className="space-y-6">
@@ -729,6 +770,7 @@ function PlanningTab({
                 participants={participants}
                 isAdmin={isAdmin}
                 onUpdate={fetchPlanningSections}
+                onSelectionUpdate={handleSelectionUpdate}
                 onCreateOption={handleCreateOption}
                 onEditSection={(sec) => {
                   setEditingSection(sec)
@@ -812,6 +854,7 @@ function PlanningSectionCard({
   participants,
   isAdmin,
   onUpdate,
+  onSelectionUpdate,
   onCreateOption,
   onEditSection,
   onDeleteSection,
@@ -821,6 +864,7 @@ function PlanningSectionCard({
   participants: ParticipantWithUser[]
   isAdmin: boolean
   onUpdate: () => void
+  onSelectionUpdate: (sectionId: string, optionId: string, userId: string, action: 'add' | 'remove', newSelection?: any) => void
   onCreateOption: (sectionId: string, option?: any) => void
   onEditSection: (section: any) => void
   onDeleteSection: (section: any) => void
@@ -932,6 +976,7 @@ function PlanningSectionCard({
                 isAdmin={isAdmin}
                 isLocked={trip.status === 'booked' || option.locked}
                 onUpdate={onUpdate}
+                onSelectionUpdate={onSelectionUpdate}
                 onEdit={(opt) => {
                   // Will implement in parent
                   onCreateOption(section.id, opt)
@@ -975,6 +1020,7 @@ function OptionCard({
   isAdmin,
   isLocked,
   onUpdate,
+  onSelectionUpdate,
   onEdit,
   onDelete,
 }: {
@@ -985,6 +1031,7 @@ function OptionCard({
   isAdmin: boolean
   isLocked: boolean
   onUpdate: () => void
+  onSelectionUpdate: (sectionId: string, optionId: string, userId: string, action: 'add' | 'remove', newSelection?: any) => void
   onEdit: (option: any) => void
   onDelete: (option: any) => void
 }) {
@@ -1017,11 +1064,14 @@ function OptionCard({
 
     if (!user) return
 
-    // Save current scroll position more reliably
-    const scrollY = window.pageYOffset || document.documentElement.scrollTop
+    // OPTIMISTIC UPDATE: Update UI immediately, then sync with database
+    // This prevents scroll jumping by avoiding a full re-fetch
 
     if (isSelected) {
-      // Remove selection
+      // Optimistically update UI - remove selection immediately
+      onSelectionUpdate(section.id, option.id, user.id, 'remove')
+
+      // Remove selection from database in background
       const { error } = await supabase
         .from('selections')
         .delete()
@@ -1029,15 +1079,15 @@ function OptionCard({
 
       if (error) {
         alert(`Error removing selection: ${error.message}`)
+        // Revert on error by refetching
+        onUpdate()
         return
       }
     } else {
-      // For single-choice sections, remove other selections in this section first
+      // For single-choice sections, database cleanup happens first
       if (!section.allow_multiple_selections) {
-        // Get all option IDs in this section
         const sectionOptionIds = (section.options || []).map((opt: any) => opt.id)
 
-        // Delete all user's selections in this section
         const { error: deleteError } = await supabase
           .from('selections')
           .delete()
@@ -1050,42 +1100,36 @@ function OptionCard({
         }
       }
 
-      // Add new selection
-      const { error } = await supabase
+      // Get user data for the selection
+      const { data: userData } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', user.id)
+        .single()
+
+      // Add new selection to database
+      const { data: insertedSelection, error } = await supabase
         .from('selections')
         .insert({
           option_id: option.id,
           user_id: user.id,
           metadata: {}
         })
+        .select()
+        .single()
 
       if (error) {
         alert(`Error adding selection: ${error.message}`)
         return
       }
+
+      // Optimistically update UI - add selection immediately
+      const newSelection = {
+        ...insertedSelection,
+        user: userData
+      }
+      onSelectionUpdate(section.id, option.id, user.id, 'add', newSelection)
     }
-
-    // Store scroll position in sessionStorage as backup
-    sessionStorage.setItem('tripDetailScrollY', scrollY.toString())
-
-    // Update sections data
-    onUpdate()
-
-    // Restore scroll position with multiple fallbacks for maximum compatibility
-    // Use setTimeout to ensure DOM has updated
-    setTimeout(() => {
-      const savedScroll = parseInt(sessionStorage.getItem('tripDetailScrollY') || '0')
-
-      // Try multiple methods for cross-browser compatibility
-      window.scrollTo(0, savedScroll)
-      document.documentElement.scrollTop = savedScroll
-      document.body.scrollTop = savedScroll
-
-      // Additional frame for iOS Safari
-      requestAnimationFrame(() => {
-        window.scrollTo(0, savedScroll)
-      })
-    }, 50)
   }
 
   return (

@@ -1,5 +1,5 @@
-import { useState, FormEvent } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, FormEvent, useEffect } from 'react'
+import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
 import { Button, Input, Card } from '../components/ui'
@@ -12,12 +12,21 @@ type Step = 'invitation' | 'details' | 'welcome'
 export function Signup() {
   const navigate = useNavigate()
   const { signUp } = useAuth()
+  const [searchParams] = useSearchParams()
 
   // Multi-step state
   const [step, setStep] = useState<Step>('invitation')
 
   // Invitation validation
   const [invitationCode, setInvitationCode] = useState('')
+
+  // Auto-fill invitation code from URL
+  useEffect(() => {
+    const codeFromUrl = searchParams.get('code')
+    if (codeFromUrl) {
+      setInvitationCode(codeFromUrl.toUpperCase())
+    }
+  }, [searchParams])
   const [invitation, setInvitation] = useState<Invitation | null>(null)
   const [validatingCode, setValidatingCode] = useState(false)
   const [codeError, setCodeError] = useState<string | null>(null)

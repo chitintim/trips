@@ -289,7 +289,14 @@ export function TripDetail() {
                       backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
                     }}
                   >
-                    {(participant.user.avatar_data as any)?.emoji || '😊'}
+                    <span className="relative">
+                      {(participant.user.avatar_data as any)?.emoji || '😊'}
+                      {(participant.user.avatar_data as any)?.accessory && (
+                        <span className="absolute -top-0.5 -right-0.5 text-[0.5rem]">
+                          {(participant.user.avatar_data as any)?.accessory}
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <span className="text-xs sm:text-sm font-medium text-gray-900 max-w-[120px] sm:max-w-none truncate">
                     {participant.user.full_name || participant.user.email}
@@ -527,7 +534,14 @@ function TripOverviewTab({
                       backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
                     }}
                   >
-                    {(participant.user.avatar_data as any)?.emoji || '😊'}
+                    <span className="relative">
+                      {(participant.user.avatar_data as any)?.emoji || '😊'}
+                      {(participant.user.avatar_data as any)?.accessory && (
+                        <span className="absolute -top-1 -right-1 text-xs">
+                          {(participant.user.avatar_data as any)?.accessory}
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <div>
                     <div className="font-medium text-gray-900">

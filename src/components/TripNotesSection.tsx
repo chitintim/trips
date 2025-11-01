@@ -306,7 +306,14 @@ export function TripNotesSection({ tripId, isOrganizer }: TripNotesSectionProps)
                             backgroundColor: (note.user?.avatar_data as any)?.bgColor || '#0ea5e9',
                           }}
                         >
-                          {(note.user?.avatar_data as any)?.emoji || '😊'}
+                          <span className="relative">
+                            {(note.user?.avatar_data as any)?.emoji || '😊'}
+                            {(note.user?.avatar_data as any)?.accessory && (
+                              <span className="absolute -top-0.5 -right-0.5 text-[0.5rem]">
+                                {(note.user?.avatar_data as any)?.accessory}
+                              </span>
+                            )}
+                          </span>
                         </div>
                         <span className="text-sm font-medium text-gray-900">
                           {note.user?.full_name || note.user?.email || 'Unknown'}

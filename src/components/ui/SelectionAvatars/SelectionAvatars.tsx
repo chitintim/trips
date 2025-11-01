@@ -86,6 +86,7 @@ export function SelectionAvatars({
         {visibleSelections.map((selection) => {
           const user = selection.user
           const emoji = (user?.avatar_data as any)?.emoji || '😊'
+          const accessory = (user?.avatar_data as any)?.accessory
           const bgColor = (user?.avatar_data as any)?.bgColor || '#0ea5e9'
           const displayName = user?.full_name || user?.email || 'Unknown'
 
@@ -96,7 +97,14 @@ export function SelectionAvatars({
               style={{ backgroundColor: bgColor }}
               title={displayName}
             >
-              {emoji}
+              <span className="relative">
+                {emoji}
+                {accessory && (
+                  <span className="absolute -top-1 -right-1 text-xs">
+                    {accessory}
+                  </span>
+                )}
+              </span>
             </div>
           )
         })}

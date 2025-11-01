@@ -109,7 +109,14 @@ export function Dashboard() {
                       backgroundColor: (currentUser.avatar_data as any)?.bgColor || '#0ea5e9',
                     }}
                   >
-                    {(currentUser.avatar_data as any)?.emoji || '😊'}
+                    <span className="relative">
+                      {(currentUser.avatar_data as any)?.emoji || '😊'}
+                      {(currentUser.avatar_data as any)?.accessory && (
+                        <span className="absolute -top-1 -right-1 text-xs">
+                          {(currentUser.avatar_data as any)?.accessory}
+                        </span>
+                      )}
+                    </span>
                   </div>
                   <span className="hidden sm:inline">
                     {currentUser.full_name || user?.email}
@@ -557,7 +564,14 @@ function UsersTab() {
                               (user.avatar_data as any)?.bgColor || '#0ea5e9',
                           }}
                         >
-                          {(user.avatar_data as any)?.emoji || '😊'}
+                          <span className="relative">
+                            {(user.avatar_data as any)?.emoji || '😊'}
+                            {(user.avatar_data as any)?.accessory && (
+                              <span className="absolute -top-1 -right-1 text-xs">
+                                {(user.avatar_data as any)?.accessory}
+                              </span>
+                            )}
+                          </span>
                         </div>
                         <div className="font-medium text-gray-900">
                           {user.full_name || 'Unnamed User'}

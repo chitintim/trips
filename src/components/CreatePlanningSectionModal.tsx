@@ -1,4 +1,4 @@
-import { useState, FormEvent } from 'react'
+import { useState, FormEvent, useEffect } from 'react'
 import { Modal, Button, Input, TextArea, Select } from './ui'
 import { supabase } from '../lib/supabase'
 import { SectionType, SectionStatus } from '../types'
@@ -8,6 +8,10 @@ interface CreatePlanningSectionModalProps {
   onClose: () => void
   tripId: string
   onSuccess: () => void
+  /**
+   * Optional: Section to edit (if provided, modal is in edit mode)
+   */
+  section?: any
 }
 
 const SECTION_TYPE_OPTIONS = [
@@ -31,7 +35,10 @@ export function CreatePlanningSectionModal({
   onClose,
   tripId,
   onSuccess,
+  section,
 }: CreatePlanningSectionModalProps) {
+  const isEditMode = !!section
+
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [sectionType, setSectionType] = useState<SectionType>('flights')
@@ -39,6 +46,17 @@ export function CreatePlanningSectionModal({
   const [allowMultipleSelections, setAllowMultipleSelections] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Populate form when editing
+  useEffect(() => {
+    if (section && isOpen) {
+      setTitle(section.title || '')
+      setDescription(section.description || '')
+      setSectionType(section.section_type || 'flights')
+      setStatus(section.status || 'not_started')
+      setAllowMultipleSelections(section.allow_multiple_selections || false)
+    }
+  }, [section, isOpen])
 
   const resetForm = () => {
     setTitle('')
@@ -60,33 +78,55 @@ export function CreatePlanningSectionModal({
     setLoading(true)
 
     try {
-      // Get current max order_index for this trip
-      const { data: sections } = await supabase
-        .from('planning_sections')
-        .select('order_index')
-        .eq('trip_id', tripId)
-        .order('order_index', { ascending: false })
-        .limit(1)
+      if (isEditMode && section) {
+        // UPDATE existing section
+        const { error: updateError } = await supabase
+          .from('planning_sections')
+          .update({
+            title,
+            description: description || null,
+            section_type: sectionType,
+            status,
+            allow_multiple_selections: allowMultipleSelections,
+          })
+          .eq('id', section.id)
 
-      const nextOrderIndex = sections && sections.length > 0 ? sections[0].order_index + 1 : 0
+        if (updateError) {
+          console.error('Error updating section:', updateError)
+          setError(updateError.message)
+          setLoading(false)
+          return
+        }
+      } else {
+        // INSERT new section
+        // Get current max order_index for this trip
+        const { data: sections } = await supabase
+          .from('planning_sections')
+          .select('order_index')
+          .eq('trip_id', tripId)
+          .order('order_index', { ascending: false })
+          .limit(1)
 
-      const { error: insertError } = await supabase
-        .from('planning_sections')
-        .insert({
-          trip_id: tripId,
-          title,
-          description: description || null,
-          section_type: sectionType,
-          status,
-          allow_multiple_selections: allowMultipleSelections,
-          order_index: nextOrderIndex,
-        })
+        const nextOrderIndex = sections && sections.length > 0 ? sections[0].order_index + 1 : 0
 
-      if (insertError) {
-        console.error('Error creating section:', insertError)
-        setError(insertError.message)
-        setLoading(false)
-        return
+        const { error: insertError } = await supabase
+          .from('planning_sections')
+          .insert({
+            trip_id: tripId,
+            title,
+            description: description || null,
+            section_type: sectionType,
+            status,
+            allow_multiple_selections: allowMultipleSelections,
+            order_index: nextOrderIndex,
+          })
+
+        if (insertError) {
+          console.error('Error creating section:', insertError)
+          setError(insertError.message)
+          setLoading(false)
+          return
+        }
       }
 
       setLoading(false)
@@ -100,7 +140,7 @@ export function CreatePlanningSectionModal({
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} title="Create Planning Section">
+    <Modal isOpen={isOpen} onClose={handleClose} title={isEditMode ? "Edit Planning Section" : "Create Planning Section"}>
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
@@ -179,7 +219,7 @@ export function CreatePlanningSectionModal({
             Cancel
           </Button>
           <Button type="submit" variant="primary" isLoading={loading}>
-            Create Section
+            {isEditMode ? 'Save Changes' : 'Create Section'}
           </Button>
         </div>
       </form>

@@ -600,6 +600,10 @@ export type Database = {
         Args: { p_invitation_id: string; p_user_id: string }
         Returns: boolean
       }
+      assign_user_to_trip: {
+        Args: { p_invitation_id: string; p_user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       invitation_status:

@@ -165,18 +165,16 @@ export function Signup() {
         // Don't fail signup, just log it
       }
 
-      // Add user to trip if invitation has trip_id
+      // Assign user to trip if invitation has trip_id (bypasses RLS)
       if (invitation.trip_id) {
-        const { error: participantError } = await supabase
-          .from('trip_participants')
-          .insert({
-            trip_id: invitation.trip_id,
-            user_id: user.id,
-            role: 'participant',
+        const { error: assignError } = await supabase
+          .rpc('assign_user_to_trip', {
+            p_invitation_id: invitation.id,
+            p_user_id: user.id,
           })
 
-        if (participantError) {
-          console.error('Participant add error:', participantError)
+        if (assignError) {
+          console.error('Trip assignment error:', assignError)
           // Don't fail signup, just log it
         }
       }

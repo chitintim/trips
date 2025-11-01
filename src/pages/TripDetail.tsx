@@ -515,15 +515,29 @@ function PlanningTab({
 
   const checkAdminStatus = async () => {
     if (!user) return
-    const { data } = await supabase
+
+    // Check if user is system admin
+    const { data: userData } = await supabase
       .from('users')
       .select('role')
       .eq('id', user.id)
       .single()
 
-    if (data) {
-      setIsAdmin(data.role === 'admin')
-    }
+    const isSystemAdmin = userData?.role === 'admin'
+
+    // Check if user is trip organizer or trip creator
+    const { data: participantData } = await supabase
+      .from('trip_participants')
+      .select('role')
+      .eq('trip_id', trip.id)
+      .eq('user_id', user.id)
+      .single()
+
+    const isTripOrganizer = participantData?.role === 'organizer'
+    const isTripCreator = trip.created_by === user.id
+
+    // User can manage planning if they're system admin, trip creator, or trip organizer
+    setIsAdmin(isSystemAdmin || isTripCreator || isTripOrganizer)
   }
 
   const fetchPlanningSections = async () => {

@@ -537,7 +537,16 @@ function PlanningTab({
     const isTripCreator = trip.created_by === user.id
 
     // User can manage planning if they're system admin, trip creator, or trip organizer
-    setIsAdmin(isSystemAdmin || isTripCreator || isTripOrganizer)
+    const canManage = isSystemAdmin || isTripCreator || isTripOrganizer
+    console.log('Planning admin check:', {
+      isSystemAdmin,
+      isTripCreator,
+      isTripOrganizer,
+      canManage,
+      userId: user.id,
+      tripCreatedBy: trip.created_by
+    })
+    setIsAdmin(canManage)
   }
 
   const fetchPlanningSections = async () => {

@@ -17,13 +17,17 @@ export function AuthCallback() {
       // Parse the hash parameters
       const hashParams = new URLSearchParams(location.hash.substring(1))
       const type = hashParams.get('type')
+      const accessToken = hashParams.get('access_token')
 
       // Handle different auth callback types
       if (type === 'recovery') {
         // Password recovery - redirect to reset password page
         navigate('/reset-password', { replace: true })
+      } else if (type === 'signup' && accessToken) {
+        // Email confirmation - redirect to dashboard
+        navigate('/', { replace: true })
       }
-      // Add other types as needed (signup confirmation, etc.)
+      // Add other types as needed
     }
   }, [location.hash, navigate])
 

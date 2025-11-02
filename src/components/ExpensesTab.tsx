@@ -425,11 +425,19 @@ function ExpenseCard({
                 <span className="truncate">{expense.payer.full_name || expense.payer.email}</span>
                 <span>•</span>
                 <span className="whitespace-nowrap">{formatDate(expense.payment_date)}</span>
-                {(isPayer || currentUserSplit) && (
+                {isPayer && (
                   <>
                     <span>•</span>
-                    <span className={`font-medium whitespace-nowrap ${isPayer ? 'text-green-600' : 'text-orange-600'}`}>
-                      {isPayer ? '✓ Paid' : `Owe ${formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}`}
+                    <span className="font-medium whitespace-nowrap text-green-600">
+                      ✓ Paid
+                    </span>
+                  </>
+                )}
+                {currentUserSplit && (
+                  <>
+                    <span>•</span>
+                    <span className="font-medium whitespace-nowrap text-orange-600">
+                      Owe {formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}
                     </span>
                   </>
                 )}

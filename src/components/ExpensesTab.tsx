@@ -242,7 +242,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
             </Card.Content>
           </Card>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {filteredExpenses.map(expense => (
               <ExpenseCard
                 key={expense.id}
@@ -392,19 +392,19 @@ function ExpenseCard({
       }`}
       onClick={() => setExpanded(!expanded)}
     >
-      <Card.Content className="py-3 px-4">
+      <Card.Content className="py-2 px-3">
         {/* Header Row */}
-        <div className="flex items-start justify-between gap-3 mb-2">
-          <div className="flex items-start gap-3 flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2 mb-1.5">
+          <div className="flex items-start gap-2 flex-1 min-w-0">
             {/* Category Icon */}
-            <div className="flex-shrink-0 text-2xl">
+            <div className="flex-shrink-0 text-xl">
               {getCategoryIcon(expense.category)}
             </div>
 
             {/* Title and Details */}
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-2">
-                <h3 className="font-semibold text-gray-900 truncate">
+                <h3 className="font-semibold text-base text-gray-900 truncate">
                   {expense.description}
                 </h3>
                 {(isAdmin || expense.paid_by === currentUserId) && (
@@ -413,14 +413,14 @@ function ExpenseCard({
                       e.stopPropagation()
                       handleDelete()
                     }}
-                    className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-2 py-1 rounded transition-colors flex-shrink-0"
+                    className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-1.5 py-0.5 rounded transition-colors flex-shrink-0"
                     title="Delete expense"
                   >
                     Delete
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-2 text-sm text-gray-600 mt-0.5">
+              <div className="flex items-center gap-1.5 text-xs text-gray-600 mt-0.5">
                 <span>Paid by {expense.payer.full_name || expense.payer.email}</span>
                 <span>•</span>
                 <span>{formatDate(expense.payment_date)}</span>
@@ -448,7 +448,7 @@ function ExpenseCard({
 
         {/* User's Split Badge */}
         {currentUserSplit && (
-          <div className="flex items-center gap-2 text-sm">
+          <div className="mt-1.5">
             <Badge variant={isPayer ? 'success' : 'warning'} className="text-xs">
               {isPayer ? '✓ You paid' : `You owe ${formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}`}
             </Badge>

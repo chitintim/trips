@@ -403,7 +403,10 @@ export function AddExpenseModal({
                   file:cursor-pointer cursor-pointer"
               />
               <p className="mt-1 text-xs text-gray-500">
-                Supports: JPEG, PNG, HEIC (iPhone), PDF • Max 6MB (will be compressed)
+                Supports: JPEG, PNG, PDF • Max 6MB (will be compressed)
+              </p>
+              <p className="mt-0.5 text-xs text-amber-600 font-medium">
+                📱 iPhone users: Please screenshot photos first before uploading
               </p>
               {receiptFile && (
                 <div className="mt-2 text-sm text-gray-700">

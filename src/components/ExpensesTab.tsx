@@ -459,7 +459,7 @@ function ExpenseCard({
         {expanded && (
           <div className="mt-4 pt-4 border-t border-gray-200">
             <h4 className="text-sm font-medium text-gray-700 mb-2">Split Details:</h4>
-            <div className="space-y-2">
+            <div className="space-y-1">
               {expense.splits.map(split => (
                 <div key={split.id} className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">

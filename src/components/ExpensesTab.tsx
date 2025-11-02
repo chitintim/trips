@@ -392,19 +392,19 @@ function ExpenseCard({
       }`}
       onClick={() => setExpanded(!expanded)}
     >
-      <Card.Content className="py-1.5 px-3">
+      <Card.Content className="py-1 px-3">
         {/* Header Row */}
-        <div className="flex items-start justify-between gap-2 mb-1">
-          <div className="flex items-start gap-2 flex-1 min-w-0">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
             {/* Category Icon */}
-            <div className="flex-shrink-0 text-xl">
+            <div className="flex-shrink-0 text-lg leading-none">
               {getCategoryIcon(expense.category)}
             </div>
 
             {/* Title and Details */}
             <div className="flex-1 min-w-0">
-              <div className="flex items-start justify-between gap-2">
-                <h3 className="font-semibold text-base text-gray-900 truncate leading-tight">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-semibold text-sm text-gray-900 truncate leading-none">
                   {expense.description}
                 </h3>
                 {(isAdmin || expense.paid_by === currentUserId) && (
@@ -413,47 +413,41 @@ function ExpenseCard({
                       e.stopPropagation()
                       handleDelete()
                     }}
-                    className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 px-1.5 py-0.5 rounded transition-colors flex-shrink-0"
+                    className="text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50 px-1 py-0.5 rounded transition-colors flex-shrink-0 leading-none"
                     title="Delete expense"
                   >
-                    Delete
+                    Del
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-gray-600 mt-1 leading-none">
-                <span>Paid by {expense.payer.full_name || expense.payer.email}</span>
+              <div className="flex items-center gap-1 text-[11px] text-gray-500 mt-0.5 leading-none">
+                <span className="truncate">{expense.payer.full_name || expense.payer.email}</span>
                 <span>•</span>
-                <span>{formatDate(expense.payment_date)}</span>
+                <span className="whitespace-nowrap">{formatDate(expense.payment_date)}</span>
+                {currentUserSplit && (
+                  <>
+                    <span>•</span>
+                    <span className={`font-medium whitespace-nowrap ${isPayer ? 'text-green-600' : 'text-orange-600'}`}>
+                      {isPayer ? '✓ Paid' : `Owe ${formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}`}
+                    </span>
+                  </>
+                )}
               </div>
-              {expense.vendor_name && (
-                <div className="text-xs text-gray-500 mt-1 leading-none">
-                  {expense.vendor_name}
-                </div>
-              )}
             </div>
           </div>
 
           {/* Amount */}
           <div className="flex-shrink-0 text-right">
-            <div className="font-bold text-gray-900">
+            <div className="font-bold text-sm text-gray-900 leading-none">
               {formatCurrency(expense.amount, expense.currency as Currency)}
             </div>
             {expense.base_currency_amount && expense.currency !== 'GBP' && (
-              <div className="text-xs text-gray-500">
+              <div className="text-[10px] text-gray-500 mt-0.5 leading-none">
                 {formatCurrency(expense.base_currency_amount, 'GBP')}
               </div>
             )}
           </div>
         </div>
-
-        {/* User's Split Badge */}
-        {currentUserSplit && (
-          <div className="mt-1">
-            <Badge variant={isPayer ? 'success' : 'warning'} className="text-xs">
-              {isPayer ? '✓ You paid' : `You owe ${formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}`}
-            </Badge>
-          </div>
-        )}
 
         {/* Expanded Details */}
         {expanded && (

@@ -392,9 +392,9 @@ function ExpenseCard({
       }`}
       onClick={() => setExpanded(!expanded)}
     >
-      <Card.Content className="py-2 px-3">
+      <Card.Content className="py-1.5 px-3">
         {/* Header Row */}
-        <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="flex items-start justify-between gap-2 mb-1">
           <div className="flex items-start gap-2 flex-1 min-w-0">
             {/* Category Icon */}
             <div className="flex-shrink-0 text-xl">
@@ -404,7 +404,7 @@ function ExpenseCard({
             {/* Title and Details */}
             <div className="flex-1 min-w-0">
               <div className="flex items-start justify-between gap-2">
-                <h3 className="font-semibold text-base text-gray-900 truncate">
+                <h3 className="font-semibold text-base text-gray-900 truncate leading-tight">
                   {expense.description}
                 </h3>
                 {(isAdmin || expense.paid_by === currentUserId) && (
@@ -420,13 +420,13 @@ function ExpenseCard({
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-1.5 text-xs text-gray-600 mt-0.5">
+              <div className="flex items-center gap-1.5 text-xs text-gray-600 mt-1 leading-none">
                 <span>Paid by {expense.payer.full_name || expense.payer.email}</span>
                 <span>•</span>
                 <span>{formatDate(expense.payment_date)}</span>
               </div>
               {expense.vendor_name && (
-                <div className="text-xs text-gray-500 mt-0.5">
+                <div className="text-xs text-gray-500 mt-1 leading-none">
                   {expense.vendor_name}
                 </div>
               )}
@@ -448,7 +448,7 @@ function ExpenseCard({
 
         {/* User's Split Badge */}
         {currentUserSplit && (
-          <div className="mt-1.5">
+          <div className="mt-1">
             <Badge variant={isPayer ? 'success' : 'warning'} className="text-xs">
               {isPayer ? '✓ You paid' : `You owe ${formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}`}
             </Badge>

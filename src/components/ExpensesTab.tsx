@@ -425,7 +425,7 @@ function ExpenseCard({
                 <span className="truncate">{expense.payer.full_name || expense.payer.email}</span>
                 <span>•</span>
                 <span className="whitespace-nowrap">{formatDate(expense.payment_date)}</span>
-                {currentUserSplit && (
+                {(isPayer || currentUserSplit) && (
                   <>
                     <span>•</span>
                     <span className={`font-medium whitespace-nowrap ${isPayer ? 'text-green-600' : 'text-orange-600'}`}>

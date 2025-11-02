@@ -450,7 +450,7 @@ function TripOverviewTab({
     // Refresh the page to show updated participants
     window.location.reload()
   }
-  const [isParticipantsExpanded, setIsParticipantsExpanded] = useState(true)
+  const [isParticipantsExpanded, setIsParticipantsExpanded] = useState(false)
 
   return (
     <div className="space-y-6">

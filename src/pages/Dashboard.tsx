@@ -110,18 +110,18 @@ export function Dashboard() {
                   className="flex items-center gap-2 text-sm text-gray-700 hover:text-gray-900 transition-colors"
                 >
                   <div
-                    className="w-8 h-8 rounded-full flex items-center justify-center text-base"
+                    className="w-8 h-8 rounded-full flex flex-col items-center justify-center text-base"
                     style={{
                       backgroundColor: (currentUser.avatar_data as any)?.bgColor || '#0ea5e9',
                     }}
                   >
-                    <span className="relative">
+                    {(currentUser.avatar_data as any)?.accessory && (
+                      <span className="text-xs -mb-1">
+                        {(currentUser.avatar_data as any)?.accessory}
+                      </span>
+                    )}
+                    <span>
                       {(currentUser.avatar_data as any)?.emoji || '😊'}
-                      {(currentUser.avatar_data as any)?.accessory && (
-                        <span className="absolute -top-1 left-1/2 -translate-x-1/2 text-xs">
-                          {(currentUser.avatar_data as any)?.accessory}
-                        </span>
-                      )}
                     </span>
                   </div>
                   <span className="hidden sm:inline">
@@ -564,19 +564,19 @@ function UsersTab() {
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-3">
                         <div
-                          className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
+                          className="w-10 h-10 rounded-full flex flex-col items-center justify-center text-lg"
                           style={{
                             backgroundColor:
                               (user.avatar_data as any)?.bgColor || '#0ea5e9',
                           }}
                         >
-                          <span className="relative">
+                          {(user.avatar_data as any)?.accessory && (
+                            <span className="text-xs -mb-1">
+                              {(user.avatar_data as any)?.accessory}
+                            </span>
+                          )}
+                          <span>
                             {(user.avatar_data as any)?.emoji || '😊'}
-                            {(user.avatar_data as any)?.accessory && (
-                              <span className="absolute -top-1 left-1/2 -translate-x-1/2 text-xs">
-                                {(user.avatar_data as any)?.accessory}
-                              </span>
-                            )}
                           </span>
                         </div>
                         <div className="font-medium text-gray-900">

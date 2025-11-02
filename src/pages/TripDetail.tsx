@@ -284,18 +284,18 @@ export function TripDetail() {
                   title={participant.user.full_name || participant.user.email}
                 >
                   <div
-                    className="w-6 h-6 rounded-full flex items-center justify-center text-sm"
+                    className="w-6 h-6 rounded-full flex flex-col items-center justify-center text-sm"
                     style={{
                       backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
                     }}
                   >
-                    <span className="relative">
+                    {(participant.user.avatar_data as any)?.accessory && (
+                      <span className="text-[0.5rem] -mb-0.5">
+                        {(participant.user.avatar_data as any)?.accessory}
+                      </span>
+                    )}
+                    <span>
                       {(participant.user.avatar_data as any)?.emoji || '😊'}
-                      {(participant.user.avatar_data as any)?.accessory && (
-                        <span className="absolute -top-0.5 left-1/2 -translate-x-1/2 text-[0.5rem]">
-                          {(participant.user.avatar_data as any)?.accessory}
-                        </span>
-                      )}
                     </span>
                   </div>
                   <span className="text-xs sm:text-sm font-medium text-gray-900 max-w-[120px] sm:max-w-none truncate">
@@ -450,63 +450,101 @@ function TripOverviewTab({
     // Refresh the page to show updated participants
     window.location.reload()
   }
+  const [isParticipantsExpanded, setIsParticipantsExpanded] = useState(true)
+
   return (
     <div className="space-y-6">
       {/* Participants Card */}
       <Card>
         <Card.Header>
-          <Card.Title>Participants</Card.Title>
-          <Card.Description>People joining this trip</Card.Description>
-        </Card.Header>
-        <Card.Content>
-          <div className="space-y-3">
-            {participants.map((participant) => (
-              <div
-                key={participant.user_id}
-                className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+          <div
+            className="cursor-pointer select-none"
+            onClick={() => setIsParticipantsExpanded(!isParticipantsExpanded)}
+          >
+            <div className="flex items-start gap-3">
+              {/* Chevron icon */}
+              <button
+                className="text-gray-400 hover:text-gray-600 transition-colors mt-0.5 flex-shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setIsParticipantsExpanded(!isParticipantsExpanded)
+                }}
               >
-                <div className="flex items-center gap-3">
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-xl"
-                    style={{
-                      backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
-                    }}
-                  >
-                    <span className="relative">
-                      {(participant.user.avatar_data as any)?.emoji || '😊'}
+                <svg
+                  className={`w-5 h-5 transition-transform duration-200 ${isParticipantsExpanded ? 'rotate-90' : ''}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+
+              {/* Title and description */}
+              <div className="flex-1 min-w-0">
+                <Card.Title className="!mb-0">Participants</Card.Title>
+                <Card.Description className="mt-1 !mb-0">
+                  {participants.length} {participants.length === 1 ? 'person' : 'people'} on this trip
+                </Card.Description>
+              </div>
+            </div>
+          </div>
+        </Card.Header>
+
+        {/* Content - only visible when expanded */}
+        {isParticipantsExpanded && (
+          <Card.Content>
+            <div className="space-y-3">
+              {participants.map((participant) => (
+                <div
+                  key={participant.user_id}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-10 h-10 rounded-full flex flex-col items-center justify-center text-xl"
+                      style={{
+                        backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
+                      }}
+                    >
                       {(participant.user.avatar_data as any)?.accessory && (
-                        <span className="absolute -top-1 left-1/2 -translate-x-1/2 text-xs">
+                        <span className="text-xs -mb-1">
                           {(participant.user.avatar_data as any)?.accessory}
                         </span>
                       )}
-                    </span>
-                  </div>
-                  <div>
-                    <div className="font-medium text-gray-900">
-                      {participant.user.full_name || 'Unknown'}
+                      <span>
+                        {(participant.user.avatar_data as any)?.emoji || '😊'}
+                      </span>
                     </div>
-                    <div className="text-sm text-gray-500">{participant.user.email}</div>
+                    <div>
+                      <div className="font-medium text-gray-900">
+                        {participant.user.full_name || 'Unknown'}
+                      </div>
+                      {(isAdmin || isOrganizer) && (
+                        <div className="text-sm text-gray-500">{participant.user.email}</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant={participant.role === 'organizer' ? 'primary' : 'neutral'}>
+                      {participant.role}
+                    </Badge>
+                    {isAdmin && participant.user_id !== user?.id && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveParticipant(participant)}
+                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                      >
+                        Remove
+                      </Button>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={participant.role === 'organizer' ? 'primary' : 'neutral'}>
-                    {participant.role}
-                  </Badge>
-                  {isAdmin && participant.user_id !== user?.id && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleRemoveParticipant(participant)}
-                      className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                    >
-                      Remove
-                    </Button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card.Content>
+              ))}
+            </div>
+          </Card.Content>
+        )}
       </Card>
 
       {/* Notes & Announcements */}

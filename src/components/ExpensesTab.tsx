@@ -392,19 +392,19 @@ function ExpenseCard({
       }`}
       onClick={() => setExpanded(!expanded)}
     >
-      <Card.Content className="py-1 px-3">
+      <Card.Content className="py-0.5 px-3">
         {/* Header Row */}
-        <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2 min-h-[32px]">
           <div className="flex items-center gap-2 flex-1 min-w-0">
             {/* Category Icon */}
-            <div className="flex-shrink-0 text-lg leading-none">
+            <div className="flex-shrink-0 text-lg leading-none flex items-center">
               {getCategoryIcon(expense.category)}
             </div>
 
             {/* Title and Details */}
-            <div className="flex-1 min-w-0">
+            <div className="flex-1 min-w-0 py-0.5">
               <div className="flex items-center justify-between gap-2">
-                <h3 className="font-semibold text-sm text-gray-900 truncate leading-none">
+                <h3 className="font-semibold text-sm text-gray-900 truncate leading-none -mb-px">
                   {expense.description}
                 </h3>
                 {(isAdmin || expense.paid_by === currentUserId) && (
@@ -413,14 +413,14 @@ function ExpenseCard({
                       e.stopPropagation()
                       handleDelete()
                     }}
-                    className="text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50 px-1 py-0.5 rounded transition-colors flex-shrink-0 leading-none"
+                    className="text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50 px-1 py-px rounded transition-colors flex-shrink-0 leading-none"
                     title="Delete expense"
                   >
                     Del
                   </button>
                 )}
               </div>
-              <div className="flex items-center gap-1 text-[11px] text-gray-500 mt-0.5 leading-none">
+              <div className="flex items-center gap-1 text-[11px] text-gray-500 leading-none">
                 <span className="truncate">{expense.payer.full_name || expense.payer.email}</span>
                 <span>•</span>
                 <span className="whitespace-nowrap">{formatDate(expense.payment_date)}</span>
@@ -437,12 +437,12 @@ function ExpenseCard({
           </div>
 
           {/* Amount */}
-          <div className="flex-shrink-0 text-right">
-            <div className="font-bold text-sm text-gray-900 leading-none">
+          <div className="flex-shrink-0 text-right py-0.5">
+            <div className="font-bold text-sm text-gray-900 leading-none -mb-px">
               {formatCurrency(expense.amount, expense.currency as Currency)}
             </div>
             {expense.base_currency_amount && expense.currency !== 'GBP' && (
-              <div className="text-[10px] text-gray-500 mt-0.5 leading-none">
+              <div className="text-[10px] text-gray-500 leading-none">
                 {formatCurrency(expense.base_currency_amount, 'GBP')}
               </div>
             )}

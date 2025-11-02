@@ -453,9 +453,9 @@ function TripOverviewTab({
   const [isParticipantsExpanded, setIsParticipantsExpanded] = useState(false)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Participants Card */}
-      <Card>
+      <Card className="!p-4">
         <Card.Header>
           <div
             className="cursor-pointer select-none"
@@ -494,7 +494,7 @@ function TripOverviewTab({
         {/* Content - only visible when expanded */}
         {isParticipantsExpanded && (
           <Card.Content>
-            <div className="space-y-3">
+            <div className="space-y-2">
               {participants.map((participant) => (
                 <div
                   key={participant.user_id}
@@ -736,7 +736,7 @@ function PlanningTab({
 
   return (
     <>
-      <div className="space-y-6">
+      <div className="space-y-4">
         {/* Header with Create Section Button */}
         {isAdmin && (
           <div className="flex justify-end">
@@ -749,9 +749,9 @@ function PlanningTab({
           </div>
         )}
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Content */}
-          <div className="lg:col-span-2 space-y-6">
+          <div className="lg:col-span-2 space-y-4">
             {sections.map((section) => (
               <PlanningSectionCard
                 key={section.id}
@@ -882,7 +882,7 @@ function PlanningSectionCard({
   )
 
   return (
-    <Card>
+    <Card className="!p-4">
       <Card.Header>
         {/* Clickable header to toggle collapse/expand */}
 
@@ -1018,7 +1018,7 @@ function PlanningSectionCard({
               }
             />
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-3">
               {availableOptions.map((option: any) => (
                 <OptionCard
                   key={option.id}

@@ -283,9 +283,9 @@ function MemberView() {
           </Card.Content>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {trips.map((trip) => (
-            <Card key={trip.id} className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => handleViewTrip(trip.id)}>
+            <Card key={trip.id} className="hover:shadow-lg transition-shadow cursor-pointer !p-4" onClick={() => handleViewTrip(trip.id)}>
               <Card.Header>
                 <div className="flex items-start justify-between">
                   <Card.Title className="text-lg">{trip.name}</Card.Title>

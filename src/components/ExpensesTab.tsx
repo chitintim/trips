@@ -387,12 +387,13 @@ function ExpenseCard({
 
   return (
     <Card
+      noPadding
       className={`cursor-pointer transition-all hover:shadow-md ${
         isPayer ? 'border-l-4 border-l-green-500' : currentUserSplit ? 'border-l-4 border-l-orange-500' : ''
       }`}
       onClick={() => setExpanded(!expanded)}
     >
-      <Card.Content className="py-0.5 px-3">
+      <div className="py-1.5 px-3">
         {/* Header Row */}
         <div className="flex items-center justify-between gap-2 min-h-[32px]">
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -449,12 +450,14 @@ function ExpenseCard({
           </div>
         </div>
 
-        {/* Expanded Details */}
-        {expanded && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <h4 className="text-sm font-medium text-gray-700 mb-2">Split Details:</h4>
-            <div className="space-y-1">
-              {expense.splits.map(split => (
+      </div>
+
+      {/* Expanded Details */}
+      {expanded && (
+        <div className="px-3 pb-3 pt-2 border-t border-gray-200">
+          <h4 className="text-sm font-medium text-gray-700 mb-2">Split Details:</h4>
+          <div className="space-y-1">
+            {expense.splits.map(split => (
                 <div key={split.id} className="flex items-center justify-between text-sm">
                   <div className="flex items-center gap-2">
                     <div
@@ -488,7 +491,6 @@ function ExpenseCard({
             {expense.receipt_url && <ReceiptDisplay receiptPath={expense.receipt_url} />}
           </div>
         )}
-      </Card.Content>
     </Card>
   )
 }

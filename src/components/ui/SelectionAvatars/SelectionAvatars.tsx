@@ -93,17 +93,17 @@ export function SelectionAvatars({
           return (
             <div
               key={selection.id}
-              className={`${classes.avatar} rounded-full flex items-center justify-center ring-2 ring-white transition-transform hover:scale-110 hover:z-10 cursor-default`}
+              className={`${classes.avatar} rounded-full flex flex-col items-center justify-center ring-2 ring-white cursor-default`}
               style={{ backgroundColor: bgColor }}
               title={displayName}
             >
-              <span className="relative">
+              {accessory && (
+                <span className="text-xs -mb-1">
+                  {accessory}
+                </span>
+              )}
+              <span>
                 {emoji}
-                {accessory && (
-                  <span className="absolute -top-1 left-1/2 -translate-x-1/2 text-xs">
-                    {accessory}
-                  </span>
-                )}
               </span>
             </div>
           )

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
+import { useScrollDirection } from '../hooks/useScrollDirection'
 import { Button, Card, Badge, Spinner, EmptyState, SelectionAvatars } from '../components/ui'
 import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab } from '../components'
 import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
@@ -19,6 +20,7 @@ export function TripDetail() {
   const { tripId } = useParams<{ tripId: string }>()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const scrollDirection = useScrollDirection()
   const [trip, setTrip] = useState<Trip | null>(null)
   const [participants, setParticipants] = useState<ParticipantWithUser[]>([])
   const [loading, setLoading] = useState(true)
@@ -194,7 +196,11 @@ export function TripDetail() {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-sticky">
+      <div
+        className={`bg-white border-b border-gray-200 sticky top-0 z-sticky transition-transform duration-300 ease-in-out ${
+          scrollDirection === 'down' ? '-translate-y-full' : 'translate-y-0'
+        }`}
+      >
         <div className="max-w-6xl mx-auto px-4 py-3">
           {/* Trip Title Row */}
           <div className="flex items-center justify-between gap-3 mb-2">
@@ -715,6 +721,7 @@ function PlanningTab({
                 trip={trip}
                 participants={participants}
                 isAdmin={isAdmin}
+                currentUserId={user?.id || ''}
                 onUpdate={fetchPlanningSections}
                 onSelectionUpdate={handleSelectionUpdate}
                 onCreateOption={handleCreateOption}
@@ -799,6 +806,7 @@ function PlanningSectionCard({
   trip,
   participants,
   isAdmin,
+  currentUserId,
   onUpdate,
   onSelectionUpdate,
   onCreateOption,
@@ -809,12 +817,14 @@ function PlanningSectionCard({
   trip: Trip
   participants: ParticipantWithUser[]
   isAdmin: boolean
+  currentUserId: string
   onUpdate: () => void
   onSelectionUpdate: (sectionId: string, optionId: string, userId: string, action: 'add' | 'remove', newSelection?: any) => void
   onCreateOption: (sectionId: string, option?: any) => void
   onEditSection: (section: any) => void
   onDeleteSection: (section: any) => void
 }) {
+  const [isExpanded, setIsExpanded] = useState(false)
   const options = section.options || []
   const availableOptions = options.filter((opt: any) => opt.status !== 'draft' && opt.status !== 'cancelled')
 
@@ -828,37 +838,103 @@ function PlanningSectionCard({
     )
   ).size
 
+  // Check if current user has made a selection in this section
+  const userHasSelected = options.some((opt: any) =>
+    (opt.selections || []).some((sel: any) => sel.user_id === currentUserId)
+  )
+
   return (
     <Card>
       <Card.Header>
-        <div className="space-y-3">
-          {/* Title row with Edit/Delete buttons */}
+        {/* Clickable header to toggle collapse/expand */}
+
+        <div
+          className="cursor-pointer select-none"
+          onClick={() => setIsExpanded(!isExpanded)}
+        >
           <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
-              <Card.Title>{section.title}</Card.Title>
-              <Badge
-                variant={
-                  section.status === 'completed'
-                    ? 'success'
-                    : section.status === 'in_progress'
-                    ? 'info'
-                    : 'neutral'
-                }
+            {/* Left: Title, badges, and chevron */}
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              {/* Chevron icon */}
+              <button
+                className="text-gray-400 hover:text-gray-600 transition-colors mt-0.5 flex-shrink-0"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setIsExpanded(!isExpanded)
+                }}
               >
-                {section.status.replace('_', ' ')}
-              </Badge>
+                <svg
+                  className={`w-5 h-5 transition-transform duration-200 ${isExpanded ? 'rotate-90' : ''}`}
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+
+              {/* Title and badges */}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Card.Title className="!mb-0">{section.title}</Card.Title>
+                  <Badge
+                    variant={
+                      section.status === 'completed'
+                        ? 'success'
+                        : section.status === 'in_progress'
+                        ? 'info'
+                        : 'neutral'
+                    }
+                  >
+                    {section.status.replace('_', ' ')}
+                  </Badge>
+                  {/* Action needed indicator */}
+                  {!userHasSelected && availableOptions.length > 0 && (
+                    <Badge variant="warning" className="animate-pulse">
+                      ⚠️ Action Needed
+                    </Badge>
+                  )}
+                </div>
+
+                {/* Description - always visible */}
+                {section.description && (
+                  <Card.Description className="mt-1 !mb-0">
+                    {section.description}
+                  </Card.Description>
+                )}
+
+                {/* Stats - always visible */}
+                <div className="mt-2 flex items-center gap-4 text-sm text-gray-600">
+                  <span>
+                    {selectionsCount} of {participants.length} people made selections
+                  </span>
+                  {availableOptions.length > 0 && (
+                    <span className="text-gray-400">
+                      • {availableOptions.length} {availableOptions.length === 1 ? 'option' : 'options'}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
+
+            {/* Right: Admin buttons */}
             {isAdmin && (
               <div className="flex gap-1 flex-shrink-0">
                 <button
-                  onClick={() => onEditSection(section)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onEditSection(section)
+                  }}
                   className="text-xs text-sky-600 hover:text-sky-700 px-2 py-1 rounded hover:bg-sky-50 transition-colors whitespace-nowrap"
                   title="Edit section"
                 >
                   Edit
                 </button>
                 <button
-                  onClick={() => onDeleteSection(section)}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onDeleteSection(section)
+                  }}
                   className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors whitespace-nowrap"
                   title="Delete section"
                 >
@@ -867,94 +943,88 @@ function PlanningSectionCard({
               </div>
             )}
           </div>
-
-          {/* Description and stats */}
-          <div>
-            {section.description && (
-              <Card.Description>{section.description}</Card.Description>
-            )}
-            <div className="mt-2 text-sm text-gray-600">
-              {selectionsCount} of {participants.length} people made selections
-            </div>
-          </div>
-
-          {/* Add Option button */}
-          {isAdmin && (
-            <div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onCreateOption(section.id)}
-              >
-                + Add Option
-              </Button>
-            </div>
-          )}
         </div>
-      </Card.Header>
-      <Card.Content>
-        {availableOptions.length === 0 ? (
-          <EmptyState
-            icon="📝"
-            title="No options yet"
-            description={isAdmin ? "Add options for this section" : "No options available yet"}
-            action={
-              isAdmin ? (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => onCreateOption(section.id)}
-                >
-                  + Add Option
-                </Button>
-              ) : undefined
-            }
-          />
-        ) : (
-          <div className="space-y-4">
-            {availableOptions.map((option: any) => (
-              <OptionCard
-                key={option.id}
-                option={option}
-                section={section}
-                trip={trip}
-                participants={participants}
-                isAdmin={isAdmin}
-                isLocked={trip.status === 'booked' || option.locked}
-                onUpdate={onUpdate}
-                onSelectionUpdate={onSelectionUpdate}
-                onEdit={(opt) => {
-                  // Will implement in parent
-                  onCreateOption(section.id, opt)
-                }}
-                onDelete={async (opt) => {
-                  const selectionCount = (opt.selections || []).length
-                  let confirmMessage = `Delete "${opt.title}"?`
 
-                  if (selectionCount > 0) {
-                    confirmMessage = `⚠️ Warning: Delete "${opt.title}"?\n\n${selectionCount} ${selectionCount === 1 ? 'person has' : 'people have'} selected this option. Their selections will be permanently deleted.\n\nThis action CANNOT be undone!`
-                  }
-
-                  if (!window.confirm(confirmMessage)) {
-                    return
-                  }
-
-                  const { error } = await supabase
-                    .from('options')
-                    .delete()
-                    .eq('id', opt.id)
-
-                  if (error) {
-                    alert(`Error deleting option: ${error.message}`)
-                  } else {
-                    onUpdate()
-                  }
-                }}
-              />
-            ))}
+        {/* Add Option button - only visible when expanded */}
+        {isExpanded && isAdmin && (
+          <div className="mt-3 pt-3 border-t border-gray-200">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onCreateOption(section.id)}
+            >
+              + Add Option
+            </Button>
           </div>
         )}
-      </Card.Content>
+      </Card.Header>
+
+      {/* Content - only visible when expanded */}
+      {isExpanded && (
+        <Card.Content>
+          {availableOptions.length === 0 ? (
+            <EmptyState
+              icon="📝"
+              title="No options yet"
+              description={isAdmin ? "Add options for this section" : "No options available yet"}
+              action={
+                isAdmin ? (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => onCreateOption(section.id)}
+                  >
+                    + Add Option
+                  </Button>
+                ) : undefined
+              }
+            />
+          ) : (
+            <div className="space-y-4">
+              {availableOptions.map((option: any) => (
+                <OptionCard
+                  key={option.id}
+                  option={option}
+                  section={section}
+                  trip={trip}
+                  participants={participants}
+                  isAdmin={isAdmin}
+                  isLocked={trip.status === 'booked' || option.locked}
+                  onUpdate={onUpdate}
+                  onSelectionUpdate={onSelectionUpdate}
+                  onEdit={(opt) => {
+                    // Will implement in parent
+                    onCreateOption(section.id, opt)
+                  }}
+                  onDelete={async (opt) => {
+                    const selectionCount = (opt.selections || []).length
+                    let confirmMessage = `Delete "${opt.title}"?`
+
+                    if (selectionCount > 0) {
+                      confirmMessage = `⚠️ Warning: Delete "${opt.title}"?\n\n${selectionCount} ${selectionCount === 1 ? 'person has' : 'people have'} selected this option. Their selections will be permanently deleted.\n\nThis action CANNOT be undone!`
+                    }
+
+                    if (!window.confirm(confirmMessage)) {
+                      return
+                    }
+
+                    const { error } = await supabase
+                      .from('options')
+                      .delete()
+                      .eq('id', opt.id)
+
+                    if (error) {
+                      alert(`Error deleting option: ${error.message}`)
+                    } else {
+                      onUpdate()
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
+        </Card.Content>
+      )}
     </Card>
   )
 }

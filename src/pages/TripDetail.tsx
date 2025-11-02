@@ -233,14 +233,6 @@ export function TripDetail() {
                 <Button variant="outline" size="sm" onClick={handleEditTrip} className="hidden sm:inline-flex">
                   Edit
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDeleteTrip}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50 hidden sm:inline-flex"
-                >
-                  Delete
-                </Button>
                 {/* Mobile: Compact menu button */}
                 <Button variant="outline" size="sm" onClick={handleEditTrip} className="sm:hidden">
                   •••

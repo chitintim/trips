@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { Button, Card, Badge, Spinner, EmptyState } from './ui'
+import { Button, Card, Spinner, EmptyState } from './ui'
 import { AddExpenseModal } from './AddExpenseModal'
 import { RecordSettlementModal } from './RecordSettlementModal'
 import { SettlementHistoryModal } from './SettlementHistoryModal'

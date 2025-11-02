@@ -93,29 +93,6 @@ export function TripDetail() {
     setEditModalOpen(true)
   }
 
-  const handleDeleteTrip = async () => {
-    if (!trip) return
-
-    const confirmMessage = `⚠️ Delete "${trip.name}"?\n\nThis will permanently delete the trip and all associated data including:\n- Planning sections\n- Options and selections\n- Comments\n- Expense records\n\nThis action CANNOT be undone!\n\nAre you absolutely sure?`
-
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    const { error } = await supabase
-      .from('trips')
-      .delete()
-      .eq('id', trip.id)
-
-    if (error) {
-      alert(`Error deleting trip: ${error.message}`)
-      return
-    }
-
-    // Navigate back to dashboard
-    navigate('/dashboard')
-  }
-
   const handleAddParticipant = () => {
     setAddParticipantModalOpen(true)
   }

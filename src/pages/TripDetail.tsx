@@ -419,6 +419,32 @@ function TripOverviewTab({
     // Refresh the page to show updated participants
     window.location.reload()
   }
+
+  const handleChangeParticipantRole = async (participant: ParticipantWithUser, newRole: 'organizer' | 'participant') => {
+    const action = newRole === 'organizer' ? 'promote' : 'demote'
+    const confirmMessage = newRole === 'organizer'
+      ? `Promote ${participant.user.full_name || participant.user.email} to organizer? They will be able to edit this trip and manage participants.`
+      : `Demote ${participant.user.full_name || participant.user.email} to participant? They will lose edit rights for this trip.`
+
+    if (!window.confirm(confirmMessage)) {
+      return
+    }
+
+    const { error } = await supabase
+      .from('trip_participants')
+      .update({ role: newRole })
+      .eq('trip_id', trip.id)
+      .eq('user_id', participant.user_id)
+
+    if (error) {
+      alert(`Error ${action}ing user: ${error.message}`)
+      return
+    }
+
+    // Refresh the page to show updated role
+    window.location.reload()
+  }
+
   const [isParticipantsExpanded, setIsParticipantsExpanded] = useState(false)
 
   return (
@@ -498,6 +524,30 @@ function TripOverviewTab({
                     <Badge variant={participant.role === 'organizer' ? 'primary' : 'neutral'}>
                       {participant.role}
                     </Badge>
+                    {/* Only show role management for admin/organizer, not on yourself */}
+                    {(isAdmin || isOrganizer) && participant.user_id !== user?.id && (
+                      <>
+                        {participant.role === 'participant' ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleChangeParticipantRole(participant, 'organizer')}
+                            className="text-sky-600 hover:text-sky-700 hover:bg-sky-50"
+                          >
+                            Make Organizer
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleChangeParticipantRole(participant, 'participant')}
+                            className="text-gray-600 hover:text-gray-700 hover:bg-gray-100"
+                          >
+                            Demote
+                          </Button>
+                        )}
+                      </>
+                    )}
                     {isAdmin && participant.user_id !== user?.id && (
                       <Button
                         variant="ghost"

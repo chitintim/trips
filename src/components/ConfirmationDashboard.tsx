@@ -598,6 +598,24 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
                                 key={participant.user_id}
                                 className="flex items-start gap-3 px-3 py-2 bg-white border border-gray-200 rounded-lg"
                               >
+                                {/* Avatar */}
+                                <div
+                                  className="w-10 h-10 rounded-full flex flex-col items-center justify-center flex-shrink-0"
+                                  style={{
+                                    backgroundColor:
+                                      (participant.user?.avatar_data as any)?.bgColor || '#0ea5e9',
+                                  }}
+                                >
+                                  {(participant.user?.avatar_data as any)?.accessory && (
+                                    <span className="text-xs -mb-1">
+                                      {(participant.user?.avatar_data as any)?.accessory}
+                                    </span>
+                                  )}
+                                  <span className="text-base">
+                                    {(participant.user?.avatar_data as any)?.emoji || '😊'}
+                                  </span>
+                                </div>
+
                                 {/* Details */}
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2 flex-wrap">

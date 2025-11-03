@@ -229,53 +229,6 @@ export function TripDetail() {
             </span>
           </div>
 
-          {/* Participants */}
-          <div className="mb-3">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs sm:text-sm font-medium text-gray-700">
-                👥 {participants.length} {participants.length === 1 ? 'Participant' : 'Participants'}
-              </h3>
-              {isAdmin && (
-                <Button variant="ghost" size="sm" onClick={handleAddParticipant} className="text-xs">
-                  + Add
-                </Button>
-              )}
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {participants.map((participant) => (
-                <div
-                  key={participant.user_id}
-                  className="flex items-center gap-1.5 bg-gray-100 rounded-full px-2 py-1"
-                  title={participant.user.full_name || participant.user.email}
-                >
-                  <div
-                    className="w-6 h-6 rounded-full flex flex-col items-center justify-center text-sm"
-                    style={{
-                      backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
-                    }}
-                  >
-                    {(participant.user.avatar_data as any)?.accessory && (
-                      <span className="text-[0.5rem] -mb-0.5">
-                        {(participant.user.avatar_data as any)?.accessory}
-                      </span>
-                    )}
-                    <span>
-                      {(participant.user.avatar_data as any)?.emoji || '😊'}
-                    </span>
-                  </div>
-                  <span className="text-xs sm:text-sm font-medium text-gray-900 max-w-[120px] sm:max-w-none truncate">
-                    {participant.user.full_name || participant.user.email}
-                  </span>
-                  {participant.role === 'organizer' && (
-                    <Badge variant="secondary" className="text-xs hidden sm:inline-flex">
-                      Organizer
-                    </Badge>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-
           {/* Tab Navigation */}
           <nav className="flex gap-1 border-b border-gray-200 -mb-px">
             <button

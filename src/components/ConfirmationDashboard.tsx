@@ -275,7 +275,7 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
     return new Date(a.confirmed_at).getTime() - new Date(b.confirmed_at).getTime()
   })
 
-  // Sort conditional by effective deadline (closest → furthest → no deadline)
+  // Sort conditional by effective deadline (closest → furthest → no deadline by oldest first)
   groupedParticipants.conditional.sort((a, b) => {
     const deadlineA = getEffectiveDeadline(a, participants)
     const deadlineB = getEffectiveDeadline(b, participants)
@@ -291,10 +291,10 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
     // Only B has deadline: B comes first
     if (!deadlineA && deadlineB) return 1
 
-    // Neither has deadline: alphabetical by name
-    const nameA = a.user?.full_name || a.user?.email || ''
-    const nameB = b.user?.full_name || b.user?.email || ''
-    return nameA.localeCompare(nameB)
+    // Neither has deadline: sort by updated_at (oldest first)
+    if (!a.updated_at) return 1
+    if (!b.updated_at) return -1
+    return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime()
   })
 
   // Sort waitlist by updated_at (FIFO - who got waitlisted first)
@@ -598,24 +598,6 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
                                 key={participant.user_id}
                                 className="flex items-start gap-3 px-3 py-2 bg-white border border-gray-200 rounded-lg"
                               >
-                                {/* Avatar */}
-                                <div
-                                  className="w-10 h-10 rounded-full flex flex-col items-center justify-center flex-shrink-0"
-                                  style={{
-                                    backgroundColor:
-                                      (participant.user?.avatar_data as any)?.bgColor || '#0ea5e9',
-                                  }}
-                                >
-                                  {(participant.user?.avatar_data as any)?.accessory && (
-                                    <span className="text-xs -mb-1">
-                                      {(participant.user?.avatar_data as any)?.accessory}
-                                    </span>
-                                  )}
-                                  <span className="text-base">
-                                    {(participant.user?.avatar_data as any)?.emoji || '😊'}
-                                  </span>
-                                </div>
-
                                 {/* Details */}
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-2 flex-wrap">
@@ -654,15 +636,54 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
                                     </div>
                                   )}
 
-                                  {/* Effective deadline for conditional */}
-                                  {status === 'conditional' && effectiveDeadline && (
+                                  {/* Waitlist timestamp */}
+                                  {status === 'waitlist' && participant.updated_at && (
                                     <div className="text-xs text-gray-500 mt-0.5">
-                                      Effective deadline:{' '}
-                                      {effectiveDeadline.toLocaleDateString('en-GB', {
-                                        day: 'numeric',
+                                      Joined waitlist:{' '}
+                                      {new Date(participant.updated_at).toLocaleDateString('en-GB', {
+                                        day: '2-digit',
                                         month: 'short',
-                                        year: 'numeric',
+                                        year: '2-digit',
+                                      }).replace(/ /g, '-')}{' '}
+                                      at{' '}
+                                      {new Date(participant.updated_at).toLocaleTimeString('en-GB', {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                        hour12: false,
                                       })}
+                                    </div>
+                                  )}
+
+                                  {/* Conditional timestamp - show effective deadline OR time became conditional */}
+                                  {status === 'conditional' && (
+                                    <div className="text-xs text-gray-500 mt-0.5">
+                                      {effectiveDeadline ? (
+                                        <>
+                                          Effective deadline:{' '}
+                                          {effectiveDeadline.toLocaleDateString('en-GB', {
+                                            day: 'numeric',
+                                            month: 'short',
+                                            year: 'numeric',
+                                          })}
+                                        </>
+                                      ) : (
+                                        participant.updated_at && (
+                                          <>
+                                            Became conditional:{' '}
+                                            {new Date(participant.updated_at).toLocaleDateString('en-GB', {
+                                              day: '2-digit',
+                                              month: 'short',
+                                              year: '2-digit',
+                                            }).replace(/ /g, '-')}{' '}
+                                            at{' '}
+                                            {new Date(participant.updated_at).toLocaleTimeString('en-GB', {
+                                              hour: '2-digit',
+                                              minute: '2-digit',
+                                              hour12: false,
+                                            })}
+                                          </>
+                                        )
+                                      )}
                                     </div>
                                   )}
 

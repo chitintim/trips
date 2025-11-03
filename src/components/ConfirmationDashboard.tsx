@@ -374,14 +374,11 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
       {/* SINGLE CONSOLIDATED CARD */}
       {/* ====================================================================== */}
       <Card>
-        <Card.Content>
+        <Card.Content className="!pt-4">
           <div className="space-y-6">
             {/* Card Header */}
             <div className="pb-6 border-b border-gray-200">
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">Trip Confirmations</h2>
-              <p className="text-sm text-gray-600">
-                Track who's coming and update your own status. Review the requirements and deadlines carefully before confirming.
-              </p>
+              <h2 className="text-2xl font-bold text-gray-900">Trip Confirmations</h2>
             </div>
 
             {/* Important Information (if exists) */}

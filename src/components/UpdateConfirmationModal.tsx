@@ -302,6 +302,67 @@ export function UpdateConfirmationModal({
 
   if (!participant) return null
 
+  // Special view for already confirmed users
+  if (participant.confirmation_status === 'confirmed') {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} size="lg">
+        <div className="space-y-6">
+          {/* Title */}
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900">You're Confirmed! 🎉</h2>
+            <p className="text-sm text-gray-600 mt-1">
+              You confirmed on{' '}
+              {participant.confirmed_at
+                ? new Date(participant.confirmed_at).toLocaleDateString('en-GB', {
+                    day: 'numeric',
+                    month: 'long',
+                    year: 'numeric',
+                  })
+                : 'N/A'}
+            </p>
+          </div>
+
+          {/* Commitment Terms */}
+          <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 space-y-3">
+            <h3 className="font-semibold text-gray-900">Your Commitment</h3>
+            <p className="text-sm text-gray-700">
+              You're locked in! Others are counting on you and have made plans based on your
+              confirmation.
+            </p>
+            {participant.confirmation_note && (
+              <div className="pt-3 border-t border-gray-300">
+                <p className="text-sm text-gray-600 font-medium mb-1">Your note:</p>
+                <p className="text-sm text-gray-700 italic">"{participant.confirmation_note}"</p>
+              </div>
+            )}
+          </div>
+
+          {/* Emergency Contact Information */}
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <div className="flex items-start gap-3">
+              <div className="text-xl">⚠️</div>
+              <div>
+                <h3 className="font-semibold text-red-900 mb-2">If You Can No Longer Make It</h3>
+                <p className="text-sm text-red-800">
+                  Please let the trip organizers know <strong>in the first instance</strong> if you
+                  can no longer make it to the trip. We will do our best to help resolve things and
+                  find a replacement if possible.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Close Button */}
+          <div className="flex justify-end pt-4 border-t border-gray-200">
+            <Button variant="outline" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    )
+  }
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="lg">
       <div className="space-y-6">

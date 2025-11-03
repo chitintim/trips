@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import {
@@ -388,9 +390,11 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
                   <div className="text-2xl">📢</div>
                   <div className="flex-1 space-y-2">
                     <h3 className="font-semibold text-gray-900">Important Information</h3>
-                    <p className="text-sm text-gray-700 whitespace-pre-wrap">
-                      {trip.confirmation_message}
-                    </p>
+                    <div className="text-sm text-gray-700 prose prose-sm max-w-none">
+                      <ReactMarkdown remarkPlugins={[remarkBreaks]}>
+                        {trip.confirmation_message}
+                      </ReactMarkdown>
+                    </div>
                     {trip.estimated_accommodation_cost && (
                       <div className="flex items-center gap-4 text-sm">
                         <span className="text-gray-600">

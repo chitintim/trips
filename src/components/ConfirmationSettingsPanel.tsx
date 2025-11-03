@@ -1,4 +1,6 @@
 import { useState, useEffect } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
 import { supabase } from '../lib/supabase'
 import { Card, Button, Input, TextArea, Select } from './ui'
 import { getSupportedCurrencies, type Currency } from '../lib/currency'
@@ -206,20 +208,20 @@ export function ConfirmationSettingsPanel({
             <Card.Header>
               <Card.Title>Confirmation Message</Card.Title>
               <Card.Description>
-                Explain what participants need to know before confirming
+                Explain what participants need to know before confirming (Markdown supported)
               </Card.Description>
             </Card.Header>
             <Card.Content>
               <TextArea
                 value={confirmationMessage}
                 onChange={(e) => setConfirmationMessage(e.target.value)}
-                placeholder="Example: We need firm commitments by Jan 15th to book the chalet. Please only confirm if you're 100% sure you can make it, as cancellations will affect the whole group's cost."
+                placeholder="Example: We need firm commitments by **Jan 15th** to book the chalet. Please only confirm if you're 100% sure you can make it, as cancellations will affect the whole group's cost."
                 rows={4}
                 maxLength={1000}
               />
               <div className="flex items-center justify-between mt-2">
                 <p className="text-xs text-gray-500">
-                  {confirmationMessage.length}/1000 characters
+                  {confirmationMessage.length}/1000 characters • Supports **bold**, *italic*, and lists
                 </p>
                 <Button
                   variant="ghost"
@@ -237,7 +239,11 @@ export function ConfirmationSettingsPanel({
                     <div className="text-2xl">📢</div>
                     <div className="flex-1">
                       <h4 className="font-semibold text-gray-900 text-sm mb-1">Important Information</h4>
-                      <p className="text-sm text-gray-700 whitespace-pre-wrap">{confirmationMessage}</p>
+                      <div className="text-sm text-gray-700 prose prose-sm max-w-none">
+                        <ReactMarkdown remarkPlugins={[remarkBreaks]}>
+                          {confirmationMessage}
+                        </ReactMarkdown>
+                      </div>
                     </div>
                   </div>
                 </div>

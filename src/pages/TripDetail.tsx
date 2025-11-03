@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { useScrollDirection } from '../hooks/useScrollDirection'
@@ -1257,6 +1258,7 @@ function OptionCard({
           {option.description && (
             <div className="text-sm text-gray-600 mb-3 markdown-content">
               <ReactMarkdown
+                remarkPlugins={[remarkBreaks]}
                 components={{
                   h1: ({ children }) => <h1 className="text-lg font-semibold text-gray-900 mb-2">{children}</h1>,
                   h2: ({ children }) => <h2 className="text-base font-semibold text-gray-900 mb-2">{children}</h2>,

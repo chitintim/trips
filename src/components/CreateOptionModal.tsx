@@ -206,9 +206,9 @@ export function CreateOptionModal({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             disabled={loading}
-            placeholder="Use markdown for formatting:&#10;## Heading&#10;- Bullet points&#10;**Bold text**&#10;[Links](https://example.com)"
+            placeholder="Use markdown for formatting:&#10;## Heading&#10;- Bullet points&#10;**Bold text**&#10;[Links](https://example.com)&#10;&#10;Press Enter for new lines!"
             rows={6}
-            helperText="You can use markdown formatting for rich text"
+            helperText="Supports markdown formatting. Press Enter for line breaks."
           />
         </div>
 

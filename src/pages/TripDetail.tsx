@@ -1276,6 +1276,30 @@ function OptionCard({
             </div>
           )}
 
+          {/* Link Display */}
+          {option.metadata?.link && (
+            <div className="mb-3">
+              <a
+                href={option.metadata.link}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-sm text-sky-600 hover:text-sky-700 hover:underline"
+              >
+                <span>🔗</span>
+                <span>
+                  {(() => {
+                    try {
+                      return new URL(option.metadata.link).hostname.replace('www.', '')
+                    } catch {
+                      return 'View link'
+                    }
+                  })()}
+                </span>
+                <span className="text-xs">↗</span>
+              </a>
+            </div>
+          )}
+
           {/* Price Display */}
           {price !== null && (
             <div className="mb-3">

@@ -44,6 +44,7 @@ export function CreateOptionModal({
 
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [link, setLink] = useState('')
   const [price, setPrice] = useState('')
   const [currency, setCurrency] = useState('EUR')
   const [priceType, setPriceType] = useState<PriceType>('per_person_fixed')
@@ -58,15 +59,17 @@ export function CreateOptionModal({
     if (option && isOpen) {
       setTitle(option.title || '')
       setDescription(option.description || '')
+      setLink(option.metadata?.link || '')
       setPrice(option.price ? String(option.price) : '')
       setCurrency(option.currency || 'EUR')
       setPriceType(option.price_type || 'per_person_fixed')
       setStatus(option.status || 'available')
       setLocked(option.locked || false)
 
-      // Convert metadata object to array of fields
+      // Convert metadata object to array of fields (exclude link as it has its own field)
       const metadata = option.metadata || {}
-      const fields = Object.entries(metadata).map(([key, value]) => ({
+      const { link: _link, ...otherMetadata } = metadata
+      const fields = Object.entries(otherMetadata).map(([key, value]) => ({
         key,
         value: String(value)
       }))
@@ -77,6 +80,7 @@ export function CreateOptionModal({
   const resetForm = () => {
     setTitle('')
     setDescription('')
+    setLink('')
     setPrice('')
     setCurrency('EUR')
     setPriceType('per_person_fixed')
@@ -113,6 +117,13 @@ export function CreateOptionModal({
     try {
       // Build metadata object from key-value pairs
       const metadata: Record<string, string> = {}
+
+      // Add link to metadata if provided
+      if (link.trim()) {
+        metadata.link = link.trim()
+      }
+
+      // Add other metadata fields
       metadataFields.forEach((field) => {
         if (field.key.trim()) {
           metadata[field.key.trim()] = field.value
@@ -200,6 +211,17 @@ export function CreateOptionModal({
             helperText="You can use markdown formatting for rich text"
           />
         </div>
+
+        {/* Link (Optional) */}
+        <Input
+          label="Link (Optional)"
+          type="url"
+          value={link}
+          onChange={(e) => setLink(e.target.value)}
+          disabled={loading}
+          placeholder="https://example.com/menu"
+          helperText="e.g., menu, booking page, details, or location map"
+        />
 
         {/* Pricing */}
         <div className="space-y-4 border-t pt-4">

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { Modal, Button, Select, TextArea, Badge, Avatar } from './ui'
+import { Modal, Button, TextArea, Badge } from './ui'
 import { ConfirmationStatusBadge, ConditionalDependencyDisplay } from './ui'
 import { Database } from '../types/database.types'
 
@@ -273,9 +273,9 @@ export function UpdateConfirmationModal({
   }
 
   // Filter out current user and already confirmed users for conditional selection
-  const selectableParticipants = participants.filter(
-    (p) => p.user_id !== user?.id && p.confirmation_status !== 'confirmed' && p.user_id !== participant?.user_id
-  )
+  // const selectableParticipants = participants.filter(
+  //   (p) => p.user_id !== user?.id && p.confirmation_status !== 'confirmed' && p.user_id !== participant?.user_id
+  // )
 
   const confirmedParticipants = participants.filter(
     (p) => p.confirmation_status === 'confirmed' && p.user_id !== participant?.user_id
@@ -318,7 +318,6 @@ export function UpdateConfirmationModal({
             {[1, 2, 3].map((s) => {
               // Determine if this step should be shown (skip step 2 if not conditional)
               const showStep2 = status === 'conditional'
-              const stepNumber = s === 3 && !showStep2 ? 2 : s
               const isStepSkipped = s === 2 && !showStep2
 
               if (isStepSkipped) return null

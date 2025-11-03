@@ -160,11 +160,8 @@ function areConditionsMet(participant: Participant, allParticipants: Participant
     })
   }
 
-  // For 'date_or_users', either date OR users must be met
-  // For 'date_and_users', both must be met
-  if (participant.conditional_type === 'date_or_users') {
-    return dateMet || usersMet
-  } else if (participant.conditional_type === 'date_and_users') {
+  // For 'both', both date AND users must be met
+  if (participant.conditional_type === 'both') {
     return dateMet && usersMet
   } else if (participant.conditional_type === 'date') {
     return dateMet
@@ -313,7 +310,6 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
   const waitlistCount = groupedParticipants.waitlist.length
   const capacityLimit = trip?.capacity_limit || null
   const isFull = capacityLimit && confirmedCount >= capacityLimit
-  const spotsRemaining = capacityLimit ? Math.max(0, capacityLimit - confirmedCount) : null
 
   // Check if current user's conditions are met
   const currentUserParticipant = participants.find((p) => p.user_id === user?.id)
@@ -540,7 +536,7 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
 
               {/* Participant Groups */}
               <div className="space-y-2.5">
-                {statusOrder.map((status, statusIndex) => {
+                {statusOrder.map((status) => {
                   const statusParticipants = groupedParticipants[status]
                   if (statusParticipants.length === 0) return null
 
@@ -688,7 +684,7 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
                                         conditionalDate={participant.conditional_date}
                                         conditionalUserIds={participant.conditional_user_ids}
                                         participants={participants}
-                                        size="xs"
+                                        size="sm"
                                       />
                                     </div>
                                   )}

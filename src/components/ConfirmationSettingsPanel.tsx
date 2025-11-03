@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { Card, Button, Input, TextArea, Select, Badge } from './ui'
+import { Card, Button, Input, TextArea, Select } from './ui'
 import { getSupportedCurrencies, type Currency } from '../lib/currency'
 
 // ============================================================================

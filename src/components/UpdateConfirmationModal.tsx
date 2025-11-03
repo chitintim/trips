@@ -458,40 +458,18 @@ export function UpdateConfirmationModal({
           {/* Step 1: Status Selection */}
           {step === 1 && (
             <div className="space-y-3">
-              {/* Warning if already confirmed */}
-              {participant.confirmation_status === 'confirmed' && (
-                <div className="bg-primary-50 border-2 border-primary-200 rounded-lg p-4">
-                  <div className="flex items-start gap-3">
-                    <svg className="w-5 h-5 text-primary-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                    </svg>
-                    <div className="flex-1">
-                      <p className="text-sm text-primary-900 font-medium mb-1">You're Already Confirmed!</p>
-                      <p className="text-sm text-primary-800">
-                        Once confirmed, your status is locked. Others are counting on you! If you absolutely need to change your status, please contact the trip organizer directly.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               {STATUS_OPTIONS.map((option) => {
                 // Don't show pending option
                 if (option.value === 'pending') return null
 
-                // If user is confirmed, disable all other options
-                const isLocked = participant.confirmation_status === 'confirmed' && option.value !== 'confirmed'
                 const isSelected = status === option.value
 
                 return (
                   <button
                     key={option.value}
-                    onClick={() => !isLocked && setStatus(option.value as ConfirmationStatus)}
-                    disabled={isLocked}
+                    onClick={() => setStatus(option.value as ConfirmationStatus)}
                     className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                      isLocked
-                        ? 'border-gray-200 bg-gray-50 opacity-50 cursor-not-allowed'
-                        : isSelected
+                      isSelected
                         ? 'border-primary-500 bg-primary-50'
                         : 'border-gray-200 hover:border-gray-300 bg-white'
                     }`}

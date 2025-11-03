@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { useScrollDirection } from '../hooks/useScrollDirection'
 import { Button, Card, Badge, Spinner, EmptyState, SelectionAvatars } from '../components/ui'
-import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
+import { CreateTripModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
 import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
 import { CreateOptionModal } from '../components/CreateOptionModal'
 import { Trip, User, TripParticipant } from '../types'
@@ -29,7 +29,6 @@ export function TripDetail() {
   const [activeTab, setActiveTab] = useState<TripTab>('overview')
   const [isAdmin, setIsAdmin] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
-  const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
 
   useEffect(() => {
     if (!tripId) {
@@ -93,10 +92,6 @@ export function TripDetail() {
 
   const handleEditTrip = () => {
     setEditModalOpen(true)
-  }
-
-  const handleAddParticipant = () => {
-    setAddParticipantModalOpen(true)
   }
 
   if (loading) {
@@ -280,13 +275,6 @@ export function TripDetail() {
             onClose={() => setEditModalOpen(false)}
             onSuccess={fetchTripData}
             editTrip={trip}
-          />
-          <AddParticipantModal
-            isOpen={addParticipantModalOpen}
-            onClose={() => setAddParticipantModalOpen(false)}
-            tripId={trip.id}
-            existingParticipantIds={participants.map((p) => p.user_id)}
-            onSuccess={fetchTripData}
           />
         </>
       )}

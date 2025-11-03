@@ -20,7 +20,8 @@ export function CreateTripModal({
   const [location, setLocation] = useState('')
   const [startDate, setStartDate] = useState('')
   const [endDate, setEndDate] = useState('')
-  const [status, setStatus] = useState<'planning' | 'booking' | 'booked'>('planning')
+  const [status, setStatus] = useState<'gathering_interest' | 'confirming_participants' | 'booking_details' | 'booked_awaiting_departure' | 'trip_ongoing' | 'trip_completed'>('gathering_interest')
+  const [isPublic, setIsPublic] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -32,13 +33,15 @@ export function CreateTripModal({
       setStartDate(editTrip.start_date)
       setEndDate(editTrip.end_date)
       setStatus(editTrip.status)
+      setIsPublic(editTrip.is_public)
     } else {
       // Reset form when creating new trip
       setName('')
       setLocation('')
       setStartDate('')
       setEndDate('')
-      setStatus('planning')
+      setStatus('gathering_interest')
+      setIsPublic(false)
     }
     setError(null)
   }, [editTrip, isOpen])
@@ -80,6 +83,7 @@ export function CreateTripModal({
             start_date: startDate,
             end_date: endDate,
             status,
+            is_public: isPublic,
           })
           .eq('id', editTrip.id)
 
@@ -98,6 +102,7 @@ export function CreateTripModal({
             p_start_date: startDate,
             p_end_date: endDate,
             p_status: status,
+            p_is_public: isPublic,
           })
 
         if (createError) {
@@ -117,7 +122,8 @@ export function CreateTripModal({
       setLocation('')
       setStartDate('')
       setEndDate('')
-      setStatus('planning')
+      setStatus('gathering_interest')
+      setIsPublic(false)
     } catch (err) {
       console.error('Unexpected error:', err)
       setError('An unexpected error occurred')
@@ -186,16 +192,39 @@ export function CreateTripModal({
           label="Trip Status"
           value={status}
           onChange={(e) =>
-            setStatus(e.target.value as 'planning' | 'booking' | 'booked')
+            setStatus(e.target.value as 'gathering_interest' | 'confirming_participants' | 'booking_details' | 'booked_awaiting_departure' | 'trip_ongoing' | 'trip_completed')
           }
           disabled={loading}
           options={[
-            { value: 'planning', label: '📝 Planning - Still deciding on options' },
-            { value: 'booking', label: '🔄 Booking - Ready to book selections' },
-            { value: 'booked', label: '✅ Booked - All bookings confirmed' },
+            { value: 'gathering_interest', label: '💭 Gathering Interest - Seeing who might be interested' },
+            { value: 'confirming_participants', label: '✋ Confirming Participants - Getting commitments' },
+            { value: 'booking_details', label: '🔄 Booking Details - Planning flights, transport, etc.' },
+            { value: 'booked_awaiting_departure', label: '✅ Booked - All set, awaiting departure' },
+            { value: 'trip_ongoing', label: '🎿 Trip Ongoing - Currently happening' },
+            { value: 'trip_completed', label: '🏁 Trip Completed - All done' },
           ]}
           helperText="Set the current status of this trip"
         />
+
+        {/* Public Visibility Toggle */}
+        <div className="flex items-start gap-3">
+          <input
+            type="checkbox"
+            id="is-public"
+            checked={isPublic}
+            onChange={(e) => setIsPublic(e.target.checked)}
+            disabled={loading}
+            className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          />
+          <div className="flex-1">
+            <label htmlFor="is-public" className="block text-sm font-medium text-gray-700 cursor-pointer">
+              Make trip visible to all logged-in users
+            </label>
+            <p className="text-xs text-gray-500 mt-1">
+              When enabled, all authenticated users can see this trip card (but not trip details). They can contact you to express interest in joining.
+            </p>
+          </div>
+        </div>
 
         {/* Buttons */}
         <div className="flex gap-3 justify-end pt-4">

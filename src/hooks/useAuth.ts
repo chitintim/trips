@@ -54,6 +54,10 @@ export function useAuth() {
 
   const signOut = async () => {
     const { error } = await supabase.auth.signOut()
+    // Ignore "Auth session missing" error - user is already signed out
+    if (error && error.message?.includes('Auth session missing')) {
+      return { error: null }
+    }
     return { error }
   }
 

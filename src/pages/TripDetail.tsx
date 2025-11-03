@@ -6,10 +6,11 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { useScrollDirection } from '../hooks/useScrollDirection'
 import { Button, Card, Badge, Spinner, EmptyState, SelectionAvatars } from '../components/ui'
-import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab } from '../components'
+import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
 import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
 import { CreateOptionModal } from '../components/CreateOptionModal'
 import { Trip, User, TripParticipant } from '../types'
+import { getTripStatusBadgeVariant, getTripStatusLabel, isTripLocked } from '../lib/tripStatus'
 
 type TripTab = 'overview' | 'planning' | 'expenses'
 
@@ -194,16 +195,10 @@ export function TripDetail() {
               </button>
               <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{trip.name}</h1>
               <Badge
-                variant={
-                  trip.status === 'booked'
-                    ? 'success'
-                    : trip.status === 'booking'
-                    ? 'info'
-                    : 'warning'
-                }
+                variant={getTripStatusBadgeVariant(trip.status)}
                 className="flex-shrink-0"
               >
-                {trip.status}
+                {getTripStatusLabel(trip.status)}
               </Badge>
             </div>
             {isAdmin && (
@@ -447,11 +442,13 @@ function TripOverviewTab({
   }
 
   const [isParticipantsExpanded, setIsParticipantsExpanded] = useState(false)
+  const [isConfirmationSettingsExpanded, setIsConfirmationSettingsExpanded] = useState(false)
 
   return (
     <div className="space-y-4">
-      {/* Participants Card */}
-      <Card className="!p-4">
+      {/* Participants Card (Organizers/Admins only) */}
+      {(isOrganizer || isAdmin) && (
+        <Card className="!p-4">
         <Card.Header>
           <div
             className="cursor-pointer select-none"
@@ -566,6 +563,64 @@ function TripOverviewTab({
           </Card.Content>
         )}
       </Card>
+      )}
+
+      {/* Confirmation Settings (Organizer Only) */}
+      {isOrganizer && (
+        <Card className="!p-4">
+          <Card.Header>
+            <div
+              className="cursor-pointer select-none"
+              onClick={() => setIsConfirmationSettingsExpanded(!isConfirmationSettingsExpanded)}
+            >
+              <div className="flex items-start gap-3">
+                {/* Chevron icon */}
+                <button
+                  className="text-gray-400 hover:text-gray-600 transition-colors mt-0.5 flex-shrink-0"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setIsConfirmationSettingsExpanded(!isConfirmationSettingsExpanded)
+                  }}
+                >
+                  <svg
+                    className={`w-5 h-5 transition-transform duration-200 ${isConfirmationSettingsExpanded ? 'rotate-90' : ''}`}
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                  </svg>
+                </button>
+
+                {/* Title and description */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Card.Title className="!mb-0">Confirmation Settings</Card.Title>
+                    <Badge variant="secondary" size="sm">Organizer</Badge>
+                  </div>
+                  <Card.Description className="mt-1 !mb-0">
+                    Configure the confirmation system for participants
+                  </Card.Description>
+                </div>
+              </div>
+            </div>
+          </Card.Header>
+
+          {/* Content - only visible when expanded */}
+          {isConfirmationSettingsExpanded && (
+            <Card.Content className="pt-4">
+              <ConfirmationSettingsPanel
+                tripId={trip.id}
+                isOrganizer={isOrganizer}
+                onUpdate={() => window.location.reload()}
+              />
+            </Card.Content>
+          )}
+        </Card>
+      )}
+
+      {/* Confirmations */}
+      <ConfirmationDashboard tripId={trip.id} />
 
       {/* Notes & Announcements */}
       <TripNotesSection tripId={trip.id} isOrganizer={isOrganizer} />
@@ -1047,7 +1102,7 @@ function PlanningSectionCard({
                   trip={trip}
                   participants={participants}
                   isAdmin={isAdmin}
-                  isLocked={trip.status === 'booked' || option.locked}
+                  isLocked={isTripLocked(trip.status) || option.locked}
                   onUpdate={onUpdate}
                   onSelectionUpdate={onSelectionUpdate}
                   onEdit={(opt) => {

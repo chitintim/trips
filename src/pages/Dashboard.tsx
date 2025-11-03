@@ -9,6 +9,7 @@ import { CreateInvitationModal } from '../components/CreateInvitationModal'
 import { CreateTripModal } from '../components/CreateTripModal'
 import { ViewUserTripsModal } from '../components/ViewUserTripsModal'
 import { User, Trip, Invitation } from '../types'
+import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming } from '../lib/tripStatus'
 
 type AdminTab = 'trips' | 'users' | 'invitations'
 
@@ -212,16 +213,27 @@ export function Dashboard() {
 // Member view (non-admin users)
 function MemberView() {
   const navigate = useNavigate()
-  const [trips, setTrips] = useState<Trip[]>([])
+  const { user } = useAuth()
+  const [myTrips, setMyTrips] = useState<(Trip & { confirmed_count: number })[]>([])
+  const [publicTrips, setPublicTrips] = useState<(Trip & { confirmed_count: number })[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchMyTrips()
-  }, [])
+    if (user) {
+      fetchMyTrips()
+    }
+  }, [user])
 
   const fetchMyTrips = async () => {
     setLoading(true)
-    const { data, error } = await supabase
+
+    if (!user) {
+      setLoading(false)
+      return
+    }
+
+    // Fetch all trips (RLS now allows viewing public trips)
+    const { data: tripsData, error } = await supabase
       .from('trips')
       .select('*')
       .order('start_date', { ascending: false })
@@ -229,11 +241,52 @@ function MemberView() {
     if (error) {
       console.error('Error fetching my trips:', error)
       alert(`Error loading trips: ${error.message}`)
+      setLoading(false)
+      return
     }
 
-    if (data) {
-      console.log('Fetched my trips:', data)
-      setTrips(data)
+    console.log('All trips data:', tripsData)
+
+    if (tripsData) {
+      // Get user's trip participations
+      const { data: participations, error: participationError } = await supabase
+        .from('trip_participants')
+        .select('trip_id')
+        .eq('user_id', user.id)
+
+      if (participationError) {
+        console.error('Error fetching participations:', participationError)
+      }
+
+      console.log('User participations:', participations)
+      const userTripIds = new Set(participations?.map(p => p.trip_id) || [])
+
+      // For each trip, get the confirmed count and separate into my trips vs public trips
+      const tripsWithCounts = await Promise.all(
+        tripsData.map(async (trip) => {
+          const { count } = await supabase
+            .from('trip_participants')
+            .select('*', { count: 'exact', head: true })
+            .eq('trip_id', trip.id)
+            .eq('confirmation_status', 'confirmed')
+
+          return {
+            ...trip,
+            confirmed_count: count || 0
+          }
+        })
+      )
+
+      // Separate into user's trips and public trips they're not in
+      const userTrips = tripsWithCounts.filter(trip => userTripIds.has(trip.id))
+      const otherPublicTrips = tripsWithCounts.filter(trip =>
+        trip.is_public && !userTripIds.has(trip.id)
+      )
+
+      console.log('Fetched my trips:', userTrips)
+      console.log('Fetched public trips:', otherPublicTrips)
+      setMyTrips(userTrips)
+      setPublicTrips(otherPublicTrips)
     }
     setLoading(false)
   }
@@ -272,61 +325,122 @@ function MemberView() {
         </p>
       </div>
 
-      {trips.length === 0 ? (
-        <Card>
-          <Card.Content className="py-12">
-            <EmptyState
-              icon="🎿"
-              title="No trips yet"
-              description="You haven't been added to any trips yet. Tim will add you soon!"
-            />
-          </Card.Content>
-        </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {trips.map((trip) => (
-            <Card key={trip.id} className="hover:shadow-lg transition-shadow cursor-pointer !p-4" onClick={() => handleViewTrip(trip.id)}>
-              <Card.Header>
-                <div className="flex items-start justify-between">
-                  <Card.Title className="text-lg">{trip.name}</Card.Title>
-                  <Badge
-                    variant={
-                      trip.status === 'booked'
-                        ? 'success'
-                        : trip.status === 'booking'
-                        ? 'info'
-                        : 'warning'
-                    }
-                  >
-                    {trip.status}
-                  </Badge>
-                </div>
-                <Card.Description className="mt-2">
-                  <div className="flex flex-col gap-1 text-sm">
-                    <span className="flex items-center gap-1">
-                      <span>📍</span> {trip.location}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <span>📅</span> {formatDateRange(trip.start_date, trip.end_date)}
-                    </span>
-                  </div>
-                </Card.Description>
-              </Card.Header>
-              <Card.Footer>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  className="w-full"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleViewTrip(trip.id)
-                  }}
-                >
-                  View Trip Details
-                </Button>
-              </Card.Footer>
-            </Card>
-          ))}
+      {/* My Trips Section */}
+      <div className="mb-8">
+        <h3 className="text-xl font-semibold text-gray-800 mb-4">My Trips</h3>
+        {myTrips.length === 0 ? (
+          <Card>
+            <Card.Content className="py-12">
+              <EmptyState
+                icon="🎿"
+                title="No trips yet"
+                description="You haven't been added to any trips yet. Tim will add you soon!"
+              />
+            </Card.Content>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {myTrips.map((trip) => {
+              const timing = getTripTiming(trip.start_date, trip.end_date)
+              return (
+                <Card key={trip.id} className="hover:shadow-lg transition-shadow cursor-pointer !p-4" onClick={() => handleViewTrip(trip.id)}>
+                  <Card.Header>
+                    <div className="flex items-start justify-between gap-2">
+                      <Card.Title className="text-lg">{trip.name}</Card.Title>
+                      <div className="flex flex-col gap-1 items-end flex-shrink-0">
+                        <Badge variant={getTripStatusBadgeVariant(trip.status)}>
+                          {getTripStatusLabel(trip.status)}
+                        </Badge>
+                        {timing && (
+                          <Badge variant={timing.variant}>
+                            {timing.label}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    <Card.Description className="mt-2">
+                      <div className="flex flex-col gap-1 text-sm">
+                        <span className="flex items-center gap-1">
+                          <span>📍</span> {trip.location}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span>📅</span> {formatDateRange(trip.start_date, trip.end_date)}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span>👥</span> {trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit} confirmed` : `${trip.confirmed_count} confirmed`}
+                        </span>
+                      </div>
+                    </Card.Description>
+                  </Card.Header>
+                  <Card.Footer>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      className="w-full"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleViewTrip(trip.id)
+                      }}
+                    >
+                      View Trip Details
+                    </Button>
+                  </Card.Footer>
+                </Card>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Public Trips Section (trips user is not in) */}
+      {publicTrips.length > 0 && (
+        <div>
+          <h3 className="text-xl font-semibold text-gray-800 mb-4">Other Public Trips</h3>
+          <p className="text-sm text-gray-600 mb-4">
+            Interested in joining? Contact Tim to express your interest!
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {publicTrips.map((trip) => {
+              const timing = getTripTiming(trip.start_date, trip.end_date)
+              return (
+                <Card key={trip.id} className="opacity-60 !p-4 pointer-events-none">
+                  <Card.Header>
+                    <div className="flex items-start justify-between gap-2">
+                      <Card.Title className="text-lg">{trip.name}</Card.Title>
+                      <div className="flex flex-col gap-1 items-end flex-shrink-0">
+                        <Badge variant={getTripStatusBadgeVariant(trip.status)}>
+                          {getTripStatusLabel(trip.status)}
+                        </Badge>
+                        {timing && (
+                          <Badge variant={timing.variant}>
+                            {timing.label}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    <Card.Description className="mt-2">
+                      <div className="flex flex-col gap-1 text-sm">
+                        <span className="flex items-center gap-1">
+                          <span>📍</span> {trip.location}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span>📅</span> {formatDateRange(trip.start_date, trip.end_date)}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span>👥</span> {trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit} confirmed` : `${trip.confirmed_count} confirmed`}
+                        </span>
+                      </div>
+                    </Card.Description>
+                  </Card.Header>
+                  <Card.Footer>
+                    <div className="text-xs text-gray-600 text-center py-2">
+                      Contact Tim to join this trip
+                    </div>
+                  </Card.Footer>
+                </Card>
+              )
+            })}
+          </div>
         </div>
       )}
     </>
@@ -336,7 +450,7 @@ function MemberView() {
 // Trips management tab (admin only)
 function TripsTab() {
   const navigate = useNavigate()
-  const [trips, setTrips] = useState<Trip[]>([])
+  const [trips, setTrips] = useState<(Trip & { confirmed_count: number })[]>([])
   const [loading, setLoading] = useState(true)
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editingTrip, setEditingTrip] = useState<Trip | null>(null)
@@ -347,7 +461,7 @@ function TripsTab() {
 
   const fetchTrips = async () => {
     setLoading(true)
-    const { data, error } = await supabase
+    const { data: tripsData, error } = await supabase
       .from('trips')
       .select('*')
       .order('start_date', { ascending: false })
@@ -355,11 +469,29 @@ function TripsTab() {
     if (error) {
       console.error('Error fetching trips:', error)
       alert(`Error loading trips: ${error.message}`)
+      setLoading(false)
+      return
     }
 
-    if (data) {
-      console.log('Fetched trips:', data)
-      setTrips(data)
+    if (tripsData) {
+      // For each trip, get the confirmed count
+      const tripsWithCounts = await Promise.all(
+        tripsData.map(async (trip) => {
+          const { count } = await supabase
+            .from('trip_participants')
+            .select('*', { count: 'exact', head: true })
+            .eq('trip_id', trip.id)
+            .eq('confirmation_status', 'confirmed')
+
+          return {
+            ...trip,
+            confirmed_count: count || 0
+          }
+        })
+      )
+
+      console.log('Fetched trips:', tripsWithCounts)
+      setTrips(tripsWithCounts)
     }
     setLoading(false)
   }
@@ -424,55 +556,63 @@ function TripsTab() {
         </Card>
       ) : (
         <div className="grid gap-4">
-          {trips.map((trip) => (
-            <Card key={trip.id}>
-              <Card.Content className="p-6">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <h3 className="text-lg font-semibold text-gray-900">
-                        {trip.name}
-                      </h3>
-                      <Badge
-                        variant={
-                          trip.status === 'booked'
-                            ? 'success'
-                            : trip.status === 'booking'
-                            ? 'info'
-                            : 'warning'
-                        }
+          {trips.map((trip) => {
+            const timing = getTripTiming(trip.start_date, trip.end_date)
+            return (
+              <Card key={trip.id}>
+                <Card.Content className="p-6">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2 flex-wrap">
+                        <h3 className="text-lg font-semibold text-gray-900">
+                          {trip.name}
+                        </h3>
+                        <Badge variant={getTripStatusBadgeVariant(trip.status)}>
+                          {getTripStatusLabel(trip.status)}
+                        </Badge>
+                        {timing && (
+                          <Badge variant={timing.variant}>
+                            {timing.label}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="flex flex-col gap-1 text-sm text-gray-600">
+                        <div className="flex items-center gap-4">
+                          <span>📍 {trip.location}</span>
+                        </div>
+                        <div className="flex items-center gap-4">
+                          <span>
+                            📅 {new Date(trip.start_date).toLocaleDateString()} -{' '}
+                            {new Date(trip.end_date).toLocaleDateString()}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span>👥</span>
+                          <span>{trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit} confirmed` : `${trip.confirmed_count} confirmed`}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleEditTrip(trip)}
                       >
-                        {trip.status}
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm text-gray-600">
-                      <span>📍 {trip.location}</span>
-                      <span>
-                        📅 {new Date(trip.start_date).toLocaleDateString()} -{' '}
-                        {new Date(trip.end_date).toLocaleDateString()}
-                      </span>
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleViewTrip(trip.id)}
+                      >
+                        View
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleEditTrip(trip)}
-                    >
-                      Edit
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleViewTrip(trip.id)}
-                    >
-                      View
-                    </Button>
-                  </div>
-                </div>
-              </Card.Content>
-            </Card>
-          ))}
+                </Card.Content>
+              </Card>
+            )
+          })}
         </div>
       )}
 

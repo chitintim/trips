@@ -17,3 +17,8 @@ export { EmptyState } from './EmptyState'
 
 // Social Components
 export { SelectionAvatars } from './SelectionAvatars'
+
+// Confirmation System Components
+export { ConfirmationStatusBadge } from './ConfirmationStatusBadge'
+export { CapacityProgressBar } from './CapacityProgressBar'
+export { ConditionalDependencyDisplay } from './ConditionalDependencyDisplay'

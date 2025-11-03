@@ -534,21 +534,54 @@ export type Database = {
       }
       trip_participants: {
         Row: {
+          conditional_date: string | null
+          conditional_type:
+            | Database["public"]["Enums"]["conditional_type"]
+            | null
+          conditional_user_ids: string[] | null
+          confirmation_note: string | null
+          confirmation_status:
+            | Database["public"]["Enums"]["confirmation_status"]
+            | null
+          confirmed_at: string | null
           created_at: string
           role: Database["public"]["Enums"]["participant_role"]
           trip_id: string
+          updated_at: string | null
           user_id: string
         }
         Insert: {
+          conditional_date?: string | null
+          conditional_type?:
+            | Database["public"]["Enums"]["conditional_type"]
+            | null
+          conditional_user_ids?: string[] | null
+          confirmation_note?: string | null
+          confirmation_status?:
+            | Database["public"]["Enums"]["confirmation_status"]
+            | null
+          confirmed_at?: string | null
           created_at?: string
           role?: Database["public"]["Enums"]["participant_role"]
           trip_id: string
+          updated_at?: string | null
           user_id: string
         }
         Update: {
+          conditional_date?: string | null
+          conditional_type?:
+            | Database["public"]["Enums"]["conditional_type"]
+            | null
+          conditional_user_ids?: string[] | null
+          confirmation_note?: string | null
+          confirmation_status?:
+            | Database["public"]["Enums"]["confirmation_status"]
+            | null
+          confirmed_at?: string | null
           created_at?: string
           role?: Database["public"]["Enums"]["participant_role"]
           trip_id?: string
+          updated_at?: string | null
           user_id?: string
         }
         Relationships: [
@@ -570,10 +603,18 @@ export type Database = {
       }
       trips: {
         Row: {
+          accommodation_cost_currency: string | null
+          capacity_limit: number | null
+          confirmation_deadline: string | null
+          confirmation_enabled: boolean | null
+          confirmation_message: string | null
           created_at: string
           created_by: string
           end_date: string
+          estimated_accommodation_cost: number | null
+          full_cost_link: string | null
           id: string
+          is_public: boolean
           location: string
           name: string
           start_date: string
@@ -581,10 +622,18 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          accommodation_cost_currency?: string | null
+          capacity_limit?: number | null
+          confirmation_deadline?: string | null
+          confirmation_enabled?: boolean | null
+          confirmation_message?: string | null
           created_at?: string
           created_by: string
           end_date: string
+          estimated_accommodation_cost?: number | null
+          full_cost_link?: string | null
           id?: string
+          is_public?: boolean
           location: string
           name: string
           start_date: string
@@ -592,10 +641,18 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          accommodation_cost_currency?: string | null
+          capacity_limit?: number | null
+          confirmation_deadline?: string | null
+          confirmation_enabled?: boolean | null
+          confirmation_message?: string | null
           created_at?: string
           created_by?: string
           end_date?: string
+          estimated_accommodation_cost?: number | null
+          full_cost_link?: string | null
           id?: string
+          is_public?: boolean
           location?: string
           name?: string
           start_date?: string
@@ -664,6 +721,10 @@ export type Database = {
         Args: { p_trip_id: string; p_user_id: string }
         Returns: boolean
       }
+      check_conditions_met: {
+        Args: { p_trip_id: string; p_user_id: string }
+        Returns: boolean
+      }
       cleanup_expired_invitations: { Args: Record<PropertyKey, never>; Returns: number }
       create_invitation: {
         Args: { p_expires_at: string; p_trip_id: string }
@@ -687,6 +748,15 @@ export type Database = {
         Returns: string
       }
       generate_invitation_code: { Args: Record<PropertyKey, never>; Returns: string }
+      get_confirmation_summary: {
+        Args: { p_trip_id: string }
+        Returns: {
+          count: number
+          status: Database["public"]["Enums"]["confirmation_status"]
+          user_ids: string[]
+        }[]
+      }
+      get_confirmed_count: { Args: { p_trip_id: string }; Returns: number }
       get_recent_failed_attempts: {
         Args: { hours_back?: number }
         Returns: {
@@ -714,6 +784,15 @@ export type Database = {
       }
     }
     Enums: {
+      conditional_type: "none" | "date" | "users" | "both"
+      confirmation_status:
+        | "pending"
+        | "confirmed"
+        | "interested"
+        | "conditional"
+        | "waitlist"
+        | "declined"
+        | "cancelled"
       expense_category:
         | "accommodation"
         | "transport"
@@ -740,7 +819,13 @@ export type Database = {
         | "activities"
         | "lessons"
       split_type: "equal" | "custom" | "percentage"
-      trip_status: "planning" | "booking" | "booked"
+      trip_status:
+        | "gathering_interest"
+        | "confirming_participants"
+        | "booking_details"
+        | "booked_awaiting_departure"
+        | "trip_ongoing"
+        | "trip_completed"
       user_role: "admin" | "member"
     }
     CompositeTypes: {
@@ -749,33 +834,27 @@ export type Database = {
   }
 }
 
-type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
-
-type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+type PublicSchema = Database[keyof Database]
 
 export type Tables<
-  DefaultSchemaTableNameOrOptions extends
-    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+  PublicTableNameOrOptions extends
+    | keyof (PublicSchema["Tables"] & PublicSchema["Views"])
+    | { schema: keyof Database },
+  TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
+    ? keyof (Database[PublicTableNameOrOptions["schema"]]["Tables"] &
+        Database[PublicTableNameOrOptions["schema"]]["Views"])
     : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+> = PublicTableNameOrOptions extends { schema: keyof Database }
+  ? (Database[PublicTableNameOrOptions["schema"]]["Tables"] &
+      Database[PublicTableNameOrOptions["schema"]]["Views"])[TableName] extends {
       Row: infer R
     }
     ? R
     : never
-  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])
-    ? (DefaultSchema["Tables"] &
-        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+  : PublicTableNameOrOptions extends keyof (PublicSchema["Tables"] &
+        PublicSchema["Views"])
+    ? (PublicSchema["Tables"] &
+        PublicSchema["Views"])[PublicTableNameOrOptions] extends {
         Row: infer R
       }
       ? R
@@ -783,24 +862,20 @@ export type Tables<
     : never
 
 export type TablesInsert<
-  DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+  PublicTableNameOrOptions extends
+    | keyof PublicSchema["Tables"]
+    | { schema: keyof Database },
+  TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
+    ? keyof Database[PublicTableNameOrOptions["schema"]]["Tables"]
     : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+> = PublicTableNameOrOptions extends { schema: keyof Database }
+  ? Database[PublicTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Insert: infer I
     }
     ? I
     : never
-  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+  : PublicTableNameOrOptions extends keyof PublicSchema["Tables"]
+    ? PublicSchema["Tables"][PublicTableNameOrOptions] extends {
         Insert: infer I
       }
       ? I
@@ -808,24 +883,20 @@ export type TablesInsert<
     : never
 
 export type TablesUpdate<
-  DefaultSchemaTableNameOrOptions extends
-    | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+  PublicTableNameOrOptions extends
+    | keyof PublicSchema["Tables"]
+    | { schema: keyof Database },
+  TableName extends PublicTableNameOrOptions extends { schema: keyof Database }
+    ? keyof Database[PublicTableNameOrOptions["schema"]]["Tables"]
     : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+> = PublicTableNameOrOptions extends { schema: keyof Database }
+  ? Database[PublicTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Update: infer U
     }
     ? U
     : never
-  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
-    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+  : PublicTableNameOrOptions extends keyof PublicSchema["Tables"]
+    ? PublicSchema["Tables"][PublicTableNameOrOptions] extends {
         Update: infer U
       }
       ? U
@@ -833,73 +904,14 @@ export type TablesUpdate<
     : never
 
 export type Enums<
-  DefaultSchemaEnumNameOrOptions extends
-    | keyof DefaultSchema["Enums"]
-    | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+  PublicEnumNameOrOptions extends
+    | keyof PublicSchema["Enums"]
+    | { schema: keyof Database },
+  EnumName extends PublicEnumNameOrOptions extends { schema: keyof Database }
+    ? keyof Database[PublicEnumNameOrOptions["schema"]]["Enums"]
     : never = never,
-> = DefaultSchemaEnumNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
-  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
-    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+> = PublicEnumNameOrOptions extends { schema: keyof Database }
+  ? Database[PublicEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : PublicEnumNameOrOptions extends keyof PublicSchema["Enums"]
+    ? PublicSchema["Enums"][PublicEnumNameOrOptions]
     : never
-
-export type CompositeTypes<
-  PublicCompositeTypeNameOrOptions extends
-    | keyof DefaultSchema["CompositeTypes"]
-    | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
-  }
-    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
-> = PublicCompositeTypeNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
-  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
-    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
-    : never
-
-export const Constants = {
-  public: {
-    Enums: {
-      expense_category: [
-        "accommodation",
-        "transport",
-        "food",
-        "activities",
-        "equipment",
-        "other",
-      ],
-      invitation_status: [
-        "active",
-        "pending_verification",
-        "completed",
-        "expired",
-      ],
-      note_type: ["announcement", "note", "reminder", "question", "info"],
-      option_status: ["draft", "available", "booking", "booked", "cancelled"],
-      participant_role: ["organizer", "participant"],
-      price_type: ["per_person_fixed", "total_split", "per_person_tiered"],
-      section_status: ["not_started", "in_progress", "completed"],
-      section_type: [
-        "accommodation",
-        "flights",
-        "transport",
-        "equipment",
-        "insurance",
-        "activities",
-        "lessons",
-      ],
-      split_type: ["equal", "custom", "percentage"],
-      trip_status: ["planning", "booking", "booked"],
-      user_role: ["admin", "member"],
-    },
-  },
-} as const

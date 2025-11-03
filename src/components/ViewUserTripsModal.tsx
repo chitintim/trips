@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Modal, Button, Badge, Spinner, EmptyState } from './ui'
 import { supabase } from '../lib/supabase'
 import { Trip, User } from '../types'
+import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming } from '../lib/tripStatus'
 
 interface ViewUserTripsModalProps {
   isOpen: boolean
@@ -94,47 +95,47 @@ export function ViewUserTripsModal({
         </div>
       ) : (
         <div className="space-y-4">
-          {trips.map((trip) => (
-            <div
-              key={trip.id}
-              className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <h3 className="text-lg font-semibold text-gray-900">
-                      {trip.name}
-                    </h3>
-                    <Badge
-                      variant={
-                        trip.status === 'booked'
-                          ? 'success'
-                          : trip.status === 'booking'
-                          ? 'info'
-                          : 'warning'
-                      }
-                    >
-                      {trip.status}
-                    </Badge>
-                    <Badge variant={trip.role === 'organizer' ? 'primary' : 'neutral'}>
-                      {trip.role}
-                    </Badge>
-                  </div>
+          {trips.map((trip) => {
+            const timing = getTripTiming(trip.start_date, trip.end_date)
+            return (
+              <div
+                key={trip.id}
+                className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-2 flex-wrap">
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        {trip.name}
+                      </h3>
+                      <Badge variant={getTripStatusBadgeVariant(trip.status)}>
+                        {getTripStatusLabel(trip.status)}
+                      </Badge>
+                      <Badge variant={trip.role === 'organizer' ? 'primary' : 'neutral'}>
+                        {trip.role}
+                      </Badge>
+                      {timing && (
+                        <Badge variant={timing.variant}>
+                          {timing.label}
+                        </Badge>
+                      )}
+                    </div>
                   <div className="flex items-center gap-4 text-sm text-gray-600">
                     <span>📍 {trip.location}</span>
                     <span>📅 {formatDateRange(trip.start_date, trip.end_date)}</span>
                   </div>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleViewTrip(trip.id)}
-                >
-                  View Trip
-                </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleViewTrip(trip.id)}
+                  >
+                    View Trip
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

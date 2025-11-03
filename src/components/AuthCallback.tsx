@@ -21,15 +21,18 @@ export function AuthCallback() {
 
       // Handle different auth callback types
       if (type === 'recovery') {
-        // Password recovery - redirect to reset password page
-        navigate('/reset-password', { replace: true })
+        // Password recovery - redirect to reset password page (only if not already there)
+        if (location.pathname !== '/reset-password') {
+          // Preserve the hash when redirecting
+          navigate('/reset-password' + location.hash, { replace: true })
+        }
       } else if (type === 'signup' && accessToken) {
         // Email confirmation - redirect to dashboard
         navigate('/', { replace: true })
       }
       // Add other types as needed
     }
-  }, [location.hash, navigate])
+  }, [location.hash, location.pathname, navigate])
 
   return null
 }

@@ -10,14 +10,43 @@ export function ResetPassword() {
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [validatingLink, setValidatingLink] = useState(true)
 
   useEffect(() => {
     // Check if user has a valid session (from email link)
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) {
-        setError('Invalid or expired reset link. Please request a new one.')
+    const validateSession = async () => {
+      try {
+        // First, check if there are hash parameters (from the email link)
+        const hashParams = new URLSearchParams(window.location.hash.substring(1))
+        const accessToken = hashParams.get('access_token')
+        const refreshToken = hashParams.get('refresh_token')
+        const type = hashParams.get('type')
+
+        if (accessToken && type === 'recovery') {
+          // Exchange the tokens for a session
+          const { error: sessionError } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken || '',
+          })
+
+          if (sessionError) {
+            setError('Invalid or expired reset link. Please request a new one.')
+          }
+        } else {
+          // No hash parameters, check for existing session
+          const { data: { session } } = await supabase.auth.getSession()
+          if (!session) {
+            setError('Invalid or expired reset link. Please request a new one.')
+          }
+        }
+      } catch (err) {
+        setError('An error occurred validating your reset link.')
+      } finally {
+        setValidatingLink(false)
       }
-    })
+    }
+
+    validateSession()
   }, [])
 
   const handleSubmit = async (e: FormEvent) => {
@@ -57,6 +86,25 @@ export function ResetPassword() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Show loading state while validating the reset link
+  if (validatingLink) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-sky-50 to-orange-50 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <Card.Content className="text-center py-8">
+            <div className="text-6xl mb-4">🔄</div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">
+              Validating Reset Link...
+            </h2>
+            <p className="text-gray-600">
+              Please wait while we verify your password reset link.
+            </p>
+          </Card.Content>
+        </Card>
+      </div>
+    )
   }
 
   if (success) {

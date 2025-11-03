@@ -12,7 +12,7 @@ import { CreateOptionModal } from '../components/CreateOptionModal'
 import { Trip, User, TripParticipant } from '../types'
 import { getTripStatusBadgeVariant, getTripStatusLabel, isTripLocked } from '../lib/tripStatus'
 
-type TripTab = 'overview' | 'planning' | 'expenses'
+type TripTab = 'overview' | 'planning' | 'expenses' | 'notes'
 
 interface ParticipantWithUser extends TripParticipant {
   user: User
@@ -256,6 +256,16 @@ export function TripDetail() {
             >
               💰 Expenses
             </button>
+            <button
+              onClick={() => setActiveTab('notes')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                activeTab === 'notes'
+                  ? 'border-primary text-primary'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              📝 Notes
+            </button>
           </nav>
         </div>
       </div>
@@ -265,6 +275,7 @@ export function TripDetail() {
         {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} />}
         {activeTab === 'planning' && <PlanningTab trip={trip} participants={participants} />}
         {activeTab === 'expenses' && <ExpensesTab tripId={trip.id} participants={participants} />}
+        {activeTab === 'notes' && <NotesTab trip={trip} />}
       </div>
 
       {/* Admin Modals */}
@@ -562,9 +573,6 @@ function TripOverviewTab({
 
       {/* Confirmations */}
       <ConfirmationDashboard tripId={trip.id} />
-
-      {/* Notes & Announcements */}
-      <TripNotesSection tripId={trip.id} isOrganizer={isOrganizer} />
     </div>
   )
 }
@@ -851,6 +859,47 @@ function PlanningTab({
         />
       )}
     </>
+  )
+}
+
+// Notes Tab Component
+function NotesTab({ trip }: { trip: Trip }) {
+  const { user } = useAuth()
+  const [isOrganizer, setIsOrganizer] = useState(false)
+
+  useEffect(() => {
+    checkOrganizerStatus()
+  }, [user])
+
+  const checkOrganizerStatus = async () => {
+    if (!user) return
+
+    // Check if user is system admin, trip creator, or trip organizer
+    const { data: userData } = await supabase
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single()
+
+    const isSystemAdmin = userData?.role === 'admin'
+
+    const { data: participantData } = await supabase
+      .from('trip_participants')
+      .select('role')
+      .eq('trip_id', trip.id)
+      .eq('user_id', user.id)
+      .single()
+
+    const isTripOrganizer = participantData?.role === 'organizer'
+    const isTripCreator = trip.created_by === user.id
+
+    setIsOrganizer(isSystemAdmin || isTripCreator || isTripOrganizer)
+  }
+
+  return (
+    <div className="space-y-6">
+      <TripNotesSection tripId={trip.id} isOrganizer={isOrganizer} />
+    </div>
   )
 }
 

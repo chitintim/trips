@@ -44,7 +44,6 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
   const [recordSettlementModalOpen, setRecordSettlementModalOpen] = useState(false)
   const [settlementHistoryModalOpen, setSettlementHistoryModalOpen] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
-  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null)
 
   useEffect(() => {
     checkAdminStatus()
@@ -484,6 +483,7 @@ function ExpenseCard({
   onDelete: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const [copiedLink, setCopiedLink] = useState(false)
 
   // Check if this is an itemized expense
   const isItemized = expense.ai_parsed && expense.status && expense.line_items
@@ -782,12 +782,12 @@ function ExpenseCard({
                         e.stopPropagation()
                         const link = `${window.location.origin}/trips/claim/${itemizedStats.linkCode}`
                         navigator.clipboard.writeText(link)
-                        setCopiedLinkId(expense.id)
-                        setTimeout(() => setCopiedLinkId(null), 2000)
+                        setCopiedLink(true)
+                        setTimeout(() => setCopiedLink(false), 2000)
                       }}
                       className="flex-shrink-0 px-2 py-1 text-xs bg-sky-100 text-sky-700 rounded hover:bg-sky-200 transition-colors"
                     >
-                      {copiedLinkId === expense.id ? '✓ Copied!' : 'Copy'}
+                      {copiedLink ? '✓ Copied!' : 'Copy'}
                     </button>
                   </div>
                 </div>

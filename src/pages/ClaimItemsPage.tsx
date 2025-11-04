@@ -51,7 +51,7 @@ export function ClaimItemsPage() {
   const [saveTimer, setSaveTimer] = useState<NodeJS.Timeout | null>(null)
 
   // Other users' live selections (broadcast)
-  const [otherUsersSelections, setOtherUsersSelections] = useState<Record<string, {
+  const [_otherUsersSelections, setOtherUsersSelections] = useState<Record<string, {
     userId: string
     userName: string
     selections: Record<string, ClaimSelection>

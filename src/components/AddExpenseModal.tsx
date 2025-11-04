@@ -4,6 +4,8 @@ import { useAuth } from '../hooks/useAuth'
 import { Modal, Button, Input, Select, Badge } from './ui'
 import { convertCurrency, formatCurrency, getSupportedCurrencies, type Currency } from '../lib/currency'
 import { uploadReceipt } from '../lib/receiptUpload'
+import { parseReceipt, type ParsedReceiptData } from '../lib/receiptParsing'
+import { ItemizedSplitWizard } from './ItemizedSplitWizard'
 import { Database } from '../types/database.types'
 
 type ExpenseCategory = Database['public']['Enums']['expense_category']
@@ -44,11 +46,20 @@ export function AddExpenseModal({
   const [location, setLocation] = useState('')
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
 
+  // AI Receipt Parsing
+  const [parsingReceipt, setParsingReceipt] = useState(false)
+  const [parsedData, setParsedData] = useState<ParsedReceiptData | null>(null)
+  const [parseError, setParseError] = useState<string | null>(null)
+  const [parsingProgress, setParsingProgress] = useState(0)
+  const [parsingMessage, setParsingMessage] = useState('')
+  const [uploadedReceiptPath, setUploadedReceiptPath] = useState<string | null>(null)
+
   // Step 2: Who Paid
   const [paidBy, setPaidBy] = useState(user?.id || '')
 
   // Step 3: Split Method
   const [splitType, setSplitType] = useState<SplitType>('equal')
+  const [useItemizedSplit, setUseItemizedSplit] = useState(false)
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([])
   const [splits, setSplits] = useState<Record<string, SplitData>>({})
 
@@ -56,26 +67,106 @@ export function AddExpenseModal({
   const [baseCurrencyAmount, setBaseCurrencyAmount] = useState<number | null>(null)
   const [fxRate, setFxRate] = useState<number | null>(null)
 
+  // Load saved draft from localStorage
   useEffect(() => {
     if (isOpen && user) {
-      // Reset form
+      const draftKey = `expense_draft_${tripId}`
+      const savedDraft = localStorage.getItem(draftKey)
+
+      if (savedDraft) {
+        try {
+          const draft = JSON.parse(savedDraft)
+          setDescription(draft.description || '')
+          setAmount(draft.amount || '')
+          setCurrency(draft.currency || 'GBP')
+          setPaymentDate(draft.paymentDate || new Date().toISOString().split('T')[0])
+          setCategory(draft.category || 'other')
+          setVendorName(draft.vendorName || '')
+          setLocation(draft.location || '')
+        } catch (err) {
+          console.error('Failed to load draft:', err)
+        }
+      }
+
+      // Load parsing state if it exists
+      const parsingKey = `expense_parsing_${tripId}`
+      const savedParsing = localStorage.getItem(parsingKey)
+
+      if (savedParsing) {
+        try {
+          const parsingState = JSON.parse(savedParsing)
+
+          // If parsing was interrupted, clear it and show message
+          if (parsingState.parsingReceipt) {
+            setParseError('Parsing was interrupted. Please try again.')
+            // Clear the interrupted parsing state
+            localStorage.removeItem(parsingKey)
+          } else {
+            // Restore completed parsing state
+            if (parsingState.parsedData) {
+              setParsedData(parsingState.parsedData)
+            }
+            if (parsingState.uploadedReceiptPath) {
+              setUploadedReceiptPath(parsingState.uploadedReceiptPath)
+            }
+            // Note: We can't restore the actual File object, but we show the parsing was successful
+          }
+        } catch (err) {
+          console.error('Failed to load parsing state:', err)
+        }
+      }
+
+      // Always reset these on open
       setStep(1)
-      setDescription('')
-      setAmount('')
-      setCurrency('GBP')
-      setPaymentDate(new Date().toISOString().split('T')[0])
-      setCategory('other')
-      setVendorName('')
-      setLocation('')
       setPaidBy(user.id)
       setSplitType('equal')
+      setUseItemizedSplit(false)
       setSelectedParticipants([])
       setSplits({})
       setBaseCurrencyAmount(null)
       setFxRate(null)
       setReceiptFile(null)
+      setParsingReceipt(false)
+      setParsingProgress(0)
+      setParsingMessage('')
     }
-  }, [isOpen, user])
+  }, [isOpen, user, tripId])
+
+  // Save draft to localStorage whenever form fields change
+  useEffect(() => {
+    if (isOpen && description) {
+      const draftKey = `expense_draft_${tripId}`
+      const draft = {
+        description,
+        amount,
+        currency,
+        paymentDate,
+        category,
+        vendorName,
+        location,
+        savedAt: new Date().toISOString()
+      }
+      localStorage.setItem(draftKey, JSON.stringify(draft))
+    }
+  }, [isOpen, tripId, description, amount, currency, paymentDate, category, vendorName, location])
+
+  // Save parsing state separately (including receipt file info)
+  useEffect(() => {
+    if (isOpen) {
+      const parsingKey = `expense_parsing_${tripId}`
+      const parsingState = {
+        hasReceiptFile: !!receiptFile,
+        receiptFileName: receiptFile?.name,
+        receiptFileSize: receiptFile?.size,
+        parsingReceipt,
+        parsedData,
+        parseError,
+        uploadedReceiptPath,
+        savedAt: new Date().toISOString()
+      }
+      localStorage.setItem(parsingKey, JSON.stringify(parsingState))
+    }
+  }, [isOpen, tripId, receiptFile, parsingReceipt, parsedData, parseError, uploadedReceiptPath])
 
   const handleNext = async () => {
     // Validation for each step
@@ -94,6 +185,12 @@ export function AddExpenseModal({
     }
 
     if (step === 3) {
+      // If using itemized split, the wizard handles everything - no validation needed
+      if (useItemizedSplit) {
+        // Itemized split wizard is self-contained, should not reach here
+        return
+      }
+
       if (selectedParticipants.length === 0) {
         alert('Please select at least one person to split with')
         return
@@ -245,6 +342,9 @@ export function AddExpenseModal({
 
       if (splitsError) throw splitsError
 
+      // Clear draft on success
+      localStorage.removeItem(`expense_draft_${tripId}`)
+
       onSuccess()
       onClose()
     } catch (error: any) {
@@ -321,6 +421,107 @@ export function AddExpenseModal({
     return names[curr]
   }
 
+  const handleParseReceipt = async () => {
+    if (!receiptFile || !user) return
+
+    setParsingReceipt(true)
+    setParseError(null)
+    setParsingProgress(0)
+    setParsingMessage('Uploading receipt...')
+
+    // Fake progress bar with non-linear timing
+    let progressInterval: NodeJS.Timeout
+    let elapsedSeconds = 0
+    let currentProgress = 0
+    let completed = false
+
+    const updateProgress = () => {
+      elapsedSeconds++
+
+      // Non-linear progress curve
+      if (elapsedSeconds <= 3) {
+        // 0-3s: Fast start (0-15%)
+        currentProgress = elapsedSeconds * 5
+        setParsingMessage('Uploading receipt...')
+      } else if (elapsedSeconds <= 10) {
+        // 3-10s: Moderate (15-35%)
+        currentProgress = 15 + (elapsedSeconds - 3) * 2.86
+        setParsingMessage('AI analyzing receipt structure...')
+      } else if (elapsedSeconds <= 30) {
+        // 10-30s: Slower middle (35-60%)
+        currentProgress = 35 + (elapsedSeconds - 10) * 1.25
+        setParsingMessage('Extracting items and prices...')
+      } else if (elapsedSeconds <= 60) {
+        // 30-60s: Very slow (60-85%)
+        currentProgress = 60 + (elapsedSeconds - 30) * 0.83
+        setParsingMessage('Calculating taxes and totals...')
+      } else if (elapsedSeconds <= 85) {
+        // 60-85s: Crawling to finish (85-95%)
+        currentProgress = 85 + (elapsedSeconds - 60) * 0.4
+        setParsingMessage('Translating and validating...')
+      } else {
+        // 85+s: Stay at 95% until complete
+        currentProgress = 95
+        setParsingMessage('Almost there...')
+      }
+
+      setParsingProgress(Math.min(currentProgress, 95))
+
+      // If completed early, accelerate to 100%
+      if (completed) {
+        clearInterval(progressInterval)
+        setParsingProgress(100)
+        setParsingMessage('Finalizing results...')
+      }
+    }
+
+    progressInterval = setInterval(updateProgress, 1000)
+
+    try {
+      // 1. Upload receipt to Supabase Storage first
+      const uploadResult = await uploadReceipt(receiptFile, user.id)
+      setUploadedReceiptPath(uploadResult.path) // Store path for later use
+
+      // 2. Call Edge Function to parse (takes 75-100 seconds)
+      const parsed = await parseReceipt(uploadResult.path, tripId)
+
+      // Signal completion to progress bar
+      completed = true
+
+      // Wait for progress to catch up
+      await new Promise(resolve => setTimeout(resolve, 500))
+
+      setParsedData(parsed)
+
+      // 3. Auto-populate form fields from parsed data
+      setDescription(parsed.vendor_name)
+      setVendorName(parsed.vendor_name)
+      if (parsed.vendor_location) setLocation(parsed.vendor_location)
+      setAmount(parsed.total.toString())
+      setCurrency(parsed.currency as Currency)
+      if (parsed.receipt_date) setPaymentDate(parsed.receipt_date)
+
+      // Use LLM's category inference
+      if (parsed.expense_category) {
+        setCategory(parsed.expense_category as ExpenseCategory)
+      }
+
+      // Clear draft since AI filled it
+      localStorage.removeItem(`expense_draft_${tripId}`)
+
+    } catch (error: any) {
+      completed = true
+      clearInterval(progressInterval)
+      console.error('Receipt parsing error:', error)
+      setParseError(error.message || 'Failed to parse receipt. Please try again.')
+    } finally {
+      clearInterval(progressInterval)
+      setParsingReceipt(false)
+      setParsingProgress(0)
+      setParsingMessage('')
+    }
+  }
+
   const renderStep = () => {
     switch (step) {
       case 1:
@@ -328,6 +529,142 @@ export function AddExpenseModal({
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900">Basic Information</h3>
 
+            {/* Receipt Upload - MOVED TO TOP */}
+            <div className="space-y-3">
+              <label className="block text-sm font-medium text-gray-700">
+                Receipt (optional - use AI to auto-fill form)
+              </label>
+              <input
+                type="file"
+                accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
+                onChange={(e) => {
+                  setReceiptFile(e.target.files?.[0] || null)
+                  // Reset parsing state when new file selected
+                  setParsedData(null)
+                  setParseError(null)
+                }}
+                disabled={parsingReceipt}
+                className="block w-full text-sm text-gray-500
+                  file:mr-4 file:py-2 file:px-4
+                  file:rounded-lg file:border-0
+                  file:text-sm file:font-medium
+                  file:bg-sky-50 file:text-sky-700
+                  hover:file:bg-sky-100
+                  file:cursor-pointer cursor-pointer
+                  disabled:opacity-50 disabled:cursor-not-allowed"
+              />
+              <p className="text-xs text-gray-500">
+                Supports: JPEG, PNG, PDF • Max 6MB (will be compressed)
+              </p>
+              <p className="text-xs text-amber-600 font-medium">
+                📱 iPhone users: Please screenshot photos first before uploading
+              </p>
+
+              {(receiptFile || parsedData) && (
+                <div className="space-y-2">
+                  {receiptFile && (
+                    <div className="text-sm text-gray-700">
+                      Selected: <strong>{receiptFile.name}</strong> ({(receiptFile.size / 1024 / 1024).toFixed(2)}MB)
+                    </div>
+                  )}
+
+                  {!receiptFile && parsedData && (
+                    <div className="text-sm text-gray-700">
+                      <span className="text-green-600">✓</span> Receipt was previously parsed and auto-filled fields
+                    </div>
+                  )}
+
+                  {/* AI Parse Button - only show if we have a file and haven't parsed yet */}
+                  {receiptFile && !parsedData && (
+                    <Button
+                      variant="secondary"
+                      onClick={handleParseReceipt}
+                      disabled={parsingReceipt}
+                      className="w-full"
+                    >
+                      {parsingReceipt ? (
+                        <span className="flex items-center justify-center gap-2">
+                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          {parsingProgress > 0 ? `${Math.round(parsingProgress)}%` : 'Starting...'}
+                        </span>
+                      ) : (
+                        '🤖 Parse Receipt with AI'
+                      )}
+                    </Button>
+                  )}
+
+                  {receiptFile && parsedData && (
+                    <div className="text-sm font-medium text-green-600 py-2">
+                      ✅ Receipt Parsed Successfully
+                    </div>
+                  )}
+
+                  {/* Parsing Progress Bar */}
+                  {parsingReceipt && (
+                    <div className="space-y-2">
+                      {/* Progress Bar */}
+                      <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                        <div
+                          className="bg-sky-500 h-2 transition-all duration-1000 ease-out"
+                          style={{ width: `${parsingProgress}%` }}
+                        />
+                      </div>
+                      {/* Progress Message */}
+                      <div className="p-3 bg-sky-50 border border-sky-200 rounded-lg">
+                        <p className="text-xs text-sky-900 font-medium">
+                          {parsingMessage}
+                        </p>
+                        <p className="text-xs text-sky-700 mt-1">
+                          Processing time: ~75-100 seconds. Your form will auto-fill when ready!
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Success Message */}
+                  {parsedData && (
+                    <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                      <p className="text-sm font-medium text-green-900">
+                        ✅ Receipt parsed successfully! Fields auto-filled below.
+                      </p>
+                      <p className="text-xs text-green-700 mt-1">
+                        Found {parsedData.line_items.length} items • Total: {parsedData.currency} {parsedData.total.toFixed(2)}
+                      </p>
+                      {!parsedData.total_matches && (
+                        <p className="text-xs text-amber-700 mt-1 font-medium">
+                          ⚠️ Total mismatch detected - please review amounts
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Error Message */}
+                  {parseError && (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                      <p className="text-sm font-medium text-red-900">
+                        ❌ Parsing failed
+                      </p>
+                      <p className="text-xs text-red-700 mt-1">{parseError}</p>
+                      <Button
+                        variant="outline"
+                        onClick={handleParseReceipt}
+                        className="mt-2 text-xs py-1 px-3"
+                      >
+                        Try Again
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            {receiptFile && <div className="border-t border-gray-200 my-4" />}
+
+            {/* Form Fields */}
             <Input
               label="Description *"
               value={description}
@@ -384,36 +721,6 @@ export function AddExpenseModal({
               placeholder="e.g., Val Thorens, France"
               maxLength={200}
             />
-
-            {/* Receipt Upload */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Receipt (optional)
-              </label>
-              <input
-                type="file"
-                accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
-                onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
-                className="block w-full text-sm text-gray-500
-                  file:mr-4 file:py-2 file:px-4
-                  file:rounded-lg file:border-0
-                  file:text-sm file:font-medium
-                  file:bg-sky-50 file:text-sky-700
-                  hover:file:bg-sky-100
-                  file:cursor-pointer cursor-pointer"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                Supports: JPEG, PNG, PDF • Max 6MB (will be compressed)
-              </p>
-              <p className="mt-0.5 text-xs text-amber-600 font-medium">
-                📱 iPhone users: Please screenshot photos first before uploading
-              </p>
-              {receiptFile && (
-                <div className="mt-2 text-sm text-gray-700">
-                  Selected: <strong>{receiptFile.name}</strong> ({(receiptFile.size / 1024 / 1024).toFixed(2)}MB)
-                </div>
-              )}
-            </div>
           </div>
         )
 
@@ -462,16 +769,43 @@ export function AddExpenseModal({
         )
 
       case 3:
+        // If user selected itemized split and we have parsed data, show the wizard
+        if (useItemizedSplit && parsedData) {
+          return (
+            <ItemizedSplitWizard
+              parsedData={parsedData}
+              tripId={tripId}
+              paidBy={paidBy}
+              receiptUrl={uploadedReceiptPath}
+              currency={currency}
+              paymentDate={paymentDate}
+              onSuccess={() => {
+                // Clear draft and close modal
+                localStorage.removeItem(`expense_draft_${tripId}`)
+                onSuccess()
+                onClose()
+              }}
+              onBack={() => {
+                setUseItemizedSplit(false)
+              }}
+            />
+          )
+        }
+
+        // Regular split method selection
         return (
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900">Split Method</h3>
 
             {/* Split Type Selector */}
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <button
-                onClick={() => setSplitType('equal')}
-                className={`flex-1 px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                  splitType === 'equal'
+                onClick={() => {
+                  setUseItemizedSplit(false)
+                  setSplitType('equal')
+                }}
+                className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                  !useItemizedSplit && splitType === 'equal'
                     ? 'border-sky-500 bg-sky-50 text-sky-700'
                     : 'border-gray-200 text-gray-700 hover:border-gray-300'
                 }`}
@@ -479,26 +813,60 @@ export function AddExpenseModal({
                 Equal Split
               </button>
               <button
-                onClick={() => setSplitType('custom')}
-                className={`flex-1 px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                  splitType === 'custom'
+                onClick={() => {
+                  setUseItemizedSplit(false)
+                  setSplitType('custom')
+                }}
+                className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                  !useItemizedSplit && splitType === 'custom'
                     ? 'border-sky-500 bg-sky-50 text-sky-700'
                     : 'border-gray-200 text-gray-700 hover:border-gray-300'
                 }`}
               >
-                Custom Amounts
+                Custom
               </button>
               <button
-                onClick={() => setSplitType('percentage')}
-                className={`flex-1 px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                  splitType === 'percentage'
+                onClick={() => {
+                  setUseItemizedSplit(false)
+                  setSplitType('percentage')
+                }}
+                className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                  !useItemizedSplit && splitType === 'percentage'
                     ? 'border-sky-500 bg-sky-50 text-sky-700'
                     : 'border-gray-200 text-gray-700 hover:border-gray-300'
                 }`}
               >
                 Percentage
               </button>
+
+              {/* Itemized option - only show if we have parsed data */}
+              {parsedData && (
+                <button
+                  onClick={() => {
+                    setUseItemizedSplit(true)
+                  }}
+                  className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
+                    useItemizedSplit
+                      ? 'border-purple-500 bg-purple-50 text-purple-700'
+                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  🤖 Itemized
+                </button>
+              )}
             </div>
+
+            {/* Show info badge for itemized option */}
+            {parsedData && !useItemizedSplit && (
+              <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+                <p className="text-xs text-purple-900 font-medium">
+                  ✨ AI detected {parsedData.line_items.length} items - Try "Itemized" split!
+                </p>
+                <p className="text-xs text-purple-700 mt-1">
+                  Let people claim which items they ordered instead of splitting equally.
+                </p>
+              </div>
+            )}
 
             {/* Participant Selection */}
             <div>
@@ -698,52 +1066,56 @@ export function AddExpenseModal({
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Add Expense" size="lg">
-      {/* Step Indicator */}
-      <div className="flex items-center justify-between mb-6">
-        {[1, 2, 3, 4].map((s) => (
-          <div key={s} className="flex items-center">
-            <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center font-medium ${
-                s === step
-                  ? 'bg-sky-500 text-white'
-                  : s < step
-                  ? 'bg-green-500 text-white'
-                  : 'bg-gray-200 text-gray-600'
-              }`}
-            >
-              {s < step ? '✓' : s}
-            </div>
-            {s < 4 && (
+      {/* Step Indicator - Hide when itemized wizard is showing */}
+      {!(step === 3 && useItemizedSplit) && (
+        <div className="flex items-center justify-between mb-6">
+          {[1, 2, 3, 4].map((s) => (
+            <div key={s} className="flex items-center">
               <div
-                className={`w-16 h-0.5 ${
-                  s < step ? 'bg-green-500' : 'bg-gray-200'
+                className={`w-8 h-8 rounded-full flex items-center justify-center font-medium ${
+                  s === step
+                    ? 'bg-sky-500 text-white'
+                    : s < step
+                    ? 'bg-green-500 text-white'
+                    : 'bg-gray-200 text-gray-600'
                 }`}
-              />
-            )}
-          </div>
-        ))}
-      </div>
+              >
+                {s < step ? '✓' : s}
+              </div>
+              {s < 4 && (
+                <div
+                  className={`w-16 h-0.5 ${
+                    s < step ? 'bg-green-500' : 'bg-gray-200'
+                  }`}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Step Content */}
       {renderStep()}
 
-      {/* Footer Buttons */}
-      <div className="flex justify-between mt-6 pt-6 border-t border-gray-200">
-        <Button
-          variant="outline"
-          onClick={step === 1 ? onClose : handleBack}
-          disabled={loading}
-        >
-          {step === 1 ? 'Cancel' : 'Back'}
-        </Button>
-        <Button
-          variant="primary"
-          onClick={step === 4 ? handleSubmit : handleNext}
-          disabled={loading}
-        >
-          {loading ? 'Saving...' : step === 4 ? 'Add Expense' : 'Next'}
-        </Button>
-      </div>
+      {/* Footer Buttons - Hide when itemized wizard is showing */}
+      {!(step === 3 && useItemizedSplit) && (
+        <div className="flex justify-between mt-6 pt-6 border-t border-gray-200">
+          <Button
+            variant="outline"
+            onClick={step === 1 ? onClose : handleBack}
+            disabled={loading}
+          >
+            {step === 1 ? 'Cancel' : 'Back'}
+          </Button>
+          <Button
+            variant="primary"
+            onClick={step === 4 ? handleSubmit : handleNext}
+            disabled={loading}
+          >
+            {loading ? 'Saving...' : step === 4 ? 'Add Expense' : 'Next'}
+          </Button>
+        </div>
+      )}
     </Modal>
   )
 }

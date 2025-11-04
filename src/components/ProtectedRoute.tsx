@@ -1,4 +1,4 @@
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { Spinner } from './ui'
 
@@ -9,6 +9,7 @@ interface ProtectedRouteProps {
 
 export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRouteProps) {
   const { user, loading } = useAuth()
+  const location = useLocation()
 
   // Show loading spinner while checking auth
   if (loading) {
@@ -22,9 +23,9 @@ export function ProtectedRoute({ children, requireAdmin = false }: ProtectedRout
     )
   }
 
-  // Redirect to login if not authenticated
+  // Redirect to login if not authenticated, saving the intended destination
   if (!user) {
-    return <Navigate to="/login" replace />
+    return <Navigate to="/login" state={{ from: location }} replace />
   }
 
   // TODO: Check admin role when we implement admin features

@@ -1,10 +1,11 @@
 import { useState, FormEvent } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Input, Card } from '../components/ui'
 
 export function Login() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -22,8 +23,9 @@ export function Login() {
       if (error) {
         setError(error.message)
       } else {
-        // Redirect to dashboard on success
-        navigate('/')
+        // Redirect to intended destination or dashboard
+        const from = (location.state as any)?.from?.pathname || '/'
+        navigate(from, { replace: true })
       }
     } catch (err) {
       setError('An unexpected error occurred')

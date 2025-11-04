@@ -368,7 +368,7 @@ export function ItemizedSplitWizard({
                     type="text"
                     inputMode="decimal"
                     pattern="[0-9]*\.?[0-9]*"
-                    defaultValue={item.unit_price.toFixed(2)}
+                    defaultValue={item.unit_price}
                     onBlur={(e) => updateLineItem(index, 'unit_price', e.target.value)}
                     onFocus={(e) => e.target.select()}
                     className="w-24 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -387,7 +387,7 @@ export function ItemizedSplitWizard({
                       type="text"
                       inputMode="decimal"
                       pattern="[0-9]*\.?[0-9]*"
-                      defaultValue={(item.line_discount_amount || 0).toFixed(2)}
+                      defaultValue={item.line_discount_amount || 0}
                       onBlur={(e) => updateLineItem(index, 'line_discount_amount', e.target.value)}
                       onFocus={(e) => e.target.select()}
                       className="w-20 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
@@ -397,7 +397,7 @@ export function ItemizedSplitWizard({
                       type="text"
                       inputMode="decimal"
                       pattern="[0-9]*\.?[0-9]*"
-                      defaultValue={(item.line_discount_percent || 0).toFixed(1)}
+                      defaultValue={item.line_discount_percent || 0}
                       onBlur={(e) => updateLineItem(index, 'line_discount_percent', e.target.value)}
                       onFocus={(e) => e.target.select()}
                       className="w-16 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"

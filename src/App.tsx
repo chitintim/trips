@@ -8,7 +8,6 @@ import { ResetPassword } from './pages/ResetPassword'
 import { Dashboard } from './pages/Dashboard'
 import { TripDetail } from './pages/TripDetail'
 import { ClaimItemsPage } from './pages/ClaimItemsPage'
-import { ComponentShowcase } from './pages/ComponentShowcase'
 
 function App() {
   return (
@@ -51,9 +50,6 @@ function App() {
             </ProtectedRoute>
           }
         />
-
-        {/* Dev Route - Component Showcase */}
-        <Route path="/showcase" element={<ComponentShowcase />} />
 
         {/* Catch all - redirect to home */}
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -68,6 +68,12 @@ CLAUDE.md
 PROGRESS.md
 PROJECT_PLAN.md
 QUICK_START.md
+RECENT_CHANGES.md
+CONFIRMATION_SYSTEM_PLAN.md
+EXPENSE_SYSTEM_PLAN.md
+EDGE_FUNCTION_SETUP.md
+ITEMIZED_EXPENSE_PLAN.md
+PHASE_*.md
 
 # Supabase Local
 supabase/.branches
@@ -78,6 +84,10 @@ supabase/.temp
 uploads/
 receipts/
 temp-uploads/
+
+# Demo/Test Pages
+public/test-*.html
+src/pages/ComponentShowcase.tsx
 
 # Optional: Personal Notes (uncomment if needed)
 # PERSONAL_NOTES.md

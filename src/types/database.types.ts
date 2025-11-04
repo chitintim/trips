@@ -66,6 +66,178 @@ export type Database = {
           },
         ]
       }
+      expense_allocation_links: {
+        Row: {
+          code: string
+          created_at: string | null
+          created_by: string
+          expense_id: string
+          expires_at: string
+          id: string
+          trip_id: string
+        }
+        Insert: {
+          code: string
+          created_at?: string | null
+          created_by: string
+          expense_id: string
+          expires_at: string
+          id?: string
+          trip_id: string
+        }
+        Update: {
+          code?: string
+          created_at?: string | null
+          created_by?: string
+          expense_id?: string
+          expires_at?: string
+          id?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "expense_allocation_links_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expense_allocation_links_expense_id_fkey"
+            columns: ["expense_id"]
+            isOneToOne: false
+            referencedRelation: "expenses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expense_allocation_links_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      expense_item_claims: {
+        Row: {
+          amount_owed: number
+          claimed_at: string | null
+          confirmed: boolean | null
+          expense_id: string
+          id: string
+          line_item_id: string
+          quantity_claimed: number
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          amount_owed: number
+          claimed_at?: string | null
+          confirmed?: boolean | null
+          expense_id: string
+          id?: string
+          line_item_id: string
+          quantity_claimed: number
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          amount_owed?: number
+          claimed_at?: string | null
+          confirmed?: boolean | null
+          expense_id?: string
+          id?: string
+          line_item_id?: string
+          quantity_claimed?: number
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "expense_item_claims_expense_id_fkey"
+            columns: ["expense_id"]
+            isOneToOne: false
+            referencedRelation: "expenses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expense_item_claims_line_item_id_fkey"
+            columns: ["line_item_id"]
+            isOneToOne: false
+            referencedRelation: "expense_line_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expense_item_claims_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      expense_line_items: {
+        Row: {
+          created_at: string | null
+          expense_id: string
+          id: string
+          line_discount_amount: number | null
+          line_discount_percent: number | null
+          line_number: number
+          name_english: string | null
+          name_original: string
+          notes: string | null
+          quantity: number
+          service_amount: number | null
+          subtotal: number
+          tax_amount: number | null
+          total_amount: number
+          unit_price: number
+        }
+        Insert: {
+          created_at?: string | null
+          expense_id: string
+          id?: string
+          line_discount_amount?: number | null
+          line_discount_percent?: number | null
+          line_number: number
+          name_english?: string | null
+          name_original: string
+          notes?: string | null
+          quantity: number
+          service_amount?: number | null
+          subtotal: number
+          tax_amount?: number | null
+          total_amount: number
+          unit_price: number
+        }
+        Update: {
+          created_at?: string | null
+          expense_id?: string
+          id?: string
+          line_discount_amount?: number | null
+          line_discount_percent?: number | null
+          line_number?: number
+          name_english?: string | null
+          name_original?: string
+          notes?: string | null
+          quantity?: number
+          service_amount?: number | null
+          subtotal?: number
+          tax_amount?: number | null
+          total_amount?: number
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "expense_line_items_expense_id_fkey"
+            columns: ["expense_id"]
+            isOneToOne: false
+            referencedRelation: "expenses"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       expense_splits: {
         Row: {
           amount: number
@@ -116,6 +288,7 @@ export type Database = {
       }
       expenses: {
         Row: {
+          ai_parsed: boolean | null
           ai_parsed_data: Json | null
           amount: number
           base_currency_amount: number | null
@@ -123,18 +296,26 @@ export type Database = {
           created_at: string
           currency: string
           description: string
+          discount_amount: number | null
+          discount_percent: number | null
           fx_rate: number | null
           fx_rate_date: string | null
           id: string
           location: string | null
           paid_by: string
+          parsing_error: string | null
           payment_date: string
           receipt_url: string | null
+          service_charge_percent: number | null
+          status: Database["public"]["Enums"]["expense_status"] | null
+          subtotal: number | null
+          tax_percent: number | null
           trip_id: string
           updated_at: string
           vendor_name: string | null
         }
         Insert: {
+          ai_parsed?: boolean | null
           ai_parsed_data?: Json | null
           amount: number
           base_currency_amount?: number | null
@@ -142,18 +323,26 @@ export type Database = {
           created_at?: string
           currency?: string
           description: string
+          discount_amount?: number | null
+          discount_percent?: number | null
           fx_rate?: number | null
           fx_rate_date?: string | null
           id?: string
           location?: string | null
           paid_by: string
+          parsing_error?: string | null
           payment_date?: string
           receipt_url?: string | null
+          service_charge_percent?: number | null
+          status?: Database["public"]["Enums"]["expense_status"] | null
+          subtotal?: number | null
+          tax_percent?: number | null
           trip_id: string
           updated_at?: string
           vendor_name?: string | null
         }
         Update: {
+          ai_parsed?: boolean | null
           ai_parsed_data?: Json | null
           amount?: number
           base_currency_amount?: number | null
@@ -161,13 +350,20 @@ export type Database = {
           created_at?: string
           currency?: string
           description?: string
+          discount_amount?: number | null
+          discount_percent?: number | null
           fx_rate?: number | null
           fx_rate_date?: string | null
           id?: string
           location?: string | null
           paid_by?: string
+          parsing_error?: string | null
           payment_date?: string
           receipt_url?: string | null
+          service_charge_percent?: number | null
+          status?: Database["public"]["Enums"]["expense_status"] | null
+          subtotal?: number | null
+          tax_percent?: number | null
           trip_id?: string
           updated_at?: string
           vendor_name?: string | null
@@ -534,6 +730,7 @@ export type Database = {
       }
       trip_participants: {
         Row: {
+          active: boolean
           conditional_date: string | null
           conditional_type:
             | Database["public"]["Enums"]["conditional_type"]
@@ -551,6 +748,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          active?: boolean
           conditional_date?: string | null
           conditional_type?:
             | Database["public"]["Enums"]["conditional_type"]
@@ -568,6 +766,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          active?: boolean
           conditional_date?: string | null
           conditional_type?:
             | Database["public"]["Enums"]["conditional_type"]
@@ -721,6 +920,10 @@ export type Database = {
         Args: { p_trip_id: string; p_user_id: string }
         Returns: boolean
       }
+      check_all_items_claimed: {
+        Args: { p_expense_id: string }
+        Returns: boolean
+      }
       check_conditions_met: {
         Args: { p_trip_id: string; p_user_id: string }
         Returns: boolean
@@ -801,6 +1004,11 @@ export type Database = {
         | "activities"
         | "equipment"
         | "other"
+      expense_status:
+        | "unallocated"
+        | "pending_allocation"
+        | "allocated"
+        | "confirmed"
       invitation_status:
         | "active"
         | "pending_verification"
@@ -972,6 +1180,12 @@ export const Constants = {
         "activities",
         "equipment",
         "other",
+      ],
+      expense_status: [
+        "unallocated",
+        "pending_allocation",
+        "allocated",
+        "confirmed",
       ],
       invitation_status: [
         "active",

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Card, Spinner, EmptyState } from './ui'
@@ -18,6 +19,9 @@ type Settlement = Database['public']['Tables']['settlements']['Row']
 interface ExpenseWithDetails extends Expense {
   payer: User
   splits: Array<ExpenseSplit & { user: User }>
+  line_items?: any[]
+  claims?: any[]
+  allocation_link?: any
 }
 
 interface BalanceData {
@@ -40,6 +44,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
   const [recordSettlementModalOpen, setRecordSettlementModalOpen] = useState(false)
   const [settlementHistoryModalOpen, setSettlementHistoryModalOpen] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null)
 
   useEffect(() => {
     checkAdminStatus()
@@ -62,6 +67,45 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     fetchExpenses()
   }, [tripId])
 
+  // Real-time subscription for expense updates
+  useEffect(() => {
+    if (!tripId) return
+
+    // Subscribe to expense changes
+    const expenseChannel = supabase
+      .channel(`trip_expenses_realtime:${tripId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'expenses',
+          filter: `trip_id=eq.${tripId}`
+        },
+        () => {
+          console.log('✅ Expense changed, refreshing all...')
+          fetchExpenses()
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // INSERT, UPDATE, DELETE
+          schema: 'public',
+          table: 'expense_item_claims'
+        },
+        handleClaimChange
+      )
+      .subscribe()
+
+    console.log('✅ Real-time subscription active for expense claims')
+
+    return () => {
+      console.log('🔴 Closing real-time subscription')
+      supabase.removeChannel(expenseChannel)
+    }
+  }, [tripId, expenses])
+
   const fetchExpenses = async () => {
     setLoading(true)
 
@@ -77,7 +121,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
         )
       `)
       .eq('trip_id', tripId)
-      .order('payment_date', { ascending: false })
+      .order('created_at', { ascending: false })
 
     if (error) {
       console.error('Error fetching expenses:', error)
@@ -92,7 +136,43 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       has_receipt: !!e.receipt_url
     })))
 
-    setExpenses((expensesData as any) || [])
+    // For itemized expenses, load additional data
+    const expensesWithItemizedData = await Promise.all(
+      (expensesData || []).map(async (expense: any) => {
+        if (expense.ai_parsed && expense.status) {
+          // This is an itemized expense, load line items, claims, and allocation link
+          const [lineItemsRes, claimsRes, linkRes] = await Promise.all([
+            supabase
+              .from('expense_line_items')
+              .select('*')
+              .eq('expense_id', expense.id)
+              .order('line_number'),
+            supabase
+              .from('expense_item_claims')
+              .select(`
+                *,
+                user:user_id (id, full_name, avatar_data)
+              `)
+              .eq('expense_id', expense.id),
+            supabase
+              .from('expense_allocation_links')
+              .select('*')
+              .eq('expense_id', expense.id)
+              .single()
+          ])
+
+          return {
+            ...expense,
+            line_items: lineItemsRes.data || [],
+            claims: claimsRes.data || [],
+            allocation_link: linkRes.data
+          }
+        }
+        return expense
+      })
+    )
+
+    setExpenses(expensesWithItemizedData as any)
 
     // Calculate balances
     await calculateBalances(expensesData as any)
@@ -162,6 +242,76 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       netBalance: b.netBalance
     })))
     setBalances(newBalances)
+  }
+
+  // Handle real-time claim changes (targeted refetch)
+  const handleClaimChange = async (payload: any) => {
+    console.log('🔔 Claim change detected:', payload)
+
+    // Extract expense_id from payload (works for INSERT, UPDATE, DELETE)
+    const expenseId = payload.new?.expense_id || payload.old?.expense_id
+    if (!expenseId) return
+
+    // Check if this expense belongs to current trip (fast O(n) lookup)
+    const expense = expenses.find(e => e.id === expenseId)
+    if (!expense) {
+      console.log('⏭️  Change not for this trip, ignoring')
+      return
+    }
+
+    console.log('✅ Change is for our trip, refetching expense:', expense.description)
+
+    // Refetch ONLY this expense's claims (targeted)
+    await refetchExpenseClaims(expenseId)
+  }
+
+  // Refetch claims for a specific expense (targeted refetch)
+  const refetchExpenseClaims = async (expenseId: string) => {
+    try {
+      // Fetch updated claims for this expense only
+      const { data: claims, error: claimsError } = await supabase
+        .from('expense_item_claims')
+        .select('*')
+        .eq('expense_id', expenseId)
+
+      if (claimsError) throw claimsError
+
+      // Fetch users for these claims
+      const claimUserIds = [...new Set((claims || []).map(c => c.user_id))]
+      let claimUsers: any[] = []
+
+      if (claimUserIds.length > 0) {
+        const { data: usersData } = await supabase
+          .from('users')
+          .select('id, full_name, avatar_data')
+          .in('id', claimUserIds)
+
+        claimUsers = usersData || []
+      }
+
+      // Attach user data to claims
+      const claimsWithUsers = (claims || []).map(claim => {
+        const user = claimUsers.find(u => u.id === claim.user_id)
+        return {
+          ...claim,
+          user: user || { id: claim.user_id, full_name: 'Unknown', avatar_data: null }
+        }
+      })
+
+      // Update state immutably (React will re-render affected card)
+      setExpenses(prevExpenses =>
+        prevExpenses.map(exp =>
+          exp.id === expenseId
+            ? { ...exp, claims: claimsWithUsers }
+            : exp
+        )
+      )
+
+      console.log('✅ Expense claims updated in state')
+    } catch (error) {
+      console.error('❌ Error refetching expense claims:', error)
+      // Silently fail - don't disrupt UX
+    }
   }
 
   const getCategoryIcon = (category: string): string => {
@@ -335,6 +485,32 @@ function ExpenseCard({
 }) {
   const [expanded, setExpanded] = useState(false)
 
+  // Check if this is an itemized expense
+  const isItemized = expense.ai_parsed && expense.status && expense.line_items
+
+  // Calculate itemized expense stats
+  let itemizedStats = null
+  if (isItemized) {
+    const lineItems = expense.line_items || []
+    const claims = expense.claims || []
+
+    const totalQuantity = lineItems.reduce((sum, item) => sum + Number(item.quantity), 0)
+    const claimedQuantity = claims.reduce((sum, claim) => sum + Number(claim.quantity_claimed), 0)
+    const percentClaimed = totalQuantity > 0 ? (claimedQuantity / totalQuantity) * 100 : 0
+
+    const userClaims = claims.filter((c: any) => c.user_id === currentUserId)
+    const userTotal = userClaims.reduce((sum: number, claim: any) => sum + Number(claim.amount_owed), 0)
+
+    itemizedStats = {
+      totalItems: lineItems.length,
+      percentClaimed,
+      fullyAllocated: percentClaimed >= 99.9,
+      userHasClaimed: userClaims.length > 0,
+      userTotal,
+      linkCode: expense.allocation_link?.code
+    }
+  }
+
   // Debug logging
   console.log('ExpenseCard render:', {
     description: expense.description,
@@ -385,12 +561,35 @@ function ExpenseCard({
   const currentUserSplit = expense.splits.find(s => s.user_id === currentUserId)
   const isPayer = expense.paid_by === currentUserId
 
+  // Determine border color
+  let borderColor = ''
+  if (isItemized && itemizedStats) {
+    if (itemizedStats.fullyAllocated) {
+      // Fully claimed - color based on user involvement
+      if (isPayer) {
+        borderColor = 'border-l-4 border-l-green-500' // User paid
+      } else if (itemizedStats.userHasClaimed) {
+        borderColor = 'border-l-4 border-l-orange-500' // User owes money
+      } else {
+        borderColor = 'border-l-4 border-l-gray-400' // User not involved
+      }
+    } else {
+      // Partially claimed
+      borderColor = 'border-l-4 border-l-purple-500'
+    }
+  } else {
+    // Regular expense (non-itemized)
+    if (isPayer) {
+      borderColor = 'border-l-4 border-l-green-500'
+    } else if (currentUserSplit) {
+      borderColor = 'border-l-4 border-l-orange-500'
+    }
+  }
+
   return (
     <Card
       noPadding
-      className={`cursor-pointer transition-all hover:shadow-md ${
-        isPayer ? 'border-l-4 border-l-green-500' : currentUserSplit ? 'border-l-4 border-l-orange-500' : ''
-      }`}
+      className={`cursor-pointer transition-all hover:shadow-md ${borderColor}`}
       onClick={() => setExpanded(!expanded)}
     >
       <div className="py-1.5 px-3">
@@ -425,20 +624,45 @@ function ExpenseCard({
                 <span className="truncate">{expense.payer.full_name || expense.payer.email}</span>
                 <span>•</span>
                 <span className="whitespace-nowrap">{formatDate(expense.payment_date)}</span>
-                {isPayer && (
+                {isItemized && itemizedStats ? (
                   <>
                     <span>•</span>
-                    <span className="font-medium whitespace-nowrap text-green-600">
-                      ✓ Paid
+                    <span
+                      className={`font-medium whitespace-nowrap ${
+                        itemizedStats.fullyAllocated ? 'text-green-600' : 'text-purple-600'
+                      }`}
+                    >
+                      {itemizedStats.fullyAllocated
+                        ? '✓ Fully Claimed'
+                        : `${Math.round(itemizedStats.percentClaimed)}% Claimed`}
                     </span>
+                    {itemizedStats.userHasClaimed && (
+                      <>
+                        <span>•</span>
+                        <span className="font-medium whitespace-nowrap text-orange-600">
+                          You: {formatCurrency(itemizedStats.userTotal, 'GBP')}
+                        </span>
+                      </>
+                    )}
                   </>
-                )}
-                {currentUserSplit && (
+                ) : (
                   <>
-                    <span>•</span>
-                    <span className="font-medium whitespace-nowrap text-orange-600">
-                      Owe {formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}
-                    </span>
+                    {isPayer && (
+                      <>
+                        <span>•</span>
+                        <span className="font-medium whitespace-nowrap text-green-600">
+                          ✓ Paid
+                        </span>
+                      </>
+                    )}
+                    {currentUserSplit && (
+                      <>
+                        <span>•</span>
+                        <span className="font-medium whitespace-nowrap text-orange-600">
+                          Owe {formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}
+                        </span>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -463,7 +687,116 @@ function ExpenseCard({
       {/* Expanded Details */}
       {expanded && (
         <div className="px-3 pb-3 pt-2 border-t border-gray-200">
-          <h4 className="text-sm font-medium text-gray-700 mb-2">Split Details:</h4>
+          {isItemized && itemizedStats ? (
+            /* Itemized Expense Details */
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-medium text-gray-700">Itemized Expense</h4>
+                {itemizedStats.linkCode && (
+                  <Link
+                    to={`/claim/${itemizedStats.linkCode}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded hover:bg-purple-200 transition-colors"
+                  >
+                    {itemizedStats.userHasClaimed ? '✏️ Edit Claims' : '📋 Claim Items'}
+                  </Link>
+                )}
+              </div>
+
+              {/* Progress Bar */}
+              <div>
+                <div className="flex justify-between text-xs text-gray-600 mb-1">
+                  <span>{expense.line_items?.length} items</span>
+                  <span>{Math.round(itemizedStats.percentClaimed)}% claimed</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2">
+                  <div
+                    className={`h-2 rounded-full transition-all ${
+                      itemizedStats.fullyAllocated ? 'bg-green-500' : 'bg-purple-500'
+                    }`}
+                    style={{ width: `${Math.min(itemizedStats.percentClaimed, 100)}%` }}
+                  />
+                </div>
+              </div>
+
+              {/* Claims Summary */}
+              {expense.claims && expense.claims.length > 0 && (
+                <div>
+                  <h5 className="text-xs font-medium text-gray-600 mb-2">Who Claimed:</h5>
+                  <div className="space-y-1">
+                    {Object.entries(
+                      expense.claims.reduce((acc: any, claim: any) => {
+                        if (!acc[claim.user_id]) {
+                          acc[claim.user_id] = {
+                            user: claim.user,
+                            total: 0,
+                            items: 0
+                          }
+                        }
+                        acc[claim.user_id].total += Number(claim.amount_owed)
+                        acc[claim.user_id].items += 1
+                        return acc
+                      }, {})
+                    ).map(([userId, data]: [string, any]) => (
+                      <div key={userId} className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-6 h-6 rounded-full flex flex-col items-center justify-center text-xs"
+                            style={{
+                              backgroundColor: data.user?.avatar_data?.bgColor || '#0ea5e9',
+                            }}
+                          >
+                            {data.user?.avatar_data?.accessory && (
+                              <span className="text-[8px] -mb-0.5">
+                                {data.user.avatar_data.accessory}
+                              </span>
+                            )}
+                            <span className="text-xs">
+                              {data.user?.avatar_data?.emoji || '😊'}
+                            </span>
+                          </div>
+                          <span className="text-gray-900">
+                            {data.user?.full_name || 'Unknown'} ({data.items} {data.items === 1 ? 'item' : 'items'})
+                          </span>
+                        </div>
+                        <span className="font-medium text-gray-700">
+                          {formatCurrency(data.total, 'GBP')}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {itemizedStats.linkCode && (
+                <div className="text-xs bg-gray-50 p-2 rounded">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-gray-700">Share Link:</span>
+                      <div className="mt-1 font-mono text-sky-600 break-all">
+                        {`${window.location.origin}/trips/claim/${itemizedStats.linkCode}`}
+                      </div>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        const link = `${window.location.origin}/trips/claim/${itemizedStats.linkCode}`
+                        navigator.clipboard.writeText(link)
+                        setCopiedLinkId(expense.id)
+                        setTimeout(() => setCopiedLinkId(null), 2000)
+                      }}
+                      className="flex-shrink-0 px-2 py-1 text-xs bg-sky-100 text-sky-700 rounded hover:bg-sky-200 transition-colors"
+                    >
+                      {copiedLinkId === expense.id ? '✓ Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Regular Expense Details */
+            <>
+              <h4 className="text-sm font-medium text-gray-700 mb-2">Split Details:</h4>
           <div className="space-y-1">
             {expense.splits.map(split => (
                 <div key={split.id} className="flex items-center justify-between text-sm">
@@ -497,8 +830,17 @@ function ExpenseCard({
 
             {/* Receipt */}
             {expense.receipt_url && <ReceiptDisplay receiptPath={expense.receipt_url} />}
-          </div>
-        )}
+            </>
+          )}
+
+          {/* Receipt for all expense types */}
+          {isItemized && expense.receipt_url && (
+            <div className="mt-3">
+              <ReceiptDisplay receiptPath={expense.receipt_url} />
+            </div>
+          )}
+        </div>
+      )}
     </Card>
   )
 }

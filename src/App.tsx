@@ -7,6 +7,7 @@ import { ForgotPassword } from './pages/ForgotPassword'
 import { ResetPassword } from './pages/ResetPassword'
 import { Dashboard } from './pages/Dashboard'
 import { TripDetail } from './pages/TripDetail'
+import { ClaimItemsPage } from './pages/ClaimItemsPage'
 import { ComponentShowcase } from './pages/ComponentShowcase'
 
 function App() {
@@ -30,6 +31,16 @@ function App() {
           }
         />
         <Route path="/dashboard" element={<Navigate to="/" replace />} />
+
+        {/* Claim Items Route */}
+        <Route
+          path="/claim/:code"
+          element={
+            <ProtectedRoute>
+              <ClaimItemsPage />
+            </ProtectedRoute>
+          }
+        />
 
         {/* Trip Detail Route */}
         <Route

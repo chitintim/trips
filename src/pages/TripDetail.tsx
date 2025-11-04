@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import { supabase } from '../lib/supabase'
@@ -21,6 +21,7 @@ interface ParticipantWithUser extends TripParticipant {
 export function TripDetail() {
   const { tripId } = useParams<{ tripId: string }>()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
   const scrollDirection = useScrollDirection()
   const [trip, setTrip] = useState<Trip | null>(null)
@@ -30,6 +31,17 @@ export function TripDetail() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
+
+  // Handle tab query parameter (e.g., from "Back to Expenses" button)
+  useEffect(() => {
+    const tabParam = searchParams.get('tab')
+    if (tabParam && ['overview', 'planning', 'expenses', 'notes'].includes(tabParam)) {
+      setActiveTab(tabParam as TripTab)
+      // Clear the query param after setting tab
+      searchParams.delete('tab')
+      setSearchParams(searchParams, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   useEffect(() => {
     if (!tripId) {

@@ -30,6 +30,71 @@ export function ItemizedSplitWizard({
   const [linkCode, setLinkCode] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
+  // Editable line items state
+  const [editableItems, setEditableItems] = useState(parsedData.line_items)
+
+  // Calculate totals from editable items
+  const calculateTotals = () => {
+    const subtotal = editableItems.reduce((sum, item) => sum + item.subtotal, 0)
+    const totalTax = editableItems.reduce((sum, item) => sum + (item.tax_amount || 0), 0)
+    const totalService = editableItems.reduce((sum, item) => sum + (item.service_amount || 0), 0)
+    const total = editableItems.reduce((sum, item) => sum + item.total_amount, 0)
+    return { subtotal, totalTax, totalService, total }
+  }
+
+  const recalculatedTotals = calculateTotals()
+
+  // Update line item field
+  const updateLineItem = (index: number, field: string, value: any) => {
+    const updated = [...editableItems]
+    const item = { ...updated[index] }
+
+    if (field === 'name_english') {
+      item.name_english = value
+    } else if (field === 'quantity') {
+      item.quantity = parseFloat(value) || 0
+      item.subtotal = item.quantity * item.unit_price
+      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+    } else if (field === 'unit_price') {
+      item.unit_price = parseFloat(value) || 0
+      item.subtotal = item.quantity * item.unit_price
+      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+    } else if (field === 'total_amount') {
+      item.total_amount = parseFloat(value) || 0
+    }
+
+    updated[index] = item
+    setEditableItems(updated)
+  }
+
+  // Add new line item
+  const addNewLineItem = () => {
+    const newItem = {
+      line_number: editableItems.length + 1,
+      name_original: 'New Item',
+      name_english: 'New Item',
+      quantity: 1,
+      unit_price: 0,
+      line_discount_amount: 0,
+      line_discount_percent: 0,
+      subtotal: 0,
+      tax_amount: 0,
+      service_amount: 0,
+      total_amount: 0
+    }
+    setEditableItems([...editableItems, newItem])
+  }
+
+  // Delete line item
+  const deleteLineItem = (index: number) => {
+    const updated = editableItems.filter((_, i) => i !== index)
+    // Renumber line items
+    updated.forEach((item, i) => {
+      item.line_number = i + 1
+    })
+    setEditableItems(updated)
+  }
+
   const handleCreateItemizedExpense = async () => {
     setLoading(true)
 
@@ -44,7 +109,7 @@ export function ItemizedSplitWizard({
         .insert({
           trip_id: tripId,
           paid_by: paidBy,
-          amount: parsedData.total,
+          amount: recalculatedTotals.total,
           currency: currency,
           payment_date: paymentDate,
           category: parsedData.expense_category as any, // Will be validated by DB
@@ -55,15 +120,15 @@ export function ItemizedSplitWizard({
           // Itemized expense fields
           status: 'unallocated',
           ai_parsed: true,
-          subtotal: parsedData.subtotal,
+          subtotal: recalculatedTotals.subtotal,
           tax_percent: parsedData.tax_percent,
-          tax_amount: parsedData.tax_amount,
+          tax_amount: recalculatedTotals.totalTax,
           service_charge_percent: parsedData.service_charge_percent,
-          service_charge_amount: parsedData.service_charge_amount,
+          service_charge_amount: recalculatedTotals.totalService,
           discount_amount: parsedData.discount_amount,
           discount_percent: parsedData.discount_percent,
           // FX conversion (will be null if currency = GBP)
-          base_currency_amount: currency === 'GBP' ? parsedData.total : null,
+          base_currency_amount: currency === 'GBP' ? recalculatedTotals.total : null,
           fx_rate: currency === 'GBP' ? 1 : null,
           fx_rate_date: currency === 'GBP' ? null : paymentDate
         })
@@ -74,8 +139,8 @@ export function ItemizedSplitWizard({
 
       console.log('Expense created:', expense.id)
 
-      // 3. Create line items
-      const lineItemsToInsert = parsedData.line_items.map(item => ({
+      // 3. Create line items (using editable items)
+      const lineItemsToInsert = editableItems.map(item => ({
         expense_id: expense.id,
         name_original: item.name_original,
         name_english: item.name_english || item.name_original,
@@ -231,42 +296,74 @@ export function ItemizedSplitWizard({
         </p>
       </div>
 
-      {/* Line Items Table */}
+      {/* Line Items Table - Editable */}
       <div className="border border-gray-200 rounded-lg overflow-hidden">
-        <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+        <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex items-center justify-between">
           <p className="text-sm font-medium text-gray-900">
-            Line Items ({parsedData.line_items.length} items)
+            Line Items ({editableItems.length} items)
           </p>
+          <p className="text-xs text-sky-600">Click to edit values</p>
         </div>
 
-        <div className="divide-y divide-gray-200 max-h-64 overflow-y-auto">
-          {parsedData.line_items.map((item) => (
-            <div key={item.line_number} className="px-4 py-3 hover:bg-gray-50">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">
-                    {item.name_english || item.name_original}
-                  </p>
-                  {item.name_english && item.name_english !== item.name_original && (
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      {item.name_original}
-                    </p>
-                  )}
-                  <p className="text-xs text-gray-500 mt-1">
-                    {item.quantity} × {currency} {item.unit_price.toFixed(2)}
-                  </p>
+        <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+          {editableItems.map((item, index) => (
+            <div key={index} className="px-4 py-3 hover:bg-gray-50">
+              <div className="space-y-2">
+                {/* Item Name */}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={item.name_english || item.name_original}
+                    onChange={(e) => updateLineItem(index, 'name_english', e.target.value)}
+                    className="flex-1 text-sm font-medium px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                  <button
+                    onClick={() => deleteLineItem(index)}
+                    className="text-red-600 hover:text-red-700 px-2 py-1"
+                    title="Delete item"
+                  >
+                    ✕
+                  </button>
                 </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-sm font-semibold text-gray-900">
+
+                {/* Quantity and Price */}
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-gray-600">Qty:</span>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={item.quantity}
+                    onChange={(e) => updateLineItem(index, 'quantity', e.target.value)}
+                    className="w-20 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                  <span className="text-gray-600">×</span>
+                  <span className="text-gray-600">{currency}</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={item.unit_price.toFixed(2)}
+                    onChange={(e) => updateLineItem(index, 'unit_price', e.target.value)}
+                    className="w-24 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+                  />
+                  <span className="text-gray-600">=</span>
+                  <span className="font-semibold text-gray-900">
                     {currency} {item.total_amount.toFixed(2)}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    incl. tax & service
-                  </p>
+                  </span>
                 </div>
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Add New Line Button */}
+        <div className="border-t border-gray-200 bg-gray-50">
+          <button
+            onClick={addNewLineItem}
+            className="w-full px-4 py-3 text-sm text-sky-600 hover:text-sky-700 hover:bg-sky-50 transition-colors flex items-center justify-center gap-2"
+          >
+            <span className="text-lg">+</span>
+            Add New Line (e.g., tip, extra item)
+          </button>
         </div>
       </div>
 
@@ -275,7 +372,7 @@ export function ItemizedSplitWizard({
         <div className="flex justify-between text-sm">
           <span className="text-gray-600">Subtotal</span>
           <span className="font-medium text-gray-900">
-            {currency} {parsedData.subtotal.toFixed(2)}
+            {currency} {recalculatedTotals.subtotal.toFixed(2)}
           </span>
         </div>
 
@@ -290,24 +387,24 @@ export function ItemizedSplitWizard({
           </div>
         )}
 
-        {parsedData.tax_amount && parsedData.tax_amount > 0 && (
+        {recalculatedTotals.totalTax > 0 && (
           <div className="flex justify-between text-sm">
             <span className="text-gray-600">
               Tax {parsedData.tax_percent && parsedData.tax_percent > 0 ? `(${parsedData.tax_percent}%)` : ''}
             </span>
             <span className="font-medium text-gray-900">
-              {currency} {parsedData.tax_amount.toFixed(2)}
+              {currency} {recalculatedTotals.totalTax.toFixed(2)}
             </span>
           </div>
         )}
 
-        {parsedData.service_charge_amount && parsedData.service_charge_amount > 0 && (
+        {recalculatedTotals.totalService > 0 && (
           <div className="flex justify-between text-sm">
             <span className="text-gray-600">
               Service Charge {parsedData.service_charge_percent && parsedData.service_charge_percent > 0 ? `(${parsedData.service_charge_percent}%)` : ''}
             </span>
             <span className="font-medium text-gray-900">
-              {currency} {parsedData.service_charge_amount.toFixed(2)}
+              {currency} {recalculatedTotals.totalService.toFixed(2)}
             </span>
           </div>
         )}
@@ -316,7 +413,7 @@ export function ItemizedSplitWizard({
           <div className="flex justify-between">
             <span className="font-semibold text-gray-900">Total</span>
             <span className="font-bold text-lg text-gray-900">
-              {currency} {parsedData.total.toFixed(2)}
+              {currency} {recalculatedTotals.total.toFixed(2)}
             </span>
           </div>
         </div>

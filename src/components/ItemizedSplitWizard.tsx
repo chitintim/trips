@@ -53,11 +53,35 @@ export function ItemizedSplitWizard({
       item.name_english = value
     } else if (field === 'quantity') {
       item.quantity = parseFloat(value) || 0
-      item.subtotal = item.quantity * item.unit_price
+      // Recalculate: qty × price - discount
+      const baseSubtotal = item.quantity * item.unit_price
+      const discountAmount = (item.line_discount_percent || 0) > 0
+        ? baseSubtotal * ((item.line_discount_percent || 0) / 100)
+        : (item.line_discount_amount || 0)
+      item.subtotal = baseSubtotal - discountAmount
       item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
     } else if (field === 'unit_price') {
       item.unit_price = parseFloat(value) || 0
-      item.subtotal = item.quantity * item.unit_price
+      // Recalculate: qty × price - discount
+      const baseSubtotal = item.quantity * item.unit_price
+      const discountAmount = (item.line_discount_percent || 0) > 0
+        ? baseSubtotal * ((item.line_discount_percent || 0) / 100)
+        : (item.line_discount_amount || 0)
+      item.subtotal = baseSubtotal - discountAmount
+      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+    } else if (field === 'line_discount_amount') {
+      item.line_discount_amount = parseFloat(value) || 0
+      item.line_discount_percent = 0 // Clear percentage when fixed amount is used
+      // Recalculate
+      const baseSubtotal = item.quantity * item.unit_price
+      item.subtotal = baseSubtotal - item.line_discount_amount
+      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+    } else if (field === 'line_discount_percent') {
+      item.line_discount_percent = parseFloat(value) || 0
+      // Recalculate discount amount from percentage
+      const baseSubtotal = item.quantity * item.unit_price
+      item.line_discount_amount = baseSubtotal * (item.line_discount_percent / 100)
+      item.subtotal = baseSubtotal - item.line_discount_amount
       item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
     } else if (field === 'total_amount') {
       item.total_amount = parseFloat(value) || 0
@@ -327,13 +351,14 @@ export function ItemizedSplitWizard({
                 </div>
 
                 {/* Quantity and Price */}
-                <div className="flex items-center gap-2 text-xs">
+                <div className="flex items-center gap-2 text-xs flex-wrap">
                   <span className="text-gray-600">Qty:</span>
                   <input
                     type="number"
                     step="0.1"
                     value={item.quantity}
                     onChange={(e) => updateLineItem(index, 'quantity', e.target.value)}
+                    onFocus={(e) => e.target.select()}
                     className="w-20 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
                   />
                   <span className="text-gray-600">×</span>
@@ -343,11 +368,50 @@ export function ItemizedSplitWizard({
                     step="0.01"
                     value={item.unit_price.toFixed(2)}
                     onChange={(e) => updateLineItem(index, 'unit_price', e.target.value)}
+                    onFocus={(e) => e.target.select()}
                     className="w-24 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
                   />
                   <span className="text-gray-600">=</span>
                   <span className="font-semibold text-gray-900">
-                    {currency} {item.total_amount.toFixed(2)}
+                    {currency} {item.subtotal.toFixed(2)}
+                  </span>
+                </div>
+
+                {/* Line Discount (if exists or user wants to add) */}
+                {((item.line_discount_amount || 0) > 0 || (item.line_discount_percent || 0) > 0) && (
+                  <div className="flex items-center gap-2 text-xs flex-wrap">
+                    <span className="text-gray-600">Discount:</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      value={(item.line_discount_amount || 0).toFixed(2)}
+                      onChange={(e) => updateLineItem(index, 'line_discount_amount', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      className="w-20 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                    <span className="text-gray-600">or</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={(item.line_discount_percent || 0).toFixed(1)}
+                      onChange={(e) => updateLineItem(index, 'line_discount_percent', e.target.value)}
+                      onFocus={(e) => e.target.select()}
+                      className="w-16 px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+                    />
+                    <span className="text-gray-600">%</span>
+                  </div>
+                )}
+
+                {/* Tax and Service (proportional from receipt) */}
+                <div className="flex items-center gap-3 text-xs text-gray-500">
+                  {item.tax_amount > 0 && (
+                    <span>Tax: {currency} {item.tax_amount.toFixed(2)}</span>
+                  )}
+                  {item.service_amount > 0 && (
+                    <span>Service: {currency} {item.service_amount.toFixed(2)}</span>
+                  )}
+                  <span className="font-semibold text-gray-900">
+                    Total: {currency} {item.total_amount.toFixed(2)}
                   </span>
                 </div>
               </div>

@@ -203,7 +203,7 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
       .eq('id', tripId)
       .single()
 
-    // Fetch participants with user details
+    // Fetch participants with user details (only active ones)
     const { data: participantsData } = await supabase
       .from('trip_participants')
       .select(`
@@ -211,6 +211,7 @@ export function ConfirmationDashboard({ tripId }: ConfirmationDashboardProps) {
         user:user_id (*)
       `)
       .eq('trip_id', tripId)
+      .eq('active', true)
 
     setTrip(tripData)
     const allParticipants = (participantsData as any[]) || []

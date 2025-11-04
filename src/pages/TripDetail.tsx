@@ -6,7 +6,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { useScrollDirection } from '../hooks/useScrollDirection'
 import { Button, Card, Badge, Spinner, EmptyState, SelectionAvatars } from '../components/ui'
-import { CreateTripModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
+import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
 import { CreatePlanningSectionModal } from '../components/CreatePlanningSectionModal'
 import { CreateOptionModal } from '../components/CreateOptionModal'
 import { Trip, User, TripParticipant } from '../types'
@@ -29,6 +29,7 @@ export function TripDetail() {
   const [activeTab, setActiveTab] = useState<TripTab>('overview')
   const [isAdmin, setIsAdmin] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
+  const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
 
   useEffect(() => {
     if (!tripId) {
@@ -76,7 +77,7 @@ export function TripDetail() {
       return
     }
 
-    // Fetch participants with user details
+    // Fetch participants with user details (only active ones)
     const { data: participantsData } = await supabase
       .from('trip_participants')
       .select(`
@@ -84,6 +85,7 @@ export function TripDetail() {
         user:user_id (*)
       `)
       .eq('trip_id', tripId)
+      .eq('active', true)
 
     setTrip(tripData)
     setParticipants((participantsData as any[]) || [])
@@ -92,6 +94,10 @@ export function TripDetail() {
 
   const handleEditTrip = () => {
     setEditModalOpen(true)
+  }
+
+  const handleAddParticipant = () => {
+    setAddParticipantModalOpen(true)
   }
 
   if (loading) {
@@ -272,7 +278,7 @@ export function TripDetail() {
 
       {/* Tab Content */}
       <div className="max-w-6xl mx-auto px-4 py-8">
-        {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} />}
+        {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} onAddParticipant={handleAddParticipant} />}
         {activeTab === 'planning' && <PlanningTab trip={trip} participants={participants} />}
         {activeTab === 'expenses' && <ExpensesTab tripId={trip.id} participants={participants} />}
         {activeTab === 'notes' && <NotesTab trip={trip} />}
@@ -287,6 +293,13 @@ export function TripDetail() {
             onSuccess={fetchTripData}
             editTrip={trip}
           />
+          <AddParticipantModal
+            isOpen={addParticipantModalOpen}
+            onClose={() => setAddParticipantModalOpen(false)}
+            tripId={trip.id}
+            existingParticipantIds={participants.map((p) => p.user_id)}
+            onSuccess={fetchTripData}
+          />
         </>
       )}
     </div>
@@ -297,9 +310,11 @@ export function TripDetail() {
 function TripOverviewTab({
   trip,
   participants,
+  onAddParticipant,
 }: {
   trip: Trip
   participants: ParticipantWithUser[]
+  onAddParticipant: () => void
 }) {
   const { user } = useAuth()
   const [isAdmin, setIsAdmin] = useState(false)
@@ -349,18 +364,46 @@ function TripOverviewTab({
   }
 
   const handleRemoveParticipant = async (participant: ParticipantWithUser) => {
-    if (!window.confirm(`Remove ${participant.user.full_name || participant.user.email} from this trip?`)) {
+    // Check if participant has expenses
+    const { data: paidExpenses } = await supabase
+      .from('expenses')
+      .select('id')
+      .eq('trip_id', trip.id)
+      .eq('paid_by', participant.user_id)
+      .limit(1)
+
+    const { data: expenseSplits } = await supabase
+      .from('expense_splits')
+      .select('expense_id')
+      .eq('user_id', participant.user_id)
+      .limit(1)
+
+    const hasExpenses = (paidExpenses && paidExpenses.length > 0) || (expenseSplits && expenseSplits.length > 0)
+
+    let confirmMessage = `Remove ${participant.user.full_name || participant.user.email} from this trip?`
+    if (hasExpenses) {
+      confirmMessage += '\n\n⚠️ This user has expense records. They will be marked as inactive but their expenses will be preserved.'
+    } else {
+      confirmMessage += '\n\nThey will be marked as inactive and can be re-added later if needed.'
+    }
+
+    if (!window.confirm(confirmMessage)) {
       return
     }
 
+    // Mark as inactive instead of deleting
+    // NOTE: Requires 'active' field on trip_participants (default true)
     const { error } = await supabase
       .from('trip_participants')
-      .delete()
+      .update({
+        active: false,
+        updated_at: new Date().toISOString()
+      })
       .eq('trip_id', trip.id)
       .eq('user_id', participant.user_id)
 
     if (error) {
-      alert(`Error removing participant: ${error.message}`)
+      alert(`Error removing participant: ${error.message}\n\nNote: If you see a column error, the 'active' field needs to be added to the database.`)
       return
     }
 
@@ -432,6 +475,19 @@ function TripOverviewTab({
                   {participants.length} {participants.length === 1 ? 'person' : 'people'} on this trip
                 </Card.Description>
               </div>
+
+              {/* Add button */}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onAddParticipant()
+                }}
+                className="flex-shrink-0"
+              >
+                + Add
+              </Button>
             </div>
           </div>
         </Card.Header>

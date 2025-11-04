@@ -44,6 +44,21 @@ export function ItemizedSplitWizard({
 
   const recalculatedTotals = calculateTotals()
 
+  // Validate and sanitize numeric input
+  const sanitizeNumber = (value: string): number => {
+    // Remove all non-numeric characters except first decimal point
+    let cleaned = value.replace(/[^\d.]/g, '')
+
+    // Keep only the first decimal point
+    const parts = cleaned.split('.')
+    if (parts.length > 2) {
+      cleaned = parts[0] + '.' + parts.slice(1).join('')
+    }
+
+    const num = parseFloat(cleaned)
+    return isNaN(num) ? 0 : num
+  }
+
   // Update line item field
   const updateLineItem = (index: number, field: string, value: any) => {
     const updated = [...editableItems]
@@ -52,7 +67,7 @@ export function ItemizedSplitWizard({
     if (field === 'name_english') {
       item.name_english = value
     } else if (field === 'quantity') {
-      item.quantity = parseFloat(value) || 0
+      item.quantity = sanitizeNumber(value)
       // Recalculate: qty × price - discount
       const baseSubtotal = item.quantity * item.unit_price
       const discountAmount = (item.line_discount_percent || 0) > 0
@@ -61,7 +76,7 @@ export function ItemizedSplitWizard({
       item.subtotal = baseSubtotal - discountAmount
       item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
     } else if (field === 'unit_price') {
-      item.unit_price = parseFloat(value) || 0
+      item.unit_price = sanitizeNumber(value)
       // Recalculate: qty × price - discount
       const baseSubtotal = item.quantity * item.unit_price
       const discountAmount = (item.line_discount_percent || 0) > 0
@@ -70,21 +85,21 @@ export function ItemizedSplitWizard({
       item.subtotal = baseSubtotal - discountAmount
       item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
     } else if (field === 'line_discount_amount') {
-      item.line_discount_amount = parseFloat(value) || 0
+      item.line_discount_amount = sanitizeNumber(value)
       item.line_discount_percent = 0 // Clear percentage when fixed amount is used
       // Recalculate
       const baseSubtotal = item.quantity * item.unit_price
       item.subtotal = baseSubtotal - item.line_discount_amount
       item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
     } else if (field === 'line_discount_percent') {
-      item.line_discount_percent = parseFloat(value) || 0
+      item.line_discount_percent = sanitizeNumber(value)
       // Recalculate discount amount from percentage
       const baseSubtotal = item.quantity * item.unit_price
       item.line_discount_amount = baseSubtotal * (item.line_discount_percent / 100)
       item.subtotal = baseSubtotal - item.line_discount_amount
       item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
     } else if (field === 'total_amount') {
-      item.total_amount = parseFloat(value) || 0
+      item.total_amount = sanitizeNumber(value)
     }
 
     updated[index] = item

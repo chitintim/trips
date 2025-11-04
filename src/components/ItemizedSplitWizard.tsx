@@ -354,8 +354,8 @@ export function ItemizedSplitWizard({
                 <div className="flex items-center gap-2 text-xs flex-wrap">
                   <span className="text-gray-600">Qty:</span>
                   <input
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     value={item.quantity}
                     onChange={(e) => updateLineItem(index, 'quantity', e.target.value)}
                     onFocus={(e) => e.target.select()}
@@ -364,8 +364,8 @@ export function ItemizedSplitWizard({
                   <span className="text-gray-600">×</span>
                   <span className="text-gray-600">{currency}</span>
                   <input
-                    type="number"
-                    step="0.01"
+                    type="text"
+                    inputMode="decimal"
                     value={item.unit_price.toFixed(2)}
                     onChange={(e) => updateLineItem(index, 'unit_price', e.target.value)}
                     onFocus={(e) => e.target.select()}
@@ -382,8 +382,8 @@ export function ItemizedSplitWizard({
                   <div className="flex items-center gap-2 text-xs flex-wrap">
                     <span className="text-gray-600">Discount:</span>
                     <input
-                      type="number"
-                      step="0.01"
+                      type="text"
+                      inputMode="decimal"
                       value={(item.line_discount_amount || 0).toFixed(2)}
                       onChange={(e) => updateLineItem(index, 'line_discount_amount', e.target.value)}
                       onFocus={(e) => e.target.select()}
@@ -391,8 +391,8 @@ export function ItemizedSplitWizard({
                     />
                     <span className="text-gray-600">or</span>
                     <input
-                      type="number"
-                      step="0.1"
+                      type="text"
+                      inputMode="decimal"
                       value={(item.line_discount_percent || 0).toFixed(1)}
                       onChange={(e) => updateLineItem(index, 'line_discount_percent', e.target.value)}
                       onFocus={(e) => e.target.select()}

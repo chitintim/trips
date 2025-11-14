@@ -240,10 +240,22 @@ export function AddExpenseModal({
 
       // Calculate FX conversion for review
       if (currency !== 'GBP') {
-        const conversion = await convertCurrency(parseFloat(amount), currency, paymentDate, 'GBP')
-        if (conversion) {
-          setBaseCurrencyAmount(conversion.convertedAmount)
-          setFxRate(conversion.rate.rate)
+        try {
+          const conversion = await convertCurrency(parseFloat(amount), currency, paymentDate, 'GBP')
+          if (conversion) {
+            setBaseCurrencyAmount(conversion.convertedAmount)
+            setFxRate(conversion.rate.rate)
+          } else {
+            // FX conversion failed - use 1:1 rate as fallback but warn user
+            alert(`Warning: Could not fetch exchange rate for ${currency} to GBP. Using amount as-is. You can edit the expense later if needed.`)
+            setBaseCurrencyAmount(parseFloat(amount))
+            setFxRate(null)
+          }
+        } catch (error) {
+          console.error('FX conversion error:', error)
+          alert(`Warning: Exchange rate conversion failed. Using amount as-is. You can edit the expense later if needed.`)
+          setBaseCurrencyAmount(parseFloat(amount))
+          setFxRate(null)
         }
       } else {
         setBaseCurrencyAmount(parseFloat(amount))
@@ -259,10 +271,21 @@ export function AddExpenseModal({
   }
 
   const handleSubmit = async () => {
+    console.log('handleSubmit called - starting submission')
     setLoading(true)
 
     try {
       const amountNum = parseFloat(amount)
+      console.log('Submitting expense:', { amount: amountNum, currency, baseCurrencyAmount, selectedParticipants: selectedParticipants.length })
+
+      // Ensure baseCurrencyAmount is set (should have been set in step 3)
+      if (!baseCurrencyAmount) {
+        console.error('baseCurrencyAmount not set - this should not happen!')
+        alert('Error: Currency conversion not completed. Please go back and try again.')
+        setLoading(false)
+        return
+      }
+
       let receiptUrl: string | null = null
 
       // Upload receipt if provided

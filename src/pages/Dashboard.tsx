@@ -277,11 +277,30 @@ function MemberView() {
         })
       )
 
-      // Separate into user's trips and public trips they're not in
-      const userTrips = tripsWithCounts.filter(trip => userTripIds.has(trip.id))
-      const otherPublicTrips = tripsWithCounts.filter(trip =>
-        trip.is_public && !userTripIds.has(trip.id)
-      )
+      // Get today's date for comparison
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+
+      // Separate user's trips into upcoming and past
+      const userTripsAll = tripsWithCounts.filter(trip => userTripIds.has(trip.id))
+      const upcomingUserTrips = userTripsAll
+        .filter(trip => new Date(trip.start_date) >= today)
+        .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
+      const pastUserTrips = userTripsAll
+        .filter(trip => new Date(trip.start_date) < today)
+        .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()) // Descending (most recent first)
+
+      // Combine: upcoming first, then past
+      const userTrips = [...upcomingUserTrips, ...pastUserTrips]
+
+      // Public trips: only show upcoming trips user is NOT part of
+      const otherPublicTrips = tripsWithCounts
+        .filter(trip =>
+          trip.is_public &&
+          !userTripIds.has(trip.id) &&
+          new Date(trip.start_date) >= today
+        )
+        .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
 
       console.log('Fetched my trips:', userTrips)
       console.log('Fetched public trips:', otherPublicTrips)
@@ -490,8 +509,23 @@ function TripsTab() {
         })
       )
 
-      console.log('Fetched trips:', tripsWithCounts)
-      setTrips(tripsWithCounts)
+      // Get today's date for comparison
+      const today = new Date()
+      today.setHours(0, 0, 0, 0)
+
+      // Separate into upcoming and past trips
+      const upcomingTrips = tripsWithCounts
+        .filter(trip => new Date(trip.start_date) >= today)
+        .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
+      const pastTrips = tripsWithCounts
+        .filter(trip => new Date(trip.start_date) < today)
+        .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()) // Descending (most recent first)
+
+      // Combine: upcoming first, then past
+      const sortedTrips = [...upcomingTrips, ...pastTrips]
+
+      console.log('Fetched trips:', sortedTrips)
+      setTrips(sortedTrips)
     }
     setLoading(false)
   }

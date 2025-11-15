@@ -31,17 +31,46 @@ export function TripDetail() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
+  const [hasSetInitialTab, setHasSetInitialTab] = useState(false)
 
   // Handle tab query parameter (e.g., from "Back to Expenses" button)
   useEffect(() => {
     const tabParam = searchParams.get('tab')
     if (tabParam && ['overview', 'planning', 'expenses', 'notes'].includes(tabParam)) {
       setActiveTab(tabParam as TripTab)
+      setHasSetInitialTab(true)
       // Clear the query param after setting tab
       searchParams.delete('tab')
       setSearchParams(searchParams, { replace: true })
     }
   }, [searchParams, setSearchParams])
+
+  // Set default tab based on trip status (only on initial load)
+  useEffect(() => {
+    if (trip && !hasSetInitialTab && !searchParams.get('tab')) {
+      let defaultTab: TripTab = 'overview'
+
+      switch (trip.status) {
+        case 'gathering_interest':
+        case 'confirming_participants':
+          defaultTab = 'overview' // People tab
+          break
+        case 'booking_details':
+        case 'booked_awaiting_departure':
+          defaultTab = 'planning' // Planning tab
+          break
+        case 'trip_ongoing':
+        case 'trip_completed':
+          defaultTab = 'expenses' // Expenses tab
+          break
+        default:
+          defaultTab = 'overview'
+      }
+
+      setActiveTab(defaultTab)
+      setHasSetInitialTab(true)
+    }
+  }, [trip, hasSetInitialTab, searchParams])
 
   useEffect(() => {
     if (!tripId) {
@@ -727,7 +756,25 @@ function PlanningTab({
       .order('order_index', { ascending: true })
 
     if (!error && sectionsData) {
-      setSections(sectionsData)
+      // Sort sections: in_progress → not_started → completed
+      const sortedSections = [...sectionsData].sort((a, b) => {
+        const statusOrder: { [key: string]: number } = {
+          'in_progress': 1,
+          'not_started': 2,
+          'completed': 3
+        }
+        const orderA = statusOrder[a.status] || 4
+        const orderB = statusOrder[b.status] || 4
+
+        // If same status, maintain original order_index
+        if (orderA === orderB) {
+          return (a.order_index || 0) - (b.order_index || 0)
+        }
+
+        return orderA - orderB
+      })
+
+      setSections(sortedSections)
     }
 
     setLoading(false)
@@ -1536,7 +1583,7 @@ function SelectionSummary({
               {/* Total */}
               <div className="pt-3 border-t-2 border-gray-300">
                 <div className="flex justify-between items-center">
-                  <span className="font-bold text-gray-900">Total:</span>
+                  <span className="font-bold text-gray-900">Indicative total based on selection:</span>
                   <span className="font-bold text-lg text-sky-600">
                     {currency} {totalCost.toFixed(2)}
                   </span>

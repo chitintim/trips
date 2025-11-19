@@ -1043,18 +1043,23 @@ function PlanningSectionCard({
   onDeleteSection: (section: any) => void
 }) {
   const [isExpanded, setIsExpanded] = useState(false)
+  const [showPendingModal, setShowPendingModal] = useState(false)
   const options = section.options || []
   const availableOptions = options.filter((opt: any) => opt.status !== 'draft' && opt.status !== 'cancelled')
 
   // Calculate how many people have made selections in this section
   const participantIds = participants.map(p => p.user_id)
-  const selectionsCount = new Set(
+  const usersWhoSelected = new Set(
     options.flatMap((opt: any) =>
       (opt.selections || [])
         .filter((sel: any) => participantIds.includes(sel.user_id))
         .map((sel: any) => sel.user_id)
     )
-  ).size
+  )
+  const selectionsCount = usersWhoSelected.size
+
+  // Get participants who haven't selected
+  const participantsWithoutSelection = participants.filter(p => !usersWhoSelected.has(p.user_id))
 
   // Check if current user has made a selection in this section
   const userHasSelected = options.some((opt: any) =>
@@ -1123,7 +1128,16 @@ function PlanningSectionCard({
 
                 {/* Stats - always visible */}
                 <div className="mt-2 flex items-center gap-4 text-sm text-gray-600">
-                  <span>
+                  <span
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      if (participantsWithoutSelection.length > 0) {
+                        setShowPendingModal(true)
+                      }
+                    }}
+                    className={participantsWithoutSelection.length > 0 ? 'cursor-pointer hover:text-sky-600 hover:underline transition-colors' : ''}
+                    title={participantsWithoutSelection.length > 0 ? 'Click to see who hasn\'t selected' : ''}
+                  >
                     {selectionsCount} of {participants.length} people made selections
                   </span>
                   {availableOptions.length > 0 && (
@@ -1242,6 +1256,93 @@ function PlanningSectionCard({
             </div>
           )}
         </Card.Content>
+      )}
+
+      {/* Pending Selections Modal */}
+      {showPendingModal && (
+        <div
+          className="fixed inset-0 z-modal flex items-center justify-center p-4 bg-black bg-opacity-50"
+          onClick={() => setShowPendingModal(false)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full max-h-[80vh] overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="border-b border-gray-200 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Pending Selections
+              </h3>
+              <button
+                onClick={() => setShowPendingModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+                aria-label="Close"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-4 overflow-y-auto max-h-[60vh]">
+              <p className="text-sm text-gray-600 mb-4">
+                The following {participantsWithoutSelection.length} {participantsWithoutSelection.length === 1 ? 'person hasn\'t' : 'people haven\'t'} made a selection for "{section.title}":
+              </p>
+              <div className="space-y-3">
+                {participantsWithoutSelection.map((participant) => {
+                  const user = participant.user
+                  const emoji = (user?.avatar_data as any)?.emoji || '😊'
+                  const accessory = (user?.avatar_data as any)?.accessory
+                  const bgColor = (user?.avatar_data as any)?.bgColor || '#0ea5e9'
+                  const displayName = user?.full_name || user?.email || 'Unknown'
+
+                  return (
+                    <div
+                      key={participant.user_id}
+                      className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg"
+                    >
+                      <div
+                        className="w-10 h-10 rounded-full flex flex-col items-center justify-center flex-shrink-0"
+                        style={{ backgroundColor: bgColor }}
+                      >
+                        {accessory && (
+                          <span className="text-xs -mb-1">
+                            {accessory}
+                          </span>
+                        )}
+                        <span className="text-base">
+                          {emoji}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium text-gray-900 truncate">
+                          {displayName}
+                        </div>
+                        {user?.email && user?.full_name && (
+                          <div className="text-xs text-gray-500 truncate">
+                            {user.email}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="border-t border-gray-200 px-6 py-4">
+              <Button
+                variant="outline"
+                onClick={() => setShowPendingModal(false)}
+                className="w-full"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </Card>
   )

@@ -1,4 +1,5 @@
 import { HTMLAttributes, useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 
 // ============================================================================
 // TYPES
@@ -54,6 +55,7 @@ export function SelectionAvatars({
 }: SelectionAvatarsProps) {
   const [showPopover, setShowPopover] = useState(false)
   const [popoverPosition, setPopoverPosition] = useState<'center' | 'left' | 'right'>('center')
+  const [buttonRect, setButtonRect] = useState<DOMRect | null>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLDivElement>(null)
 
@@ -84,13 +86,15 @@ export function SelectionAvatars({
   // Calculate popover position to avoid going off-screen
   useEffect(() => {
     if (showPopover && buttonRef.current) {
-      const buttonRect = buttonRef.current.getBoundingClientRect()
+      const rect = buttonRef.current.getBoundingClientRect()
+      setButtonRect(rect)
+
       const viewportWidth = window.innerWidth
       const popoverWidth = 288 // w-72 = 18rem = 288px
 
       // Check if there's enough space on the left and right
-      const spaceOnLeft = buttonRect.left
-      const spaceOnRight = viewportWidth - buttonRect.right
+      const spaceOnLeft = rect.left
+      const spaceOnRight = viewportWidth - rect.right
 
       if (spaceOnLeft < popoverWidth / 2 && spaceOnRight >= popoverWidth) {
         setPopoverPosition('left')
@@ -154,8 +158,31 @@ export function SelectionAvatars({
     return null
   }
 
+  // Calculate popover styles based on button position
+  const getPopoverStyles = () => {
+    if (!buttonRect) return {}
+
+    const top = buttonRect.bottom + 8 // 8px gap (mt-2)
+    let left = buttonRect.left
+    let transform = ''
+
+    if (popoverPosition === 'center') {
+      left = buttonRect.left + buttonRect.width / 2
+      transform = 'translateX(-50%)'
+    } else if (popoverPosition === 'right') {
+      left = buttonRect.right - 288 // w-72 = 288px
+    }
+
+    return {
+      position: 'fixed' as const,
+      top: `${top}px`,
+      left: `${left}px`,
+      transform,
+    }
+  }
+
   return (
-    <div className={`relative flex items-center gap-2 ${className}`} {...props}>
+    <div className={`flex items-center gap-2 ${className}`} {...props}>
       {/* Avatar List - Clickable */}
       <div
         ref={buttonRef}
@@ -221,17 +248,12 @@ export function SelectionAvatars({
         </div>
       )}
 
-      {/* Popover */}
-      {showPopover && (
+      {/* Popover - rendered via portal to avoid z-index issues */}
+      {showPopover && createPortal(
         <div
           ref={popoverRef}
-          className="absolute z-popover mt-2 w-72 bg-white rounded-lg shadow-xl border border-gray-200 max-h-96 overflow-y-auto"
-          style={{
-            top: '100%',
-            left: popoverPosition === 'left' ? '0' : popoverPosition === 'right' ? 'auto' : '50%',
-            right: popoverPosition === 'right' ? '0' : 'auto',
-            transform: popoverPosition === 'center' ? 'translateX(-50%)' : 'none',
-          }}
+          className="z-popover w-72 bg-white rounded-lg shadow-xl border border-gray-200 max-h-96 overflow-y-auto"
+          style={getPopoverStyles()}
         >
           {/* Header */}
           <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between rounded-t-lg">
@@ -290,7 +312,8 @@ export function SelectionAvatars({
               )
             })}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

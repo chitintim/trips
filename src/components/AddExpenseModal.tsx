@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Modal, Button, Input, Select, Badge } from './ui'
@@ -67,9 +67,17 @@ export function AddExpenseModal({
   const [baseCurrencyAmount, setBaseCurrencyAmount] = useState<number | null>(null)
   const [fxRate, setFxRate] = useState<number | null>(null)
 
+  // Track if modal was previously open to detect fresh opens vs. re-renders
+  const wasOpenRef = useRef(false)
+  const sessionIdRef = useRef<string | null>(null)
+
   // Load saved draft from localStorage
   useEffect(() => {
     if (isOpen && user) {
+      // Detect fresh open (transition from closed to open)
+      const isFreshOpen = !wasOpenRef.current
+      wasOpenRef.current = true
+
       const draftKey = `expense_draft_${tripId}`
       const savedDraft = localStorage.getItem(draftKey)
 
@@ -116,21 +124,85 @@ export function AddExpenseModal({
         }
       }
 
-      // Always reset these on open
-      setStep(1)
-      setPaidBy(user.id)
-      setSplitType('equal')
-      setUseItemizedSplit(false)
-      setSelectedParticipants([])
-      setSplits({})
-      setBaseCurrencyAmount(null)
-      setFxRate(null)
-      setReceiptFile(null)
-      setParsingReceipt(false)
-      setParsingProgress(0)
-      setParsingMessage('')
+      // Load step state (persists across app switches on mobile)
+      const stepKey = `expense_step_${tripId}`
+      const savedStep = localStorage.getItem(stepKey)
+
+      if (isFreshOpen) {
+        // Fresh open: check if we have saved step state from interrupted session
+        if (savedStep) {
+          try {
+            const stepState = JSON.parse(savedStep)
+            // Restore step state if session is recent (within last hour)
+            const savedAt = new Date(stepState.savedAt).getTime()
+            const now = Date.now()
+            const oneHour = 60 * 60 * 1000
+
+            if (now - savedAt < oneHour && stepState.sessionId) {
+              // Restore the session
+              sessionIdRef.current = stepState.sessionId
+              setStep(stepState.step || 1)
+              setPaidBy(stepState.paidBy || user.id)
+              setSplitType(stepState.splitType || 'equal')
+              setUseItemizedSplit(stepState.useItemizedSplit || false)
+            } else {
+              // Session expired, start fresh
+              sessionIdRef.current = Date.now().toString()
+              setStep(1)
+              setPaidBy(user.id)
+              setSplitType('equal')
+              setUseItemizedSplit(false)
+              localStorage.removeItem(stepKey)
+            }
+          } catch (err) {
+            console.error('Failed to load step state:', err)
+            sessionIdRef.current = Date.now().toString()
+            setStep(1)
+            setPaidBy(user.id)
+            setSplitType('equal')
+            setUseItemizedSplit(false)
+          }
+        } else {
+          // No saved step state, start fresh
+          sessionIdRef.current = Date.now().toString()
+          setStep(1)
+          setPaidBy(user.id)
+          setSplitType('equal')
+          setUseItemizedSplit(false)
+        }
+
+        // Always reset these on fresh open
+        setSelectedParticipants([])
+        setSplits({})
+        setBaseCurrencyAmount(null)
+        setFxRate(null)
+        setReceiptFile(null)
+        setParsingReceipt(false)
+        setParsingProgress(0)
+        setParsingMessage('')
+      }
+      // If not fresh open (re-render while modal is open), don't reset anything
+    } else if (!isOpen) {
+      // Modal is closing
+      wasOpenRef.current = false
     }
   }, [isOpen, user, tripId])
+
+  // Save step state to localStorage whenever it changes (for mobile app switching)
+  useEffect(() => {
+    if (isOpen && sessionIdRef.current) {
+      const stepKey = `expense_step_${tripId}`
+      const stepState = {
+        sessionId: sessionIdRef.current,
+        step,
+        paidBy,
+        splitType,
+        useItemizedSplit,
+        savedAt: new Date().toISOString()
+      }
+      localStorage.setItem(stepKey, JSON.stringify(stepState))
+    }
+  }, [isOpen, tripId, step, paidBy, splitType, useItemizedSplit])
 
   // Save draft to localStorage whenever form fields change
   useEffect(() => {
@@ -365,8 +437,9 @@ export function AddExpenseModal({
 
       if (splitsError) throw splitsError
 
-      // Clear draft on success
+      // Clear draft and step state on success
       localStorage.removeItem(`expense_draft_${tripId}`)
+      localStorage.removeItem(`expense_step_${tripId}`)
 
       onSuccess()
       onClose()
@@ -803,8 +876,9 @@ export function AddExpenseModal({
               currency={currency}
               paymentDate={paymentDate}
               onSuccess={() => {
-                // Clear draft and close modal
+                // Clear draft and step state, then close modal
                 localStorage.removeItem(`expense_draft_${tripId}`)
+                localStorage.removeItem(`expense_step_${tripId}`)
                 onSuccess()
                 onClose()
               }}

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../hooks/useAuth'
 import { Button, Badge } from './ui'
 import { generateLinkCode, type ParsedReceiptData } from '../lib/receiptParsing'
 import type { Currency } from '../lib/currency'
@@ -25,6 +26,7 @@ export function ItemizedSplitWizard({
   onSuccess,
   onBack
 }: ItemizedSplitWizardProps) {
+  const { user } = useAuth()
   const [loading, setLoading] = useState(false)
   const [shareLink, setShareLink] = useState<string | null>(null)
   const [linkCode, setLinkCode] = useState<string | null>(null)
@@ -32,6 +34,10 @@ export function ItemizedSplitWizard({
 
   // Editable line items state
   const [editableItems, setEditableItems] = useState(parsedData.line_items)
+
+  // Editable tax and service percentages
+  const [taxPercent, setTaxPercent] = useState(parsedData.tax_percent || 0)
+  const [servicePercent, setServicePercent] = useState(parsedData.service_charge_percent || 0)
 
   // Calculate totals from editable items
   const calculateTotals = () => {
@@ -59,6 +65,40 @@ export function ItemizedSplitWizard({
     return isNaN(num) ? 0 : num
   }
 
+  // Recalculate all line item tax/service amounts when percentages change
+  const recalculateTaxAndService = (newTaxPercent: number, newServicePercent: number) => {
+    const updatedItems = editableItems.map(item => {
+      const newTaxAmount = item.subtotal * (newTaxPercent / 100)
+      const newServiceAmount = item.subtotal * (newServicePercent / 100)
+      return {
+        ...item,
+        tax_amount: newTaxAmount,
+        service_amount: newServiceAmount,
+        total_amount: item.subtotal + newTaxAmount + newServiceAmount
+      }
+    })
+    setEditableItems(updatedItems)
+  }
+
+  const handleTaxPercentChange = (value: string) => {
+    const newPercent = sanitizeNumber(value)
+    setTaxPercent(newPercent)
+    recalculateTaxAndService(newPercent, servicePercent)
+  }
+
+  const handleServicePercentChange = (value: string) => {
+    const newPercent = sanitizeNumber(value)
+    setServicePercent(newPercent)
+    recalculateTaxAndService(taxPercent, newPercent)
+  }
+
+  // Helper to recalculate item totals with current tax/service percentages
+  const recalculateItemTotal = (item: typeof editableItems[0]) => {
+    item.tax_amount = item.subtotal * (taxPercent / 100)
+    item.service_amount = item.subtotal * (servicePercent / 100)
+    item.total_amount = item.subtotal + item.tax_amount + item.service_amount
+  }
+
   // Update line item field
   const updateLineItem = (index: number, field: string, value: any) => {
     const updated = [...editableItems]
@@ -74,7 +114,7 @@ export function ItemizedSplitWizard({
         ? baseSubtotal * ((item.line_discount_percent || 0) / 100)
         : (item.line_discount_amount || 0)
       item.subtotal = baseSubtotal - discountAmount
-      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+      recalculateItemTotal(item)
     } else if (field === 'unit_price') {
       item.unit_price = sanitizeNumber(value)
       // Recalculate: qty × price - discount
@@ -83,21 +123,21 @@ export function ItemizedSplitWizard({
         ? baseSubtotal * ((item.line_discount_percent || 0) / 100)
         : (item.line_discount_amount || 0)
       item.subtotal = baseSubtotal - discountAmount
-      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+      recalculateItemTotal(item)
     } else if (field === 'line_discount_amount') {
       item.line_discount_amount = sanitizeNumber(value)
       item.line_discount_percent = 0 // Clear percentage when fixed amount is used
       // Recalculate
       const baseSubtotal = item.quantity * item.unit_price
       item.subtotal = baseSubtotal - item.line_discount_amount
-      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+      recalculateItemTotal(item)
     } else if (field === 'line_discount_percent') {
       item.line_discount_percent = sanitizeNumber(value)
       // Recalculate discount amount from percentage
       const baseSubtotal = item.quantity * item.unit_price
       item.line_discount_amount = baseSubtotal * (item.line_discount_percent / 100)
       item.subtotal = baseSubtotal - item.line_discount_amount
-      item.total_amount = item.subtotal + (item.tax_amount || 0) + (item.service_amount || 0)
+      recalculateItemTotal(item)
     } else if (field === 'total_amount') {
       item.total_amount = sanitizeNumber(value)
     }
@@ -135,6 +175,11 @@ export function ItemizedSplitWizard({
   }
 
   const handleCreateItemizedExpense = async () => {
+    if (!user?.id) {
+      alert('You must be logged in to create an itemized expense')
+      return
+    }
+
     setLoading(true)
 
     try {
@@ -160,9 +205,9 @@ export function ItemizedSplitWizard({
           status: 'unallocated',
           ai_parsed: true,
           subtotal: recalculatedTotals.subtotal,
-          tax_percent: parsedData.tax_percent,
+          tax_percent: taxPercent,
           tax_amount: recalculatedTotals.totalTax,
-          service_charge_percent: parsedData.service_charge_percent,
+          service_charge_percent: servicePercent,
           service_charge_amount: recalculatedTotals.totalService,
           discount_amount: parsedData.discount_amount,
           discount_percent: parsedData.discount_percent,
@@ -213,7 +258,7 @@ export function ItemizedSplitWizard({
           trip_id: tripId,
           code: code,
           expires_at: expiresAt.toISOString(),
-          created_by: paidBy
+          created_by: user?.id  // Must be current user for RLS policy
         })
 
       if (linkError) throw linkError
@@ -470,27 +515,49 @@ export function ItemizedSplitWizard({
           </div>
         )}
 
-        {recalculatedTotals.totalTax > 0 && (
-          <div className="flex justify-between text-sm">
-            <span className="text-gray-600">
-              Tax {parsedData.tax_percent && parsedData.tax_percent > 0 ? `(${parsedData.tax_percent}%)` : ''}
-            </span>
-            <span className="font-medium text-gray-900">
-              {currency} {recalculatedTotals.totalTax.toFixed(2)}
-            </span>
+        {/* Editable Tax Percentage */}
+        <div className="flex justify-between items-center text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-gray-600">Tax</span>
+            <div className="flex items-center">
+              <input
+                type="text"
+                inputMode="decimal"
+                pattern="[0-9]*\.?[0-9]*"
+                value={taxPercent}
+                onChange={(e) => handleTaxPercentChange(e.target.value)}
+                onFocus={(e) => e.target.select()}
+                className="w-14 px-2 py-0.5 text-xs border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500 text-center"
+              />
+              <span className="text-gray-500 ml-1">%</span>
+            </div>
           </div>
-        )}
+          <span className="font-medium text-gray-900">
+            {currency} {recalculatedTotals.totalTax.toFixed(2)}
+          </span>
+        </div>
 
-        {recalculatedTotals.totalService > 0 && (
-          <div className="flex justify-between text-sm">
-            <span className="text-gray-600">
-              Service Charge {parsedData.service_charge_percent && parsedData.service_charge_percent > 0 ? `(${parsedData.service_charge_percent}%)` : ''}
-            </span>
-            <span className="font-medium text-gray-900">
-              {currency} {recalculatedTotals.totalService.toFixed(2)}
-            </span>
+        {/* Editable Service Charge Percentage */}
+        <div className="flex justify-between items-center text-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-gray-600">Service</span>
+            <div className="flex items-center">
+              <input
+                type="text"
+                inputMode="decimal"
+                pattern="[0-9]*\.?[0-9]*"
+                value={servicePercent}
+                onChange={(e) => handleServicePercentChange(e.target.value)}
+                onFocus={(e) => e.target.select()}
+                className="w-14 px-2 py-0.5 text-xs border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500 text-center"
+              />
+              <span className="text-gray-500 ml-1">%</span>
+            </div>
           </div>
-        )}
+          <span className="font-medium text-gray-900">
+            {currency} {recalculatedTotals.totalService.toFixed(2)}
+          </span>
+        </div>
 
         <div className="pt-2 mt-2 border-t border-gray-300">
           <div className="flex justify-between">

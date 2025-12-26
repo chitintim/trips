@@ -173,8 +173,8 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
 
     setExpenses(expensesWithItemizedData as any)
 
-    // Calculate balances
-    await calculateBalances(expensesData as any)
+    // Calculate balances - pass expensesWithItemizedData to include claims
+    await calculateBalances(expensesWithItemizedData as any)
 
     setLoading(false)
   }
@@ -204,11 +204,28 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
         .filter(exp => exp.paid_by === userId)
         .reduce((sum, exp) => sum + (exp.base_currency_amount || exp.amount), 0)
 
-      // Total owed by this user
-      const totalOwed = expensesData
-        .flatMap(exp => exp.splits)
+      // Total owed by this user from regular expense splits
+      const totalOwedFromSplits = expensesData
+        .flatMap(exp => exp.splits || [])
         .filter(split => split.user_id === userId)
         .reduce((sum, split) => sum + (split.base_currency_amount || split.amount), 0)
+
+      // Total owed by this user from itemized expense claims (converted to GBP)
+      const totalOwedFromClaims = expensesData
+        .filter(exp => exp.ai_parsed && exp.claims) // Only itemized expenses with claims
+        .reduce((sum: number, exp: any) => {
+          const userClaims = (exp.claims || []).filter((claim: any) => claim.user_id === userId)
+          const claimTotal = userClaims.reduce((claimSum: number, claim: any) => {
+            const amountInOriginalCurrency = claim.amount_owed || 0
+            // Convert to GBP using expense's fx_rate (if available, otherwise assume 1:1)
+            const fxRate = exp.fx_rate || 1
+            return claimSum + (amountInOriginalCurrency * fxRate)
+          }, 0)
+          return sum + claimTotal
+        }, 0)
+
+      // Combined total owed
+      const totalOwed = totalOwedFromSplits + totalOwedFromClaims
 
       // Settlements received (others paid this user)
       const settlementsReceived = settlements
@@ -298,15 +315,18 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       })
 
       // Update state immutably (React will re-render affected card)
-      setExpenses(prevExpenses =>
-        prevExpenses.map(exp =>
+      setExpenses(prevExpenses => {
+        const updatedExpenses = prevExpenses.map(exp =>
           exp.id === expenseId
             ? { ...exp, claims: claimsWithUsers }
             : exp
         )
-      )
+        // Recalculate balances with the updated claims
+        calculateBalances(updatedExpenses)
+        return updatedExpenses
+      })
 
-      console.log('✅ Expense claims updated in state')
+      console.log('✅ Expense claims updated in state and balances recalculated')
     } catch (error) {
       console.error('❌ Error refetching expense claims:', error)
       // Silently fail - don't disrupt UX

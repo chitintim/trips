@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Badge } from './ui'
 import { generateLinkCode, type ParsedReceiptData } from '../lib/receiptParsing'
-import type { Currency } from '../lib/currency'
+import { convertCurrency, type Currency } from '../lib/currency'
 
 interface ItemizedSplitWizardProps {
   parsedData: ParsedReceiptData
@@ -187,7 +187,37 @@ export function ItemizedSplitWizard({
       const code = generateLinkCode()
       setLinkCode(code)
 
-      // 2. Create expense with status='unallocated'
+      // 2. Fetch FX rate if currency is not GBP
+      let baseCurrencyAmount: number | null = null
+      let fxRate: number | null = null
+      let fxRateDate: string | null = null
+
+      if (currency === 'GBP') {
+        baseCurrencyAmount = recalculatedTotals.total
+        fxRate = 1
+        fxRateDate = null
+      } else {
+        // Fetch FX rate from frankfurter.app
+        console.log(`Fetching FX rate for ${currency} -> GBP on ${paymentDate}`)
+        const conversionResult = await convertCurrency(
+          recalculatedTotals.total,
+          currency,
+          paymentDate,
+          'GBP'
+        )
+
+        if (conversionResult) {
+          baseCurrencyAmount = conversionResult.convertedAmount
+          fxRate = conversionResult.rate.rate
+          fxRateDate = conversionResult.rate.date
+          console.log(`FX rate: 1 ${currency} = ${fxRate} GBP (date: ${fxRateDate})`)
+          console.log(`Converted: ${currency} ${recalculatedTotals.total} = GBP ${baseCurrencyAmount.toFixed(2)}`)
+        } else {
+          console.warn('Failed to fetch FX rate, expense will be created without GBP conversion')
+        }
+      }
+
+      // 3. Create expense with status='unallocated'
       const { data: expense, error: expenseError } = await supabase
         .from('expenses')
         .insert({
@@ -211,10 +241,10 @@ export function ItemizedSplitWizard({
           service_charge_amount: recalculatedTotals.totalService,
           discount_amount: parsedData.discount_amount,
           discount_percent: parsedData.discount_percent,
-          // FX conversion (will be null if currency = GBP)
-          base_currency_amount: currency === 'GBP' ? recalculatedTotals.total : null,
-          fx_rate: currency === 'GBP' ? 1 : null,
-          fx_rate_date: currency === 'GBP' ? null : paymentDate
+          // FX conversion (now properly fetched for all currencies)
+          base_currency_amount: baseCurrencyAmount,
+          fx_rate: fxRate,
+          fx_rate_date: fxRateDate
         })
         .select()
         .single()

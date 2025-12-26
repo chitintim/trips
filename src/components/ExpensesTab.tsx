@@ -431,6 +431,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
           key={expenses.length} // Force re-render when expenses change
           balances={balances}
           currentUserId={user?.id || ''}
+          isAdmin={isAdmin}
           onOpenSettlementHistory={() => setSettlementHistoryModalOpen(true)}
           onOpenRecordPayment={() => setRecordSettlementModalOpen(true)}
         />
@@ -869,11 +870,13 @@ function ExpenseCard({
 function BalanceSummary({
   balances,
   currentUserId,
+  isAdmin,
   onOpenSettlementHistory,
   onOpenRecordPayment
 }: {
   balances: BalanceData[]
   currentUserId: string
+  isAdmin: boolean
   onOpenSettlementHistory: () => void
   onOpenRecordPayment: () => void
 }) {
@@ -1068,6 +1071,44 @@ function BalanceSummary({
                     💡 This shows the <strong>minimum {allTransactions.length} transaction{allTransactions.length !== 1 ? 's' : ''}</strong> needed to settle all debts in the group.
                   </div>
                 </div>
+
+                {/* Admin: Show all group transactions */}
+                {isAdmin && allTransactions.length > 0 && (
+                  <div className="pt-4 mt-4 border-t border-gray-300">
+                    <h4 className="text-xs font-semibold text-gray-700 mb-3 uppercase flex items-center gap-1">
+                      <span>👑</span> All Group Settlements
+                    </h4>
+                    <div className="space-y-2">
+                      {allTransactions.map((transaction, idx) => {
+                        const isCurrentUserInvolved =
+                          transaction.from === currentUserId ||
+                          transaction.to === currentUserId
+
+                        return (
+                          <div
+                            key={idx}
+                            className={`flex justify-between items-center p-2 rounded-lg border ${
+                              isCurrentUserInvolved
+                                ? 'bg-sky-50 border-sky-200'
+                                : 'bg-gray-50 border-gray-200'
+                            }`}
+                          >
+                            <span className="text-sm text-gray-900">
+                              <strong>{transaction.fromName}</strong>
+                              <span className="text-gray-500 mx-1">→</span>
+                              <strong>{transaction.toName}</strong>
+                            </span>
+                            <span className={`font-bold ${
+                              isCurrentUserInvolved ? 'text-sky-600' : 'text-gray-600'
+                            }`}>
+                              {formatCurrency(transaction.amount, 'GBP')}
+                            </span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             )
           })()}

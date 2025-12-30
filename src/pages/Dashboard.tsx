@@ -281,17 +281,26 @@ function MemberView() {
       const today = new Date()
       today.setHours(0, 0, 0, 0)
 
-      // Separate user's trips into upcoming and past
+      // Separate user's trips into ongoing, upcoming, and past
       const userTripsAll = tripsWithCounts.filter(trip => userTripIds.has(trip.id))
+
+      // Ongoing: started but not ended yet (start_date <= today AND end_date >= today)
+      const ongoingUserTrips = userTripsAll
+        .filter(trip => new Date(trip.start_date) <= today && new Date(trip.end_date) >= today)
+        .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime()) // Ending soonest first
+
+      // Upcoming: hasn't started yet (start_date > today)
       const upcomingUserTrips = userTripsAll
-        .filter(trip => new Date(trip.start_date) >= today)
+        .filter(trip => new Date(trip.start_date) > today)
         .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
+
+      // Past: already ended (end_date < today)
       const pastUserTrips = userTripsAll
-        .filter(trip => new Date(trip.start_date) < today)
+        .filter(trip => new Date(trip.end_date) < today)
         .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()) // Descending (most recent first)
 
-      // Combine: upcoming first, then past
-      const userTrips = [...upcomingUserTrips, ...pastUserTrips]
+      // Combine: ongoing first, then upcoming, then past
+      const userTrips = [...ongoingUserTrips, ...upcomingUserTrips, ...pastUserTrips]
 
       // Public trips: only show upcoming trips user is NOT part of
       const otherPublicTrips = tripsWithCounts
@@ -513,16 +522,23 @@ function TripsTab() {
       const today = new Date()
       today.setHours(0, 0, 0, 0)
 
-      // Separate into upcoming and past trips
+      // Ongoing: started but not ended yet
+      const ongoingTrips = tripsWithCounts
+        .filter(trip => new Date(trip.start_date) <= today && new Date(trip.end_date) >= today)
+        .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime()) // Ending soonest first
+
+      // Upcoming: hasn't started yet
       const upcomingTrips = tripsWithCounts
-        .filter(trip => new Date(trip.start_date) >= today)
+        .filter(trip => new Date(trip.start_date) > today)
         .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
+
+      // Past: already ended
       const pastTrips = tripsWithCounts
-        .filter(trip => new Date(trip.start_date) < today)
+        .filter(trip => new Date(trip.end_date) < today)
         .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()) // Descending (most recent first)
 
-      // Combine: upcoming first, then past
-      const sortedTrips = [...upcomingTrips, ...pastTrips]
+      // Combine: ongoing first, then upcoming, then past
+      const sortedTrips = [...ongoingTrips, ...upcomingTrips, ...pastTrips]
 
       console.log('Fetched trips:', sortedTrips)
       setTrips(sortedTrips)

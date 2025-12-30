@@ -520,7 +520,9 @@ function ExpenseCard({
     const percentClaimed = totalQuantity > 0 ? (claimedQuantity / totalQuantity) * 100 : 0
 
     const userClaims = claims.filter((c: any) => c.user_id === currentUserId)
-    const userTotal = userClaims.reduce((sum: number, claim: any) => sum + Number(claim.amount_owed), 0)
+    // Convert claim amounts to GBP using expense's fx_rate
+    const fxRate = expense.fx_rate || 1
+    const userTotal = userClaims.reduce((sum: number, claim: any) => sum + Number(claim.amount_owed) * fxRate, 0)
 
     itemizedStats = {
       totalItems: lineItems.length,
@@ -754,7 +756,9 @@ function ExpenseCard({
                             items: 0
                           }
                         }
-                        acc[claim.user_id].total += Number(claim.amount_owed)
+                        // Convert claim amount to GBP using expense's fx_rate
+                        const fxRate = expense.fx_rate || 1
+                        acc[claim.user_id].total += Number(claim.amount_owed) * fxRate
                         acc[claim.user_id].items += 1
                         return acc
                       }, {})

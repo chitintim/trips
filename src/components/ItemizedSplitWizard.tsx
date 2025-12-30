@@ -175,6 +175,14 @@ export function ItemizedSplitWizard({
   }
 
   const handleCreateItemizedExpense = async () => {
+    // Blur any focused input to ensure values are saved (mobile Safari fix)
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur()
+    }
+
+    // Small delay to allow state updates after blur
+    await new Promise(resolve => setTimeout(resolve, 50))
+
     if (!user?.id) {
       alert('You must be logged in to create an itemized expense')
       return

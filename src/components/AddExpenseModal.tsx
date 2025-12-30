@@ -635,9 +635,10 @@ export function AddExpenseModal({
                 accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
                 onChange={(e) => {
                   setReceiptFile(e.target.files?.[0] || null)
-                  // Reset parsing state when new file selected
+                  // Reset ALL parsing state when new file selected
                   setParsedData(null)
                   setParseError(null)
+                  setUploadedReceiptPath(null)
                 }}
                 disabled={parsingReceipt}
                 className="block w-full text-sm text-gray-500
@@ -876,9 +877,10 @@ export function AddExpenseModal({
               currency={currency}
               paymentDate={paymentDate}
               onSuccess={() => {
-                // Clear draft and step state, then close modal
+                // Clear ALL localStorage state on success (including parsing state)
                 localStorage.removeItem(`expense_draft_${tripId}`)
                 localStorage.removeItem(`expense_step_${tripId}`)
+                localStorage.removeItem(`expense_parsing_${tripId}`)
                 onSuccess()
                 onClose()
               }}

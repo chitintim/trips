@@ -287,7 +287,7 @@ export function ItemizedSplitWizard({
 
       // 4. Create allocation link
       const expiresAt = new Date()
-      expiresAt.setDate(expiresAt.getDate() + 14) // 14 days from now
+      expiresAt.setDate(expiresAt.getDate() + 30) // 1 month from now
 
       const { error: linkError } = await supabase
         .from('expense_allocation_links')
@@ -360,7 +360,7 @@ export function ItemizedSplitWizard({
               <p className="text-xs font-medium text-sky-900 mb-1">Claim Link Code</p>
               <p className="text-2xl font-bold text-sky-700 font-mono tracking-wider">{linkCode}</p>
             </div>
-            <Badge variant="info">Expires in 14 days</Badge>
+            <Badge variant="info">Expires in 30 days</Badge>
           </div>
 
           <div className="pt-2 border-t border-sky-200">

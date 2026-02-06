@@ -713,7 +713,7 @@ export function ClaimItemsPage() {
                       </div>
                       <input
                         type="number"
-                        step="0.1"
+                        step="any"
                         min="0"
                         max={available}
                         value={selected || ''}

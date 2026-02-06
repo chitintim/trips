@@ -408,22 +408,11 @@ export function ClaimItemsPage() {
   }
 
   const handleQuantityChange = (lineItemId: string, quantityStr: string, lineItem: LineItemWithClaims) => {
-    // Allow empty string and intermediate decimal states (e.g., "0.", "1.")
-    if (quantityStr === '' || quantityStr === '.') {
-      const newSelections = { ...selections }
-      delete newSelections[lineItemId]
-      setSelections(newSelections)
-      return
-    }
-
-    // Only allow valid decimal characters
-    if (!/^\d*\.?\d*$/.test(quantityStr)) {
-      return
-    }
-
-    const quantity = parseFloat(quantityStr)
+    // Parse as decimal, allow empty string
+    const quantity = quantityStr === '' ? 0 : parseFloat(quantityStr)
 
     if (isNaN(quantity) || quantity < 0) {
+      // Invalid input, ignore
       return
     }
 
@@ -723,12 +712,12 @@ export function ClaimItemsPage() {
                         <p className="text-xs text-gray-500">Can use decimals (e.g., 0.5 for sharing)</p>
                       </div>
                       <input
-                        type="text"
-                        inputMode="decimal"
-                        pattern="[0-9]*\.?[0-9]*"
+                        type="number"
+                        step="any"
+                        min="0"
+                        max={available}
                         value={selected || ''}
                         onChange={(e) => handleQuantityChange(item.id, e.target.value, item)}
-                        onFocus={(e) => e.target.select()}
                         placeholder="0"
                         className="w-20 px-3 py-2 text-center text-lg font-semibold border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
                       />

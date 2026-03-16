@@ -40,11 +40,7 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
   // Lock body scroll when drawer is open (prevents background scroll on mobile)
   useEffect(() => {
     if (isOpen) {
-      const scrollY = window.scrollY
-      document.body.style.position = 'fixed'
-      document.body.style.top = `-${scrollY}px`
-      document.body.style.left = '0'
-      document.body.style.right = '0'
+      document.documentElement.style.overflow = 'hidden'
       document.body.style.overflow = 'hidden'
 
       fetchMessages()
@@ -53,12 +49,8 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
       fetchDailyCount()
 
       return () => {
-        document.body.style.position = ''
-        document.body.style.top = ''
-        document.body.style.left = ''
-        document.body.style.right = ''
+        document.documentElement.style.overflow = ''
         document.body.style.overflow = ''
-        window.scrollTo(0, scrollY)
       }
     }
   }, [isOpen, trip.id])
@@ -268,9 +260,8 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
     <>
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/20 z-40 lg:bg-transparent"
+        className="fixed inset-0 bg-black/20 z-40 lg:bg-transparent touch-none"
         onClick={onClose}
-        onTouchMove={(e) => e.preventDefault()}
       />
 
       {/* Drawer */}
@@ -299,7 +290,7 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
         )}
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-2" style={{ WebkitOverflowScrolling: 'touch' }}>
+        <div className="flex-1 overflow-y-auto overscroll-contain touch-pan-y px-3 py-2" style={{ WebkitOverflowScrolling: 'touch' }}>
           {loading ? (
             <div className="flex justify-center py-8">
               <Spinner />

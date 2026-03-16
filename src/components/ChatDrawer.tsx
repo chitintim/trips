@@ -74,15 +74,29 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
           setMessages(prev => {
             // Avoid duplicates (by real DB id)
             if (prev.some(m => m.id === newMsg.id)) return prev
-            // Remove optimistic/streaming placeholders that this real message replaces
-            const filtered = prev.filter(m => {
-              // Remove optimistic user messages from same user
-              if (m.id.startsWith('optimistic-') && newMsg.role === 'user' && m.user_id === newMsg.user_id) return false
-              // Remove streaming assistant messages when real assistant message arrives
-              if (m.id.startsWith('streaming-') && newMsg.role === 'assistant') return false
-              return true
-            })
-            return [...filtered, newMsg]
+
+            // Replace optimistic user message in-place (preserves ordering)
+            const optimisticIdx = prev.findIndex(m =>
+              m.id.startsWith('optimistic-') && newMsg.role === 'user' && m.user_id === newMsg.user_id
+            )
+            if (optimisticIdx !== -1) {
+              const updated = [...prev]
+              updated[optimisticIdx] = newMsg
+              return updated
+            }
+
+            // Replace streaming assistant message in-place (preserves ordering)
+            const streamingIdx = prev.findIndex(m =>
+              m.id.startsWith('streaming-') && newMsg.role === 'assistant'
+            )
+            if (streamingIdx !== -1) {
+              const updated = [...prev]
+              updated[streamingIdx] = newMsg
+              return updated
+            }
+
+            // New message from another user — append
+            return [...prev, newMsg]
           })
         }
       )

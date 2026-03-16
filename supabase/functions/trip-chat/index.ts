@@ -299,6 +299,7 @@ Deno.serve(async (req) => {
           let parsed: LLMResponse
           try {
             let jsonContent = fullText.trim()
+            // Strip markdown code fences if present
             if (jsonContent.startsWith('```json')) {
               jsonContent = jsonContent.replace(/```json\n?/g, '').replace(/```\n?/g, '')
             } else if (jsonContent.startsWith('```')) {
@@ -306,7 +307,41 @@ Deno.serve(async (req) => {
             }
             parsed = JSON.parse(jsonContent)
           } catch {
-            parsed = { message: fullText, actions: [] }
+            // LLM sometimes outputs natural language BEFORE the JSON object.
+            // Try to find and extract the JSON from the text.
+            let extracted = false
+            for (const pattern of ['{ "message"', '{"message"']) {
+              const idx = fullText.indexOf(pattern)
+              if (idx !== -1) {
+                try {
+                  parsed = JSON.parse(fullText.slice(idx))
+                  extracted = true
+                  break
+                } catch {
+                  // Try trimming trailing text after the JSON by finding balanced braces
+                  const jsonCandidate = fullText.slice(idx)
+                  let depth = 0
+                  let end = -1
+                  for (let i = 0; i < jsonCandidate.length; i++) {
+                    if (jsonCandidate[i] === '{') depth++
+                    else if (jsonCandidate[i] === '}') {
+                      depth--
+                      if (depth === 0) { end = i + 1; break }
+                    }
+                  }
+                  if (end !== -1) {
+                    try {
+                      parsed = JSON.parse(jsonCandidate.slice(0, end))
+                      extracted = true
+                      break
+                    } catch { /* continue */ }
+                  }
+                }
+              }
+            }
+            if (!extracted) {
+              parsed = { message: fullText, actions: [] }
+            }
           }
 
           // CRITICAL: Strip actions for non-organizers

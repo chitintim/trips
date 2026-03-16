@@ -37,12 +37,29 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
   const isOverLimit = input.length > maxLength
   const isAtDailyLimit = remainingMessages <= 0
 
+  // Lock body scroll when drawer is open (prevents background scroll on mobile)
   useEffect(() => {
     if (isOpen) {
+      const scrollY = window.scrollY
+      document.body.style.position = 'fixed'
+      document.body.style.top = `-${scrollY}px`
+      document.body.style.left = '0'
+      document.body.style.right = '0'
+      document.body.style.overflow = 'hidden'
+
       fetchMessages()
       fetchUsers()
       checkOrganizerStatus()
       fetchDailyCount()
+
+      return () => {
+        document.body.style.position = ''
+        document.body.style.top = ''
+        document.body.style.left = ''
+        document.body.style.right = ''
+        document.body.style.overflow = ''
+        window.scrollTo(0, scrollY)
+      }
     }
   }, [isOpen, trip.id])
 
@@ -253,10 +270,11 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
       <div
         className="fixed inset-0 bg-black/20 z-40 lg:bg-transparent"
         onClick={onClose}
+        onTouchMove={(e) => e.preventDefault()}
       />
 
       {/* Drawer */}
-      <div className="fixed right-0 top-0 bottom-0 w-full sm:w-[400px] bg-white shadow-2xl z-50 flex flex-col">
+      <div className="fixed right-0 top-0 w-full sm:w-[400px] bg-white shadow-2xl z-50 flex flex-col" style={{ height: '100dvh' }}>
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white">
           <div>
@@ -281,7 +299,7 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
         )}
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-3 py-2">
+        <div className="flex-1 overflow-y-auto overscroll-contain px-3 py-2" style={{ WebkitOverflowScrolling: 'touch' }}>
           {loading ? (
             <div className="flex justify-center py-8">
               <Spinner />
@@ -313,7 +331,7 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
         </div>
 
         {/* Input */}
-        <div className="border-t border-gray-200 p-3 bg-white">
+        <div className="border-t border-gray-200 p-3 bg-white" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
           {isAtDailyLimit && (
             <p className="text-xs text-red-500 mb-2 text-center">
               Daily message limit reached ({maxMessages}/{maxMessages}). Try again tomorrow.

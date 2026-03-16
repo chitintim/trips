@@ -13,6 +13,8 @@ export type ExpenseSplit = Tables<'expense_splits'>
 export type Invitation = Tables<'invitations'>
 export type InvitationAttempt = Tables<'invitation_attempts'>
 export type TripNote = Tables<'trip_notes'>
+export type TimelineEvent = Tables<'trip_timeline_events'>
+export type ChatMessage = Tables<'trip_chat_messages'>
 
 // Insert types (for creating new records)
 export type UserInsert = TablesInsert<'users'>
@@ -27,6 +29,9 @@ export type ExpenseSplitInsert = TablesInsert<'expense_splits'>
 export type InvitationInsert = TablesInsert<'invitations'>
 export type InvitationAttemptInsert = TablesInsert<'invitation_attempts'>
 export type TripNoteInsert = TablesInsert<'trip_notes'>
+export type TimelineEventInsert = TablesInsert<'trip_timeline_events'>
+export type TimelineEventUpdate = TablesUpdate<'trip_timeline_events'>
+export type ChatMessageInsert = TablesInsert<'trip_chat_messages'>
 
 // Update types (for updating records)
 export type UserUpdate = TablesUpdate<'users'>
@@ -52,6 +57,8 @@ export type OptionStatus = Enums<'option_status'>
 export type PriceType = Enums<'price_type'>
 export type NoteType = Enums<'note_type'>
 export type InvitationStatus = Enums<'invitation_status'>
+export type TimelineEventCategory = Enums<'timeline_event_category'>
+export type ChatMessageRole = Enums<'chat_message_role'>
 
 // Extended types with relationships
 export interface TripWithCreator extends Trip {

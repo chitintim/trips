@@ -8,8 +8,10 @@ import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab, Co
 import { PlanningTabV2 } from '../components/planning/PlanningTabV2'
 import { Trip, User, TripParticipant } from '../types'
 import { getTripStatusBadgeVariant, getTripStatusLabel } from '../lib/tripStatus'
+import { TimelineTab } from '../components/TimelineTab'
+import { ChatDrawer } from '../components/ChatDrawer'
 
-type TripTab = 'overview' | 'planning' | 'expenses' | 'notes'
+type TripTab = 'overview' | 'planning' | 'timeline' | 'expenses' | 'notes'
 
 interface ParticipantWithUser extends TripParticipant {
   user: User
@@ -28,12 +30,13 @@ export function TripDetail() {
   const [isAdmin, setIsAdmin] = useState(false)
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
+  const [chatOpen, setChatOpen] = useState(false)
   const [hasSetInitialTab, setHasSetInitialTab] = useState(false)
 
   // Handle tab query parameter (e.g., from "Back to Expenses" button)
   useEffect(() => {
     const tabParam = searchParams.get('tab')
-    if (tabParam && ['overview', 'planning', 'expenses', 'notes'].includes(tabParam)) {
+    if (tabParam && ['overview', 'planning', 'timeline', 'expenses', 'notes'].includes(tabParam)) {
       setActiveTab(tabParam as TripTab)
       setHasSetInitialTab(true)
       // Clear the query param after setting tab
@@ -62,8 +65,10 @@ export function TripDetail() {
             defaultTab = 'overview' // People tab
             break
           case 'booking_details':
-          case 'booked_awaiting_departure':
             defaultTab = 'planning' // Planning tab
+            break
+          case 'booked_awaiting_departure':
+            defaultTab = 'timeline' // Timeline tab
             break
           case 'trip_ongoing':
           case 'trip_completed':
@@ -279,46 +284,66 @@ export function TripDetail() {
           </div>
 
           {/* Tab Navigation */}
-          <nav className="flex gap-1 border-b border-gray-200 -mb-px">
+          <nav className="flex items-center border-b border-gray-200 -mb-px">
+            <div className="flex gap-1 flex-1 min-w-0 overflow-x-auto">
+              <button
+                onClick={() => setActiveTab('overview')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  activeTab === 'overview'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                👥 People
+              </button>
+              <button
+                onClick={() => setActiveTab('planning')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  activeTab === 'planning'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                🗓️ Planning
+              </button>
+              <button
+                onClick={() => setActiveTab('timeline')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  activeTab === 'timeline'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                📋 Timeline
+              </button>
+              <button
+                onClick={() => setActiveTab('expenses')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  activeTab === 'expenses'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                💰 Expenses
+              </button>
+              <button
+                onClick={() => setActiveTab('notes')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  activeTab === 'notes'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                📝 Notes
+              </button>
+            </div>
+            {/* AI Chat button in tab bar */}
             <button
-              onClick={() => setActiveTab('overview')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'overview'
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
+              onClick={() => setChatOpen(true)}
+              className="flex-shrink-0 ml-2 px-3 py-1.5 text-sm font-medium text-purple-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors flex items-center gap-1.5 border border-purple-200"
+              title="Open Trip Assistant"
             >
-              👥 People
-            </button>
-            <button
-              onClick={() => setActiveTab('planning')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'planning'
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              🗓️ Planning
-            </button>
-            <button
-              onClick={() => setActiveTab('expenses')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'expenses'
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              💰 Expenses
-            </button>
-            <button
-              onClick={() => setActiveTab('notes')}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === 'notes'
-                  ? 'border-primary text-primary'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
-            >
-              📝 Notes
+              🤖 AI Chat
             </button>
           </nav>
         </div>
@@ -328,9 +353,26 @@ export function TripDetail() {
       <div className="max-w-6xl mx-auto px-4 py-8">
         {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} onAddParticipant={handleAddParticipant} />}
         {activeTab === 'planning' && <PlanningTabV2 trip={trip} participants={participants} />}
+        {activeTab === 'timeline' && <TimelineTab trip={trip} participants={participants} />}
         {activeTab === 'expenses' && <ExpensesTab tripId={trip.id} participants={participants} />}
         {activeTab === 'notes' && <NotesTab trip={trip} />}
       </div>
+
+      {/* Chat Floating Button */}
+      <button
+        onClick={() => setChatOpen(true)}
+        className="fixed bottom-6 right-6 z-30 bg-purple-600 hover:bg-purple-700 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg hover:shadow-xl transition-all"
+        title="Trip Assistant"
+      >
+        <span className="text-2xl">🤖</span>
+      </button>
+
+      {/* Chat Drawer */}
+      <ChatDrawer
+        trip={trip}
+        isOpen={chatOpen}
+        onClose={() => setChatOpen(false)}
+      />
 
       {/* Admin Modals */}
       {trip && (

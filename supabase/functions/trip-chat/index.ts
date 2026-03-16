@@ -164,6 +164,37 @@ Deno.serve(async (req) => {
       p_user_id: user.id,
     })
 
+    // Rate limiting & message length limits
+    const MAX_MESSAGES_ORGANIZER = 20
+    const MAX_MESSAGES_PARTICIPANT = 5
+    const MAX_LENGTH_ORGANIZER = 10000   // ~2000 words, enough for pasting booking details
+    const MAX_LENGTH_PARTICIPANT = 700   // ~100 words
+
+    const maxLength = isOrganizer ? MAX_LENGTH_ORGANIZER : MAX_LENGTH_PARTICIPANT
+    if (message.length > maxLength) {
+      throw new Error(
+        isOrganizer
+          ? `Message too long (${message.length} chars). Maximum is ${MAX_LENGTH_ORGANIZER} characters.`
+          : `Message too long. Please keep messages under ${MAX_LENGTH_PARTICIPANT} characters (~100 words).`
+      )
+    }
+
+    const maxMessages = isOrganizer ? MAX_MESSAGES_ORGANIZER : MAX_MESSAGES_PARTICIPANT
+    const todayStart = new Date()
+    todayStart.setUTCHours(0, 0, 0, 0)
+    const { count: todayCount } = await supabaseAdmin
+      .from('trip_chat_messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('trip_id', tripId)
+      .eq('user_id', user.id)
+      .eq('role', 'user')
+      .gte('created_at', todayStart.toISOString())
+    if ((todayCount ?? 0) >= maxMessages) {
+      throw new Error(
+        `You've reached your daily limit of ${maxMessages} messages. Try again tomorrow.`
+      )
+    }
+
     // Get user name
     const { data: userData } = await supabaseAdmin
       .from('users')

@@ -27,14 +27,22 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(true)
   const [isOrganizer, setIsOrganizer] = useState(false)
+  const [dailyCount, setDailyCount] = useState(0)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const maxLength = isOrganizer ? 10000 : 700
+  const maxMessages = isOrganizer ? 20 : 5
+  const remainingMessages = Math.max(0, maxMessages - dailyCount)
+  const isOverLimit = input.length > maxLength
+  const isAtDailyLimit = remainingMessages <= 0
 
   useEffect(() => {
     if (isOpen) {
       fetchMessages()
       fetchUsers()
       checkOrganizerStatus()
+      fetchDailyCount()
     }
   }, [isOpen, trip.id])
 
@@ -140,12 +148,27 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
     setIsOrganizer(isSystemAdmin || isTripCreator || isTripOrganizer)
   }
 
+  const fetchDailyCount = async () => {
+    if (!user) return
+    const todayStart = new Date()
+    todayStart.setUTCHours(0, 0, 0, 0)
+    const { count } = await supabase
+      .from('trip_chat_messages')
+      .select('*', { count: 'exact', head: true })
+      .eq('trip_id', trip.id)
+      .eq('user_id', user.id)
+      .eq('role', 'user')
+      .gte('created_at', todayStart.toISOString())
+    setDailyCount(count ?? 0)
+  }
+
   const handleSend = async () => {
     const trimmed = input.trim()
-    if (!trimmed || sending || !user) return
+    if (!trimmed || sending || !user || isOverLimit || isAtDailyLimit) return
 
     setSending(true)
     setInput('')
+    setDailyCount(prev => prev + 1)
 
     // Optimistic user message
     const optimisticMsg: ChatMessageType = {
@@ -291,6 +314,11 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
 
         {/* Input */}
         <div className="border-t border-gray-200 p-3 bg-white">
+          {isAtDailyLimit && (
+            <p className="text-xs text-red-500 mb-2 text-center">
+              Daily message limit reached ({maxMessages}/{maxMessages}). Try again tomorrow.
+            </p>
+          )}
           <div className="flex gap-2 items-end">
             <textarea
               ref={textareaRef}
@@ -298,20 +326,24 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                isOrganizer
-                  ? 'Ask a question or add events...'
-                  : 'Ask a question about the trip...'
+                isAtDailyLimit
+                  ? 'Daily limit reached'
+                  : isOrganizer
+                    ? 'Ask a question or add events...'
+                    : 'Ask a question about the trip...'
               }
               rows={1}
-              className="flex-1 resize-none rounded-xl border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300 focus:border-transparent max-h-24"
+              className={`flex-1 resize-none rounded-xl border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-sky-300 focus:border-transparent max-h-24 ${
+                isOverLimit ? 'border-red-400' : 'border-gray-300'
+              }`}
               style={{ minHeight: '38px' }}
-              disabled={sending}
+              disabled={sending || isAtDailyLimit}
             />
             <Button
               variant="primary"
               size="sm"
               onClick={handleSend}
-              disabled={!input.trim() || sending}
+              disabled={!input.trim() || sending || isOverLimit || isAtDailyLimit}
               className="!rounded-xl !px-3 flex-shrink-0"
             >
               {sending ? (
@@ -323,6 +355,16 @@ export function ChatDrawer({ trip, isOpen, onClose }: ChatDrawerProps) {
               )}
             </Button>
           </div>
+          {input.length > 0 && (
+            <div className="flex justify-between mt-1 px-1">
+              <span className={`text-[10px] ${isOverLimit ? 'text-red-500 font-medium' : 'text-gray-400'}`}>
+                {input.length}/{maxLength}
+              </span>
+              <span className="text-[10px] text-gray-400">
+                {remainingMessages} message{remainingMessages !== 1 ? 's' : ''} left today
+              </span>
+            </div>
+          )}
         </div>
       </div>
     </>

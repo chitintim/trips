@@ -305,10 +305,13 @@ export type Database = {
           paid_by: string
           parsing_error: string | null
           payment_date: string
+          receipt_date: string | null
           receipt_url: string | null
+          service_charge_amount: number | null
           service_charge_percent: number | null
           status: Database["public"]["Enums"]["expense_status"] | null
           subtotal: number | null
+          tax_amount: number | null
           tax_percent: number | null
           trip_id: string
           updated_at: string
@@ -332,10 +335,13 @@ export type Database = {
           paid_by: string
           parsing_error?: string | null
           payment_date?: string
+          receipt_date?: string | null
           receipt_url?: string | null
+          service_charge_amount?: number | null
           service_charge_percent?: number | null
           status?: Database["public"]["Enums"]["expense_status"] | null
           subtotal?: number | null
+          tax_amount?: number | null
           tax_percent?: number | null
           trip_id: string
           updated_at?: string
@@ -359,10 +365,13 @@ export type Database = {
           paid_by?: string
           parsing_error?: string | null
           payment_date?: string
+          receipt_date?: string | null
           receipt_url?: string | null
+          service_charge_amount?: number | null
           service_charge_percent?: number | null
           status?: Database["public"]["Enums"]["expense_status"] | null
           subtotal?: number | null
+          tax_amount?: number | null
           tax_percent?: number | null
           trip_id?: string
           updated_at?: string
@@ -484,6 +493,7 @@ export type Database = {
           id: string
           locked: boolean
           metadata: Json | null
+          order_index: number
           price: number | null
           price_type: Database["public"]["Enums"]["price_type"]
           section_id: string
@@ -498,6 +508,7 @@ export type Database = {
           id?: string
           locked?: boolean
           metadata?: Json | null
+          order_index?: number
           price?: number | null
           price_type?: Database["public"]["Enums"]["price_type"]
           section_id: string
@@ -512,6 +523,7 @@ export type Database = {
           id?: string
           locked?: boolean
           metadata?: Json | null
+          order_index?: number
           price?: number | null
           price_type?: Database["public"]["Enums"]["price_type"]
           section_id?: string
@@ -683,6 +695,57 @@ export type Database = {
           },
         ]
       }
+      trip_chat_messages: {
+        Row: {
+          actions_executed: Json | null
+          content: string
+          created_at: string | null
+          had_write_actions: boolean | null
+          id: string
+          metadata: Json | null
+          role: Database["public"]["Enums"]["chat_message_role"]
+          trip_id: string
+          user_id: string | null
+        }
+        Insert: {
+          actions_executed?: Json | null
+          content: string
+          created_at?: string | null
+          had_write_actions?: boolean | null
+          id?: string
+          metadata?: Json | null
+          role: Database["public"]["Enums"]["chat_message_role"]
+          trip_id: string
+          user_id?: string | null
+        }
+        Update: {
+          actions_executed?: Json | null
+          content?: string
+          created_at?: string | null
+          had_write_actions?: boolean | null
+          id?: string
+          metadata?: Json | null
+          role?: Database["public"]["Enums"]["chat_message_role"]
+          trip_id?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_chat_messages_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_chat_messages_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       trip_notes: {
         Row: {
           content: string
@@ -796,6 +859,88 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trip_timeline_events: {
+        Row: {
+          all_day: boolean | null
+          category: Database["public"]["Enums"]["timeline_event_category"]
+          created_at: string | null
+          created_by: string
+          description: string | null
+          end_time: string | null
+          event_date: string
+          id: string
+          location: string | null
+          metadata: Json | null
+          participant_ids: string[] | null
+          sort_order: number | null
+          source_option_id: string | null
+          start_time: string | null
+          title: string
+          trip_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          all_day?: boolean | null
+          category?: Database["public"]["Enums"]["timeline_event_category"]
+          created_at?: string | null
+          created_by: string
+          description?: string | null
+          end_time?: string | null
+          event_date: string
+          id?: string
+          location?: string | null
+          metadata?: Json | null
+          participant_ids?: string[] | null
+          sort_order?: number | null
+          source_option_id?: string | null
+          start_time?: string | null
+          title: string
+          trip_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          all_day?: boolean | null
+          category?: Database["public"]["Enums"]["timeline_event_category"]
+          created_at?: string | null
+          created_by?: string
+          description?: string | null
+          end_time?: string | null
+          event_date?: string
+          id?: string
+          location?: string | null
+          metadata?: Json | null
+          participant_ids?: string[] | null
+          sort_order?: number | null
+          source_option_id?: string | null
+          start_time?: string | null
+          title?: string
+          trip_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_timeline_events_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_timeline_events_source_option_id_fkey"
+            columns: ["source_option_id"]
+            isOneToOne: false
+            referencedRelation: "options"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_timeline_events_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
             referencedColumns: ["id"]
           },
         ]
@@ -988,6 +1133,7 @@ export type Database = {
       }
     }
     Enums: {
+      chat_message_role: "user" | "assistant" | "system"
       conditional_type: "none" | "date" | "users" | "both"
       confirmation_status:
         | "pending"
@@ -1028,6 +1174,16 @@ export type Database = {
         | "activities"
         | "lessons"
       split_type: "equal" | "custom" | "percentage"
+      timeline_event_category:
+        | "flight"
+        | "accommodation"
+        | "transport"
+        | "activity"
+        | "dining"
+        | "transfer"
+        | "meeting_point"
+        | "free_time"
+        | "other"
       trip_status:
         | "gathering_interest"
         | "confirming_participants"
@@ -1163,6 +1319,7 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      chat_message_role: ["user", "assistant", "system"],
       conditional_type: ["none", "date", "users", "both"],
       confirmation_status: [
         "pending",
@@ -1208,6 +1365,17 @@ export const Constants = {
         "lessons",
       ],
       split_type: ["equal", "custom", "percentage"],
+      timeline_event_category: [
+        "flight",
+        "accommodation",
+        "transport",
+        "activity",
+        "dining",
+        "transfer",
+        "meeting_point",
+        "free_time",
+        "other",
+      ],
       trip_status: [
         "gathering_interest",
         "confirming_participants",

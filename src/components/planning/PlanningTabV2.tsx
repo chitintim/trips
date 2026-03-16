@@ -89,6 +89,7 @@ export function PlanningTabV2({ trip, participants }: PlanningTabV2Props) {
       `)
       .eq('trip_id', trip.id)
       .order('order_index', { ascending: true })
+      .order('order_index', { referencedTable: 'options', ascending: true })
 
     if (!error && sectionsData) {
       const sortedSections = [...sectionsData].sort((a, b) => {

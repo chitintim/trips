@@ -384,8 +384,11 @@ function EnhancedSectionCard({
     }
   }
 
-  // Calculate selection stats
-  const participantIds = participants.map(p => p.user_id)
+  // Calculate selection stats — only count confirmed participants when confirmation is enabled
+  const relevantParticipants = trip.confirmation_enabled
+    ? participants.filter(p => p.confirmation_status === 'confirmed')
+    : participants
+  const participantIds = relevantParticipants.map(p => p.user_id)
   const usersWhoSelected = new Set(
     options.flatMap((opt: any) =>
       (opt.selections || [])
@@ -394,7 +397,7 @@ function EnhancedSectionCard({
     )
   )
   const selectionsCount = usersWhoSelected.size
-  const participantsWithoutSelection = participants.filter(p => !usersWhoSelected.has(p.user_id))
+  const participantsWithoutSelection = relevantParticipants.filter(p => !usersWhoSelected.has(p.user_id))
   const userHasSelected = options.some((opt: any) =>
     (opt.selections || []).some((sel: any) => sel.user_id === currentUserId)
   )
@@ -520,7 +523,7 @@ function EnhancedSectionCard({
                     }}
                     className={participantsWithoutSelection.length > 0 ? 'cursor-pointer hover:text-sky-600 hover:underline transition-colors' : ''}
                   >
-                    {selectionsCount} of {participants.length} selected
+                    {selectionsCount} of {relevantParticipants.length} selected
                   </span>
                   {availableOptions.length > 0 && (
                     <span className="text-gray-400">

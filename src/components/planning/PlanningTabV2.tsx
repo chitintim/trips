@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import { supabase } from '../../lib/supabase'
@@ -450,6 +451,7 @@ function EnhancedSectionCard({
   const gridStructure = getGridStructure()
 
   return (
+    <>
     <Card className="!p-4 isolate">
       <Card.Header>
         <div
@@ -665,15 +667,18 @@ function EnhancedSectionCard({
         </Card.Content>
       )}
 
-      {/* Pending Modal */}
-      {showPendingModal && (
-        <PendingSelectionsModal
-          section={section}
-          participants={participantsWithoutSelection}
-          onClose={() => setShowPendingModal(false)}
-        />
-      )}
     </Card>
+
+    {/* Pending Modal — rendered via portal to escape Card's isolate stacking context */}
+    {showPendingModal && createPortal(
+      <PendingSelectionsModal
+        section={section}
+        participants={participantsWithoutSelection}
+        onClose={() => setShowPendingModal(false)}
+      />,
+      document.body
+    )}
+    </>
   )
 }
 

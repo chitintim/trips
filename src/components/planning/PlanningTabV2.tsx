@@ -19,6 +19,7 @@ import { MatrixSelector } from './MatrixSelector'
 import { QuickAddOptions } from './QuickAddOptions'
 import { Trip, User, TripParticipant } from '../../types'
 import { isTripLocked } from '../../lib/tripStatus'
+import { convertCurrency, formatCurrency, type Currency } from '../../lib/currency'
 
 interface ParticipantWithUser extends TripParticipant {
   user: User
@@ -789,7 +790,7 @@ function OptionCardV2({
           {option.price && (
             <div className="mb-3">
               <span className="text-lg font-bold text-gray-900">
-                {option.currency || 'EUR'} {option.price.toFixed(2)}
+                {formatCurrency(option.price, (option.currency || 'EUR') as Currency)}
               </span>
               <span className="text-sm text-gray-600 ml-2">per person</span>
             </div>
@@ -825,7 +826,8 @@ function SelectionSummaryV2({
   sections: any[]
   userId: string
 }) {
-  let totalCost = 0
+  const [convertedTotal, setConvertedTotal] = useState<{ amount: number; currency: Currency; isMixed: boolean } | null>(null)
+
   const userSelections: Array<{ section: string; option: string; price?: number; currency?: string }> = []
 
   sections.forEach((section) => {
@@ -838,12 +840,59 @@ function SelectionSummaryV2({
           price: option.price,
           currency: option.currency,
         })
-        if (option.price) {
-          totalCost += option.price
-        }
       }
     })
   })
+
+  // Determine the most common currency among priced selections to use as display currency
+  const pricedSelections = userSelections.filter(s => s.price && s.price > 0)
+  const currencyCounts = new Map<string, number>()
+  pricedSelections.forEach(s => {
+    const c = s.currency || 'EUR'
+    currencyCounts.set(c, (currencyCounts.get(c) || 0) + 1)
+  })
+  const displayCurrency: Currency = (
+    [...currencyCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'EUR'
+  ) as Currency
+  const allSameCurrency = currencyCounts.size <= 1
+
+  // Convert totals when selections involve mixed currencies
+  useEffect(() => {
+    if (pricedSelections.length === 0) {
+      setConvertedTotal(null)
+      return
+    }
+
+    if (allSameCurrency) {
+      const total = pricedSelections.reduce((sum, s) => sum + (s.price || 0), 0)
+      setConvertedTotal({ amount: total, currency: displayCurrency, isMixed: false })
+      return
+    }
+
+    // Mixed currencies — convert each to the display currency
+    const today = new Date().toISOString().split('T')[0]
+    let cancelled = false
+
+    async function convertAll() {
+      let total = 0
+      for (const sel of pricedSelections) {
+        const from = (sel.currency || 'EUR') as Currency
+        if (from === displayCurrency) {
+          total += sel.price!
+        } else {
+          const result = await convertCurrency(sel.price!, from, today, displayCurrency)
+          if (cancelled) return
+          total += result ? result.convertedAmount : sel.price!
+        }
+      }
+      if (!cancelled) {
+        setConvertedTotal({ amount: total, currency: displayCurrency, isMixed: true })
+      }
+    }
+
+    convertAll()
+    return () => { cancelled = true }
+  }, [JSON.stringify(pricedSelections), displayCurrency, allSameCurrency])
 
   // Count how many sections user hasn't selected in
   const sectionsWithOptions = sections.filter(s => (s.options || []).some((o: any) => o.status !== 'draft' && o.status !== 'cancelled'))
@@ -868,19 +917,25 @@ function SelectionSummaryV2({
                     <span className="truncate pr-2">{sel.option}</span>
                     {sel.price && (
                       <span className="text-sky-600 flex-shrink-0">
-                        {sel.currency || 'EUR'} {sel.price.toFixed(0)}
+                        {formatCurrency(sel.price, (sel.currency || 'EUR') as Currency)}
                       </span>
                     )}
                   </div>
                 </div>
               ))}
 
-              {totalCost > 0 && (
+              {convertedTotal && convertedTotal.amount > 0 && (
                 <div className="pt-3 border-t border-gray-200">
                   <div className="flex justify-between font-semibold">
                     <span>Estimated Total</span>
-                    <span className="text-sky-600">EUR {totalCost.toFixed(2)}</span>
+                    <span className="text-sky-600">
+                      {convertedTotal.isMixed && '~'}
+                      {formatCurrency(convertedTotal.amount, convertedTotal.currency)}
+                    </span>
                   </div>
+                  {convertedTotal.isMixed && (
+                    <p className="text-xs text-gray-400 mt-1 text-right">Converted at latest ECB rates</p>
+                  )}
                 </div>
               )}
             </div>

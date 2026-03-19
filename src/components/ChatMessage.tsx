@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { ChatMessage as ChatMessageType } from '../types'
 import { AvatarData } from '../types'
 
@@ -66,8 +67,8 @@ export function ChatMessage({ message, senderName, senderAvatar, isCurrentUser }
           }`}
         >
           {isAssistant ? (
-            <div className="chat-markdown prose prose-sm max-w-none break-words [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1 [&>li]:my-0.5 [&>h1]:text-base [&>h2]:text-sm [&>h3]:text-sm [&>h1]:font-semibold [&>h2]:font-semibold [&>h3]:font-semibold [&>h1]:mt-2 [&>h2]:mt-2 [&>h3]:mt-1 [&>pre]:bg-gray-200 [&>pre]:rounded [&>pre]:p-2 [&>pre]:text-xs [&_code]:text-xs [&_code]:bg-gray-200 [&_code]:px-1 [&_code]:rounded [&>blockquote]:border-l-2 [&>blockquote]:border-gray-300 [&>blockquote]:pl-2 [&>blockquote]:text-gray-600">
-              <ReactMarkdown>{message.content}</ReactMarkdown>
+            <div className="chat-markdown prose prose-sm max-w-none break-words [&>p]:my-1 [&>ul]:my-1 [&>ol]:my-1 [&>li]:my-0.5 [&>h1]:text-base [&>h2]:text-sm [&>h3]:text-sm [&>h1]:font-semibold [&>h2]:font-semibold [&>h3]:font-semibold [&>h1]:mt-2 [&>h2]:mt-2 [&>h3]:mt-1 [&>pre]:bg-gray-200 [&>pre]:rounded [&>pre]:p-2 [&>pre]:text-xs [&_code]:text-xs [&_code]:bg-gray-200 [&_code]:px-1 [&_code]:rounded [&>blockquote]:border-l-2 [&>blockquote]:border-gray-300 [&>blockquote]:pl-2 [&>blockquote]:text-gray-600 [&_table]:w-full [&_table]:text-xs [&_table]:my-2 [&_table]:border-collapse [&_th]:bg-gray-200 [&_th]:px-2 [&_th]:py-1 [&_th]:text-left [&_th]:font-semibold [&_th]:border [&_th]:border-gray-300 [&_td]:px-2 [&_td]:py-1 [&_td]:border [&_td]:border-gray-300 [&_tr:nth-child(even)]:bg-gray-50">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
             </div>
           ) : (
             <div className="whitespace-pre-wrap break-words">{message.content}</div>

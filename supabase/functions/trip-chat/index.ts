@@ -33,7 +33,7 @@ function buildSystemPrompt(
   isOrganizer: boolean,
   userName: string
 ): string {
-  const { trip, participants, sections, expenses, timelineEvents } = tripContext
+  const { trip, participants, sections, timelineEvents, balances, pendingClaims, expenseOverview } = tripContext
 
   const participantList = participants
     .map((p: any) => `- ${p.user?.full_name || p.user?.email} (${p.role})`)
@@ -59,14 +59,38 @@ function buildSystemPrompt(
     })
     .join('\n\n')
 
+  // Timeline events now include IDs so the AI can reference them for update/delete
   const eventSummary = timelineEvents.length > 0
     ? timelineEvents
-      .map((e: any) => `- ${e.event_date} ${e.start_time || 'all day'}: ${e.title} [${e.category}]${e.location ? ` @ ${e.location}` : ''}`)
+      .map((e: any) => `- [${e.id}] ${e.event_date} ${e.start_time || 'all day'}: ${e.title} [${e.category}]${e.location ? ` @ ${e.location}` : ''}${e.description ? ` — ${e.description.slice(0, 100)}` : ''}`)
       .join('\n')
     : '(no events yet)'
 
-  const expenseSummary = expenses.length > 0
-    ? `${expenses.length} expenses totaling ${expenses.reduce((sum: number, e: any) => sum + e.amount, 0).toFixed(2)} ${expenses[0]?.currency || 'GBP'}`
+  // Expense balances per user
+  const balanceSummary = balances.length > 0
+    ? balances
+      .map((b: any) => {
+        const name = nameMap[b.userId] || 'Unknown'
+        if (b.netBalance > 0.01) return `- ${name}: is owed ${b.currency}${b.netBalance.toFixed(2)} (paid ${b.currency}${b.totalPaid.toFixed(2)}, owes ${b.currency}${b.totalOwed.toFixed(2)})`
+        if (b.netBalance < -0.01) return `- ${name}: owes ${b.currency}${Math.abs(b.netBalance).toFixed(2)} (paid ${b.currency}${b.totalPaid.toFixed(2)}, owes ${b.currency}${b.totalOwed.toFixed(2)})`
+        return `- ${name}: settled up`
+      })
+      .join('\n')
+    : '(no expenses yet)'
+
+  // Pending claims for itemized expenses
+  const claimsSummary = pendingClaims.length > 0
+    ? pendingClaims
+      .map((c: any) => {
+        const missingNames = c.missingUsers.map((uid: string) => nameMap[uid] || 'Unknown').join(', ')
+        return `- "${c.description}" (${c.currency}${c.amount}) — ${c.status}${c.claimCode ? ` — claim code: ${c.claimCode}` : ''}\n  Awaiting claims from: ${missingNames || 'everyone'}`
+      })
+      .join('\n')
+    : null
+
+  // Expense overview
+  const expenseText = expenseOverview.totalCount > 0
+    ? `${expenseOverview.totalCount} expenses. ${expenseOverview.byCurrency.map((c: any) => `${c.currency}${c.total.toFixed(2)}`).join(', ')}.${expenseOverview.byCategory.length > 0 ? ` Categories: ${expenseOverview.byCategory.map((c: any) => `${c.category} (${c.count})`).join(', ')}.` : ''}`
     : '(no expenses yet)'
 
   let roleInstructions: string
@@ -75,8 +99,8 @@ function buildSystemPrompt(
 
 When they ask to add/create events, return actions in the "actions" array. Each action should be:
 - type: "create_event" — include event_date (YYYY-MM-DD), title, category, and optionally start_time (HH:MM), end_time, description, location, all_day
-- type: "update_event" — include event_id and fields to change
-- type: "delete_event" — include event_id
+- type: "update_event" — include event_id (UUID from the timeline above) and fields to change
+- type: "delete_event" — include event_id (UUID from the timeline above)
 
 Valid categories: flight, accommodation, transport, activity, dining, transfer, meeting_point, free_time, other
 
@@ -84,6 +108,18 @@ You can create multiple events in a single response (e.g., when importing a full
 Always include event_title in each action for display purposes.`
   } else {
     roleInstructions = `The current user "${userName}" is a PARTICIPANT (not an organizer). They can ask questions about the trip, but you MUST NOT return any actions. Do NOT include an "actions" array in your response. If they ask to change something, politely tell them only organizers can make changes to the timeline.`
+  }
+
+  let expenseSection = `EXPENSES OVERVIEW: ${expenseText}
+
+BALANCES:
+${balanceSummary}`
+
+  if (claimsSummary) {
+    expenseSection += `
+
+PENDING ITEMIZED CLAIMS (these expenses need participants to select what they consumed):
+${claimsSummary}`
   }
 
   return `You are a helpful trip planning assistant for the trip "${trip.name}".
@@ -102,7 +138,7 @@ ${sectionSummary}
 CURRENT TIMELINE:
 ${eventSummary}
 
-EXPENSES: ${expenseSummary}
+${expenseSection}
 
 ${roleInstructions}
 
@@ -203,22 +239,109 @@ Deno.serve(async (req) => {
       .single()
     const userName = userData?.full_name || userData?.email || 'Unknown'
 
-    // Gather trip context
-    const [tripResult, participantsResult, sectionsResult, expensesResult, eventsResult, chatResult] = await Promise.all([
+    // Gather trip context — expenses use nested selects for splits, claims, and allocation links
+    const [tripResult, participantsResult, sectionsResult, expensesResult, settlementsResult, eventsResult, chatResult] = await Promise.all([
       supabaseAdmin.from('trips').select('*').eq('id', tripId).single(),
       supabaseAdmin.from('trip_participants').select('*, user:user_id(full_name, email, avatar_data)').eq('trip_id', tripId).eq('active', true),
       supabaseAdmin.from('planning_sections').select('*, options(*, selections(user_id))').eq('trip_id', tripId).order('order_index'),
-      supabaseAdmin.from('expenses').select('amount, currency, description').eq('trip_id', tripId),
+      supabaseAdmin.from('expenses').select('id, paid_by, amount, currency, base_currency_amount, description, category, status, ai_parsed, fx_rate, expense_splits(user_id, amount, base_currency_amount), expense_item_claims(user_id, amount_owed), expense_allocation_links(code)').eq('trip_id', tripId),
+      supabaseAdmin.from('settlements').select('from_user_id, to_user_id, amount').eq('trip_id', tripId),
       supabaseAdmin.from('trip_timeline_events').select('*').eq('trip_id', tripId).order('event_date').order('start_time'),
       supabaseAdmin.from('trip_chat_messages').select('role, content, user_id, created_at').eq('trip_id', tripId).order('created_at', { ascending: false }).limit(50),
     ])
 
+    const expenses = expensesResult.data || []
+    const participants = participantsResult.data || []
+    const participantIds = participants.map((p: any) => p.user_id)
+    const settlements = settlementsResult.data || []
+
+    // Extract nested data from expenses
+    const splits = expenses.flatMap((e: any) => (e.expense_splits || []).map((s: any) => ({ ...s, expense_id: e.id })))
+    const claims = expenses.flatMap((e: any) => (e.expense_item_claims || []).map((c: any) => ({ ...c, expense_id: e.id })))
+    const allocationLinks = expenses.flatMap((e: any) => (e.expense_allocation_links || []).map((l: any) => ({ ...l, expense_id: e.id })))
+
+    // Compute per-user balances (mirrors frontend debtMinimization logic)
+    // Use base_currency_amount (GBP) when available, otherwise original amount
+    const baseCurrency = 'GBP'
+    const balances: Array<{ userId: string, totalPaid: number, totalOwed: number, netBalance: number, currency: string }> = []
+
+    for (const pid of participantIds) {
+      // Total paid by this user
+      const totalPaid = expenses
+        .filter((e: any) => e.paid_by === pid)
+        .reduce((sum: number, e: any) => sum + Number(e.base_currency_amount || e.amount), 0)
+
+      // Total owed from splits (non-itemized expenses)
+      const totalOwedSplits = splits
+        .filter((s: any) => s.user_id === pid)
+        .reduce((sum: number, s: any) => sum + Number(s.base_currency_amount || s.amount), 0)
+
+      // Total owed from claims (itemized expenses)
+      const totalOwedClaims = claims
+        .filter((c: any) => c.user_id === pid)
+        .reduce((sum: number, c: any) => {
+          const expense = expenses.find((e: any) => e.id === c.expense_id)
+          const fxRate = expense?.fx_rate ? Number(expense.fx_rate) : 1
+          return sum + Number(c.amount_owed) * fxRate
+        }, 0)
+
+      const totalOwed = totalOwedSplits + totalOwedClaims
+
+      // Settlements
+      const settledPaid = settlements
+        .filter((s: any) => s.from_user_id === pid)
+        .reduce((sum: number, s: any) => sum + Number(s.amount), 0)
+      const settledReceived = settlements
+        .filter((s: any) => s.to_user_id === pid)
+        .reduce((sum: number, s: any) => sum + Number(s.amount), 0)
+
+      const netBalance = totalPaid - totalOwed + settledPaid - settledReceived
+
+      balances.push({ userId: pid, totalPaid, totalOwed, netBalance, currency: baseCurrency })
+    }
+
+    // Identify pending itemized claims (expenses needing user action)
+    const pendingClaims: Array<{ description: string, amount: number, currency: string, status: string, claimCode: string | null, missingUsers: string[] }> = []
+    const pendingExpenses = expenses.filter((e: any) => e.ai_parsed && e.status && ['unallocated', 'pending_allocation'].includes(e.status))
+
+    for (const expense of pendingExpenses) {
+      const expenseClaims = claims.filter((c: any) => c.expense_id === expense.id)
+      const claimedUserIds = [...new Set(expenseClaims.map((c: any) => c.user_id))]
+      // Everyone except the payer should claim
+      const missingUsers = participantIds.filter((pid: string) => pid !== expense.paid_by && !claimedUserIds.includes(pid))
+      const link = allocationLinks.find((l: any) => l.expense_id === expense.id)
+
+      pendingClaims.push({
+        description: expense.description,
+        amount: Number(expense.amount),
+        currency: expense.currency || baseCurrency,
+        status: expense.status,
+        claimCode: link?.code || null,
+        missingUsers,
+      })
+    }
+
+    // Expense overview (totals by currency and category)
+    const byCurrency: Record<string, number> = {}
+    const byCategory: Record<string, number> = {}
+    for (const e of expenses) {
+      const curr = e.currency || baseCurrency
+      byCurrency[curr] = (byCurrency[curr] || 0) + Number(e.amount)
+      byCategory[e.category] = (byCategory[e.category] || 0) + 1
+    }
+
     const tripContext = {
       trip: tripResult.data,
-      participants: participantsResult.data || [],
+      participants,
       sections: sectionsResult.data || [],
-      expenses: expensesResult.data || [],
       timelineEvents: eventsResult.data || [],
+      balances,
+      pendingClaims,
+      expenseOverview: {
+        totalCount: expenses.length,
+        byCurrency: Object.entries(byCurrency).map(([currency, total]) => ({ currency, total })),
+        byCategory: Object.entries(byCategory).map(([category, count]) => ({ category, count })),
+      },
     }
 
     // Build conversation history for Claude

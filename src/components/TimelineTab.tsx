@@ -43,12 +43,22 @@ function generateDateRange(startDate: string, endDate: string): string[] {
   return dates
 }
 
-function formatDayHeader(dateStr: string, tripStartDate: string): { dayNum: number; label: string } {
+function formatDayHeader(dateStr: string, tripStartDate: string, tripEndDate: string): { dayLabel: string; label: string } {
   const date = new Date(dateStr + 'T00:00:00')
   const start = new Date(tripStartDate + 'T00:00:00')
-  const dayNum = Math.floor((date.getTime() - start.getTime()) / (86400000)) + 1
+  const end = new Date(tripEndDate + 'T00:00:00')
+  const dayNum = Math.floor((date.getTime() - start.getTime()) / 86400000) + 1
   const label = date.toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'short' })
-  return { dayNum, label }
+
+  let dayLabel: string
+  if (date < start) {
+    dayLabel = `Pre-trip`
+  } else if (date > end) {
+    dayLabel = `Post-trip`
+  } else {
+    dayLabel = `Day ${dayNum}`
+  }
+  return { dayLabel, label }
 }
 
 export function TimelineTab({ trip, participants }: TimelineTabProps) {
@@ -248,7 +258,13 @@ export function TimelineTab({ trip, participants }: TimelineTabProps) {
     )
   }
 
-  const allDates = generateDateRange(trip.start_date, trip.end_date)
+  // Build date range: always cover planned trip dates, but expand to include
+  // any events outside that range (early arrivals, late departures)
+  const eventDates = events.map(e => e.event_date)
+  const minDate = [trip.start_date, ...eventDates].sort()[0]
+  const maxDate = [trip.end_date, ...eventDates].sort().pop()!
+  const allDates = generateDateRange(minDate, maxDate)
+
   const eventsByDate = new Map<string, TimelineEvent[]>()
   for (const event of events) {
     const existing = eventsByDate.get(event.event_date) || []
@@ -287,7 +303,7 @@ export function TimelineTab({ trip, participants }: TimelineTabProps) {
       ) : (
         <div className="space-y-3">
           {allDates.map(dateStr => {
-            const { dayNum, label } = formatDayHeader(dateStr, trip.start_date)
+            const { dayLabel, label } = formatDayHeader(dateStr, trip.start_date, trip.end_date)
             const dayEvents = eventsByDate.get(dateStr) || []
             const isCollapsed = collapsedDays.has(dateStr)
             const isToday = dateStr === today
@@ -316,7 +332,7 @@ export function TimelineTab({ trip, participants }: TimelineTabProps) {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                     <span className={`font-semibold ${isToday ? 'text-sky-700' : 'text-gray-900'}`}>
-                      Day {dayNum}
+                      {dayLabel}
                     </span>
                     <span className={`text-sm ${isToday ? 'text-sky-600' : 'text-gray-500'}`}>
                       {label}

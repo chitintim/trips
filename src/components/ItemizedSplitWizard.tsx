@@ -264,42 +264,53 @@ export function ItemizedSplitWizard({
 
       console.log('Expense created:', expense.id)
 
-      // 3. Create line items (using editable items)
-      const lineItemsToInsert = editableItems.map(item => ({
-        expense_id: expense.id,
-        name_original: item.name_original,
-        name_english: item.name_english || item.name_original,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        line_discount_amount: item.line_discount_amount || 0,
-        line_discount_percent: item.line_discount_percent || 0,
-        subtotal: item.subtotal,
-        tax_amount: item.tax_amount,
-        service_amount: item.service_amount,
-        total_amount: item.total_amount,
-        line_number: item.line_number
-      }))
+      try {
+        // 3. Create line items (using editable items, filter out zero-quantity items)
+        const lineItemsToInsert = editableItems
+          .filter(item => item.quantity > 0 && item.total_amount >= 0)
+          .map(item => ({
+            expense_id: expense.id,
+            name_original: item.name_original,
+            name_english: item.name_english || item.name_original,
+            quantity: item.quantity,
+            unit_price: Math.max(0, item.unit_price),
+            line_discount_amount: item.line_discount_amount || 0,
+            line_discount_percent: item.line_discount_percent || 0,
+            subtotal: Math.max(0, item.subtotal),
+            tax_amount: Math.max(0, item.tax_amount),
+            service_amount: Math.max(0, item.service_amount),
+            total_amount: Math.max(0, item.total_amount),
+            line_number: item.line_number
+          }))
 
-      const { error: lineItemsError } = await supabase
-        .from('expense_line_items')
-        .insert(lineItemsToInsert)
+        const { error: lineItemsError } = await supabase
+          .from('expense_line_items')
+          .insert(lineItemsToInsert)
 
-      if (lineItemsError) throw lineItemsError
+        if (lineItemsError) throw lineItemsError
 
-      console.log('Line items created:', lineItemsToInsert.length)
+        console.log('Line items created:', lineItemsToInsert.length)
 
-      // 4. Create allocation link (no expiry — stays open until fully claimed)
-      const { error: linkError } = await supabase
-        .from('expense_allocation_links')
-        .insert({
-          expense_id: expense.id,
-          trip_id: tripId,
-          code: code,
-          expires_at: null,
-          created_by: user?.id  // Must be current user for RLS policy
-        })
+        // 4. Create allocation link (no expiry — stays open until fully claimed)
+        const { error: linkError } = await supabase
+          .from('expense_allocation_links')
+          .insert({
+            expense_id: expense.id,
+            trip_id: tripId,
+            code: code,
+            expires_at: null,
+            created_by: user?.id  // Must be current user for RLS policy
+          })
 
-      if (linkError) throw linkError
+        if (linkError) throw linkError
+      } catch (innerError) {
+        // Clean up orphaned expense if line items or link creation failed
+        console.error('Failed after expense creation, cleaning up expense:', expense.id)
+        await supabase.from('expense_allocation_links').delete().eq('expense_id', expense.id)
+        await supabase.from('expense_line_items').delete().eq('expense_id', expense.id)
+        await supabase.from('expenses').delete().eq('id', expense.id)
+        throw innerError
+      }
 
       console.log('Allocation link created:', code)
 

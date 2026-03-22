@@ -59,6 +59,7 @@ export function AddExpenseModal({
   // Step 1 also: Split Method selection
   const [splitType, setSplitType] = useState<SplitType>('equal')
   const [useItemizedSplit, setUseItemizedSplit] = useState(false)
+  const [itemizedPaidByConfirmed, setItemizedPaidByConfirmed] = useState(false)
 
   // Step 2: Who Paid & Who Owes
   const [paidBy, setPaidBy] = useState(user?.id || '')
@@ -176,6 +177,7 @@ export function AddExpenseModal({
         // Always reset these on fresh open
         setSelectedParticipants([])
         setSplits({})
+        setItemizedPaidByConfirmed(false)
         setBaseCurrencyAmount(null)
         setFxRate(null)
         setReceiptFile(null)
@@ -943,8 +945,66 @@ export function AddExpenseModal({
         )
 
       case 2:
-        // If user selected itemized split and we have parsed data, show the wizard
+        // If user selected itemized split and we have parsed data
         if (useItemizedSplit && parsedData) {
+          // Show "Who Paid" first, then wizard after confirming payer
+          if (!itemizedPaidByConfirmed) {
+            return (
+              <div className="space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900">Who Paid?</h3>
+                <p className="text-sm text-gray-600 mb-2">Select the person who paid for this expense</p>
+                <div className="space-y-2">
+                  {participants.map(participant => (
+                    <button
+                      key={participant.user_id}
+                      onClick={() => setPaidBy(participant.user_id)}
+                      className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${
+                        paidBy === participant.user_id
+                          ? 'border-sky-500 bg-sky-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-lg flex-shrink-0"
+                        style={{
+                          backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
+                        }}
+                      >
+                        <span className="relative">
+                          {(participant.user.avatar_data as any)?.emoji || '😊'}
+                        </span>
+                      </div>
+                      <div className="text-left flex-1">
+                        <div className="font-medium text-gray-900">
+                          {participant.user.full_name || participant.user.email}
+                        </div>
+                      </div>
+                      {paidBy === participant.user_id && (
+                        <Badge variant="success">Paid</Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex justify-between pt-4 border-t border-gray-200">
+                  <Button variant="outline" onClick={handleBack}>Back</Button>
+                  <Button
+                    variant="primary"
+                    onClick={() => {
+                      if (!paidBy) {
+                        alert('Please select who paid')
+                        return
+                      }
+                      setItemizedPaidByConfirmed(true)
+                    }}
+                  >
+                    Next — Edit Items
+                  </Button>
+                </div>
+              </div>
+            )
+          }
+
+          // Payer confirmed, show the itemized wizard
           return (
             <ItemizedSplitWizard
               parsedData={parsedData}
@@ -963,7 +1023,7 @@ export function AddExpenseModal({
                 onClose()
               }}
               onBack={() => {
-                setUseItemizedSplit(false)
+                setItemizedPaidByConfirmed(false)
               }}
             />
           )
@@ -1212,8 +1272,8 @@ export function AddExpenseModal({
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Add Expense" size="lg">
-      {/* Step Indicator - Hide when itemized wizard is showing */}
-      {!(step === 2 && useItemizedSplit) && (
+      {/* Step Indicator - Hide when itemized wizard is showing (but not the paidBy sub-step) */}
+      {!(step === 2 && useItemizedSplit && itemizedPaidByConfirmed) && (
         <div className="flex items-center justify-between mb-6">
           {[1, 2, 3].map((s) => (
             <div key={s} className="flex items-center">
@@ -1243,7 +1303,7 @@ export function AddExpenseModal({
       {/* Step Content */}
       {renderStep()}
 
-      {/* Footer Buttons - Hide when itemized wizard is showing */}
+      {/* Footer Buttons - Hide when itemized wizard or its paidBy sub-step is showing */}
       {!(step === 2 && useItemizedSplit) && (
         <div className="flex justify-between mt-6 pt-6 border-t border-gray-200">
           <Button

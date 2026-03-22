@@ -66,14 +66,14 @@ In Europe (France, Switzerland, Austria, Italy, Germany, Spain, and most EU/EEA 
 - When vat_inclusive is false (US receipts, some B2B invoices): tax IS an additional charge. Distribute it proportionally across line items
 
 JAPANESE / ASIAN RECEIPTS:
-- Japan: Consumption tax (消費税 / shouhizei) is 10% standard, 8% reduced rate for food/beverages. Prices on consumer receipts typically INCLUDE tax (税込 / zeikomi). Set vat_inclusive: true.
-- Look for: 税込 (tax included), 内税 (internal tax), 税抜 (tax excluded = vat_inclusive: false)
+- Japan: Consumption tax is already INCLUDED in displayed prices. For simplicity, treat Japanese receipts as vat_inclusive: true with tax_percent: 0 and tax_amount: 0 for all line items AND the receipt total. Ignore any tax breakdown lines (消費税, 内税, etc.) — they are informational only.
+- CRITICAL — LINE TOTALS vs UNIT PRICES: On Japanese receipts, the number displayed on the RIGHT side of each line is the LINE TOTAL, NOT the unit price. If the line shows a quantity multiplier (e.g., "×2" or "2点"), then: unit_price = displayed_right_number / quantity. Example: "ラーメン ×2  1800" means unit_price=900, quantity=2, subtotal=1800. The line totals should sum to the receipt grand total.
 - JPY amounts have NO decimal places. Return whole numbers (e.g., 1500 not 1500.00)
 - Translate Japanese item names to English in name_english field
 
 HOW TO DETECT VAT-INCLUSIVE vs VAT-EXCLUSIVE:
 - European consumer receipts (restaurants, shops, ski rentals) → vat_inclusive: true
-- Japanese consumer receipts (税込, zeikomi) → vat_inclusive: true
+- Japanese consumer receipts → vat_inclusive: true, tax_percent: 0, tax_amount: 0 (treat all prices as tax-inclusive, ignore tax breakdown)
 - Look for clues: "TTC" (toutes taxes comprises), "inkl. MwSt", "IVA inclusa", currency EUR/CHF → likely VAT-inclusive
 - Look for clues: "Sales Tax", "Tax added", currency USD/CAD → likely VAT-exclusive
 - If the receipt shows item prices AND a separate tax line that when added equals the total → VAT-exclusive

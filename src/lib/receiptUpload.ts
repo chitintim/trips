@@ -8,7 +8,6 @@
  * - File validation
  */
 
-import heic2any from 'heic2any'
 import imageCompression from 'browser-image-compression'
 import { supabase } from './supabase'
 
@@ -24,14 +23,13 @@ export interface UploadResult {
 
 /**
  * Convert HEIC/HEIF file to JPEG
+ * Uses dynamic import so heic-to is only loaded when needed
  */
 async function convertHeicToJpeg(file: File): Promise<File> {
-  const isHeic = file.type === 'image/heic' ||
-                 file.type === 'image/heif' ||
-                 file.name.toLowerCase().endsWith('.heic') ||
-                 file.name.toLowerCase().endsWith('.heif')
+  const { isHeic } = await import('heic-to')
 
-  if (!isHeic) {
+  const heic = await isHeic(file)
+  if (!heic) {
     return file
   }
 
@@ -42,14 +40,8 @@ async function convertHeicToJpeg(file: File): Promise<File> {
       fileSize: (file.size / 1024 / 1024).toFixed(2) + 'MB'
     })
 
-    const converted = await heic2any({
-      blob: file,
-      toType: 'image/jpeg',
-      quality: 0.8
-    })
-
-    // heic2any can return Blob or Blob[]
-    const blob = Array.isArray(converted) ? converted[0] : converted
+    const { heicTo } = await import('heic-to')
+    const blob = await heicTo({ blob: file, type: 'image/jpeg', quality: 0.8 })
 
     // Create new File from converted blob
     const fileName = file.name.replace(/\.(heic|heif)$/i, '.jpg')

@@ -118,9 +118,9 @@ async function fetchRateFromAPI(
   to: Currency
 ): Promise<FXRate | null> {
   try {
-    // Check if date is in the future
     const requestDate = new Date(date)
-    const today = new Date()
+    const now = new Date()
+    const today = new Date(now)
     today.setHours(0, 0, 0, 0) // Reset to start of day for comparison
 
     let effectiveDate = date
@@ -129,6 +129,20 @@ async function fetchRateFromAPI(
       // Future date - use today's rate instead
       effectiveDate = today.toISOString().split('T')[0]
       console.warn(`Cannot get FX rate for future date ${date}. Using today's rate (${effectiveDate}) instead.`)
+    }
+
+    // If requesting today's date and ECB hasn't published yet (~16:00 CET),
+    // use yesterday's confirmed closing rate instead
+    const todayStr = now.toISOString().split('T')[0]
+    if (effectiveDate === todayStr) {
+      const cetTimeStr = now.toLocaleString('en-US', { timeZone: 'Europe/Berlin', hour: 'numeric', hour12: false })
+      const cetHour = parseInt(cetTimeStr, 10)
+      if (cetHour < 16) {
+        const yesterday = new Date(now)
+        yesterday.setDate(yesterday.getDate() - 1)
+        effectiveDate = yesterday.toISOString().split('T')[0]
+        console.log(`ECB rate not yet published for today. Using yesterday's closing rate (${effectiveDate}).`)
+      }
     }
 
     const url = `https://api.frankfurter.app/${effectiveDate}?from=${from}&to=${to}`

@@ -72,7 +72,7 @@ export type Database = {
           created_at: string | null
           created_by: string
           expense_id: string
-          expires_at: string
+          expires_at: string | null
           id: string
           trip_id: string
         }
@@ -81,7 +81,7 @@ export type Database = {
           created_at?: string | null
           created_by: string
           expense_id: string
-          expires_at: string
+          expires_at?: string | null
           id?: string
           trip_id: string
         }
@@ -90,7 +90,7 @@ export type Database = {
           created_at?: string | null
           created_by?: string
           expense_id?: string
-          expires_at?: string
+          expires_at?: string | null
           id?: string
           trip_id?: string
         }
@@ -302,6 +302,7 @@ export type Database = {
           fx_rate_date: string | null
           id: string
           location: string | null
+          option_id: string | null
           paid_by: string
           parsing_error: string | null
           payment_date: string
@@ -332,6 +333,7 @@ export type Database = {
           fx_rate_date?: string | null
           id?: string
           location?: string | null
+          option_id?: string | null
           paid_by: string
           parsing_error?: string | null
           payment_date?: string
@@ -362,6 +364,7 @@ export type Database = {
           fx_rate_date?: string | null
           id?: string
           location?: string | null
+          option_id?: string | null
           paid_by?: string
           parsing_error?: string | null
           payment_date?: string
@@ -378,6 +381,13 @@ export type Database = {
           vendor_name?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "expenses_option_id_fkey"
+            columns: ["option_id"]
+            isOneToOne: false
+            referencedRelation: "options"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "expenses_paid_by_fkey"
             columns: ["paid_by"]
@@ -961,6 +971,9 @@ export type Database = {
           is_public: boolean
           location: string
           name: string
+          settlement_snapshot: Json | null
+          settlement_snapshot_at: string | null
+          settlement_snapshot_by: string | null
           start_date: string
           status: Database["public"]["Enums"]["trip_status"]
           updated_at: string
@@ -980,6 +993,9 @@ export type Database = {
           is_public?: boolean
           location: string
           name: string
+          settlement_snapshot?: Json | null
+          settlement_snapshot_at?: string | null
+          settlement_snapshot_by?: string | null
           start_date: string
           status?: Database["public"]["Enums"]["trip_status"]
           updated_at?: string
@@ -999,6 +1015,9 @@ export type Database = {
           is_public?: boolean
           location?: string
           name?: string
+          settlement_snapshot?: Json | null
+          settlement_snapshot_at?: string | null
+          settlement_snapshot_by?: string | null
           start_date?: string
           status?: Database["public"]["Enums"]["trip_status"]
           updated_at?: string
@@ -1007,6 +1026,13 @@ export type Database = {
           {
             foreignKeyName: "trips_created_by_fkey"
             columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trips_settlement_snapshot_by_fkey"
+            columns: ["settlement_snapshot_by"]
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]

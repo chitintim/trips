@@ -12,6 +12,7 @@ interface ItemizedSplitWizardProps {
   receiptUrl: string | null
   currency: Currency
   paymentDate: string
+  optionId?: string | null
   onSuccess: () => void
   onBack: () => void
 }
@@ -23,6 +24,7 @@ export function ItemizedSplitWizard({
   receiptUrl,
   currency,
   paymentDate,
+  optionId,
   onSuccess,
   onBack
 }: ItemizedSplitWizardProps) {
@@ -239,6 +241,7 @@ export function ItemizedSplitWizard({
           location: parsedData.vendor_location || null,
           description: `${parsedData.vendor_name} - Itemized`,
           receipt_url: receiptUrl,
+          option_id: optionId || null,
           // Itemized expense fields
           status: 'unallocated',
           ai_parsed: true,
@@ -285,17 +288,14 @@ export function ItemizedSplitWizard({
 
       console.log('Line items created:', lineItemsToInsert.length)
 
-      // 4. Create allocation link
-      const expiresAt = new Date()
-      expiresAt.setDate(expiresAt.getDate() + 30) // 1 month from now
-
+      // 4. Create allocation link (no expiry — stays open until fully claimed)
       const { error: linkError } = await supabase
         .from('expense_allocation_links')
         .insert({
           expense_id: expense.id,
           trip_id: tripId,
           code: code,
-          expires_at: expiresAt.toISOString(),
+          expires_at: null,
           created_by: user?.id  // Must be current user for RLS policy
         })
 
@@ -360,7 +360,7 @@ export function ItemizedSplitWizard({
               <p className="text-xs font-medium text-sky-900 mb-1">Claim Link Code</p>
               <p className="text-2xl font-bold text-sky-700 font-mono tracking-wider">{linkCode}</p>
             </div>
-            <Badge variant="info">Expires in 30 days</Badge>
+            <Badge variant="info">Open until fully claimed</Badge>
           </div>
 
           <div className="pt-2 border-t border-sky-200">

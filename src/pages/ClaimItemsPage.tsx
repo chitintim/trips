@@ -251,13 +251,6 @@ export function ClaimItemsPage() {
       if (linkError) throw new Error('Invalid or expired claim link')
       if (!link) throw new Error('Claim link not found')
 
-      // 2. Check expiry
-      const now = new Date()
-      const expiresAt = new Date(link.expires_at)
-      if (now > expiresAt) {
-        throw new Error('This claim link has expired')
-      }
-
       setAllocationLink(link)
 
       // 3. Check user is trip participant
@@ -433,7 +426,7 @@ export function ClaimItemsPage() {
     } else {
       // Calculate amount for this quantity (proportional)
       const unitCost = Number(lineItem.total_amount) / Number(lineItem.quantity)
-      const amount = unitCost * quantity
+      const amount = Math.round(unitCost * quantity * 100) / 100
 
       setSelections({
         ...selections,
@@ -555,8 +548,12 @@ export function ClaimItemsPage() {
       <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
         <div className="max-w-2xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between">
-            <h1 className="text-xl font-semibold text-gray-900">Claim Your Items</h1>
-            <Badge variant="info">Expires in {Math.ceil((new Date(allocationLink.expires_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24))} days</Badge>
+            <h1 className="text-xl font-semibold text-gray-900">
+              {expense?.status === 'allocated' ? 'Claimed Items Summary' : 'Claim Your Items'}
+            </h1>
+            {expense?.status === 'allocated' && (
+              <Badge variant="success">Fully Claimed</Badge>
+            )}
           </div>
           <p className="text-sm text-gray-600 mt-1">
             {expense.vendor_name} • Paid by {paidByUser?.full_name}
@@ -566,15 +563,26 @@ export function ClaimItemsPage() {
 
       {/* Content */}
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
-        {/* Instructions */}
-        <div className="bg-sky-50 border border-sky-200 rounded-lg p-4">
-          <p className="text-sm font-medium text-sky-900">
-            📋 How it works
-          </p>
-          <p className="text-sm text-sky-700 mt-1">
-            Select the quantity of each item you ordered. Your share will be calculated automatically based on what you claim.
-          </p>
-        </div>
+        {/* Instructions / Status Banner */}
+        {expense.status === 'allocated' ? (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+            <p className="text-sm font-medium text-green-900">
+              ✅ All items have been claimed
+            </p>
+            <p className="text-sm text-green-700 mt-1">
+              This is a read-only summary of who claimed what.
+            </p>
+          </div>
+        ) : (
+          <div className="bg-sky-50 border border-sky-200 rounded-lg p-4">
+            <p className="text-sm font-medium text-sky-900">
+              📋 How it works
+            </p>
+            <p className="text-sm text-sky-700 mt-1">
+              Select the quantity of each item you ordered. Your share will be calculated automatically based on what you claim.
+            </p>
+          </div>
+        )}
 
         {/* Line Items */}
         <div className="space-y-3">
@@ -582,7 +590,7 @@ export function ClaimItemsPage() {
 
           {lineItems.map((item) => {
             const selected = selections[item.id]?.quantity || 0
-            const available = item.availableQuantity
+            const available = item.availableQuantity < 0.001 ? 0 : item.availableQuantity
 
             return (
               <div
@@ -706,32 +714,57 @@ export function ClaimItemsPage() {
 
                   {/* Quantity Selector */}
                   <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div>
+                    {expense?.status === 'allocated' ? (
+                      <div className="flex items-center justify-between">
                         <p className="text-sm font-medium text-gray-700">Your quantity</p>
-                        <p className="text-xs text-gray-500">Can use decimals (e.g., 0.5 for sharing)</p>
+                        <span className="text-lg font-semibold text-gray-900">{selected > 0 ? selected.toFixed(2) : '—'}</span>
                       </div>
-                      <input
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max={available}
-                        value={selected || ''}
-                        onChange={(e) => handleQuantityChange(item.id, e.target.value, item)}
-                        placeholder="0"
-                        className="w-20 px-3 py-2 text-center text-lg font-semibold border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="text-gray-500">
-                        Available: <span className="font-medium text-gray-700">{available.toFixed(2)}</span>
-                      </span>
-                      {selected > 0 && (
-                        <span className="text-sky-600 font-medium">
-                          You: {selected.toFixed(2)} / {Number(item.quantity).toFixed(2)}
-                        </span>
-                      )}
-                    </div>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-sm font-medium text-gray-700">Your quantity</p>
+                            <p className="text-xs text-gray-500">Can use decimals (e.g., 0.5 for sharing)</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {available > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const myExistingClaim = item.claims.find(c => c.user_id === user?.id)
+                                  const myPreviousClaim = myExistingClaim ? Number(myExistingClaim.quantity_claimed) : 0
+                                  const remaining = available + (selected > 0 ? selected : myPreviousClaim)
+                                  handleQuantityChange(item.id, String(remaining), item)
+                                }}
+                                className="text-xs text-sky-600 hover:text-sky-800 font-medium whitespace-nowrap px-2 py-1 rounded hover:bg-sky-50 transition-colors"
+                              >
+                                Claim rest
+                              </button>
+                            )}
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              max={available}
+                              value={selected || ''}
+                              onChange={(e) => handleQuantityChange(item.id, e.target.value, item)}
+                              placeholder="0"
+                              className="w-20 px-3 py-2 text-center text-lg font-semibold border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-gray-500">
+                            Available: <span className="font-medium text-gray-700">{available.toFixed(2)}</span>
+                          </span>
+                          {selected > 0 && (
+                            <span className="text-sky-600 font-medium">
+                              You: {selected.toFixed(2)} / {Number(item.quantity).toFixed(2)}
+                            </span>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {selected > 0 && (
@@ -761,20 +794,22 @@ export function ClaimItemsPage() {
             </span>
           </div>
 
-          {/* Auto-save indicator */}
-          <div className="mb-3">
-            {saving ? (
-              <p className="text-sm text-amber-600 flex items-center gap-2 justify-center">
-                <span className="animate-spin">⏳</span>
-                Saving...
-              </p>
-            ) : (
-              <p className="text-sm text-green-600 flex items-center gap-2 justify-center">
-                <span>✓</span>
-                Changes saved automatically
-              </p>
-            )}
-          </div>
+          {/* Auto-save indicator - hidden when fully allocated */}
+          {expense?.status !== 'allocated' && (
+            <div className="mb-3">
+              {saving ? (
+                <p className="text-sm text-amber-600 flex items-center gap-2 justify-center">
+                  <span className="animate-spin">⏳</span>
+                  Saving...
+                </p>
+              ) : (
+                <p className="text-sm text-green-600 flex items-center gap-2 justify-center">
+                  <span>✓</span>
+                  Changes saved automatically
+                </p>
+              )}
+            </div>
+          )}
 
           <Button
             variant="outline"

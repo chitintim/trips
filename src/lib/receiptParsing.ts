@@ -6,6 +6,7 @@ export interface ParsedReceiptData {
   receipt_date?: string
   currency: string
   expense_category: string // 'accommodation' | 'transport' | 'food' | 'activities' | 'equipment' | 'other'
+  vat_inclusive: boolean
   subtotal: number
   total: number
   tax_percent?: number
@@ -32,7 +33,7 @@ export interface ParsedReceiptData {
 }
 
 /**
- * Parse a receipt using the GPT-5-mini Edge Function
+ * Parse a receipt using Claude Sonnet 4.6 (with OpenAI fallback) Edge Function
  * @param receiptPath - Path to receipt in Supabase Storage (e.g., "userId/filename.jpg")
  * @param tripId - Trip ID for authentication verification
  * @returns Parsed receipt data with vendor, items, totals, etc.

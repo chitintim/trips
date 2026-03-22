@@ -1,5 +1,6 @@
-// Receipt Parsing Edge Function with OpenAI GPT-4o Vision
-// This function extracts structured data from receipt images and PDFs
+// Receipt Parsing Edge Function
+// Primary: Anthropic Claude Sonnet 4.6 | Fallback: OpenAI GPT-4o-mini
+// Extracts structured data from receipt images and PDFs
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
@@ -30,7 +31,8 @@ interface ReceiptData {
   vendor_location?: string
   receipt_date?: string
   currency: string
-  expense_category: string // 'accommodation' | 'transport' | 'food' | 'activities' | 'equipment' | 'other'
+  expense_category: string
+  vat_inclusive: boolean
   subtotal: number
   total: number
   tax_percent?: number
@@ -44,54 +46,81 @@ interface ReceiptData {
   calculation_notes?: string
 }
 
-// OpenAI prompt for receipt parsing
+// Shared prompt for receipt parsing (used by both Claude and OpenAI)
 function getReceiptParsingPrompt(): string {
   return `You are a receipt parsing expert. Analyze this receipt image and extract ALL information in a structured JSON format.
 
 CRITICAL REQUIREMENTS:
 1. Extract EVERY line item visible on the receipt
 2. Translate foreign language items to English (keep original too)
-3. Calculate individual line item taxes and service charges proportionally
+3. Handle tax and service charges correctly (see VAT RULES below)
 4. Ensure line items SUM EXACTLY to the grand total
-5. Identify the calculation order: typically (subtotal - discount) + tax + service = total
-6. Categorize the expense based on vendor and items
+5. Categorize the expense based on vendor and items
+
+EUROPEAN VAT RULES (CRITICAL — READ CAREFULLY):
+In Europe (France, Switzerland, Austria, Italy, Germany, Spain, and most EU/EEA countries), item prices displayed on receipts INCLUDE VAT/TVA/MwSt/IVA by law.
+
+- When you see "TVA 10%", "MwSt 7.7%", "IVA 22%" etc. on a European receipt, this is an INFORMATIONAL BREAKDOWN of tax already embedded in the item prices — it is NOT an additional charge
+- Set "vat_inclusive": true for European receipts
+- When vat_inclusive is true: set tax_percent to 0 and tax_amount to 0 for BOTH the receipt total AND each line item. The item unit_price and subtotal should match what's printed on the receipt (they already contain VAT)
+- When vat_inclusive is false (US receipts, some B2B invoices): tax IS an additional charge. Distribute it proportionally across line items
+
+JAPANESE / ASIAN RECEIPTS:
+- Japan: Consumption tax (消費税 / shouhizei) is 10% standard, 8% reduced rate for food/beverages. Prices on consumer receipts typically INCLUDE tax (税込 / zeikomi). Set vat_inclusive: true.
+- Look for: 税込 (tax included), 内税 (internal tax), 税抜 (tax excluded = vat_inclusive: false)
+- JPY amounts have NO decimal places. Return whole numbers (e.g., 1500 not 1500.00)
+- Translate Japanese item names to English in name_english field
+
+HOW TO DETECT VAT-INCLUSIVE vs VAT-EXCLUSIVE:
+- European consumer receipts (restaurants, shops, ski rentals) → vat_inclusive: true
+- Japanese consumer receipts (税込, zeikomi) → vat_inclusive: true
+- Look for clues: "TTC" (toutes taxes comprises), "inkl. MwSt", "IVA inclusa", currency EUR/CHF → likely VAT-inclusive
+- Look for clues: "Sales Tax", "Tax added", currency USD/CAD → likely VAT-exclusive
+- If the receipt shows item prices AND a separate tax line that when added equals the total → VAT-exclusive
+- If the receipt shows item prices that already sum to the total, with a VAT breakdown shown separately → VAT-inclusive
+
+SERVICE CHARGE RULES:
+- Service charges ("service compris", "Servicepauschale", "servizio") are ALWAYS separate additions to the subtotal, even on European receipts
+- Service charges are NOT included in item prices
+- Distribute service proportionally: line_service = (line_subtotal / receipt_subtotal) * total_service_charge
 
 Return JSON in this EXACT structure:
 {
   "vendor_name": "Restaurant Name",
   "vendor_location": "City, Country (if visible)",
   "receipt_date": "YYYY-MM-DD (if visible)",
-  "currency": "GBP" or "EUR" etc,
+  "currency": "GBP", "EUR", "USD", "CHF", "JPY", "AUD", "CAD" etc,
   "expense_category": "food",
+  "vat_inclusive": true,
 
   "subtotal": 100.00,
-  "total": 115.00,
+  "total": 110.00,
 
-  "tax_percent": 10.0,
-  "tax_amount": 10.00,
-  "service_charge_percent": 5.0,
-  "service_charge_amount": 5.00,
+  "tax_percent": 0,
+  "tax_amount": 0,
+  "service_charge_percent": 10.0,
+  "service_charge_amount": 10.00,
   "discount_amount": 0.00,
   "discount_percent": 0.0,
 
   "line_items": [
     {
       "line_number": 1,
-      "name_original": "Margherita Pizza",
+      "name_original": "Pizza Margherita",
       "name_english": "Margherita Pizza",
       "quantity": 2,
       "unit_price": 12.50,
       "line_discount_amount": 0.00,
       "line_discount_percent": 0.0,
       "subtotal": 25.00,
-      "tax_amount": 2.50,
-      "service_amount": 1.25,
-      "total_amount": 28.75
+      "tax_amount": 0,
+      "service_amount": 2.50,
+      "total_amount": 27.50
     }
   ],
 
   "total_matches": true,
-  "calculation_notes": "Any notes about calculations"
+  "calculation_notes": "VAT-inclusive European receipt. Tax amounts shown on receipt are informational only."
 }
 
 EXPENSE CATEGORY RULES:
@@ -104,14 +133,166 @@ Choose ONE of these categories based on the vendor and line items:
 - "other": Anything that doesn't fit the above categories
 
 CALCULATION RULES:
+For VAT-INCLUSIVE receipts (most European):
+- line_item.subtotal = quantity * unit_price - line_discount_amount (prices as printed on receipt)
+- line_item.tax_amount = 0 (tax already in price)
+- line_item.service_amount = (line_subtotal / receipt_subtotal) * total_service_charge
+- line_item.total_amount = subtotal + service_amount
+- receipt tax_percent = 0, receipt tax_amount = 0
+
+For VAT-EXCLUSIVE receipts (US, some B2B):
 - line_item.subtotal = quantity * unit_price - line_discount_amount
-- Distribute tax proportionally: line_tax = (line_subtotal / receipt_subtotal) * total_tax
-- Distribute service proportionally: line_service = (line_subtotal / receipt_subtotal) * total_service
+- line_item.tax_amount = (line_subtotal / receipt_subtotal) * total_tax
+- line_item.service_amount = (line_subtotal / receipt_subtotal) * total_service
 - line_item.total_amount = subtotal + tax_amount + service_amount
-- SUM(all line_item.total_amount) MUST equal receipt total
+
+ALWAYS: SUM(all line_item.total_amount) MUST equal receipt total.
 
 If receipt is unclear or text is cut off, make best effort estimates and note in calculation_notes.
 Return ONLY valid JSON, no markdown formatting.`
+}
+
+// Call Anthropic Claude API
+async function callAnthropicAPI(
+  base64: string,
+  mimeType: string,
+  isPDF: boolean,
+  prompt: string
+): Promise<string> {
+  const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY')
+  if (!anthropicApiKey) {
+    throw new Error('ANTHROPIC_API_KEY not configured')
+  }
+
+  console.log('Calling Anthropic Claude API...')
+
+  // Build content block based on file type
+  const fileContentBlock = isPDF
+    ? {
+        type: 'document' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: 'application/pdf' as const,
+          data: base64,
+        },
+      }
+    : {
+        type: 'image' as const,
+        source: {
+          type: 'base64' as const,
+          media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+          data: base64,
+        },
+      }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': anthropicApiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 8192,
+      temperature: 0.1,
+      messages: [
+        {
+          role: 'user',
+          content: [
+            fileContentBlock,
+            {
+              type: 'text',
+              text: prompt,
+            },
+          ],
+        },
+      ],
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error('Anthropic API error:', response.status, errorText)
+    throw new Error(`Anthropic API failed (${response.status}): ${errorText}`)
+  }
+
+  const data = await response.json()
+  console.log('Anthropic response received')
+
+  // Extract text content from Claude's response
+  const textBlock = data.content?.find((block: any) => block.type === 'text')
+  if (!textBlock?.text) {
+    throw new Error('No text content in Anthropic response')
+  }
+
+  return textBlock.text
+}
+
+// Call OpenAI API (fallback)
+async function callOpenAIAPI(
+  base64: string,
+  mimeType: string,
+  isPDF: boolean,
+  prompt: string
+): Promise<string> {
+  const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
+  if (!openaiApiKey) {
+    throw new Error('OPENAI_API_KEY not configured')
+  }
+
+  console.log('Calling OpenAI API (fallback)...')
+
+  const fileContent = isPDF ? {
+    type: 'file',
+    file: {
+      filename: 'receipt.pdf',
+      file_data: `data:${mimeType};base64,${base64}`
+    }
+  } : {
+    type: 'image_url',
+    image_url: {
+      url: `data:${mimeType};base64,${base64}`
+    }
+  }
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${openaiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            fileContent,
+          ],
+        },
+      ],
+      max_completion_tokens: 8192,
+      temperature: 0.1,
+    }),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    console.error('OpenAI API error:', response.status, errorText)
+    throw new Error(`OpenAI API failed (${response.status}): ${errorText}`)
+  }
+
+  const data = await response.json()
+  console.log('OpenAI response received')
+
+  const content = data.choices[0]?.message?.content
+  if (!content) {
+    throw new Error('No content in OpenAI response')
+  }
+
+  return content
 }
 
 // Main handler
@@ -174,7 +355,6 @@ Deno.serve(async (req) => {
     console.log('User verified as trip participant')
 
     // Download receipt image from Supabase Storage
-    // receiptPath format: "userId/filename.jpg"
     console.log('Attempting to download from receipts bucket:', receiptPath)
 
     const { data: imageData, error: downloadError } = await supabaseClient
@@ -194,7 +374,7 @@ Deno.serve(async (req) => {
     console.log('Receipt downloaded, size:', imageData.size, 'bytes', 'type:', imageData.type)
 
     // Check file size limit (5MB)
-    const maxFileSize = 5 * 1024 * 1024 // 5MB
+    const maxFileSize = 5 * 1024 * 1024
     if (imageData.size > maxFileSize) {
       throw new Error('Image too large. Maximum 5MB allowed.')
     }
@@ -202,7 +382,6 @@ Deno.serve(async (req) => {
     // Detect MIME type from blob or file extension
     let mimeType = imageData.type || 'image/jpeg'
     if (!mimeType || mimeType === 'application/octet-stream') {
-      // Fallback: detect from file extension
       const ext = receiptPath.toLowerCase().split('.').pop()
       const mimeTypes: Record<string, string> = {
         'jpg': 'image/jpeg',
@@ -218,14 +397,11 @@ Deno.serve(async (req) => {
     console.log('Detected MIME type:', mimeType)
 
     // Convert blob to base64 (process in chunks to avoid stack overflow)
-    // Note: OpenAI's gpt-4o-mini supports PDFs directly via base64 encoding (since March 2025)
-    // PDFs are passed the same way as images - the API handles both formats
     const arrayBuffer = await imageData.arrayBuffer()
     const uint8Array = new Uint8Array(arrayBuffer)
 
-    // Process in chunks to avoid "Maximum call stack size exceeded"
     let binaryString = ''
-    const chunkSize = 8192 // 8KB chunks
+    const chunkSize = 8192
     for (let i = 0; i < uint8Array.length; i += chunkSize) {
       const chunk = uint8Array.subarray(i, i + chunkSize)
       binaryString += String.fromCharCode(...chunk)
@@ -234,99 +410,69 @@ Deno.serve(async (req) => {
 
     console.log('Image converted to base64, length:', base64.length)
 
-    // Get OpenAI API key from Supabase secrets
-    const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
-    if (!openaiApiKey) {
-      throw new Error('OpenAI API key not configured')
-    }
-
-    console.log('Calling OpenAI API...')
-
-    // Prepare content based on file type
-    // PDFs use "file" type, images use "image_url" type (OpenAI API requirement)
     const isPDF = mimeType === 'application/pdf'
-    const fileContent = isPDF ? {
-      type: 'file',
-      file: {
-        filename: receiptPath.split('/').pop() || 'receipt.pdf',
-        file_data: `data:${mimeType};base64,${base64}`
+    const prompt = getReceiptParsingPrompt()
+
+    // Try Anthropic Claude first, fall back to OpenAI on failure
+    let rawContent: string
+
+    try {
+      rawContent = await callAnthropicAPI(base64, mimeType, isPDF, prompt)
+      console.log('Successfully parsed with Anthropic Claude')
+    } catch (anthropicError) {
+      console.warn('Anthropic API failed, falling back to OpenAI:', anthropicError.message)
+      try {
+        rawContent = await callOpenAIAPI(base64, mimeType, isPDF, prompt)
+        console.log('Successfully parsed with OpenAI (fallback)')
+      } catch (openaiError) {
+        console.error('Both APIs failed. Anthropic:', anthropicError.message, 'OpenAI:', openaiError.message)
+        throw new Error(`Receipt parsing failed with both providers. Last error: ${openaiError.message}`)
       }
-    } : {
-      type: 'image_url',
-      image_url: {
-        url: `data:${mimeType};base64,${base64}`
-      }
     }
-
-    console.log('File type:', isPDF ? 'PDF' : 'Image')
-
-    // Call OpenAI API (using gpt-4o-mini - supports images AND PDFs)
-    const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openaiApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini', // Supports both images and PDF files (since March 2025)
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'text',
-                text: getReceiptParsingPrompt(),
-              },
-              fileContent, // Different format for PDFs vs images
-            ],
-          },
-        ],
-        max_completion_tokens: 8192,
-        temperature: 0.1, // Lower temperature for more consistent structured output
-      }),
-    })
-
-    if (!openaiResponse.ok) {
-      const errorText = await openaiResponse.text()
-      console.error('OpenAI API error:', openaiResponse.status, errorText)
-      throw new Error(`OpenAI API failed (${openaiResponse.status}): ${errorText}`)
-    }
-
-    const openaiData = await openaiResponse.json()
-    console.log('OpenAI response received:', JSON.stringify(openaiData, null, 2))
-
-    // Extract content
-    const content = openaiData.choices[0]?.message?.content
-    if (!content) {
-      console.error('Response structure:', JSON.stringify(openaiData, null, 2))
-      throw new Error(`No content in OpenAI response. Response structure: ${JSON.stringify(openaiData)}`)
-    }
-
-    console.log('Parsing OpenAI response...')
 
     // Parse JSON response (remove markdown formatting if present)
-    let jsonContent = content.trim()
+    let jsonContent = rawContent.trim()
     if (jsonContent.startsWith('```json')) {
       jsonContent = jsonContent.replace(/```json\n?/g, '').replace(/```\n?/g, '')
+    }
+    if (jsonContent.startsWith('```')) {
+      jsonContent = jsonContent.replace(/```\n?/g, '')
     }
 
     const parsedData: ReceiptData = JSON.parse(jsonContent)
 
-    // Validate totals
-    const calculatedTotal = parsedData.line_items.reduce(
-      (sum, item) => sum + item.total_amount,
-      0
-    )
-    const totalDiff = Math.abs(calculatedTotal - parsedData.total)
-    parsedData.total_matches = totalDiff < 0.01 // Allow 1 cent difference
+    // Ensure vat_inclusive field exists (default to false if missing)
+    if (parsedData.vat_inclusive === undefined) {
+      parsedData.vat_inclusive = false
+    }
+
+    // Server-side total validation: cross-check line item subtotals + receipt-level tax/service against total
+    const isZeroDecimal = parsedData.currency === 'JPY' || parsedData.currency === 'KRW'
+    const tolerance = isZeroDecimal ? 2 : 0.02 // Allow rounding tolerance
+    const fmt = (n: number) => isZeroDecimal ? Math.round(n).toString() : n.toFixed(2)
+
+    // Check 1: SUM(line_item.total_amount) should equal receipt total
+    const lineItemsTotal = parsedData.line_items.reduce((sum, item) => sum + item.total_amount, 0)
+    const lineItemsDiff = Math.abs(lineItemsTotal - parsedData.total)
+
+    // Check 2: SUM(line_item.subtotal) + tax + service - discount should equal receipt total
+    const lineItemsSubtotal = parsedData.line_items.reduce((sum, item) => sum + item.subtotal, 0)
+    const reconstructedTotal = lineItemsSubtotal
+      + (parsedData.tax_amount || 0)
+      + (parsedData.service_charge_amount || 0)
+      - (parsedData.discount_amount || 0)
+    const reconstructedDiff = Math.abs(reconstructedTotal - parsedData.total)
+
+    // Pass if either check is within tolerance
+    parsedData.total_matches = lineItemsDiff < tolerance || reconstructedDiff < tolerance
 
     if (!parsedData.total_matches) {
       parsedData.calculation_notes =
-        `Warning: Line items sum to ${calculatedTotal.toFixed(2)} but receipt total is ${parsedData.total.toFixed(2)}. ` +
+        `Warning: Line items total=${fmt(lineItemsTotal)}, reconstructed (subtotals+tax+service-discount)=${fmt(reconstructedTotal)}, receipt total=${fmt(parsedData.total)}. ` +
         (parsedData.calculation_notes || '')
     }
 
-    console.log('Receipt parsed successfully:', parsedData.line_items.length, 'items')
+    console.log('Receipt parsed successfully:', parsedData.line_items.length, 'items, vat_inclusive:', parsedData.vat_inclusive)
 
     // Return success response
     return new Response(
@@ -366,7 +512,8 @@ Deno.serve(async (req) => {
   1. Start Supabase local development:
      supabase start
 
-  2. Set OpenAI API key:
+  2. Set API keys:
+     supabase secrets set ANTHROPIC_API_KEY=sk-ant-your-key-here
      supabase secrets set OPENAI_API_KEY=sk-your-key-here
 
   3. Serve the function:

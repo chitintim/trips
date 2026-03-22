@@ -44,6 +44,8 @@ export function AddExpenseModal({
   const [category, setCategory] = useState<ExpenseCategory>('other')
   const [vendorName, setVendorName] = useState('')
   const [location, setLocation] = useState('')
+  const [optionId, setOptionId] = useState<string | null>(null)
+  const [planningOptions, setPlanningOptions] = useState<Array<{ sectionTitle: string; options: Array<{ id: string; title: string }> }>>([])
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
 
   // AI Receipt Parsing
@@ -54,16 +56,16 @@ export function AddExpenseModal({
   const [parsingMessage, setParsingMessage] = useState('')
   const [uploadedReceiptPath, setUploadedReceiptPath] = useState<string | null>(null)
 
-  // Step 2: Who Paid
-  const [paidBy, setPaidBy] = useState(user?.id || '')
-
-  // Step 3: Split Method
+  // Step 1 also: Split Method selection
   const [splitType, setSplitType] = useState<SplitType>('equal')
   const [useItemizedSplit, setUseItemizedSplit] = useState(false)
+
+  // Step 2: Who Paid & Who Owes
+  const [paidBy, setPaidBy] = useState(user?.id || '')
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([])
   const [splits, setSplits] = useState<Record<string, SplitData>>({})
 
-  // Step 4: Review (calculated)
+  // Step 3: Review (calculated)
   const [baseCurrencyAmount, setBaseCurrencyAmount] = useState<number | null>(null)
   const [fxRate, setFxRate] = useState<number | null>(null)
 
@@ -240,6 +242,32 @@ export function AddExpenseModal({
     }
   }, [isOpen, tripId, receiptFile, parsingReceipt, parsedData, parseError, uploadedReceiptPath])
 
+  // Fetch planning options for linking expenses
+  useEffect(() => {
+    if (isOpen && tripId) {
+      const fetchOptions = async () => {
+        const { data } = await supabase
+          .from('planning_sections')
+          .select('id, title, options(id, title, status)')
+          .eq('trip_id', tripId)
+          .order('order_index')
+        if (data) {
+          setPlanningOptions(
+            data
+              .map(section => ({
+                sectionTitle: section.title,
+                options: ((section.options as any[]) || [])
+                  .filter((opt: any) => opt.status !== 'cancelled')
+                  .map((opt: any) => ({ id: opt.id, title: opt.title }))
+              }))
+              .filter(section => section.options.length > 0)
+          )
+        }
+      }
+      fetchOptions()
+    }
+  }, [isOpen, tripId])
+
   const handleNext = async () => {
     // Validation for each step
     if (step === 1) {
@@ -254,9 +282,7 @@ export function AddExpenseModal({
         alert('Please select who paid')
         return
       }
-    }
 
-    if (step === 3) {
       // If using itemized split, the wizard handles everything - no validation needed
       if (useItemizedSplit) {
         // Itemized split wizard is self-contained, should not reach here
@@ -388,7 +414,8 @@ export function AddExpenseModal({
           base_currency_amount: baseCurrencyAmount,
           fx_rate: fxRate,
           fx_rate_date: currency !== 'GBP' ? paymentDate : null,
-          receipt_url: receiptUrl
+          receipt_url: receiptUrl,
+          option_id: optionId
         })
         .select()
         .single()
@@ -818,54 +845,104 @@ export function AddExpenseModal({
               placeholder="e.g., Val Thorens, France"
               maxLength={200}
             />
-          </div>
-        )
 
-      case 2:
-        return (
-          <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900">Who Paid?</h3>
-            <p className="text-sm text-gray-600">Select the person who paid for this expense</p>
+            {/* Link to Planning Option */}
+            {planningOptions.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Link to planning option (optional)
+                </label>
+                <select
+                  value={optionId || ''}
+                  onChange={(e) => setOptionId(e.target.value || null)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                >
+                  <option value="">— None —</option>
+                  {planningOptions.map(section => (
+                    <optgroup key={section.sectionTitle} label={section.sectionTitle}>
+                      {section.options.map(opt => (
+                        <option key={opt.id} value={opt.id}>{opt.title}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </div>
+            )}
 
-            <div className="space-y-2">
-              {participants.map(participant => (
+            {/* Split Method Selector */}
+            <div className="border-t border-gray-200 pt-4 mt-4">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Split Method *
+              </label>
+              <div className="flex gap-2 flex-wrap">
                 <button
-                  key={participant.user_id}
-                  onClick={() => setPaidBy(participant.user_id)}
-                  className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${
-                    paidBy === participant.user_id
-                      ? 'border-sky-500 bg-sky-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                  onClick={() => {
+                    setUseItemizedSplit(false)
+                    setSplitType('equal')
+                  }}
+                  className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                    !useItemizedSplit && splitType === 'equal'
+                      ? 'border-sky-500 bg-sky-50 text-sky-700'
+                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
                   }`}
                 >
-                  <div
-                    className="w-10 h-10 rounded-full flex items-center justify-center text-xl flex-shrink-0"
-                    style={{
-                      backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
-                    }}
-                  >
-                    <span className="relative">
-                      {(participant.user.avatar_data as any)?.emoji || '😊'}
-                    </span>
-                  </div>
-                  <div className="text-left flex-1">
-                    <div className="font-medium text-gray-900">
-                      {participant.user.full_name || participant.user.email}
-                    </div>
-                    <div className="text-sm text-gray-500">
-                      {participant.user.email}
-                    </div>
-                  </div>
-                  {paidBy === participant.user_id && (
-                    <Badge variant="success">Selected</Badge>
-                  )}
+                  Equal
                 </button>
-              ))}
+                <button
+                  onClick={() => {
+                    setUseItemizedSplit(false)
+                    setSplitType('custom')
+                  }}
+                  className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                    !useItemizedSplit && splitType === 'custom'
+                      ? 'border-sky-500 bg-sky-50 text-sky-700'
+                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  Custom
+                </button>
+                <button
+                  onClick={() => {
+                    setUseItemizedSplit(false)
+                    setSplitType('percentage')
+                  }}
+                  className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                    !useItemizedSplit && splitType === 'percentage'
+                      ? 'border-sky-500 bg-sky-50 text-sky-700'
+                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                  }`}
+                >
+                  Percentage
+                </button>
+                {parsedData && (
+                  <button
+                    onClick={() => setUseItemizedSplit(true)}
+                    className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                      useItemizedSplit
+                        ? 'border-purple-500 bg-purple-50 text-purple-700'
+                        : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                    }`}
+                  >
+                    Itemized
+                  </button>
+                )}
+              </div>
+
+              {parsedData && !useItemizedSplit && (
+                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mt-2">
+                  <p className="text-xs text-purple-900 font-medium">
+                    AI detected {parsedData.line_items.length} items — Try "Itemized" split!
+                  </p>
+                  <p className="text-xs text-purple-700 mt-1">
+                    Let people claim which items they ordered instead of splitting equally.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )
 
-      case 3:
+      case 2:
         // If user selected itemized split and we have parsed data, show the wizard
         if (useItemizedSplit && parsedData) {
           return (
@@ -876,6 +953,7 @@ export function AddExpenseModal({
               receiptUrl={uploadedReceiptPath}
               currency={currency}
               paymentDate={paymentDate}
+              optionId={optionId}
               onSuccess={() => {
                 // Clear ALL localStorage state on success (including parsing state)
                 localStorage.removeItem(`expense_draft_${tripId}`)
@@ -891,87 +969,56 @@ export function AddExpenseModal({
           )
         }
 
-        // Regular split method selection
         return (
           <div className="space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900">Split Method</h3>
-
-            {/* Split Type Selector */}
-            <div className="flex gap-2 flex-wrap">
-              <button
-                onClick={() => {
-                  setUseItemizedSplit(false)
-                  setSplitType('equal')
-                }}
-                className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                  !useItemizedSplit && splitType === 'equal'
-                    ? 'border-sky-500 bg-sky-50 text-sky-700'
-                    : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                Equal Split
-              </button>
-              <button
-                onClick={() => {
-                  setUseItemizedSplit(false)
-                  setSplitType('custom')
-                }}
-                className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                  !useItemizedSplit && splitType === 'custom'
-                    ? 'border-sky-500 bg-sky-50 text-sky-700'
-                    : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                Custom
-              </button>
-              <button
-                onClick={() => {
-                  setUseItemizedSplit(false)
-                  setSplitType('percentage')
-                }}
-                className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                  !useItemizedSplit && splitType === 'percentage'
-                    ? 'border-sky-500 bg-sky-50 text-sky-700'
-                    : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                Percentage
-              </button>
-
-              {/* Itemized option - only show if we have parsed data */}
-              {parsedData && (
-                <button
-                  onClick={() => {
-                    setUseItemizedSplit(true)
-                  }}
-                  className={`flex-1 min-w-[120px] px-4 py-2 rounded-lg border-2 font-medium transition-colors ${
-                    useItemizedSplit
-                      ? 'border-purple-500 bg-purple-50 text-purple-700'
-                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  🤖 Itemized
-                </button>
-              )}
+            {/* Who Paid */}
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Who Paid?</h3>
+              <p className="text-sm text-gray-600 mb-2">Select the person who paid for this expense</p>
+              <div className="space-y-2">
+                {participants.map(participant => (
+                  <button
+                    key={participant.user_id}
+                    onClick={() => setPaidBy(participant.user_id)}
+                    className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${
+                      paidBy === participant.user_id
+                        ? 'border-sky-500 bg-sky-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-lg flex-shrink-0"
+                      style={{
+                        backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
+                      }}
+                    >
+                      <span className="relative">
+                        {(participant.user.avatar_data as any)?.emoji || '😊'}
+                      </span>
+                    </div>
+                    <div className="text-left flex-1">
+                      <div className="font-medium text-gray-900">
+                        {participant.user.full_name || participant.user.email}
+                      </div>
+                    </div>
+                    {paidBy === participant.user_id && (
+                      <Badge variant="success">Paid</Badge>
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {/* Show info badge for itemized option */}
-            {parsedData && !useItemizedSplit && (
-              <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
-                <p className="text-xs text-purple-900 font-medium">
-                  ✨ AI detected {parsedData.line_items.length} items - Try "Itemized" split!
-                </p>
-                <p className="text-xs text-purple-700 mt-1">
-                  Let people claim which items they ordered instead of splitting equally.
-                </p>
-              </div>
-            )}
+            {/* Divider */}
+            <div className="border-t border-gray-200" />
 
-            {/* Participant Selection */}
+            {/* Who Owes */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select people to split with *
-              </label>
+              <h3 className="text-lg font-semibold text-gray-900">Who's Involved?</h3>
+              <p className="text-sm text-gray-600 mb-2">
+                Select people to split with
+                {splitType === 'equal' ? ' (equal split)' : splitType === 'custom' ? ' (custom amounts)' : ' (percentage)'}
+              </p>
               <div className="space-y-2">
                 {participants.map(participant => (
                   <div key={participant.user_id}>
@@ -1074,7 +1121,7 @@ export function AddExpenseModal({
           </div>
         )
 
-      case 4:
+      case 3:
         return (
           <div className="space-y-4">
             <h3 className="text-lg font-semibold text-gray-900">Review & Submit</h3>
@@ -1166,9 +1213,9 @@ export function AddExpenseModal({
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Add Expense" size="lg">
       {/* Step Indicator - Hide when itemized wizard is showing */}
-      {!(step === 3 && useItemizedSplit) && (
+      {!(step === 2 && useItemizedSplit) && (
         <div className="flex items-center justify-between mb-6">
-          {[1, 2, 3, 4].map((s) => (
+          {[1, 2, 3].map((s) => (
             <div key={s} className="flex items-center">
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center font-medium ${
@@ -1181,9 +1228,9 @@ export function AddExpenseModal({
               >
                 {s < step ? '✓' : s}
               </div>
-              {s < 4 && (
+              {s < 3 && (
                 <div
-                  className={`w-16 h-0.5 ${
+                  className={`w-24 h-0.5 ${
                     s < step ? 'bg-green-500' : 'bg-gray-200'
                   }`}
                 />
@@ -1197,7 +1244,7 @@ export function AddExpenseModal({
       {renderStep()}
 
       {/* Footer Buttons - Hide when itemized wizard is showing */}
-      {!(step === 3 && useItemizedSplit) && (
+      {!(step === 2 && useItemizedSplit) && (
         <div className="flex justify-between mt-6 pt-6 border-t border-gray-200">
           <Button
             variant="outline"
@@ -1208,10 +1255,10 @@ export function AddExpenseModal({
           </Button>
           <Button
             variant="primary"
-            onClick={step === 4 ? handleSubmit : handleNext}
+            onClick={step === 3 ? handleSubmit : handleNext}
             disabled={loading}
           >
-            {loading ? 'Saving...' : step === 4 ? 'Add Expense' : 'Next'}
+            {loading ? 'Saving...' : step === 3 ? 'Add Expense' : 'Next'}
           </Button>
         </div>
       )}

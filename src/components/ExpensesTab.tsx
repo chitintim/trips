@@ -22,6 +22,7 @@ interface ExpenseWithDetails extends Expense {
   line_items?: any[]
   claims?: any[]
   allocation_link?: any
+  expected_participants?: string[]
 }
 
 interface BalanceData {
@@ -171,10 +172,36 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       })
     )
 
-    setExpenses(expensesWithItemizedData as any)
+    // For expenses with option_id, fetch expected participants from selections
+    const optionIds = [...new Set(
+      expensesWithItemizedData
+        .filter((e: any) => e.option_id)
+        .map((e: any) => e.option_id as string)
+    )]
+    let optionSelections: Record<string, string[]> = {}
+    if (optionIds.length > 0) {
+      const { data: selectionsData } = await supabase
+        .from('selections')
+        .select('option_id, user_id')
+        .in('option_id', optionIds)
+      if (selectionsData) {
+        selectionsData.forEach(sel => {
+          if (!optionSelections[sel.option_id]) optionSelections[sel.option_id] = []
+          optionSelections[sel.option_id].push(sel.user_id)
+        })
+      }
+    }
+
+    // Attach expected_participants to expenses
+    const expensesWithExpectedParticipants = expensesWithItemizedData.map((e: any) => ({
+      ...e,
+      expected_participants: e.option_id ? (optionSelections[e.option_id] || []) : []
+    }))
+
+    setExpenses(expensesWithExpectedParticipants as any)
 
     // Calculate balances - pass expensesWithItemizedData to include claims
-    await calculateBalances(expensesWithItemizedData as any)
+    await calculateBalances(expensesWithExpectedParticipants as any)
 
     setLoading(false)
   }
@@ -371,6 +398,72 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
             </Button>
           </div>
 
+          {/* Actions Required Banner */}
+          {(() => {
+            if (!user) return null
+            const actions: Array<{ message: string; linkUrl?: string; linkLabel: string; expenseId: string }> = []
+
+            expenses.forEach(expense => {
+              if (!expense.ai_parsed || !expense.status) return
+
+              // Check if current user needs to claim items
+              const userHasClaimed = expense.claims?.some((c: any) => c.user_id === user.id && c.quantity_claimed > 0)
+              if (!userHasClaimed && expense.status !== 'allocated' && expense.allocation_link) {
+                // Check if user is an expected participant (via option selections or trip participant)
+                const isPayer = expense.paid_by === user.id
+                if (!isPayer) {
+                  actions.push({
+                    message: `You haven't claimed items on "${expense.description}"`,
+                    linkUrl: `/claim/${expense.allocation_link.code}`,
+                    linkLabel: 'Claim now',
+                    expenseId: expense.id
+                  })
+                }
+              }
+
+              // Check if expense owner/admin sees unclaimed items
+              const isOwner = expense.paid_by === user.id || isAdmin
+              if (isOwner && expense.allocation_link && expense.status !== 'allocated') {
+                const totalQty = expense.line_items?.reduce((sum: number, item: any) => sum + Number(item.quantity), 0) || 0
+                const claimedQty = expense.claims?.reduce((sum: number, claim: any) => sum + Number(claim.quantity_claimed), 0) || 0
+                const claimPercent = totalQty > 0 ? Math.round((claimedQty / totalQty) * 100) : 0
+                if (claimPercent < 100) {
+                  const uniqueClaimants = new Set(expense.claims?.map((c: any) => c.user_id) || [])
+                  const numClaimants = uniqueClaimants.size
+                  // Don't duplicate if we already have a "claim now" action for this expense
+                  if (!actions.some(a => a.expenseId === expense.id)) {
+                    actions.push({
+                      message: `"${expense.description}" is ${claimPercent}% claimed — ${numClaimants} ${numClaimants === 1 ? 'person has' : 'people have'} claimed`,
+                      linkUrl: `/claim/${expense.allocation_link.code}`,
+                      linkLabel: 'View claims',
+                      expenseId: expense.id
+                    })
+                  }
+                }
+              }
+            })
+
+            if (actions.length === 0) return null
+
+            return (
+              <div className="space-y-2">
+                {actions.map((action, i) => (
+                  <div key={i} className="bg-amber-50 border border-amber-300 rounded-lg p-3 flex items-center justify-between gap-3">
+                    <p className="text-sm text-amber-900">{action.message}</p>
+                    {action.linkUrl && (
+                      <Link
+                        to={action.linkUrl}
+                        className="text-sm font-medium text-amber-700 hover:text-amber-900 whitespace-nowrap underline"
+                      >
+                        {action.linkLabel} →
+                      </Link>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )
+          })()}
+
         {/* Category Filters */}
         <div className="flex flex-wrap gap-2">
           <FilterButton
@@ -418,6 +511,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
                 expense={expense}
                 currentUserId={user?.id || ''}
                 isAdmin={isAdmin}
+                participants={participants}
                 onDelete={fetchExpenses}
               />
             ))}
@@ -432,6 +526,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
           balances={balances}
           currentUserId={user?.id || ''}
           isAdmin={isAdmin}
+          tripId={tripId}
           onOpenSettlementHistory={() => setSettlementHistoryModalOpen(true)}
           onOpenRecordPayment={() => setRecordSettlementModalOpen(true)}
         />
@@ -496,11 +591,13 @@ function ExpenseCard({
   expense,
   currentUserId,
   isAdmin,
+  participants,
   onDelete
 }: {
   expense: ExpenseWithDetails
   currentUserId: string
   isAdmin: boolean
+  participants: any[]
   onDelete: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -742,6 +839,25 @@ function ExpenseCard({
                 </div>
               </div>
 
+              {/* Outstanding Claimants */}
+              {expense.expected_participants && expense.expected_participants.length > 0 && !itemizedStats.fullyAllocated && (() => {
+                const claimedUserIds = new Set(expense.claims?.filter((c: any) => c.quantity_claimed > 0).map((c: any) => c.user_id) || [])
+                const missingUsers = expense.expected_participants!
+                  .filter(uid => !claimedUserIds.has(uid))
+                  .map(uid => {
+                    const p = participants.find((pp: any) => pp.user_id === uid)
+                    return p?.user?.full_name || p?.user?.email || 'Unknown'
+                  })
+                if (missingUsers.length === 0) return null
+                return (
+                  <div className="bg-amber-50 border border-amber-300 rounded-lg p-2">
+                    <p className="text-xs font-medium text-amber-900">
+                      Haven't claimed yet: {missingUsers.join(', ')}
+                    </p>
+                  </div>
+                )
+              })()}
+
               {/* Claims Summary */}
               {expense.claims && expense.claims.length > 0 && (
                 <div>
@@ -875,15 +991,93 @@ function BalanceSummary({
   balances,
   currentUserId,
   isAdmin,
+  tripId,
   onOpenSettlementHistory,
   onOpenRecordPayment
 }: {
   balances: BalanceData[]
   currentUserId: string
   isAdmin: boolean
+  tripId: string
   onOpenSettlementHistory: () => void
   onOpenRecordPayment: () => void
 }) {
+  const [snapshot, setSnapshot] = useState<any>(null)
+  const [snapshotAt, setSnapshotAt] = useState<string | null>(null)
+  const [savingSnapshot, setSavingSnapshot] = useState(false)
+
+  useEffect(() => {
+    const fetchSnapshot = async () => {
+      const { data } = await supabase
+        .from('trips')
+        .select('settlement_snapshot, settlement_snapshot_at')
+        .eq('id', tripId)
+        .single()
+      if (data) {
+        setSnapshot(data.settlement_snapshot)
+        setSnapshotAt(data.settlement_snapshot_at)
+      }
+    }
+    fetchSnapshot()
+  }, [tripId])
+
+  const handleFinalizeSettlements = async () => {
+    if (!window.confirm('This will freeze the settlement arrangement. The recommended payments will no longer change as new expenses or settlements are added. Proceed?')) return
+
+    setSavingSnapshot(true)
+    const people: Person[] = balances.map(b => ({
+      userId: b.userId,
+      name: b.user.full_name || b.user.email || 'Unknown',
+      netBalance: b.netBalance
+    }))
+    const allTransactions = minimizeTransactions(people)
+
+    const snapshotData = {
+      transactions: allTransactions.map(t => ({
+        from: t.from,
+        to: t.to,
+        fromName: t.fromName,
+        toName: t.toName,
+        amount: t.amount,
+        settled: false
+      })),
+      balances: people.map(p => ({ userId: p.userId, name: p.name, netBalance: p.netBalance })),
+      created_at: new Date().toISOString()
+    }
+
+    const { error } = await supabase
+      .from('trips')
+      .update({
+        settlement_snapshot: snapshotData,
+        settlement_snapshot_at: new Date().toISOString(),
+        settlement_snapshot_by: currentUserId
+      })
+      .eq('id', tripId)
+
+    if (!error) {
+      setSnapshot(snapshotData)
+      setSnapshotAt(new Date().toISOString())
+    } else {
+      alert('Failed to finalize settlements: ' + error.message)
+    }
+    setSavingSnapshot(false)
+  }
+
+  const handleToggleSettled = async (index: number) => {
+    if (!snapshot) return
+    const updated = { ...snapshot }
+    updated.transactions = [...updated.transactions]
+    updated.transactions[index] = { ...updated.transactions[index], settled: !updated.transactions[index].settled }
+
+    const { error } = await supabase
+      .from('trips')
+      .update({ settlement_snapshot: updated })
+      .eq('id', tripId)
+
+    if (!error) {
+      setSnapshot(updated)
+    }
+  }
   const currentUserBalance = balances.find(b => b.userId === currentUserId)
 
   if (!currentUserBalance) {
@@ -997,125 +1191,211 @@ function BalanceSummary({
       <Card className="mt-4">
         <Card.Header>
           <Card.Title>Optimized Settlements</Card.Title>
-          <Card.Description>Minimum transactions to settle all debts</Card.Description>
+          <Card.Description>
+            {snapshot ? `Finalized on ${new Date(snapshotAt!).toLocaleDateString('en-GB')}` : 'Minimum transactions to settle all debts'}
+          </Card.Description>
         </Card.Header>
         <Card.Content>
-          {(() => {
-            // Convert balances to Person format
-            const people: Person[] = balances.map(b => ({
-              userId: b.userId,
-              name: b.user.full_name || b.user.email || 'Unknown',
-              netBalance: b.netBalance
-            }))
+          {snapshot ? (
+            /* Frozen snapshot view */
+            <div className="space-y-4">
+              {(() => {
+                const txns = snapshot.transactions || []
+                const settledCount = txns.filter((t: any) => t.settled).length
+                const totalCount = txns.length
 
-            // Debug logging
-            console.log('People with balances:', people.map(p => ({ name: p.name, balance: p.netBalance })))
-
-            // Calculate minimized transactions
-            const allTransactions = minimizeTransactions(people)
-
-            console.log('Minimized transactions:', allTransactions)
-
-            const { toPay, toReceive } = getUserTransactions(allTransactions, currentUserId)
-
-            // Check if everyone is settled (all balances near zero)
-            const allSettled = people.every(p => Math.abs(p.netBalance) < 0.01)
-
-            if (allSettled || allTransactions.length === 0) {
-              return (
-                <div className="text-center py-4 text-sm text-gray-500">
-                  All settled up! 🎉
-                </div>
-              )
-            }
-
-            return (
-              <div className="space-y-4">
-                {/* What you need to pay */}
-                {toPay.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold text-gray-700 mb-2 uppercase">You Pay:</h4>
-                    <div className="space-y-2">
-                      {toPay.map((transaction, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-2 bg-red-50 rounded-lg border border-red-200">
-                          <span className="text-sm text-gray-900">
-                            Pay <strong>{transaction.toName}</strong>
-                          </span>
-                          <span className="font-bold text-red-600">
-                            {formatCurrency(transaction.amount, 'GBP')}
-                          </span>
-                        </div>
-                      ))}
+                if (totalCount === 0) {
+                  return (
+                    <div className="text-center py-4 text-sm text-gray-500">
+                      All settled up! 🎉
                     </div>
-                  </div>
-                )}
+                  )
+                }
 
-                {/* What you will receive */}
-                {toReceive.length > 0 && (
-                  <div>
-                    <h4 className="text-xs font-semibold text-gray-700 mb-2 uppercase">You Receive:</h4>
-                    <div className="space-y-2">
-                      {toReceive.map((transaction, idx) => (
-                        <div key={idx} className="flex justify-between items-center p-2 bg-green-50 rounded-lg border border-green-200">
-                          <span className="text-sm text-gray-900">
-                            <strong>{transaction.fromName}</strong> pays you
-                          </span>
-                          <span className="font-bold text-green-600">
-                            {formatCurrency(transaction.amount, 'GBP')}
-                          </span>
-                        </div>
-                      ))}
+                return (
+                  <>
+                    {/* Progress */}
+                    <div className="text-sm text-gray-600 text-center">
+                      {settledCount}/{totalCount} settlements completed
                     </div>
-                  </div>
-                )}
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="bg-green-500 h-2 rounded-full transition-all"
+                        style={{ width: `${(settledCount / totalCount) * 100}%` }}
+                      />
+                    </div>
 
-                {/* Summary note */}
-                <div className="pt-3 border-t border-gray-200">
-                  <div className="text-xs text-gray-600">
-                    💡 This shows the <strong>minimum {allTransactions.length} transaction{allTransactions.length !== 1 ? 's' : ''}</strong> needed to settle all debts in the group.
-                  </div>
-                </div>
-
-                {/* Admin: Show all group transactions */}
-                {isAdmin && allTransactions.length > 0 && (
-                  <div className="pt-4 mt-4 border-t border-gray-300">
-                    <h4 className="text-xs font-semibold text-gray-700 mb-3 uppercase flex items-center gap-1">
-                      <span>👑</span> All Group Settlements
-                    </h4>
+                    {/* Transaction list */}
                     <div className="space-y-2">
-                      {allTransactions.map((transaction, idx) => {
-                        const isCurrentUserInvolved =
-                          transaction.from === currentUserId ||
-                          transaction.to === currentUserId
-
+                      {txns.map((txn: any, idx: number) => {
+                        const isInvolved = txn.from === currentUserId || txn.to === currentUserId
                         return (
                           <div
                             key={idx}
-                            className={`flex justify-between items-center p-2 rounded-lg border ${
-                              isCurrentUserInvolved
+                            className={`flex items-center gap-2 p-2 rounded-lg border ${
+                              txn.settled
+                                ? 'bg-green-50 border-green-200'
+                                : isInvolved
                                 ? 'bg-sky-50 border-sky-200'
                                 : 'bg-gray-50 border-gray-200'
                             }`}
                           >
-                            <span className="text-sm text-gray-900">
-                              <strong>{transaction.fromName}</strong>
-                              <span className="text-gray-500 mx-1">→</span>
-                              <strong>{transaction.toName}</strong>
-                            </span>
-                            <span className={`font-bold ${
-                              isCurrentUserInvolved ? 'text-sky-600' : 'text-gray-600'
-                            }`}>
-                              {formatCurrency(transaction.amount, 'GBP')}
-                            </span>
+                            <button
+                              onClick={() => handleToggleSettled(idx)}
+                              className={`flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center text-xs ${
+                                txn.settled
+                                  ? 'bg-green-500 border-green-500 text-white'
+                                  : 'border-gray-300 hover:border-gray-400'
+                              }`}
+                            >
+                              {txn.settled && '✓'}
+                            </button>
+                            <div className={`flex-1 flex justify-between items-center text-sm ${txn.settled ? 'line-through opacity-60' : ''}`}>
+                              <span className="text-gray-900">
+                                <strong>{txn.fromName}</strong>
+                                <span className="text-gray-500 mx-1">→</span>
+                                <strong>{txn.toName}</strong>
+                              </span>
+                              <span className={`font-bold ${txn.settled ? 'text-green-600' : 'text-gray-600'}`}>
+                                {formatCurrency(txn.amount, 'GBP')}
+                              </span>
+                            </div>
                           </div>
                         )
                       })}
                     </div>
+
+                    {/* Admin: Re-finalize button */}
+                    {isAdmin && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full"
+                        onClick={handleFinalizeSettlements}
+                        disabled={savingSnapshot}
+                      >
+                        {savingSnapshot ? 'Re-finalizing...' : 'Re-finalize Settlements'}
+                      </Button>
+                    )}
+                  </>
+                )
+              })()}
+            </div>
+          ) : (
+            /* Live calculation view */
+            (() => {
+              const people: Person[] = balances.map(b => ({
+                userId: b.userId,
+                name: b.user.full_name || b.user.email || 'Unknown',
+                netBalance: b.netBalance
+              }))
+
+              const allTransactions = minimizeTransactions(people)
+              const { toPay, toReceive } = getUserTransactions(allTransactions, currentUserId)
+              const allSettled = people.every(p => Math.abs(p.netBalance) < 0.01)
+
+              if (allSettled || allTransactions.length === 0) {
+                return (
+                  <div className="text-center py-4 text-sm text-gray-500">
+                    All settled up! 🎉
                   </div>
-                )}
-              </div>
-            )
-          })()}
+                )
+              }
+
+              return (
+                <div className="space-y-4">
+                  {toPay.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-semibold text-gray-700 mb-2 uppercase">You Pay:</h4>
+                      <div className="space-y-2">
+                        {toPay.map((transaction, idx) => (
+                          <div key={idx} className="flex justify-between items-center p-2 bg-red-50 rounded-lg border border-red-200">
+                            <span className="text-sm text-gray-900">
+                              Pay <strong>{transaction.toName}</strong>
+                            </span>
+                            <span className="font-bold text-red-600">
+                              {formatCurrency(transaction.amount, 'GBP')}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {toReceive.length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-semibold text-gray-700 mb-2 uppercase">You Receive:</h4>
+                      <div className="space-y-2">
+                        {toReceive.map((transaction, idx) => (
+                          <div key={idx} className="flex justify-between items-center p-2 bg-green-50 rounded-lg border border-green-200">
+                            <span className="text-sm text-gray-900">
+                              <strong>{transaction.fromName}</strong> pays you
+                            </span>
+                            <span className="font-bold text-green-600">
+                              {formatCurrency(transaction.amount, 'GBP')}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-3 border-t border-gray-200">
+                    <div className="text-xs text-gray-600">
+                      💡 This shows the <strong>minimum {allTransactions.length} transaction{allTransactions.length !== 1 ? 's' : ''}</strong> needed to settle all debts in the group.
+                    </div>
+                  </div>
+
+                  {/* Admin: Show all group transactions + Finalize button */}
+                  {isAdmin && allTransactions.length > 0 && (
+                    <div className="pt-4 mt-4 border-t border-gray-300">
+                      <h4 className="text-xs font-semibold text-gray-700 mb-3 uppercase flex items-center gap-1">
+                        <span>👑</span> All Group Settlements
+                      </h4>
+                      <div className="space-y-2">
+                        {allTransactions.map((transaction, idx) => {
+                          const isCurrentUserInvolved =
+                            transaction.from === currentUserId ||
+                            transaction.to === currentUserId
+
+                          return (
+                            <div
+                              key={idx}
+                              className={`flex justify-between items-center p-2 rounded-lg border ${
+                                isCurrentUserInvolved
+                                  ? 'bg-sky-50 border-sky-200'
+                                  : 'bg-gray-50 border-gray-200'
+                              }`}
+                            >
+                              <span className="text-sm text-gray-900">
+                                <strong>{transaction.fromName}</strong>
+                                <span className="text-gray-500 mx-1">→</span>
+                                <strong>{transaction.toName}</strong>
+                              </span>
+                              <span className={`font-bold ${
+                                isCurrentUserInvolved ? 'text-sky-600' : 'text-gray-600'
+                              }`}>
+                                {formatCurrency(transaction.amount, 'GBP')}
+                              </span>
+                            </div>
+                          )
+                        })}
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        className="w-full mt-3"
+                        onClick={handleFinalizeSettlements}
+                        disabled={savingSnapshot}
+                      >
+                        {savingSnapshot ? 'Finalizing...' : 'Finalize Settlements'}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )
+            })()
+          )}
         </Card.Content>
       </Card>
     </div>

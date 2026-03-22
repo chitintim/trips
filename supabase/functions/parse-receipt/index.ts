@@ -56,6 +56,14 @@ CRITICAL REQUIREMENTS:
 3. Handle tax and service charges correctly (see VAT RULES below)
 4. Ensure line items SUM EXACTLY to the grand total
 5. Categorize the expense based on vendor and items
+6. Correctly distinguish UNIT PRICE from LINE TOTAL (see QUANTITY HANDLING below)
+
+QUANTITY HANDLING (ALL RECEIPTS):
+When a line item shows a quantity (e.g., "×2", "2x", "Qty: 2", "2点"), the number shown alongside it could be EITHER the unit price OR the line total. You MUST determine which by cross-referencing against the receipt grand total:
+- If the right-side numbers (as-is) sum to the receipt subtotal/total → they are LINE TOTALS. Derive unit_price = number / quantity.
+- If (number × quantity) values sum to the receipt subtotal/total → they are UNIT PRICES. Derive subtotal = number × quantity.
+- Some receipts show both (e.g., "¥900 ×2 ¥1800") — use the final number as line total.
+- Always verify: SUM of all line subtotals must equal the receipt subtotal.
 
 EUROPEAN VAT RULES (CRITICAL — READ CAREFULLY):
 In Europe (France, Switzerland, Austria, Italy, Germany, Spain, and most EU/EEA countries), item prices displayed on receipts INCLUDE VAT/TVA/MwSt/IVA by law.
@@ -67,7 +75,6 @@ In Europe (France, Switzerland, Austria, Italy, Germany, Spain, and most EU/EEA 
 
 JAPANESE / ASIAN RECEIPTS:
 - Japan: Consumption tax is already INCLUDED in displayed prices. For simplicity, treat Japanese receipts as vat_inclusive: true with tax_percent: 0 and tax_amount: 0 for all line items AND the receipt total. Ignore any tax breakdown lines (消費税, 内税, etc.) — they are informational only.
-- CRITICAL — LINE TOTALS vs UNIT PRICES: Japanese receipts vary. When a line shows a quantity (e.g., "×2"), the number on the right could be EITHER the unit price OR the line total. You MUST determine which by checking: do the right-side numbers sum to the receipt grand total? If YES, they are line totals (unit_price = number / quantity). If NO but (number × quantity) values sum to the grand total, they are unit prices. Some receipts show both: "¥900 ×2 ¥1800" — use the final number as line total. Always verify: SUM of all line subtotals must equal the receipt subtotal/total.
 - JPY amounts have NO decimal places. Return whole numbers (e.g., 1500 not 1500.00)
 - Translate Japanese item names to English in name_english field
 

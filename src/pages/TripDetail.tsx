@@ -71,6 +71,8 @@ export function TripDetail() {
             defaultTab = 'timeline' // Timeline tab
             break
           case 'trip_ongoing':
+            defaultTab = 'timeline' // Timeline tab
+            break
           case 'trip_completed':
             defaultTab = 'expenses' // Expenses tab
             break

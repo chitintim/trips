@@ -76,6 +76,7 @@ export function TimelineTab({ trip, participants }: TimelineTabProps) {
   const [addModalOpen, setAddModalOpen] = useState(false)
   const [editingEvent, setEditingEvent] = useState<TimelineEvent | null>(null)
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set())
+  const [hasInitializedCollapse, setHasInitializedCollapse] = useState(false)
 
   // Form state
   const [formDate, setFormDate] = useState('')
@@ -115,6 +116,31 @@ export function TimelineTab({ trip, participants }: TimelineTabProps) {
       supabase.removeChannel(channel)
     }
   }, [trip.id])
+
+  // Smart default collapse: expand only today (or first day if pre-trip, all collapsed if post-trip)
+  useEffect(() => {
+    if (loading || hasInitializedCollapse) return
+
+    const eventDates = events.map(e => e.event_date)
+    const minDate = [trip.start_date, ...eventDates].sort()[0]
+    const maxDate = [trip.end_date, ...eventDates].sort().pop()!
+    const allDates = generateDateRange(minDate, maxDate)
+    const today = formatLocalDate(new Date())
+
+    let expandedDate: string | null = null
+
+    if (today >= trip.start_date && today <= trip.end_date) {
+      // During the trip — expand today
+      expandedDate = today
+    } else if (today < trip.start_date) {
+      // Before the trip — expand the first day
+      expandedDate = allDates[0] || null
+    }
+    // After the trip — all collapsed (expandedDate stays null)
+
+    setCollapsedDays(new Set(allDates.filter(d => d !== expandedDate)))
+    setHasInitializedCollapse(true)
+  }, [loading, events, trip.start_date, trip.end_date, hasInitializedCollapse])
 
   const fetchEvents = async () => {
     const { data, error } = await supabase

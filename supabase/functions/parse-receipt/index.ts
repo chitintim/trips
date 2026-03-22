@@ -67,7 +67,7 @@ In Europe (France, Switzerland, Austria, Italy, Germany, Spain, and most EU/EEA 
 
 JAPANESE / ASIAN RECEIPTS:
 - Japan: Consumption tax is already INCLUDED in displayed prices. For simplicity, treat Japanese receipts as vat_inclusive: true with tax_percent: 0 and tax_amount: 0 for all line items AND the receipt total. Ignore any tax breakdown lines (消費税, 内税, etc.) — they are informational only.
-- CRITICAL — LINE TOTALS vs UNIT PRICES: On Japanese receipts, the number displayed on the RIGHT side of each line is the LINE TOTAL, NOT the unit price. If the line shows a quantity multiplier (e.g., "×2" or "2点"), then: unit_price = displayed_right_number / quantity. Example: "ラーメン ×2  1800" means unit_price=900, quantity=2, subtotal=1800. The line totals should sum to the receipt grand total.
+- CRITICAL — LINE TOTALS vs UNIT PRICES: Japanese receipts vary. When a line shows a quantity (e.g., "×2"), the number on the right could be EITHER the unit price OR the line total. You MUST determine which by checking: do the right-side numbers sum to the receipt grand total? If YES, they are line totals (unit_price = number / quantity). If NO but (number × quantity) values sum to the grand total, they are unit prices. Some receipts show both: "¥900 ×2 ¥1800" — use the final number as line total. Always verify: SUM of all line subtotals must equal the receipt subtotal/total.
 - JPY amounts have NO decimal places. Return whole numbers (e.g., 1500 not 1500.00)
 - Translate Japanese item names to English in name_english field
 

@@ -6,7 +6,7 @@ import { Button, Card, Spinner, EmptyState } from './ui'
 import { AddExpenseModal } from './AddExpenseModal'
 import { RecordSettlementModal } from './RecordSettlementModal'
 import { SettlementHistoryModal } from './SettlementHistoryModal'
-import { formatCurrency, type Currency } from '../lib/currency'
+import { formatCurrency, convertCurrency, type Currency } from '../lib/currency'
 import { minimizeTransactions, getUserTransactions, type Person } from '../lib/debtMinimization'
 import { getReceiptUrl } from '../lib/receiptUpload'
 import { Database } from '../types/database.types'
@@ -219,6 +219,45 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
 
     console.log('Found', settlements.length, 'settlements')
 
+    // Pre-compute FX rates for expenses missing base_currency_amount
+    // This ensures we convert foreign currency amounts to GBP correctly
+    const fxRateMap = new Map<string, number>() // expense_id → rate to GBP
+    for (const exp of expensesData) {
+      if (exp.fx_rate) {
+        fxRateMap.set(exp.id, exp.fx_rate)
+      } else if (exp.currency && exp.currency !== 'GBP') {
+        // Missing FX rate for non-GBP expense — convert on the fly
+        const dateStr = exp.payment_date || exp.created_at?.split('T')[0] || new Date().toISOString().split('T')[0]
+        try {
+          const result = await convertCurrency(1, exp.currency as Currency, dateStr, 'GBP')
+          if (result) {
+            fxRateMap.set(exp.id, result.rate.rate)
+            console.log(`Live FX for ${exp.description}: 1 ${exp.currency} = ${result.rate.rate} GBP`)
+          } else {
+            console.warn(`FX conversion failed for ${exp.description} (${exp.currency}), skipping`)
+          }
+        } catch (err) {
+          console.warn(`FX conversion error for ${exp.description}:`, err)
+        }
+      }
+    }
+
+    // Helper: get GBP amount for an expense
+    const getExpenseGBP = (exp: ExpenseWithDetails): number => {
+      if (exp.base_currency_amount) return exp.base_currency_amount
+      if (!exp.currency || exp.currency === 'GBP') return exp.amount
+      const rate = fxRateMap.get(exp.id)
+      return rate ? exp.amount * rate : 0 // skip if no rate available
+    }
+
+    // Helper: get GBP amount for a split
+    const getSplitGBP = (split: ExpenseSplit, expense: ExpenseWithDetails): number => {
+      if (split.base_currency_amount) return split.base_currency_amount
+      if (!expense.currency || expense.currency === 'GBP') return split.amount
+      const rate = fxRateMap.get(expense.id)
+      return rate ? split.amount * rate : 0
+    }
+
     // Calculate for each participant
     const balanceMap = new Map<string, BalanceData>()
 
@@ -226,27 +265,27 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       const userId = participant.user_id
       const participantUser = participant.user
 
-      // Total paid by this user
+      // Total paid by this user (in GBP)
       const totalPaid = expensesData
         .filter(exp => exp.paid_by === userId)
-        .reduce((sum, exp) => sum + (exp.base_currency_amount || exp.amount), 0)
+        .reduce((sum, exp) => sum + getExpenseGBP(exp), 0)
 
-      // Total owed by this user from regular expense splits
+      // Total owed by this user from regular expense splits (in GBP)
       const totalOwedFromSplits = expensesData
-        .flatMap(exp => exp.splits || [])
-        .filter(split => split.user_id === userId)
-        .reduce((sum, split) => sum + (split.base_currency_amount || split.amount), 0)
+        .reduce((sum, exp) => {
+          const userSplits = (exp.splits || []).filter(s => s.user_id === userId)
+          return sum + userSplits.reduce((s, split) => s + getSplitGBP(split, exp), 0)
+        }, 0)
 
-      // Total owed by this user from itemized expense claims (converted to GBP)
+      // Total owed by this user from itemized expense claims (in GBP)
       const totalOwedFromClaims = expensesData
-        .filter(exp => exp.ai_parsed && exp.claims) // Only itemized expenses with claims
+        .filter(exp => exp.ai_parsed && exp.claims)
         .reduce((sum: number, exp: any) => {
           const userClaims = (exp.claims || []).filter((claim: any) => claim.user_id === userId)
           const claimTotal = userClaims.reduce((claimSum: number, claim: any) => {
             const amountInOriginalCurrency = claim.amount_owed || 0
-            // Convert to GBP using expense's fx_rate (if available, otherwise assume 1:1)
-            const fxRate = exp.fx_rate || 1
-            return claimSum + (amountInOriginalCurrency * fxRate)
+            const rate = fxRateMap.get(exp.id) || exp.fx_rate || (exp.currency === 'GBP' ? 1 : 0)
+            return claimSum + (amountInOriginalCurrency * rate)
           }, 0)
           return sum + claimTotal
         }, 0)

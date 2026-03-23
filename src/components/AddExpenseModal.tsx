@@ -346,15 +346,15 @@ export function AddExpenseModal({
             setBaseCurrencyAmount(conversion.convertedAmount)
             setFxRate(conversion.rate.rate)
           } else {
-            // FX conversion failed - use 1:1 rate as fallback but warn user
-            alert(`Warning: Could not fetch exchange rate for ${currency} to GBP. Using amount as-is. You can edit the expense later if needed.`)
-            setBaseCurrencyAmount(parseFloat(amount))
+            // FX conversion failed - store nulls, balance calc will convert on-the-fly
+            alert(`Warning: Could not fetch exchange rate for ${currency} to GBP. The expense will be saved and converted automatically when calculating balances.`)
+            setBaseCurrencyAmount(null)
             setFxRate(null)
           }
         } catch (error) {
           console.error('FX conversion error:', error)
-          alert(`Warning: Exchange rate conversion failed. Using amount as-is. You can edit the expense later if needed.`)
-          setBaseCurrencyAmount(parseFloat(amount))
+          alert(`Warning: Exchange rate conversion failed. The expense will be saved and converted automatically when calculating balances.`)
+          setBaseCurrencyAmount(null)
           setFxRate(null)
         }
       } else {
@@ -378,10 +378,11 @@ export function AddExpenseModal({
       const amountNum = parseFloat(amount)
       console.log('Submitting expense:', { amount: amountNum, currency, baseCurrencyAmount, selectedParticipants: selectedParticipants.length })
 
-      // Ensure baseCurrencyAmount is set (should have been set in step 3)
-      if (!baseCurrencyAmount) {
-        console.error('baseCurrencyAmount not set - this should not happen!')
-        alert('Error: Currency conversion not completed. Please go back and try again.')
+      // For GBP expenses, baseCurrencyAmount must be set
+      // For non-GBP, it may be null if FX conversion failed (balance calc will handle it)
+      if (!baseCurrencyAmount && currency === 'GBP') {
+        console.error('baseCurrencyAmount not set for GBP expense!')
+        alert('Error: Please go back and try again.')
         setLoading(false)
         return
       }
@@ -413,9 +414,9 @@ export function AddExpenseModal({
           category,
           vendor_name: vendorName.trim() || null,
           location: location.trim() || null,
-          base_currency_amount: baseCurrencyAmount,
-          fx_rate: fxRate,
-          fx_rate_date: currency !== 'GBP' ? paymentDate : null,
+          base_currency_amount: baseCurrencyAmount || null,
+          fx_rate: fxRate || null,
+          fx_rate_date: (currency !== 'GBP' && fxRate) ? paymentDate : null,
           receipt_url: receiptUrl,
           option_id: optionId
         })

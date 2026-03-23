@@ -45,10 +45,11 @@ export function ClaimItemsPage() {
 
   // User selections
   const [selections, setSelections] = useState<Record<string, ClaimSelection>>({})
+  const [savedSelections, setSavedSelections] = useState<Record<string, ClaimSelection>>({})
 
-  // Auto-save state
+  // Save state
   const [saving, setSaving] = useState(false)
-  const [saveTimer, setSaveTimer] = useState<NodeJS.Timeout | null>(null)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
   // Other users' live selections (broadcast)
   const [_otherUsersSelections, setOtherUsersSelections] = useState<Record<string, {
@@ -86,26 +87,8 @@ export function ClaimItemsPage() {
     console.log('📤 Broadcasting selections to other users')
   }, [selections, broadcastChannel, user, expense, currentUserProfile])
 
-  // Auto-save selections with debouncing (1 second delay)
-  useEffect(() => {
-    if (!expense || !user) return
-
-    // Clear existing timer
-    if (saveTimer) {
-      clearTimeout(saveTimer)
-    }
-
-    // Set new timer to auto-save after 1 second of no changes
-    const timer = setTimeout(() => {
-      autoSaveClaims()
-    }, 1000)
-
-    setSaveTimer(timer)
-
-    return () => {
-      if (timer) clearTimeout(timer)
-    }
-  }, [selections])
+  // Detect unsaved changes
+  const hasUnsavedChanges = JSON.stringify(selections) !== JSON.stringify(savedSelections)
 
   // Real-time subscription: postgres_changes + broadcasts
   useEffect(() => {
@@ -391,6 +374,7 @@ export function ClaimItemsPage() {
       })
 
       setSelections(existingSelections)
+      setSavedSelections(existingSelections)
 
     } catch (err: any) {
       console.error('Error loading claim data:', err)
@@ -443,14 +427,15 @@ export function ClaimItemsPage() {
     return Object.values(selections).reduce((sum, sel) => sum + sel.amount, 0)
   }
 
-  // Auto-save selections to database (debounced)
-  const autoSaveClaims = async () => {
+  // Save selections to database (manual trigger)
+  const saveClaims = async () => {
     if (!user || !expense) return
 
     const selectionsList = Object.values(selections)
 
     try {
       setSaving(true)
+      setSaveError(null)
 
       // 1. Delete user's existing claims first
       const { error: deleteError } = await supabase
@@ -476,7 +461,23 @@ export function ClaimItemsPage() {
           .from('expense_item_claims')
           .insert(claimsToInsert)
 
-        if (claimsError) throw claimsError
+        if (claimsError) {
+          // Insert failed after delete — attempt to restore previous claims
+          const prevSelections = Object.values(savedSelections)
+          if (prevSelections.length > 0) {
+            await supabase
+              .from('expense_item_claims')
+              .insert(prevSelections.map(sel => ({
+                line_item_id: sel.lineItemId,
+                user_id: user.id,
+                expense_id: expense.id,
+                quantity_claimed: sel.quantity,
+                amount_owed: sel.amount,
+                confirmed: true
+              })))
+          }
+          throw claimsError
+        }
       }
 
       // 3. Update expense status based on full allocation
@@ -504,9 +505,11 @@ export function ClaimItemsPage() {
         .update({ status: newStatus })
         .eq('id', expense.id)
 
-      console.log('✅ Auto-saved claims')
+      // Mark selections as saved
+      setSavedSelections({ ...selections })
     } catch (err: any) {
-      console.error('❌ Error auto-saving claims:', err)
+      console.error('Error saving claims:', err)
+      setSaveError('Failed to save — please try again')
     } finally {
       setSaving(false)
     }
@@ -794,18 +797,25 @@ export function ClaimItemsPage() {
             </span>
           </div>
 
-          {/* Auto-save indicator - hidden when fully allocated */}
+          {/* Save button and status */}
           {expense?.status !== 'allocated' && (
-            <div className="mb-3">
-              {saving ? (
-                <p className="text-sm text-amber-600 flex items-center gap-2 justify-center">
-                  <span className="animate-spin">⏳</span>
-                  Saving...
+            <div className="mb-3 space-y-2">
+              {saveError && (
+                <p className="text-sm text-red-600 text-center font-medium">
+                  {saveError}
                 </p>
-              ) : (
-                <p className="text-sm text-green-600 flex items-center gap-2 justify-center">
-                  <span>✓</span>
-                  Changes saved automatically
+              )}
+              <Button
+                variant="primary"
+                onClick={saveClaims}
+                disabled={saving || !hasUnsavedChanges}
+                className="w-full"
+              >
+                {saving ? 'Saving...' : hasUnsavedChanges ? 'Save Claims' : 'Saved'}
+              </Button>
+              {hasUnsavedChanges && !saving && (
+                <p className="text-xs text-amber-600 text-center">
+                  You have unsaved changes
                 </p>
               )}
             </div>

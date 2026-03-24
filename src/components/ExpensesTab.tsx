@@ -327,7 +327,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     setBalances(newBalances)
   }
 
-  // Update FX rates for expenses missing conversion or fetched same-day before ECB publish
+  // Update FX rates for expenses missing conversion data
   const handleUpdateFxRates = async () => {
     setUpdatingFx(true)
     const now = new Date()
@@ -335,18 +335,28 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     let updated = 0
     let failed = 0
 
-    // Find expenses needing FX updates
+    // Find expenses missing FX conversion data
     const needsUpdate = expenses.filter(exp => {
       if (!exp.currency || exp.currency === 'GBP') return false
-      // Missing FX data entirely
-      if (!exp.base_currency_amount || !exp.fx_rate) return true
-      // Rate was fetched same day as payment (may have been before ECB published)
-      if (exp.fx_rate_date && exp.payment_date && exp.fx_rate_date === exp.payment_date) return true
-      return false
+      return !exp.base_currency_amount || !exp.fx_rate
     })
 
     if (needsUpdate.length === 0) {
       alert('All expenses already have up-to-date FX rates.')
+      setUpdatingFx(false)
+      return
+    }
+
+    // Quick connectivity check before processing all expenses
+    try {
+      const testResult = await convertCurrency(1, needsUpdate[0].currency as Currency, todayStr, 'GBP')
+      if (!testResult) {
+        alert('The exchange rate API is currently unavailable. Please try again later.')
+        setUpdatingFx(false)
+        return
+      }
+    } catch {
+      alert('The exchange rate API is currently unavailable. Please try again later.')
       setUpdatingFx(false)
       return
     }
@@ -505,12 +515,10 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     return expense.category === activeFilter
   })
 
-  // Count expenses needing FX updates
+  // Count expenses missing FX conversion data
   const fxUpdateCount = expenses.filter(exp => {
     if (!exp.currency || exp.currency === 'GBP') return false
-    if (!exp.base_currency_amount || !exp.fx_rate) return true
-    if (exp.fx_rate_date && exp.payment_date && exp.fx_rate_date === exp.payment_date) return true
-    return false
+    return !exp.base_currency_amount || !exp.fx_rate
   }).length
 
   if (loading) {

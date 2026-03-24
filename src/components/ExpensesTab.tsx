@@ -45,6 +45,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
   const [recordSettlementModalOpen, setRecordSettlementModalOpen] = useState(false)
   const [settlementHistoryModalOpen, setSettlementHistoryModalOpen] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [updatingFx, setUpdatingFx] = useState(false)
 
   useEffect(() => {
     checkAdminStatus()
@@ -326,6 +327,94 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     setBalances(newBalances)
   }
 
+  // Update FX rates for expenses missing conversion or fetched same-day before ECB publish
+  const handleUpdateFxRates = async () => {
+    setUpdatingFx(true)
+    const now = new Date()
+    const todayStr = now.toISOString().split('T')[0]
+    let updated = 0
+    let failed = 0
+
+    // Find expenses needing FX updates
+    const needsUpdate = expenses.filter(exp => {
+      if (!exp.currency || exp.currency === 'GBP') return false
+      // Missing FX data entirely
+      if (!exp.base_currency_amount || !exp.fx_rate) return true
+      // Rate was fetched same day as payment (may have been before ECB published)
+      if (exp.fx_rate_date && exp.payment_date && exp.fx_rate_date === exp.payment_date) return true
+      return false
+    })
+
+    if (needsUpdate.length === 0) {
+      alert('All expenses already have up-to-date FX rates.')
+      setUpdatingFx(false)
+      return
+    }
+
+    for (const exp of needsUpdate) {
+      const dateStr = exp.payment_date || exp.created_at?.split('T')[0] || todayStr
+      try {
+        const result = await convertCurrency(exp.amount, exp.currency as Currency, dateStr, 'GBP')
+        if (!result) {
+          failed++
+          continue
+        }
+
+        // Check if rate actually changed
+        const newRate = result.rate.rate
+        if (exp.fx_rate && Math.abs(exp.fx_rate - newRate) < 0.000001) continue
+
+        // Update expense
+        const { error: expError } = await supabase
+          .from('expenses')
+          .update({
+            base_currency_amount: result.convertedAmount,
+            fx_rate: newRate,
+            fx_rate_date: result.rate.date
+          })
+          .eq('id', exp.id)
+
+        if (expError) {
+          console.error(`Failed to update expense ${exp.description}:`, expError)
+          failed++
+          continue
+        }
+
+        // Update splits for this expense
+        const { data: splits } = await supabase
+          .from('expense_splits')
+          .select('id, amount')
+          .eq('expense_id', exp.id)
+
+        if (splits) {
+          for (const split of splits) {
+            await supabase
+              .from('expense_splits')
+              .update({ base_currency_amount: split.amount * newRate })
+              .eq('id', split.id)
+          }
+        }
+
+        console.log(`Updated FX for "${exp.description}": ${exp.currency} → GBP @ ${newRate} (date: ${result.rate.date})`)
+        updated++
+      } catch (err) {
+        console.error(`FX update error for ${exp.description}:`, err)
+        failed++
+      }
+    }
+
+    setUpdatingFx(false)
+
+    if (updated > 0) {
+      alert(`Updated ${updated} expense${updated > 1 ? 's' : ''} with latest FX rates.${failed > 0 ? ` ${failed} failed (API may be unavailable).` : ''}`)
+      fetchExpenses() // Refresh data and recalculate balances
+    } else if (failed > 0) {
+      alert(`Could not update FX rates — the exchange rate API may be temporarily unavailable. Try again later.`)
+    } else {
+      alert('All FX rates are already up to date.')
+    }
+  }
+
   // Handle real-time claim changes (targeted refetch)
   const handleClaimChange = async (payload: any) => {
     console.log('🔔 Claim change detected:', payload)
@@ -416,6 +505,14 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     return expense.category === activeFilter
   })
 
+  // Count expenses needing FX updates
+  const fxUpdateCount = expenses.filter(exp => {
+    if (!exp.currency || exp.currency === 'GBP') return false
+    if (!exp.base_currency_amount || !exp.fx_rate) return true
+    if (exp.fx_rate_date && exp.payment_date && exp.fx_rate_date === exp.payment_date) return true
+    return false
+  }).length
+
   if (loading) {
     return (
       <div className="flex justify-center py-12">
@@ -432,9 +529,24 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
           {/* Header with Add Button */}
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-900">Expenses</h2>
-            <Button variant="primary" size="sm" onClick={() => setAddExpenseModalOpen(true)}>
-              + Add Expense
-            </Button>
+            <div className="flex items-center gap-2">
+              {fxUpdateCount > 0 && (
+                <button
+                  onClick={handleUpdateFxRates}
+                  disabled={updatingFx}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-700 bg-amber-50 border border-amber-300 rounded-lg hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                >
+                  {updatingFx ? (
+                    <><Spinner size="sm" /> Updating...</>
+                  ) : (
+                    <>💱 Update FX ({fxUpdateCount})</>
+                  )}
+                </button>
+              )}
+              <Button variant="primary" size="sm" onClick={() => setAddExpenseModalOpen(true)}>
+                + Add Expense
+              </Button>
+            </div>
           </div>
 
           {/* Actions Required Banner */}

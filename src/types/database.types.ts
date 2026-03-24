@@ -404,6 +404,36 @@ export type Database = {
           },
         ]
       }
+      fx_rates: {
+        Row: {
+          fetched_at: string | null
+          from_currency: string
+          id: string
+          rate: number
+          rate_date: string
+          source: string | null
+          to_currency: string
+        }
+        Insert: {
+          fetched_at?: string | null
+          from_currency: string
+          id?: string
+          rate: number
+          rate_date: string
+          source?: string | null
+          to_currency: string
+        }
+        Update: {
+          fetched_at?: string | null
+          from_currency?: string
+          id?: string
+          rate?: number
+          rate_date?: string
+          source?: string | null
+          to_currency?: string
+        }
+        Relationships: []
+      }
       invitation_attempts: {
         Row: {
           code_attempted: string

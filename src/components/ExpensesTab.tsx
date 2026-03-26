@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
@@ -6,7 +6,7 @@ import { Button, Card, Spinner, EmptyState } from './ui'
 import { AddExpenseModal } from './AddExpenseModal'
 import { RecordSettlementModal } from './RecordSettlementModal'
 import { SettlementHistoryModal } from './SettlementHistoryModal'
-import { formatCurrency, convertCurrency, type Currency } from '../lib/currency'
+import { formatCurrency, convertCurrency, isProvisionalRate, isConfirmedRateAvailable, type Currency } from '../lib/currency'
 import { minimizeTransactions, getUserTransactions, type Person } from '../lib/debtMinimization'
 import { getReceiptUrl } from '../lib/receiptUpload'
 import { Database } from '../types/database.types'
@@ -47,6 +47,16 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
   const [isAdmin, setIsAdmin] = useState(false)
   const [updatingFx, setUpdatingFx] = useState(false)
 
+  // Ref to track expenses for real-time callbacks (avoids stale closures)
+  const expensesRef = useRef<ExpenseWithDetails[]>([])
+  expensesRef.current = expenses
+
+  // Ref to suppress real-time refreshes during FX bulk update
+  const suppressRealtimeRef = useRef(false)
+
+  // Cache settlements so claim-change recalculations don't need a separate fetch
+  const settlementsRef = useRef<Settlement[]>([])
+
   useEffect(() => {
     checkAdminStatus()
   }, [user])
@@ -68,7 +78,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     fetchExpenses()
   }, [tripId])
 
-  // Real-time subscription for expense updates
+  // Real-time subscription for expense updates — only depends on tripId
   useEffect(() => {
     if (!tripId) return
 
@@ -84,6 +94,10 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
           filter: `trip_id=eq.${tripId}`
         },
         () => {
+          if (suppressRealtimeRef.current) {
+            console.log('⏸️ Expense changed but suppressed during FX update')
+            return
+          }
           console.log('✅ Expense changed, refreshing all...')
           fetchExpenses()
         }
@@ -95,7 +109,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
           schema: 'public',
           table: 'expense_item_claims'
         },
-        handleClaimChange
+        (payload: any) => handleClaimChangeRef.current(payload)
       )
       .subscribe()
 
@@ -105,10 +119,12 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       console.log('🔴 Closing real-time subscription')
       supabase.removeChannel(expenseChannel)
     }
-  }, [tripId, expenses])
+  }, [tripId])
 
   const fetchExpenses = async () => {
-    setLoading(true)
+    // Only show full spinner on initial load, not re-fetches
+    const isInitialLoad = expenses.length === 0
+    if (isInitialLoad) setLoading(true)
 
     // Fetch expenses with payer and splits
     const { data: expensesData, error } = await supabase
@@ -130,116 +146,97 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       return
     }
 
-    console.log('Fetched expenses with receipts:', expensesData?.map(e => ({
-      id: e.id,
-      description: e.description,
-      receipt_url: e.receipt_url,
-      has_receipt: !!e.receipt_url
-    })))
+    // Identify itemized expenses for batch loading
+    const itemizedExpenseIds = (expensesData || [])
+      .filter((e: any) => e.ai_parsed && e.status)
+      .map((e: any) => e.id as string)
 
-    // For itemized expenses, load additional data
-    const expensesWithItemizedData = await Promise.all(
-      (expensesData || []).map(async (expense: any) => {
-        if (expense.ai_parsed && expense.status) {
-          // This is an itemized expense, load line items, claims, and allocation link
-          const [lineItemsRes, claimsRes, linkRes] = await Promise.all([
-            supabase
-              .from('expense_line_items')
-              .select('*')
-              .eq('expense_id', expense.id)
-              .order('line_number'),
-            supabase
-              .from('expense_item_claims')
-              .select(`
-                *,
-                user:user_id (id, full_name, avatar_data)
-              `)
-              .eq('expense_id', expense.id),
-            supabase
-              .from('expense_allocation_links')
-              .select('*')
-              .eq('expense_id', expense.id)
-              .single()
-          ])
-
-          return {
-            ...expense,
-            line_items: lineItemsRes.data || [],
-            claims: claimsRes.data || [],
-            allocation_link: linkRes.data
-          }
-        }
-        return expense
-      })
-    )
-
-    // For expenses with option_id, fetch expected participants from selections
+    // Collect option_ids for selection lookup
     const optionIds = [...new Set(
-      expensesWithItemizedData
+      (expensesData || [])
         .filter((e: any) => e.option_id)
         .map((e: any) => e.option_id as string)
     )]
-    let optionSelections: Record<string, string[]> = {}
-    if (optionIds.length > 0) {
-      const { data: selectionsData } = await supabase
-        .from('selections')
-        .select('option_id, user_id')
-        .in('option_id', optionIds)
-      if (selectionsData) {
-        selectionsData.forEach(sel => {
-          if (!optionSelections[sel.option_id]) optionSelections[sel.option_id] = []
-          optionSelections[sel.option_id].push(sel.user_id)
-        })
-      }
+
+    // Batch-fetch all itemized data + selections + settlements in parallel (3 bulk queries instead of N*3)
+    const [lineItemsRes, claimsRes, linksRes, selectionsRes, settlementsRes] = await Promise.all([
+      itemizedExpenseIds.length > 0
+        ? supabase.from('expense_line_items').select('*').in('expense_id', itemizedExpenseIds).order('line_number')
+        : Promise.resolve({ data: [] as any[], error: null }),
+      itemizedExpenseIds.length > 0
+        ? supabase.from('expense_item_claims').select('*, user:user_id (id, full_name, avatar_data)').in('expense_id', itemizedExpenseIds)
+        : Promise.resolve({ data: [] as any[], error: null }),
+      itemizedExpenseIds.length > 0
+        ? supabase.from('expense_allocation_links').select('*').in('expense_id', itemizedExpenseIds)
+        : Promise.resolve({ data: [] as any[], error: null }),
+      optionIds.length > 0
+        ? supabase.from('selections').select('option_id, user_id').in('option_id', optionIds)
+        : Promise.resolve({ data: [] as any[], error: null }),
+      supabase.from('settlements').select('*').eq('trip_id', tripId),
+    ])
+
+    // Group itemized data by expense_id
+    const lineItemsByExpense = new Map<string, any[]>()
+    for (const item of (lineItemsRes.data || [])) {
+      const list = lineItemsByExpense.get(item.expense_id) || []
+      list.push(item)
+      lineItemsByExpense.set(item.expense_id, list)
     }
 
-    // Attach expected_participants to expenses
-    const expensesWithExpectedParticipants = expensesWithItemizedData.map((e: any) => ({
-      ...e,
-      expected_participants: e.option_id ? (optionSelections[e.option_id] || []) : []
+    const claimsByExpense = new Map<string, any[]>()
+    for (const claim of (claimsRes.data || [])) {
+      const list = claimsByExpense.get(claim.expense_id) || []
+      list.push(claim)
+      claimsByExpense.set(claim.expense_id, list)
+    }
+
+    const linkByExpense = new Map<string, any>()
+    for (const link of (linksRes.data || [])) {
+      linkByExpense.set(link.expense_id, link)
+    }
+
+    // Build option selections map
+    const optionSelections: Record<string, string[]> = {}
+    for (const sel of (selectionsRes.data || [])) {
+      if (!optionSelections[sel.option_id]) optionSelections[sel.option_id] = []
+      optionSelections[sel.option_id].push(sel.user_id)
+    }
+
+    // Assemble final expenses array
+    const assembledExpenses = (expensesData || []).map((expense: any) => ({
+      ...expense,
+      line_items: lineItemsByExpense.get(expense.id) || [],
+      claims: claimsByExpense.get(expense.id) || [],
+      allocation_link: linkByExpense.get(expense.id) || null,
+      expected_participants: expense.option_id ? (optionSelections[expense.option_id] || []) : [],
     }))
 
-    setExpenses(expensesWithExpectedParticipants as any)
+    setExpenses(assembledExpenses as any)
 
-    // Calculate balances - pass expensesWithItemizedData to include claims
-    await calculateBalances(expensesWithExpectedParticipants as any)
+    // Calculate balances using pre-fetched settlements
+    calculateBalances(assembledExpenses as any, (settlementsRes.data || []) as Settlement[])
 
     setLoading(false)
   }
 
-  const calculateBalances = async (expensesData: ExpenseWithDetails[]) => {
+  const calculateBalances = (expensesData: ExpenseWithDetails[], settlements?: Settlement[]) => {
     console.log('Calculating balances for', expensesData.length, 'expenses')
 
-    // Fetch settlements
-    const { data: settlementsData } = await supabase
-      .from('settlements')
-      .select('*')
-      .eq('trip_id', tripId)
-
-    const settlements = (settlementsData || []) as Settlement[]
+    // Use provided settlements, or fall back to cached settlements from last full fetch
+    if (settlements) {
+      settlementsRef.current = settlements
+    } else {
+      settlements = settlementsRef.current
+    }
 
     console.log('Found', settlements.length, 'settlements')
 
-    // Pre-compute FX rates for expenses missing base_currency_amount
-    // This ensures we convert foreign currency amounts to GBP correctly
+    // Build FX rate map from DB values only (no API calls — keeps page load fast)
+    // Expenses missing fx_rate will show 0 in balances until user clicks "Update FX"
     const fxRateMap = new Map<string, number>() // expense_id → rate to GBP
     for (const exp of expensesData) {
       if (exp.fx_rate) {
         fxRateMap.set(exp.id, exp.fx_rate)
-      } else if (exp.currency && exp.currency !== 'GBP') {
-        // Missing FX rate for non-GBP expense — convert on the fly
-        const dateStr = exp.payment_date || exp.created_at?.split('T')[0] || new Date().toISOString().split('T')[0]
-        try {
-          const result = await convertCurrency(1, exp.currency as Currency, dateStr, 'GBP')
-          if (result) {
-            fxRateMap.set(exp.id, result.rate.rate)
-            console.log(`Live FX for ${exp.description}: 1 ${exp.currency} = ${result.rate.rate} GBP`)
-          } else {
-            console.warn(`FX conversion failed for ${exp.description} (${exp.currency}), skipping`)
-          }
-        } catch (err) {
-          console.warn(`FX conversion error for ${exp.description}:`, err)
-        }
       }
     }
 
@@ -330,19 +327,23 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
   // Update FX rates for expenses missing conversion data
   const handleUpdateFxRates = async () => {
     setUpdatingFx(true)
+    suppressRealtimeRef.current = true // Suppress real-time refreshes during bulk update
     const now = new Date()
     const todayStr = now.toISOString().split('T')[0]
     let updated = 0
     let failed = 0
 
-    // Find expenses missing FX conversion data
+    // Find expenses missing FX data or with provisional rates that can be updated
     const needsUpdate = expenses.filter(exp => {
       if (!exp.currency || exp.currency === 'GBP') return false
-      return !exp.base_currency_amount || !exp.fx_rate
+      if (!exp.base_currency_amount || !exp.fx_rate) return true
+      if (isProvisionalRate(exp.payment_date, exp.fx_rate_date) && isConfirmedRateAvailable(exp.payment_date)) return true
+      return false
     })
 
     if (needsUpdate.length === 0) {
       alert('All expenses already have up-to-date FX rates.')
+      suppressRealtimeRef.current = false
       setUpdatingFx(false)
       return
     }
@@ -352,11 +353,13 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       const testResult = await convertCurrency(1, needsUpdate[0].currency as Currency, todayStr, 'GBP')
       if (!testResult) {
         alert('The exchange rate API is currently unavailable. Please try again later.')
+        suppressRealtimeRef.current = false
         setUpdatingFx(false)
         return
       }
     } catch {
       alert('The exchange rate API is currently unavailable. Please try again later.')
+      suppressRealtimeRef.current = false
       setUpdatingFx(false)
       return
     }
@@ -370,9 +373,10 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
           continue
         }
 
-        // Check if rate actually changed
+        // Skip if rate AND date are unchanged (allows provisional → confirmed updates)
         const newRate = result.rate.rate
-        if (exp.fx_rate && Math.abs(exp.fx_rate - newRate) < 0.000001) continue
+        const newDate = result.rate.date
+        if (exp.fx_rate && Math.abs(exp.fx_rate - newRate) < 0.000001 && exp.fx_rate_date === newDate) continue
 
         // Update expense
         const { error: expError } = await supabase
@@ -413,11 +417,13 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
       }
     }
 
+    // Re-enable real-time and do a single clean refresh
+    suppressRealtimeRef.current = false
     setUpdatingFx(false)
 
     if (updated > 0) {
+      await fetchExpenses() // Refresh data and recalculate balances
       alert(`Updated ${updated} expense${updated > 1 ? 's' : ''} with latest FX rates.${failed > 0 ? ` ${failed} failed (API may be unavailable).` : ''}`)
-      fetchExpenses() // Refresh data and recalculate balances
     } else if (failed > 0) {
       alert(`Could not update FX rates — the exchange rate API may be temporarily unavailable. Try again later.`)
     } else {
@@ -425,8 +431,8 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     }
   }
 
-  // Handle real-time claim changes (targeted refetch)
-  const handleClaimChange = async (payload: any) => {
+  // Handle real-time claim changes (targeted refetch) — uses ref for current expenses
+  const handleClaimChange = useCallback(async (payload: any) => {
     console.log('🔔 Claim change detected:', payload)
 
     // Extract expense_id from payload (works for INSERT, UPDATE, DELETE)
@@ -434,7 +440,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
     if (!expenseId) return
 
     // Check if this expense belongs to current trip (fast O(n) lookup)
-    const expense = expenses.find(e => e.id === expenseId)
+    const expense = expensesRef.current.find(e => e.id === expenseId)
     if (!expense) {
       console.log('⏭️  Change not for this trip, ignoring')
       return
@@ -444,7 +450,11 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
 
     // Refetch ONLY this expense's claims (targeted)
     await refetchExpenseClaims(expenseId)
-  }
+  }, [])
+
+  // Stable ref for handleClaimChange so subscription callback doesn't go stale
+  const handleClaimChangeRef = useRef(handleClaimChange)
+  handleClaimChangeRef.current = handleClaimChange
 
   // Refetch claims for a specific expense (targeted refetch)
   const refetchExpenseClaims = async (expenseId: string) => {
@@ -516,9 +526,14 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
   })
 
   // Count expenses missing FX conversion data
+  // Count expenses needing FX update: missing data OR provisional rate with confirmed now available
   const fxUpdateCount = expenses.filter(exp => {
     if (!exp.currency || exp.currency === 'GBP') return false
-    return !exp.base_currency_amount || !exp.fx_rate
+    // Missing FX data entirely
+    if (!exp.base_currency_amount || !exp.fx_rate) return true
+    // Provisional rate that can now be updated
+    if (isProvisionalRate(exp.payment_date, exp.fx_rate_date) && isConfirmedRateAvailable(exp.payment_date)) return true
+    return false
   }).length
 
   if (loading) {
@@ -776,7 +791,8 @@ function ExpenseCard({
     const percentClaimed = totalQuantity > 0 ? (claimedQuantity / totalQuantity) * 100 : 0
 
     const userClaims = claims.filter((c: any) => c.user_id === currentUserId)
-    // Convert claim amounts to GBP using expense's fx_rate
+    // Convert claim amounts to GBP if fx_rate available, otherwise keep in original currency
+    const hasFxRate = !!expense.fx_rate
     const fxRate = expense.fx_rate || 1
     const userTotal = userClaims.reduce((sum: number, claim: any) => sum + Number(claim.amount_owed) * fxRate, 0)
 
@@ -786,6 +802,7 @@ function ExpenseCard({
       fullyAllocated: percentClaimed >= 99.9,
       userHasClaimed: userClaims.length > 0,
       userTotal,
+      userTotalCurrency: (hasFxRate ? 'GBP' : (expense.currency || 'GBP')) as Currency,
       linkCode: expense.allocation_link?.code
     }
   }
@@ -919,7 +936,7 @@ function ExpenseCard({
                       <>
                         <span>•</span>
                         <span className="font-medium whitespace-nowrap text-orange-600">
-                          You: {formatCurrency(itemizedStats.userTotal, 'GBP')}
+                          You: {formatCurrency(itemizedStats.userTotal, itemizedStats.userTotalCurrency)}
                         </span>
                       </>
                     )}
@@ -938,7 +955,10 @@ function ExpenseCard({
                       <>
                         <span>•</span>
                         <span className="font-medium whitespace-nowrap text-orange-600">
-                          Owe {formatCurrency(currentUserSplit.base_currency_amount || currentUserSplit.amount, 'GBP')}
+                          Owe {currentUserSplit.base_currency_amount
+                            ? formatCurrency(currentUserSplit.base_currency_amount, 'GBP')
+                            : formatCurrency(currentUserSplit.amount, (expense.currency as Currency) || 'GBP')
+                          }
                         </span>
                       </>
                     )}
@@ -1031,9 +1051,10 @@ function ExpenseCard({
                             items: 0
                           }
                         }
-                        // Convert claim amount to GBP using expense's fx_rate
+                        // Convert claim amount to GBP if fx_rate available, otherwise keep in original currency
                         const fxRate = expense.fx_rate || 1
                         acc[claim.user_id].total += Number(claim.amount_owed) * fxRate
+                        acc[claim.user_id].currency = expense.fx_rate ? 'GBP' : (expense.currency || 'GBP')
                         acc[claim.user_id].items += 1
                         return acc
                       }, {})
@@ -1060,7 +1081,7 @@ function ExpenseCard({
                           </span>
                         </div>
                         <span className="font-medium text-gray-700">
-                          {formatCurrency(data.total, 'GBP')}
+                          {formatCurrency(data.total, data.currency || 'GBP')}
                         </span>
                       </div>
                     ))}
@@ -1116,7 +1137,10 @@ function ExpenseCard({
                     </span>
                   </div>
                   <span className="font-medium text-gray-700">
-                    {formatCurrency(split.base_currency_amount || split.amount, 'GBP')}
+                    {formatCurrency(
+                      split.base_currency_amount || split.amount,
+                      split.base_currency_amount ? 'GBP' : ((expense.currency as Currency) || 'GBP')
+                    )}
                   </span>
                 </div>
               ))}

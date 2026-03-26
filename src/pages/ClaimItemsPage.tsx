@@ -69,6 +69,18 @@ export function ClaimItemsPage() {
     loadClaimData()
   }, [code, user])
 
+  // When browser tab wakes from sleep, just refresh claims (not full reload)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && expense && user) {
+        console.log('👁️ Tab became visible, refreshing claims')
+        refreshClaims()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [expense, user])
+
   // Broadcast selections to other users when they change (instant feedback)
   useEffect(() => {
     if (!broadcastChannel || !user || !expense || !currentUserProfile) return
@@ -89,6 +101,41 @@ export function ClaimItemsPage() {
 
   // Detect unsaved changes
   const hasUnsavedChanges = JSON.stringify(selections) !== JSON.stringify(savedSelections)
+
+  // Autosave: debounce 1.5s after last selection change
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle')
+
+  useEffect(() => {
+    if (!user || !expense || expense.status === 'allocated') return
+    if (!hasUnsavedChanges) {
+      // Selections match saved — clear any pending timer
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+      return
+    }
+
+    setAutoSaveStatus('pending')
+
+    // Clear previous timer
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+
+    // Start new debounce timer
+    autosaveTimerRef.current = setTimeout(async () => {
+      setAutoSaveStatus('saving')
+      try {
+        await saveClaims()
+        setAutoSaveStatus('saved')
+        // Reset to idle after 2s
+        setTimeout(() => setAutoSaveStatus('idle'), 2000)
+      } catch {
+        setAutoSaveStatus('error')
+      }
+    }, 1500)
+
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current)
+    }
+  }, [selections])
 
   // Real-time subscription: postgres_changes + broadcasts
   useEffect(() => {
@@ -113,8 +160,8 @@ export function ClaimItemsPage() {
         },
         (payload: any) => {
           console.log('🔔 Claim saved (database):', payload)
-          // Reload to show confirmed claims
-          loadClaimData()
+          // Only refresh claims, not the entire page (avoids full spinner on reconnect)
+          refreshClaims()
         }
       )
       // Listen for live selection broadcasts (instant updates)
@@ -220,11 +267,13 @@ export function ClaimItemsPage() {
       return
     }
 
-    setLoading(true)
+    // Only show full-page spinner on initial load
+    const isInitialLoad = !expense
+    if (isInitialLoad) setLoading(true)
     setError(null)
 
     try {
-      // 1. Load allocation link
+      // 1. Load allocation link (everything depends on this)
       const { data: link, error: linkError } = await supabase
         .from('expense_allocation_links')
         .select('*')
@@ -236,103 +285,47 @@ export function ClaimItemsPage() {
 
       setAllocationLink(link)
 
-      // 3. Check user is trip participant
-      const { data: participant, error: participantError } = await supabase
-        .from('trip_participants')
-        .select('*')
-        .eq('trip_id', link.trip_id)
-        .eq('user_id', user.id)
-        .single()
+      // 2. Fetch everything else in parallel (all depend on link, but not on each other)
+      const [participantRes, expenseRes, currentUserRes, participantsRes, itemsRes, claimsRes] = await Promise.all([
+        supabase.from('trip_participants').select('*').eq('trip_id', link.trip_id).eq('user_id', user.id).single(),
+        supabase.from('expenses').select('*').eq('id', link.expense_id).single(),
+        supabase.from('users').select('id, full_name, avatar_url, avatar_data').eq('id', user.id).single(),
+        supabase.from('trip_participants').select('user_id').eq('trip_id', link.trip_id),
+        supabase.from('expense_line_items').select('*').eq('expense_id', link.expense_id).order('line_number'),
+        supabase.from('expense_item_claims').select('*').eq('expense_id', link.expense_id),
+      ])
 
-      if (participantError || !participant) {
+      if (participantRes.error || !participantRes.data) {
         throw new Error('You must be a trip participant to claim items')
       }
 
-      // 4. Load expense
-      const { data: expenseData, error: expenseError } = await supabase
-        .from('expenses')
-        .select('*')
-        .eq('id', link.expense_id)
-        .single()
-
-      if (expenseError) throw expenseError
-      if (!expenseData) throw new Error('Expense not found')
-
+      if (expenseRes.error || !expenseRes.data) throw new Error('Expense not found')
+      const expenseData = expenseRes.data
       setExpense(expenseData)
 
-      // 5. Load paid_by user separately
-      const { data: paidByUserData, error: userError } = await supabase
+      if (currentUserRes.data) setCurrentUserProfile(currentUserRes.data)
+
+      // 3. Fetch payer + all participant users in parallel
+      const participantIds = (participantsRes.data || []).map(p => p.user_id)
+      const claimUserIds = [...new Set((claimsRes.data || []).map(c => c.user_id))]
+      const allUserIds = [...new Set([expenseData.paid_by, ...participantIds, ...claimUserIds])]
+
+      const { data: allUsers } = await supabase
         .from('users')
         .select('id, full_name, avatar_url, avatar_data')
-        .eq('id', expenseData.paid_by)
-        .single()
+        .in('id', allUserIds)
 
-      if (!userError && paidByUserData) {
-        setPaidByUser(paidByUserData)
-      }
+      const usersMap: Record<string, any> = {}
+      ;(allUsers || []).forEach(u => { usersMap[u.id] = u })
 
-      // 5b. Load current user's profile for broadcasting
-      const { data: currentUserData } = await supabase
-        .from('users')
-        .select('id, full_name, avatar_url, avatar_data')
-        .eq('id', user.id)
-        .single()
+      setPaidByUser(usersMap[expenseData.paid_by] || null)
+      usersCacheRef.current = usersMap
 
-      if (currentUserData) {
-        setCurrentUserProfile(currentUserData)
-      }
-
-      // 5c. Load all trip participants for avatar cache
-      const { data: participants } = await supabase
-        .from('trip_participants')
-        .select('user_id')
-        .eq('trip_id', link.trip_id)
-
-      if (participants && participants.length > 0) {
-        const participantIds = participants.map(p => p.user_id)
-        const { data: participantUsers } = await supabase
-          .from('users')
-          .select('id, full_name, avatar_url, avatar_data')
-          .in('id', participantIds)
-
-        if (participantUsers) {
-          const cache: Record<string, any> = {}
-          participantUsers.forEach(u => {
-            cache[u.id] = u
-          })
-          usersCacheRef.current = cache
-        }
-      }
-
-      // 6. Load line items
-      const { data: items, error: itemsError } = await supabase
-        .from('expense_line_items')
-        .select('*')
-        .eq('expense_id', link.expense_id)
-        .order('line_number')
-
-      if (itemsError) throw itemsError
-
-      // 7. Load existing claims for these items
-      const { data: claims, error: claimsError } = await supabase
-        .from('expense_item_claims')
-        .select('*')
-        .eq('expense_id', link.expense_id)
-
-      if (claimsError) throw claimsError
-
-      // 8. Load users for claims separately to avoid RLS issues
-      const claimUserIds = [...new Set((claims || []).map(c => c.user_id))]
-      let claimUsers: any[] = []
-
-      if (claimUserIds.length > 0) {
-        const { data: usersData } = await supabase
-          .from('users')
-          .select('id, full_name, avatar_url, avatar_data')
-          .in('id', claimUserIds)
-
-        claimUsers = usersData || []
-      }
+      const items = itemsRes.data
+      const claims = claimsRes.data
+      if (itemsRes.error) throw itemsRes.error
+      if (claimsRes.error) throw claimsRes.error
+      const claimUsers = Object.values(usersMap)
 
       // 9. Calculate available quantities and attach claims with user data
       const itemsWithClaims: LineItemWithClaims[] = (items || []).map(item => {
@@ -381,6 +374,69 @@ export function ClaimItemsPage() {
       setError(err.message || 'Failed to load claim information')
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Lightweight refresh: only re-fetch claims (no spinner, no full reload)
+  const refreshClaims = async () => {
+    if (!expense || !user) return
+
+    try {
+      const { data: claimsData } = await supabase
+        .from('expense_item_claims')
+        .select('*')
+        .eq('expense_id', expense.id)
+
+      const claims = claimsData || []
+      const claimUserIds = [...new Set(claims.map(c => c.user_id))]
+      let claimUsers: any[] = []
+
+      if (claimUserIds.length > 0) {
+        const { data } = await supabase
+          .from('users')
+          .select('id, full_name, avatar_url, avatar_data')
+          .in('id', claimUserIds)
+        claimUsers = data || []
+        // Update user cache
+        claimUsers.forEach(u => { usersCacheRef.current[u.id] = u })
+      }
+
+      // Rebuild line items with updated claims
+      setLineItems(prevItems =>
+        prevItems.map(item => {
+          const itemClaims = claims
+            .filter(c => c.line_item_id === item.id)
+            .map(claim => ({
+              ...claim,
+              user: claimUsers.find(u => u.id === claim.user_id) ||
+                    usersCacheRef.current[claim.user_id] ||
+                    { id: claim.user_id, full_name: 'Unknown', avatar_url: null, avatar_data: null }
+            }))
+
+          const totalClaimed = itemClaims.reduce((sum, c) => sum + Number(c.quantity_claimed), 0)
+          return {
+            ...item,
+            claims: itemClaims as any,
+            availableQuantity: Number(item.quantity) - totalClaimed,
+          }
+        })
+      )
+
+      // Update current user's saved selections
+      const userClaims = claims.filter(c => c.user_id === user.id)
+      const updatedSaved: Record<string, ClaimSelection> = {}
+      userClaims.forEach(claim => {
+        updatedSaved[claim.line_item_id] = {
+          lineItemId: claim.line_item_id,
+          quantity: Number(claim.quantity_claimed),
+          amount: Number(claim.amount_owed),
+        }
+      })
+      setSavedSelections(updatedSaved)
+
+      console.log('✅ Claims refreshed (lightweight)')
+    } catch (err) {
+      console.error('Error refreshing claims:', err)
     }
   }
 
@@ -797,26 +853,50 @@ export function ClaimItemsPage() {
             </span>
           </div>
 
-          {/* Save button and status */}
+          {/* Save status indicator + manual save fallback */}
           {expense?.status !== 'allocated' && (
             <div className="mb-3 space-y-2">
-              {saveError && (
-                <p className="text-sm text-red-600 text-center font-medium">
-                  {saveError}
-                </p>
+              {/* Prominent save status bar */}
+              {autoSaveStatus === 'pending' && (
+                <div className="bg-red-100 border-2 border-red-400 rounded-lg px-4 py-2 text-center">
+                  <p className="text-red-700 font-bold text-base">Unsaved changes</p>
+                  <p className="text-red-600 text-xs">Auto-saving in a moment...</p>
+                </div>
               )}
-              <Button
-                variant="primary"
-                onClick={saveClaims}
-                disabled={saving || !hasUnsavedChanges}
-                className="w-full"
-              >
-                {saving ? 'Saving...' : hasUnsavedChanges ? 'Save Claims' : 'Saved'}
-              </Button>
-              {hasUnsavedChanges && !saving && (
-                <p className="text-xs text-amber-600 text-center">
-                  You have unsaved changes
-                </p>
+              {autoSaveStatus === 'saving' && (
+                <div className="bg-amber-50 border-2 border-amber-300 rounded-lg px-4 py-2 text-center">
+                  <p className="text-amber-700 font-bold text-base">Saving...</p>
+                </div>
+              )}
+              {autoSaveStatus === 'saved' && (
+                <div className="bg-green-50 border-2 border-green-300 rounded-lg px-4 py-2 text-center">
+                  <p className="text-green-700 font-bold text-base">✓ Saved</p>
+                </div>
+              )}
+              {autoSaveStatus === 'error' && (
+                <div className="bg-red-50 border-2 border-red-400 rounded-lg px-4 py-2 text-center">
+                  <p className="text-red-700 font-bold text-base">Failed to save</p>
+                  <button
+                    onClick={saveClaims}
+                    className="text-red-600 text-sm underline font-medium mt-1"
+                  >
+                    Tap to retry
+                  </button>
+                </div>
+              )}
+              {saveError && autoSaveStatus !== 'error' && (
+                <p className="text-sm text-red-600 text-center font-medium">{saveError}</p>
+              )}
+              {/* Manual save button as fallback */}
+              {hasUnsavedChanges && autoSaveStatus !== 'saving' && (
+                <Button
+                  variant="primary"
+                  onClick={saveClaims}
+                  disabled={saving}
+                  className="w-full"
+                >
+                  {saving ? 'Saving...' : 'Save Now'}
+                </Button>
               )}
             </div>
           )}

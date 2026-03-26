@@ -1080,6 +1080,60 @@ export function AddExpenseModal({
                 Select people to split with
                 {splitType === 'equal' ? ' (equal split)' : splitType === 'custom' ? ' (custom amounts)' : ' (percentage)'}
               </p>
+
+              {/* Quick select buttons */}
+              <div className="flex gap-2 mb-3">
+                {participants.some((p: any) => p.confirmation_status === 'confirmed') && (
+                  <button
+                    onClick={() => {
+                      const confirmedIds = participants
+                        .filter((p: any) => p.confirmation_status === 'confirmed')
+                        .map((p: any) => p.user_id)
+                      setSelectedParticipants(confirmedIds)
+                      // Reset splits for new selection
+                      const newSplits: Record<string, SplitData> = {}
+                      if (splitType !== 'equal') {
+                        confirmedIds.forEach(id => {
+                          newSplits[id] = { userId: id, ...(splitType === 'custom' ? { amount: 0 } : { percentage: 0 }) }
+                        })
+                      }
+                      setSplits(newSplits)
+                    }}
+                    className="flex-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-green-300 bg-green-50 text-green-700 hover:bg-green-100 transition-colors"
+                  >
+                    Going on trip ({participants.filter((p: any) => p.confirmation_status === 'confirmed').length})
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    const allIds = participants.map((p: any) => p.user_id)
+                    setSelectedParticipants(allIds)
+                    // Reset splits for new selection
+                    const newSplits: Record<string, SplitData> = {}
+                    if (splitType !== 'equal') {
+                      allIds.forEach(id => {
+                        newSplits[id] = { userId: id, ...(splitType === 'custom' ? { amount: 0 } : { percentage: 0 }) }
+                      })
+                    }
+                    setSplits(newSplits)
+                  }}
+                  className="flex-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100 transition-colors"
+                >
+                  All group ({participants.length})
+                </button>
+                {selectedParticipants.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setSelectedParticipants([])
+                      setSplits({})
+                    }}
+                    className="px-3 py-1.5 text-xs font-medium rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-100 transition-colors"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+
               <div className="space-y-2">
                 {participants.map(participant => (
                   <div key={participant.user_id}>

@@ -360,15 +360,6 @@ export function TripDetail() {
         {activeTab === 'notes' && <NotesTab trip={trip} />}
       </div>
 
-      {/* Chat Floating Button */}
-      <button
-        onClick={() => setChatOpen(true)}
-        className="fixed bottom-6 right-6 z-30 bg-purple-600 hover:bg-purple-700 text-white rounded-full w-14 h-14 flex items-center justify-center shadow-lg hover:shadow-xl transition-all"
-        title="Trip Assistant"
-      >
-        <span className="text-2xl">🤖</span>
-      </button>
-
       {/* Chat Drawer */}
       <ChatDrawer
         trip={trip}

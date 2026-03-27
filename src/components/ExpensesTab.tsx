@@ -917,13 +917,13 @@ function ExpenseCard({
                   {expense.description}
                 </h3>
                 {(isAdmin || isOrganizer || expense.paid_by === currentUserId) && (
-                  <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 flex-shrink-0">
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
                         onEdit(expense)
                       }}
-                      className="text-[10px] text-sky-600 hover:text-sky-700 hover:bg-sky-50 px-1 py-px rounded transition-colors flex-shrink-0 leading-none"
+                      className="text-xs text-sky-600 hover:text-sky-700 bg-sky-50 hover:bg-sky-100 px-2 py-0.5 rounded transition-colors leading-none font-medium"
                       title="Edit expense"
                     >
                       Edit
@@ -933,7 +933,7 @@ function ExpenseCard({
                         e.stopPropagation()
                         handleDelete()
                       }}
-                      className="text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50 px-1 py-px rounded transition-colors flex-shrink-0 leading-none"
+                      className="text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-1.5 py-0.5 rounded transition-colors leading-none"
                       title="Delete expense"
                     >
                       Del

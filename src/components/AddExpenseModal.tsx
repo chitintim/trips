@@ -504,16 +504,8 @@ export function AddExpenseModal({
 
         // For regular (non-itemized) expenses: replace splits
         if (!isEditingItemized) {
-          // Delete existing splits
-          const { error: deleteError } = await supabase
-            .from('expense_splits')
-            .delete()
-            .eq('expense_id', editingExpense.id)
-
-          if (deleteError) throw deleteError
-
-          // Insert new splits
-          const splitInserts = selectedParticipants
+          // Build new splits
+          const splitRows = selectedParticipants
             .map(userId => {
               let splitAmount: number
               let splitPercentage: number | null = null
@@ -548,9 +540,21 @@ export function AddExpenseModal({
             })
             .filter(split => split.amount > 0)
 
+          // Remove splits for users no longer selected
+          const existingUserIds = editingExpense.splits?.map(s => s.user_id) || []
+          const removedUserIds = existingUserIds.filter(id => !selectedParticipants.includes(id))
+          if (removedUserIds.length > 0) {
+            await supabase
+              .from('expense_splits')
+              .delete()
+              .eq('expense_id', editingExpense.id)
+              .in('user_id', removedUserIds)
+          }
+
+          // Upsert splits (updates existing, inserts new)
           const { error: splitsError } = await supabase
             .from('expense_splits')
-            .insert(splitInserts)
+            .upsert(splitRows, { onConflict: 'expense_id,user_id' })
 
           if (splitsError) throw splitsError
         }

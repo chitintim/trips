@@ -6,6 +6,7 @@ import { convertCurrency, formatCurrency, getSupportedCurrencies, type Currency 
 import { uploadReceipt } from '../lib/receiptUpload'
 import { parseReceipt, type ParsedReceiptData } from '../lib/receiptParsing'
 import { ItemizedSplitWizard } from './ItemizedSplitWizard'
+import { type ExpenseWithDetails } from './ExpensesTab'
 import { Database } from '../types/database.types'
 
 type ExpenseCategory = Database['public']['Enums']['expense_category']
@@ -23,6 +24,7 @@ interface AddExpenseModalProps {
   tripId: string
   participants: any[]
   onSuccess: () => void
+  editingExpense?: ExpenseWithDetails | null
 }
 
 export function AddExpenseModal({
@@ -30,9 +32,12 @@ export function AddExpenseModal({
   onClose,
   tripId,
   participants,
-  onSuccess
+  onSuccess,
+  editingExpense = null
 }: AddExpenseModalProps) {
   const { user } = useAuth()
+  const isEditMode = !!editingExpense
+  const isEditingItemized = isEditMode && !!(editingExpense?.line_items?.length)
   const [step, setStep] = useState(1)
   const [loading, setLoading] = useState(false)
 
@@ -74,116 +79,155 @@ export function AddExpenseModal({
   const wasOpenRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
 
-  // Load saved draft from localStorage
+  // Load saved draft from localStorage (or pre-populate in edit mode)
   useEffect(() => {
     if (isOpen && user) {
       // Detect fresh open (transition from closed to open)
       const isFreshOpen = !wasOpenRef.current
       wasOpenRef.current = true
 
-      const draftKey = `expense_draft_${tripId}`
-      const savedDraft = localStorage.getItem(draftKey)
+      // Edit mode: pre-populate from existing expense, skip localStorage
+      if (isEditMode && editingExpense && isFreshOpen) {
+        setDescription(editingExpense.description || '')
+        setAmount(editingExpense.amount?.toString() || '')
+        setCurrency((editingExpense.currency || 'GBP') as Currency)
+        setPaymentDate(editingExpense.payment_date || new Date().toISOString().split('T')[0])
+        setCategory((editingExpense.category || 'other') as ExpenseCategory)
+        setVendorName(editingExpense.vendor_name || '')
+        setLocation(editingExpense.location || '')
+        setOptionId(editingExpense.option_id || null)
+        setPaidBy(editingExpense.paid_by || user.id)
+        setUploadedReceiptPath(editingExpense.receipt_url || null)
+        setBaseCurrencyAmount(editingExpense.base_currency_amount || null)
+        setFxRate(editingExpense.fx_rate || null)
 
-      if (savedDraft) {
-        try {
-          const draft = JSON.parse(savedDraft)
-          setDescription(draft.description || '')
-          setAmount(draft.amount || '')
-          setCurrency(draft.currency || 'GBP')
-          setPaymentDate(draft.paymentDate || new Date().toISOString().split('T')[0])
-          setCategory(draft.category || 'other')
-          setVendorName(draft.vendorName || '')
-          setLocation(draft.location || '')
-        } catch (err) {
-          console.error('Failed to load draft:', err)
-        }
-      }
-
-      // Load parsing state if it exists
-      const parsingKey = `expense_parsing_${tripId}`
-      const savedParsing = localStorage.getItem(parsingKey)
-
-      if (savedParsing) {
-        try {
-          const parsingState = JSON.parse(savedParsing)
-
-          // If parsing was interrupted, clear it and show message
-          if (parsingState.parsingReceipt) {
-            setParseError('Parsing was interrupted. Please try again.')
-            // Clear the interrupted parsing state
-            localStorage.removeItem(parsingKey)
-          } else {
-            // Restore completed parsing state
-            if (parsingState.parsedData) {
-              setParsedData(parsingState.parsedData)
+        if (isEditingItemized) {
+          setUseItemizedSplit(true)
+          setSplitType('equal')
+          setSelectedParticipants([])
+          setSplits({})
+        } else {
+          setUseItemizedSplit(false)
+          const existingSplitType = editingExpense.splits?.[0]?.split_type as SplitType || 'equal'
+          setSplitType(existingSplitType)
+          setSelectedParticipants(editingExpense.splits?.map(s => s.user_id) || [])
+          const splitsRecord: Record<string, SplitData> = {}
+          editingExpense.splits?.forEach(s => {
+            splitsRecord[s.user_id] = {
+              userId: s.user_id,
+              amount: s.amount ?? undefined,
+              percentage: s.percentage ?? undefined
             }
-            if (parsingState.uploadedReceiptPath) {
-              setUploadedReceiptPath(parsingState.uploadedReceiptPath)
-            }
-            // Note: We can't restore the actual File object, but we show the parsing was successful
-          }
-        } catch (err) {
-          console.error('Failed to load parsing state:', err)
+          })
+          setSplits(splitsRecord)
         }
-      }
 
-      // Load step state (persists across app switches on mobile)
-      const stepKey = `expense_step_${tripId}`
-      const savedStep = localStorage.getItem(stepKey)
+        setStep(1)
+        sessionIdRef.current = null
+        setItemizedPaidByConfirmed(false)
+        setReceiptFile(null)
+        setParsedData(null)
+        setParseError(null)
+        setParsingReceipt(false)
+        setParsingProgress(0)
+        setParsingMessage('')
+      } else if (!isEditMode) {
+        // Add mode: load from localStorage
+        const draftKey = `expense_draft_${tripId}`
+        const savedDraft = localStorage.getItem(draftKey)
 
-      if (isFreshOpen) {
-        // Fresh open: check if we have saved step state from interrupted session
-        if (savedStep) {
+        if (savedDraft) {
           try {
-            const stepState = JSON.parse(savedStep)
-            // Restore step state if session is recent (within last hour)
-            const savedAt = new Date(stepState.savedAt).getTime()
-            const now = Date.now()
-            const oneHour = 60 * 60 * 1000
+            const draft = JSON.parse(savedDraft)
+            setDescription(draft.description || '')
+            setAmount(draft.amount || '')
+            setCurrency(draft.currency || 'GBP')
+            setPaymentDate(draft.paymentDate || new Date().toISOString().split('T')[0])
+            setCategory(draft.category || 'other')
+            setVendorName(draft.vendorName || '')
+            setLocation(draft.location || '')
+          } catch (err) {
+            console.error('Failed to load draft:', err)
+          }
+        }
 
-            if (now - savedAt < oneHour && stepState.sessionId) {
-              // Restore the session
-              sessionIdRef.current = stepState.sessionId
-              setStep(stepState.step || 1)
-              setPaidBy(stepState.paidBy || user.id)
-              setSplitType(stepState.splitType || 'equal')
-              setUseItemizedSplit(stepState.useItemizedSplit || false)
+        // Load parsing state if it exists
+        const parsingKey = `expense_parsing_${tripId}`
+        const savedParsing = localStorage.getItem(parsingKey)
+
+        if (savedParsing) {
+          try {
+            const parsingState = JSON.parse(savedParsing)
+
+            if (parsingState.parsingReceipt) {
+              setParseError('Parsing was interrupted. Please try again.')
+              localStorage.removeItem(parsingKey)
             } else {
-              // Session expired, start fresh
+              if (parsingState.parsedData) {
+                setParsedData(parsingState.parsedData)
+              }
+              if (parsingState.uploadedReceiptPath) {
+                setUploadedReceiptPath(parsingState.uploadedReceiptPath)
+              }
+            }
+          } catch (err) {
+            console.error('Failed to load parsing state:', err)
+          }
+        }
+
+        // Load step state (persists across app switches on mobile)
+        const stepKey = `expense_step_${tripId}`
+        const savedStep = localStorage.getItem(stepKey)
+
+        if (isFreshOpen) {
+          if (savedStep) {
+            try {
+              const stepState = JSON.parse(savedStep)
+              const savedAt = new Date(stepState.savedAt).getTime()
+              const now = Date.now()
+              const oneHour = 60 * 60 * 1000
+
+              if (now - savedAt < oneHour && stepState.sessionId) {
+                sessionIdRef.current = stepState.sessionId
+                setStep(stepState.step || 1)
+                setPaidBy(stepState.paidBy || user.id)
+                setSplitType(stepState.splitType || 'equal')
+                setUseItemizedSplit(stepState.useItemizedSplit || false)
+              } else {
+                sessionIdRef.current = Date.now().toString()
+                setStep(1)
+                setPaidBy(user.id)
+                setSplitType('equal')
+                setUseItemizedSplit(false)
+                localStorage.removeItem(stepKey)
+              }
+            } catch (err) {
+              console.error('Failed to load step state:', err)
               sessionIdRef.current = Date.now().toString()
               setStep(1)
               setPaidBy(user.id)
               setSplitType('equal')
               setUseItemizedSplit(false)
-              localStorage.removeItem(stepKey)
             }
-          } catch (err) {
-            console.error('Failed to load step state:', err)
+          } else {
             sessionIdRef.current = Date.now().toString()
             setStep(1)
             setPaidBy(user.id)
             setSplitType('equal')
             setUseItemizedSplit(false)
           }
-        } else {
-          // No saved step state, start fresh
-          sessionIdRef.current = Date.now().toString()
-          setStep(1)
-          setPaidBy(user.id)
-          setSplitType('equal')
-          setUseItemizedSplit(false)
-        }
 
-        // Always reset these on fresh open
-        setSelectedParticipants([])
-        setSplits({})
-        setItemizedPaidByConfirmed(false)
-        setBaseCurrencyAmount(null)
-        setFxRate(null)
-        setReceiptFile(null)
-        setParsingReceipt(false)
-        setParsingProgress(0)
-        setParsingMessage('')
+          // Always reset these on fresh open
+          setSelectedParticipants([])
+          setSplits({})
+          setItemizedPaidByConfirmed(false)
+          setBaseCurrencyAmount(null)
+          setFxRate(null)
+          setReceiptFile(null)
+          setParsingReceipt(false)
+          setParsingProgress(0)
+          setParsingMessage('')
+        }
       }
       // If not fresh open (re-render while modal is open), don't reset anything
     } else if (!isOpen) {
@@ -194,6 +238,7 @@ export function AddExpenseModal({
 
   // Save step state to localStorage whenever it changes (for mobile app switching)
   useEffect(() => {
+    if (isEditMode) return
     if (isOpen && sessionIdRef.current) {
       const stepKey = `expense_step_${tripId}`
       const stepState = {
@@ -210,6 +255,7 @@ export function AddExpenseModal({
 
   // Save draft to localStorage whenever form fields change
   useEffect(() => {
+    if (isEditMode) return
     if (isOpen && description) {
       const draftKey = `expense_draft_${tripId}`
       const draft = {
@@ -228,6 +274,7 @@ export function AddExpenseModal({
 
   // Save parsing state separately (including receipt file info)
   useEffect(() => {
+    if (isEditMode) return
     if (isOpen) {
       const parsingKey = `expense_parsing_${tripId}`
       const parsingState = {
@@ -275,6 +322,34 @@ export function AddExpenseModal({
     if (step === 1) {
       if (!description.trim() || !amount || parseFloat(amount) <= 0) {
         alert('Please enter a description and valid amount')
+        return
+      }
+
+      // Itemized edit: skip step 2, do FX conversion and jump to review
+      if (isEditingItemized) {
+        if (!paidBy) {
+          alert('Please select who paid')
+          return
+        }
+        if (currency !== 'GBP') {
+          try {
+            const conversion = await convertCurrency(parseFloat(amount), currency, paymentDate, 'GBP')
+            if (conversion) {
+              setBaseCurrencyAmount(conversion.convertedAmount)
+              setFxRate(conversion.rate.rate)
+            } else {
+              setBaseCurrencyAmount(null)
+              setFxRate(null)
+            }
+          } catch {
+            setBaseCurrencyAmount(null)
+            setFxRate(null)
+          }
+        } else {
+          setBaseCurrencyAmount(parseFloat(amount))
+          setFxRate(1)
+        }
+        setStep(3)
         return
       }
     }
@@ -367,115 +442,181 @@ export function AddExpenseModal({
   }
 
   const handleBack = () => {
+    // Itemized edit skips step 2
+    if (isEditingItemized && step === 3) {
+      setStep(1)
+      return
+    }
     setStep(step - 1)
   }
 
   const handleSubmit = async () => {
-    console.log('handleSubmit called - starting submission')
     setLoading(true)
 
     try {
       const amountNum = parseFloat(amount)
-      console.log('Submitting expense:', { amount: amountNum, currency, baseCurrencyAmount, selectedParticipants: selectedParticipants.length })
 
       // For GBP expenses, baseCurrencyAmount must be set
-      // For non-GBP, it may be null if FX conversion failed (balance calc will handle it)
       if (!baseCurrencyAmount && currency === 'GBP') {
-        console.error('baseCurrencyAmount not set for GBP expense!')
         alert('Error: Please go back and try again.')
         setLoading(false)
         return
       }
 
-      let receiptUrl: string | null = null
+      let receiptUrl: string | null = isEditMode ? (editingExpense?.receipt_url || null) : null
 
-      // Upload receipt if provided
+      // Upload receipt if provided (new file replaces existing)
       if (receiptFile && user) {
         try {
           const uploadResult = await uploadReceipt(receiptFile, user.id)
-          receiptUrl = uploadResult.path // Store path, not full URL
-          console.log('Receipt uploaded:', receiptUrl)
+          receiptUrl = uploadResult.path
         } catch (uploadError: any) {
           console.error('Receipt upload failed:', uploadError)
-          alert(`Receipt upload failed: ${uploadError.message}\n\nExpense will be created without receipt.`)
+          alert(`Receipt upload failed: ${uploadError.message}\n\nExpense will be saved without receipt change.`)
+          if (isEditMode) receiptUrl = editingExpense?.receipt_url || null
         }
       }
 
-      // Insert expense
-      const { data: expenseData, error: expenseError } = await supabase
-        .from('expenses')
-        .insert({
-          trip_id: tripId,
-          paid_by: paidBy,
-          amount: amountNum,
-          currency,
-          description: description.trim(),
-          payment_date: paymentDate,
-          category,
-          vendor_name: vendorName.trim() || null,
-          location: location.trim() || null,
-          base_currency_amount: baseCurrencyAmount || null,
-          fx_rate: fxRate || null,
-          fx_rate_date: (currency !== 'GBP' && fxRate) ? paymentDate : null,
-          receipt_url: receiptUrl,
-          option_id: optionId
-        })
-        .select()
-        .single()
+      const expenseFields = {
+        paid_by: paidBy,
+        amount: amountNum,
+        currency,
+        description: description.trim(),
+        payment_date: paymentDate,
+        category,
+        vendor_name: vendorName.trim() || null,
+        location: location.trim() || null,
+        base_currency_amount: baseCurrencyAmount || null,
+        fx_rate: fxRate || null,
+        fx_rate_date: (currency !== 'GBP' && fxRate) ? paymentDate : null,
+        receipt_url: receiptUrl,
+        option_id: optionId
+      }
 
-      if (expenseError) throw expenseError
+      if (isEditMode && editingExpense) {
+        // UPDATE existing expense
+        const { error: updateError } = await supabase
+          .from('expenses')
+          .update(expenseFields)
+          .eq('id', editingExpense.id)
 
-      // Calculate split amounts and filter out zero amounts
-      const splitInserts = selectedParticipants
-        .map(userId => {
-          let splitAmount: number
-          let splitPercentage: number | null = null
-          let splitBaseCurrencyAmount: number | null = null
+        if (updateError) throw updateError
 
-          if (splitType === 'equal') {
-            splitAmount = amountNum / selectedParticipants.length
-            if (baseCurrencyAmount) {
-              splitBaseCurrencyAmount = baseCurrencyAmount / selectedParticipants.length
+        // For regular (non-itemized) expenses: replace splits
+        if (!isEditingItemized) {
+          // Delete existing splits
+          const { error: deleteError } = await supabase
+            .from('expense_splits')
+            .delete()
+            .eq('expense_id', editingExpense.id)
+
+          if (deleteError) throw deleteError
+
+          // Insert new splits
+          const splitInserts = selectedParticipants
+            .map(userId => {
+              let splitAmount: number
+              let splitPercentage: number | null = null
+              let splitBaseCurrencyAmount: number | null = null
+
+              if (splitType === 'equal') {
+                splitAmount = amountNum / selectedParticipants.length
+                if (baseCurrencyAmount) {
+                  splitBaseCurrencyAmount = baseCurrencyAmount / selectedParticipants.length
+                }
+              } else if (splitType === 'custom') {
+                splitAmount = splits[userId]?.amount || 0
+                if (baseCurrencyAmount && fxRate) {
+                  splitBaseCurrencyAmount = splitAmount * fxRate
+                }
+              } else {
+                splitPercentage = splits[userId]?.percentage || 0
+                splitAmount = (amountNum * splitPercentage) / 100
+                if (baseCurrencyAmount) {
+                  splitBaseCurrencyAmount = (baseCurrencyAmount * splitPercentage) / 100
+                }
+              }
+
+              return {
+                expense_id: editingExpense.id,
+                user_id: userId,
+                amount: splitAmount,
+                split_type: splitType,
+                percentage: splitPercentage,
+                base_currency_amount: splitBaseCurrencyAmount
+              }
+            })
+            .filter(split => split.amount > 0)
+
+          const { error: splitsError } = await supabase
+            .from('expense_splits')
+            .insert(splitInserts)
+
+          if (splitsError) throw splitsError
+        }
+        // For itemized: only the expense row was updated, line items/claims untouched
+      } else {
+        // INSERT new expense
+        const { data: expenseData, error: expenseError } = await supabase
+          .from('expenses')
+          .insert({ trip_id: tripId, ...expenseFields })
+          .select()
+          .single()
+
+        if (expenseError) throw expenseError
+
+        // Calculate split amounts and filter out zero amounts
+        const splitInserts = selectedParticipants
+          .map(userId => {
+            let splitAmount: number
+            let splitPercentage: number | null = null
+            let splitBaseCurrencyAmount: number | null = null
+
+            if (splitType === 'equal') {
+              splitAmount = amountNum / selectedParticipants.length
+              if (baseCurrencyAmount) {
+                splitBaseCurrencyAmount = baseCurrencyAmount / selectedParticipants.length
+              }
+            } else if (splitType === 'custom') {
+              splitAmount = splits[userId]?.amount || 0
+              if (baseCurrencyAmount && fxRate) {
+                splitBaseCurrencyAmount = splitAmount * fxRate
+              }
+            } else {
+              splitPercentage = splits[userId]?.percentage || 0
+              splitAmount = (amountNum * splitPercentage) / 100
+              if (baseCurrencyAmount) {
+                splitBaseCurrencyAmount = (baseCurrencyAmount * splitPercentage) / 100
+              }
             }
-          } else if (splitType === 'custom') {
-            splitAmount = splits[userId]?.amount || 0
-            if (baseCurrencyAmount && fxRate) {
-              splitBaseCurrencyAmount = splitAmount * fxRate
+
+            return {
+              expense_id: expenseData.id,
+              user_id: userId,
+              amount: splitAmount,
+              split_type: splitType,
+              percentage: splitPercentage,
+              base_currency_amount: splitBaseCurrencyAmount
             }
-          } else { // percentage
-            splitPercentage = splits[userId]?.percentage || 0
-            splitAmount = (amountNum * splitPercentage) / 100
-            if (baseCurrencyAmount) {
-              splitBaseCurrencyAmount = (baseCurrencyAmount * splitPercentage) / 100
-            }
-          }
+          })
+          .filter(split => split.amount > 0)
 
-          return {
-            expense_id: expenseData.id,
-            user_id: userId,
-            amount: splitAmount,
-            split_type: splitType,
-            percentage: splitPercentage,
-            base_currency_amount: splitBaseCurrencyAmount
-          }
-        })
-        .filter(split => split.amount > 0) // Filter out zero amounts to avoid constraint violation
+        const { error: splitsError } = await supabase
+          .from('expense_splits')
+          .insert(splitInserts)
 
-      const { error: splitsError } = await supabase
-        .from('expense_splits')
-        .insert(splitInserts)
+        if (splitsError) throw splitsError
 
-      if (splitsError) throw splitsError
-
-      // Clear draft and step state on success
-      localStorage.removeItem(`expense_draft_${tripId}`)
-      localStorage.removeItem(`expense_step_${tripId}`)
+        // Clear draft and step state on success (add mode only)
+        localStorage.removeItem(`expense_draft_${tripId}`)
+        localStorage.removeItem(`expense_step_${tripId}`)
+      }
 
       onSuccess()
       onClose()
     } catch (error: any) {
-      console.error('Error adding expense:', error)
-      alert(`Error adding expense: ${error.message}`)
+      console.error(`Error ${isEditMode ? 'updating' : 'adding'} expense:`, error)
+      alert(`Error ${isEditMode ? 'updating' : 'adding'} expense: ${error.message}`)
     } finally {
       setLoading(false)
     }
@@ -658,17 +799,27 @@ export function AddExpenseModal({
             {/* Receipt Upload - MOVED TO TOP */}
             <div className="space-y-3">
               <label className="block text-sm font-medium text-gray-700">
-                Receipt (optional - use AI to auto-fill form)
+                {isEditMode ? 'Receipt (optional)' : 'Receipt (optional - use AI to auto-fill form)'}
               </label>
+
+              {/* Show existing receipt info in edit mode */}
+              {isEditMode && uploadedReceiptPath && !receiptFile && (
+                <div className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-2">
+                  Receipt attached
+                </div>
+              )}
+
               <input
                 type="file"
                 accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
                 onChange={(e) => {
                   setReceiptFile(e.target.files?.[0] || null)
-                  // Reset ALL parsing state when new file selected
-                  setParsedData(null)
-                  setParseError(null)
-                  setUploadedReceiptPath(null)
+                  if (!isEditMode) {
+                    // Reset ALL parsing state when new file selected (add mode only)
+                    setParsedData(null)
+                    setParseError(null)
+                    setUploadedReceiptPath(null)
+                  }
                 }}
                 disabled={parsingReceipt}
                 className="block w-full text-sm text-gray-500
@@ -680,21 +831,25 @@ export function AddExpenseModal({
                   file:cursor-pointer cursor-pointer
                   disabled:opacity-50 disabled:cursor-not-allowed"
               />
-              <p className="text-xs text-gray-500">
-                Supports: JPEG, PNG, PDF • Max 6MB (will be compressed)
-              </p>
-              <p className="text-xs text-amber-600 font-medium">
-                📱 iPhone users: Please screenshot photos first before uploading
-              </p>
+              {!isEditMode && (
+                <>
+                  <p className="text-xs text-gray-500">
+                    Supports: JPEG, PNG, PDF • Max 6MB (will be compressed)
+                  </p>
+                  <p className="text-xs text-amber-600 font-medium">
+                    📱 iPhone users: Please screenshot photos first before uploading
+                  </p>
+                </>
+              )}
 
-              {(receiptFile || parsedData) && (
+              {receiptFile && (
+                <div className="text-sm text-gray-700">
+                  {isEditMode ? 'New receipt: ' : 'Selected: '}<strong>{receiptFile.name}</strong> ({(receiptFile.size / 1024 / 1024).toFixed(2)}MB)
+                </div>
+              )}
+
+              {!isEditMode && (receiptFile || parsedData) && (
                 <div className="space-y-2">
-                  {receiptFile && (
-                    <div className="text-sm text-gray-700">
-                      Selected: <strong>{receiptFile.name}</strong> ({(receiptFile.size / 1024 / 1024).toFixed(2)}MB)
-                    </div>
-                  )}
-
                   {!receiptFile && parsedData && (
                     <div className="text-sm text-gray-700">
                       <span className="text-green-600">✓</span> Receipt was previously parsed and auto-filled fields
@@ -872,74 +1027,129 @@ export function AddExpenseModal({
               </div>
             )}
 
+            {/* Who Paid - shown in step 1 for itemized edit (since step 2 is skipped) */}
+            {isEditingItemized && (
+              <div className="border-t border-gray-200 pt-4 mt-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Who Paid? *
+                </label>
+                <div className="space-y-2">
+                  {participants.map(participant => (
+                    <button
+                      key={participant.user_id}
+                      onClick={() => setPaidBy(participant.user_id)}
+                      className={`w-full flex items-center gap-3 p-3 rounded-lg border-2 transition-colors ${
+                        paidBy === participant.user_id
+                          ? 'border-sky-500 bg-sky-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <div
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-lg flex-shrink-0"
+                        style={{
+                          backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
+                        }}
+                      >
+                        <span className="relative">
+                          {(participant.user.avatar_data as any)?.emoji || '😊'}
+                        </span>
+                      </div>
+                      <div className="text-left flex-1">
+                        <div className="font-medium text-gray-900">
+                          {participant.user.full_name || participant.user.email}
+                        </div>
+                      </div>
+                      {paidBy === participant.user_id && (
+                        <Badge variant="success">Paid</Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Split Method Selector */}
             <div className="border-t border-gray-200 pt-4 mt-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Split Method *
               </label>
-              <div className="flex gap-2 flex-wrap">
-                <button
-                  onClick={() => {
-                    setUseItemizedSplit(false)
-                    setSplitType('equal')
-                  }}
-                  className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
-                    !useItemizedSplit && splitType === 'equal'
-                      ? 'border-sky-500 bg-sky-50 text-sky-700'
-                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  Equal
-                </button>
-                <button
-                  onClick={() => {
-                    setUseItemizedSplit(false)
-                    setSplitType('custom')
-                  }}
-                  className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
-                    !useItemizedSplit && splitType === 'custom'
-                      ? 'border-sky-500 bg-sky-50 text-sky-700'
-                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  Custom
-                </button>
-                <button
-                  onClick={() => {
-                    setUseItemizedSplit(false)
-                    setSplitType('percentage')
-                  }}
-                  className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
-                    !useItemizedSplit && splitType === 'percentage'
-                      ? 'border-sky-500 bg-sky-50 text-sky-700'
-                      : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  Percentage
-                </button>
-                {parsedData && (
-                  <button
-                    onClick={() => setUseItemizedSplit(true)}
-                    className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
-                      useItemizedSplit
-                        ? 'border-purple-500 bg-purple-50 text-purple-700'
-                        : 'border-gray-200 text-gray-700 hover:border-gray-300'
-                    }`}
-                  >
-                    Itemized
-                  </button>
-                )}
-              </div>
 
-              {parsedData && !useItemizedSplit && (
-                <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mt-2">
-                  <p className="text-xs text-purple-900 font-medium">
-                    AI detected {parsedData.line_items.length} items — Try "Itemized" split!
-                  </p>
-                  <p className="text-xs text-purple-700 mt-1">
-                    Let people claim which items they ordered instead of splitting equally.
+              {isEditingItemized ? (
+                <div>
+                  <div className="px-3 py-2 rounded-lg border-2 border-purple-500 bg-purple-50 text-purple-700 text-sm font-medium text-center">
+                    Itemized
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Item allocations are managed via the claim page and cannot be changed here.
                   </p>
                 </div>
+              ) : (
+                <>
+                  <div className="flex gap-2 flex-wrap">
+                    <button
+                      onClick={() => {
+                        setUseItemizedSplit(false)
+                        setSplitType('equal')
+                      }}
+                      className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                        !useItemizedSplit && splitType === 'equal'
+                          ? 'border-sky-500 bg-sky-50 text-sky-700'
+                          : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                      }`}
+                    >
+                      Equal
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUseItemizedSplit(false)
+                        setSplitType('custom')
+                      }}
+                      className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                        !useItemizedSplit && splitType === 'custom'
+                          ? 'border-sky-500 bg-sky-50 text-sky-700'
+                          : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                      }`}
+                    >
+                      Custom
+                    </button>
+                    <button
+                      onClick={() => {
+                        setUseItemizedSplit(false)
+                        setSplitType('percentage')
+                      }}
+                      className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                        !useItemizedSplit && splitType === 'percentage'
+                          ? 'border-sky-500 bg-sky-50 text-sky-700'
+                          : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                      }`}
+                    >
+                      Percentage
+                    </button>
+                    {parsedData && (
+                      <button
+                        onClick={() => setUseItemizedSplit(true)}
+                        className={`flex-1 min-w-[80px] px-3 py-2 rounded-lg border-2 text-sm font-medium transition-colors ${
+                          useItemizedSplit
+                            ? 'border-purple-500 bg-purple-50 text-purple-700'
+                            : 'border-gray-200 text-gray-700 hover:border-gray-300'
+                        }`}
+                      >
+                        Itemized
+                      </button>
+                    )}
+                  </div>
+
+                  {parsedData && !useItemizedSplit && (
+                    <div className="bg-purple-50 border border-purple-200 rounded-lg p-3 mt-2">
+                      <p className="text-xs text-purple-900 font-medium">
+                        AI detected {parsedData.line_items.length} items — Try "Itemized" split!
+                      </p>
+                      <p className="text-xs text-purple-700 mt-1">
+                        Let people claim which items they ordered instead of splitting equally.
+                      </p>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1279,44 +1489,53 @@ export function AddExpenseModal({
             </div>
 
             {/* Split Summary */}
-            <div>
-              <h4 className="font-medium text-gray-900 mb-2">Split Details</h4>
-              <div className="space-y-2">
-                {selectedParticipants.map(userId => {
-                  const participant = participants.find(p => p.user_id === userId)
-                  let splitAmount: number
+            {isEditingItemized ? (
+              <div className="p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                <p className="text-sm text-purple-900 font-medium">Itemized split</p>
+                <p className="text-xs text-purple-700 mt-1">
+                  {editingExpense?.line_items?.length || 0} line items — allocations managed via the claim page
+                </p>
+              </div>
+            ) : (
+              <div>
+                <h4 className="font-medium text-gray-900 mb-2">Split Details</h4>
+                <div className="space-y-2">
+                  {selectedParticipants.map(userId => {
+                    const participant = participants.find(p => p.user_id === userId)
+                    let splitAmount: number
 
-                  if (splitType === 'equal') {
-                    splitAmount = parseFloat(amount) / selectedParticipants.length
-                  } else if (splitType === 'custom') {
-                    splitAmount = splits[userId]?.amount || 0
-                  } else {
-                    splitAmount = (parseFloat(amount) * (splits[userId]?.percentage || 0)) / 100
-                  }
+                    if (splitType === 'equal') {
+                      splitAmount = parseFloat(amount) / selectedParticipants.length
+                    } else if (splitType === 'custom') {
+                      splitAmount = splits[userId]?.amount || 0
+                    } else {
+                      splitAmount = (parseFloat(amount) * (splits[userId]?.percentage || 0)) / 100
+                    }
 
-                  return (
-                    <div key={userId} className="flex items-center justify-between p-2 bg-gray-50 rounded">
-                      <div className="flex items-center gap-2">
-                        <div
-                          className="w-6 h-6 rounded-full flex items-center justify-center text-sm"
-                          style={{
-                            backgroundColor: (participant?.user.avatar_data as any)?.bgColor || '#0ea5e9',
-                          }}
-                        >
-                          <span>{(participant?.user.avatar_data as any)?.emoji || '😊'}</span>
+                    return (
+                      <div key={userId} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-6 h-6 rounded-full flex items-center justify-center text-sm"
+                            style={{
+                              backgroundColor: (participant?.user.avatar_data as any)?.bgColor || '#0ea5e9',
+                            }}
+                          >
+                            <span>{(participant?.user.avatar_data as any)?.emoji || '😊'}</span>
+                          </div>
+                          <span className="text-sm text-gray-900">
+                            {participant?.user.full_name || 'Unknown'}
+                          </span>
                         </div>
-                        <span className="text-sm text-gray-900">
-                          {participant?.user.full_name || 'Unknown'}
+                        <span className="font-medium text-gray-900">
+                          {formatCurrency(splitAmount, currency)}
                         </span>
                       </div>
-                      <span className="font-medium text-gray-900">
-                        {formatCurrency(splitAmount, currency)}
-                      </span>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )
 
@@ -1326,11 +1545,11 @@ export function AddExpenseModal({
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add Expense" size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={isEditMode ? 'Edit Expense' : 'Add Expense'} size="lg">
       {/* Step Indicator - Hide when itemized wizard is showing (but not the paidBy sub-step) */}
       {!(step === 2 && useItemizedSplit && itemizedPaidByConfirmed) && (
         <div className="flex items-center justify-between mb-6">
-          {[1, 2, 3].map((s) => (
+          {(isEditingItemized ? [1, 3] : [1, 2, 3]).map((s, index, arr) => (
             <div key={s} className="flex items-center">
               <div
                 className={`w-8 h-8 rounded-full flex items-center justify-center font-medium ${
@@ -1341,9 +1560,9 @@ export function AddExpenseModal({
                     : 'bg-gray-200 text-gray-600'
                 }`}
               >
-                {s < step ? '✓' : s}
+                {s < step ? '✓' : (isEditingItemized ? index + 1 : s)}
               </div>
-              {s < 3 && (
+              {index < arr.length - 1 && (
                 <div
                   className={`w-24 h-0.5 ${
                     s < step ? 'bg-green-500' : 'bg-gray-200'
@@ -1373,7 +1592,7 @@ export function AddExpenseModal({
             onClick={step === 3 ? handleSubmit : handleNext}
             disabled={loading}
           >
-            {loading ? 'Saving...' : step === 3 ? 'Add Expense' : 'Next'}
+            {loading ? 'Saving...' : step === 3 ? (isEditMode ? 'Save Changes' : 'Add Expense') : 'Next'}
           </Button>
         </div>
       )}

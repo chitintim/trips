@@ -16,7 +16,7 @@ type ExpenseSplit = Database['public']['Tables']['expense_splits']['Row']
 type User = Database['public']['Tables']['users']['Row']
 type Settlement = Database['public']['Tables']['settlements']['Row']
 
-interface ExpenseWithDetails extends Expense {
+export interface ExpenseWithDetails extends Expense {
   payer: User
   splits: Array<ExpenseSplit & { user: User }>
   line_items?: any[]
@@ -45,6 +45,7 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
   const [recordSettlementModalOpen, setRecordSettlementModalOpen] = useState(false)
   const [settlementHistoryModalOpen, setSettlementHistoryModalOpen] = useState(false)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [editingExpense, setEditingExpense] = useState<ExpenseWithDetails | null>(null)
   const [updatingFx, setUpdatingFx] = useState(false)
 
   // Ref to track expenses for real-time callbacks (avoids stale closures)
@@ -56,6 +57,8 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
 
   // Cache settlements so claim-change recalculations don't need a separate fetch
   const settlementsRef = useRef<Settlement[]>([])
+
+  const isOrganizer = participants.some((p: any) => p.user_id === user?.id && p.role === 'organizer')
 
   useEffect(() => {
     checkAdminStatus()
@@ -685,8 +688,10 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
                 expense={expense}
                 currentUserId={user?.id || ''}
                 isAdmin={isAdmin}
+                isOrganizer={isOrganizer}
                 participants={participants}
                 onDelete={fetchExpenses}
+                onEdit={(exp) => setEditingExpense(exp)}
               />
             ))}
           </div>
@@ -709,11 +714,15 @@ export function ExpensesTab({ tripId, participants }: { tripId: string; particip
 
     {/* Add Expense Modal */}
     <AddExpenseModal
-      isOpen={addExpenseModalOpen}
-      onClose={() => setAddExpenseModalOpen(false)}
+      isOpen={addExpenseModalOpen || !!editingExpense}
+      onClose={() => {
+        setAddExpenseModalOpen(false)
+        setEditingExpense(null)
+      }}
       tripId={tripId}
       participants={participants}
       onSuccess={fetchExpenses}
+      editingExpense={editingExpense}
     />
 
     {/* Record Settlement Modal */}
@@ -765,14 +774,18 @@ function ExpenseCard({
   expense,
   currentUserId,
   isAdmin,
+  isOrganizer,
   participants,
-  onDelete
+  onDelete,
+  onEdit
 }: {
   expense: ExpenseWithDetails
   currentUserId: string
   isAdmin: boolean
+  isOrganizer: boolean
   participants: any[]
   onDelete: () => void
+  onEdit: (expense: ExpenseWithDetails) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const [copiedLink, setCopiedLink] = useState(false)
@@ -903,17 +916,29 @@ function ExpenseCard({
                 <h3 className="font-semibold text-sm text-gray-900 truncate leading-none -mb-px">
                   {expense.description}
                 </h3>
-                {(isAdmin || expense.paid_by === currentUserId) && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleDelete()
-                    }}
-                    className="text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50 px-1 py-px rounded transition-colors flex-shrink-0 leading-none"
-                    title="Delete expense"
-                  >
-                    Del
-                  </button>
+                {(isAdmin || isOrganizer || expense.paid_by === currentUserId) && (
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onEdit(expense)
+                      }}
+                      className="text-[10px] text-sky-600 hover:text-sky-700 hover:bg-sky-50 px-1 py-px rounded transition-colors flex-shrink-0 leading-none"
+                      title="Edit expense"
+                    >
+                      Edit
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDelete()
+                      }}
+                      className="text-[10px] text-red-600 hover:text-red-700 hover:bg-red-50 px-1 py-px rounded transition-colors flex-shrink-0 leading-none"
+                      title="Delete expense"
+                    >
+                      Del
+                    </button>
+                  </div>
                 )}
               </div>
               <div className="flex items-center gap-1 text-[11px] text-gray-500 leading-none">

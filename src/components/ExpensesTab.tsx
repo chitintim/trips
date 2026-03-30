@@ -8,7 +8,7 @@ import { RecordSettlementModal } from './RecordSettlementModal'
 import { SettlementHistoryModal } from './SettlementHistoryModal'
 import { formatCurrency, convertCurrency, isProvisionalRate, isConfirmedRateAvailable, type Currency } from '../lib/currency'
 import { minimizeTransactions, getUserTransactions, type Person } from '../lib/debtMinimization'
-import { getReceiptUrl } from '../lib/receiptUpload'
+import { ReceiptDisplay } from './ReceiptDisplay'
 import { Database } from '../types/database.types'
 
 type Expense = Database['public']['Tables']['expenses']['Row']
@@ -1610,80 +1610,4 @@ function BalanceSummary({
   )
 }
 
-// Receipt Display Component (handles async URL fetching)
-function ReceiptDisplay({ receiptPath }: { receiptPath: string }) {
-  const [receiptUrl, setReceiptUrl] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const fetchReceiptUrl = async () => {
-      try {
-        setLoading(true)
-        const url = await getReceiptUrl(receiptPath)
-        setReceiptUrl(url)
-        setError(null)
-      } catch (err: any) {
-        console.error('Error fetching receipt URL:', err)
-        setError(err.message || 'Failed to load receipt')
-      } finally {
-        setLoading(false)
-      }
-    }
-
-    fetchReceiptUrl()
-  }, [receiptPath])
-
-  if (loading) {
-    return (
-      <div className="mt-3">
-        <h4 className="text-sm font-medium text-gray-700 mb-2">Receipt:</h4>
-        <div className="flex items-center justify-center h-40 bg-gray-100 rounded-lg">
-          <p className="text-sm text-gray-500">Loading receipt...</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (error) {
-    return (
-      <div className="mt-3">
-        <h4 className="text-sm font-medium text-gray-700 mb-2">Receipt:</h4>
-        <div className="flex items-center justify-center h-40 bg-red-50 rounded-lg border border-red-200">
-          <p className="text-sm text-red-600">{error}</p>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="mt-3">
-      <h4 className="text-sm font-medium text-gray-700 mb-2">Receipt:</h4>
-      <a
-        href={receiptUrl || '#'}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="block"
-      >
-        <img
-          src={receiptUrl || ''}
-          alt="Receipt"
-          className="max-w-full h-auto rounded-lg border border-gray-300 hover:border-sky-500 transition-colors cursor-pointer"
-          style={{ maxHeight: '300px' }}
-          onError={(e) => {
-            console.error('Failed to load receipt image:', receiptPath)
-            e.currentTarget.style.display = 'none'
-            const errorMsg = document.createElement('p')
-            errorMsg.className = 'text-red-600 text-sm'
-            errorMsg.textContent = 'Failed to load receipt image'
-            e.currentTarget.parentElement?.appendChild(errorMsg)
-          }}
-        />
-      </a>
-      <p className="mt-1 text-xs text-gray-500">
-        Click to view full size
-      </p>
-    </div>
-  )
-}
 

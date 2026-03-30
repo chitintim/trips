@@ -1,0 +1,1 @@
+export { MySpendingTab } from './MySpendingTab'

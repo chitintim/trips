@@ -20,9 +20,8 @@ export function ExpenseAuditTrail({ expenses, userId, categoryFilter }: ExpenseA
   // Expenses I paid
   const expensesIPaid = filtered.filter(e => e.paid_by === userId)
 
-  // Expenses assigned to me (I have a split or claim, but didn't pay)
-  const expensesAssignedToMe = filtered.filter(e => {
-    if (e.paid_by === userId) return false
+  // All expenses where I have a share (split or claim), regardless of who paid
+  const expensesMyShare = filtered.filter(e => {
     const hasSplit = (e.splits || []).some(s => s.user_id === userId)
     const hasClaim = e.ai_parsed && (e.claims || []).some((c: any) => c.user_id === userId)
     return hasSplit || hasClaim
@@ -51,9 +50,9 @@ export function ExpenseAuditTrail({ expenses, userId, categoryFilter }: ExpenseA
   }
 
   const totalIPaid = expensesIPaid.reduce((sum, e) => sum + getExpenseGBP(e), 0)
-  const totalAssignedToMe = expensesAssignedToMe.reduce((sum, e) => sum + getMyShareGBP(e), 0)
+  const totalMyShare = expensesMyShare.reduce((sum, e) => sum + getMyShareGBP(e), 0)
 
-  if (expensesIPaid.length === 0 && expensesAssignedToMe.length === 0) return null
+  if (expensesIPaid.length === 0 && expensesMyShare.length === 0) return null
 
   return (
     <div>
@@ -96,8 +95,8 @@ export function ExpenseAuditTrail({ expenses, userId, categoryFilter }: ExpenseA
         </div>
       )}
 
-      {/* Expenses Assigned to Me */}
-      {expensesAssignedToMe.length > 0 && (
+      {/* My Share - all expenses where I owe a portion */}
+      {expensesMyShare.length > 0 && (
         <div>
           <button
             onClick={() => setOwedExpanded(!owedExpanded)}
@@ -111,17 +110,17 @@ export function ExpenseAuditTrail({ expenses, userId, categoryFilter }: ExpenseA
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
               <h3 className="text-sm font-semibold text-gray-700">
-                Expenses Assigned to Me ({expensesAssignedToMe.length})
+                My Share ({expensesMyShare.length})
               </h3>
             </div>
             <span className="text-sm font-bold text-orange-600">
-              {formatCurrency(totalAssignedToMe, 'GBP')}
+              {formatCurrency(totalMyShare, 'GBP')}
             </span>
           </button>
 
           {owedExpanded && (
             <div className="space-y-1">
-              {expensesAssignedToMe.map(expense => (
+              {expensesMyShare.map(expense => (
                 <SpendingExpenseRow
                   key={expense.id}
                   expense={expense}

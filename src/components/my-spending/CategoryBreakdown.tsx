@@ -28,18 +28,31 @@ const CATEGORY_COLORS: Record<string, string> = {
   other: 'bg-gray-500',
 }
 
-export function CategoryBreakdown({ expenses, userId, participantCount, activeCategory, onCategorySelect }: CategoryBreakdownProps) {
+export function CategoryBreakdown({ expenses, userId, activeCategory, onCategorySelect }: CategoryBreakdownProps) {
   // Calculate per-category spending for the user and for the trip
-  const categories = new Map<string, { myTotal: number; tripTotal: number }>()
+  // Track distinct users who have a share in each category for accurate averages
+  const categories = new Map<string, { myTotal: number; tripTotal: number; usersWithShare: Set<string> }>()
 
   for (const expense of expenses) {
     const category = expense.category || 'other'
-    const entry = categories.get(category) || { myTotal: 0, tripTotal: 0 }
+    const entry = categories.get(category) || { myTotal: 0, tripTotal: 0, usersWithShare: new Set<string>() }
 
     // Trip total for this expense (in GBP)
     const expenseGBP = expense.base_currency_amount
       || ((!expense.currency || expense.currency === 'GBP') ? expense.amount : (expense.fx_rate ? expense.amount * expense.fx_rate : 0))
     entry.tripTotal += expenseGBP
+
+    // Track all users who have splits on this expense
+    for (const split of (expense.splits || [])) {
+      entry.usersWithShare.add(split.user_id)
+    }
+
+    // Track all users who have itemized claims on this expense
+    if (expense.ai_parsed && expense.claims) {
+      for (const claim of (expense.claims || [])) {
+        entry.usersWithShare.add((claim as any).user_id)
+      }
+    }
 
     // My share from splits
     const mySplits = (expense.splits || []).filter(s => s.user_id === userId)
@@ -79,7 +92,8 @@ export function CategoryBreakdown({ expenses, userId, participantCount, activeCa
           {sorted.map(([category, data]) => {
             const pct = myGrandTotal > 0 ? (data.myTotal / myGrandTotal) * 100 : 0
             const barWidth = maxMyTotal > 0 ? (data.myTotal / maxMyTotal) * 100 : 0
-            const tripAvgPerPerson = data.tripTotal / participantCount
+            const usersInCategory = data.usersWithShare.size || 1
+            const tripAvgPerPerson = data.tripTotal / usersInCategory
             const diffFromAvg = tripAvgPerPerson > 0
               ? ((data.myTotal - tripAvgPerPerson) / tripAvgPerPerson) * 100
               : 0

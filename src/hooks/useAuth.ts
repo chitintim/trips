@@ -68,6 +68,39 @@ export function useAuth() {
     return { error }
   }
 
+  /**
+   * "Email me a code": send a 6-digit OTP to an existing account's email.
+   * `shouldCreateUser: false` so this never silently creates a new
+   * unregistered account from the login screen (invitation-only signup
+   * stays the only way to create a user).
+   */
+  const requestEmailOtp = async (email: string) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: false },
+    })
+    return { error }
+  }
+
+  /** Verify the 6-digit code sent by requestEmailOtp, completing sign-in. */
+  const verifyEmailOtp = async (email: string, token: string) => {
+    const { data, error } = await supabase.auth.verifyOtp({ email, token, type: 'email' })
+    return { user: data.user, session: data.session, error }
+  }
+
+  /**
+   * OTP-first invitation signup: send a code to an email that does NOT
+   * have an account yet (shouldCreateUser: true creates the auth user on
+   * verify, without requiring a password).
+   */
+  const requestSignupOtp = async (email: string) => {
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { shouldCreateUser: true },
+    })
+    return { error }
+  }
+
   return {
     user: authState.user,
     session: authState.session,
@@ -76,5 +109,8 @@ export function useAuth() {
     signIn,
     signOut,
     resetPassword,
+    requestEmailOtp,
+    verifyEmailOtp,
+    requestSignupOtp,
   }
 }

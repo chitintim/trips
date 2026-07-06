@@ -1570,6 +1570,7 @@ export type Database = {
           trip_id: string
           updated_at: string | null
           user_id: string
+          waitlist_offer_expires_at: string | null
         }
         Insert: {
           active?: boolean
@@ -1588,6 +1589,7 @@ export type Database = {
           trip_id: string
           updated_at?: string | null
           user_id: string
+          waitlist_offer_expires_at?: string | null
         }
         Update: {
           active?: boolean
@@ -1606,6 +1608,7 @@ export type Database = {
           trip_id?: string
           updated_at?: string | null
           user_id?: string
+          waitlist_offer_expires_at?: string | null
         }
         Relationships: [
           {

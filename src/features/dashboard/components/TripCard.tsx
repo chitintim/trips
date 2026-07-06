@@ -1,0 +1,74 @@
+import { useNavigate } from 'react-router-dom'
+import { Badge, Card, Deadline } from '../../../components/ui'
+import { StageRail, getTripAccentStyle } from '../../../components/layout'
+import { useNeedsAttention } from '../../../lib/queries/useNeedsAttention'
+import { getTripStatusLabel } from '../../../lib/tripStatus'
+import type { TripWithCount } from '../../../lib/queries/useTrip'
+
+interface TripCardProps {
+  trip: TripWithCount
+}
+
+function formatDateRange(startDate: string, endDate: string): string {
+  const start = new Date(startDate)
+  const end = new Date(endDate)
+  const opts: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
+  if (start.getFullYear() === end.getFullYear()) {
+    return `${start.toLocaleDateString('en-GB', opts)} – ${end.toLocaleDateString('en-GB', opts)}, ${start.getFullYear()}`
+  }
+  return `${start.toLocaleDateString('en-GB', { ...opts, year: 'numeric' })} – ${end.toLocaleDateString('en-GB', { ...opts, year: 'numeric' })}`
+}
+
+/**
+ * Dashboard trip card: per-trip accent (via getTripAccentStyle, deterministic
+ * from trip id until a real accent_hue column exists), compact stage rail,
+ * countdown, and needs-attention badge count for the current user on this
+ * trip.
+ */
+export function TripCard({ trip }: TripCardProps) {
+  const navigate = useNavigate()
+  const needsAttention = useNeedsAttention(trip.id)
+  const totalAttentionCount = needsAttention.reduce((sum, item) => sum + (item.count ?? 1), 0)
+
+  const now = Date.now()
+  const isUpcoming = new Date(trip.start_date).getTime() > now
+  const isOngoing = new Date(trip.start_date).getTime() <= now && new Date(trip.end_date).getTime() >= now
+
+  return (
+    <div data-trip-accent style={getTripAccentStyle(trip.id)}>
+      <Card hoverable clickable onClick={() => navigate(`/${trip.id}`)} className="overflow-hidden">
+        <div className="h-2 -mx-6 -mt-6 mb-4 bg-accent-500" />
+        <Card.Content className="space-y-3 pt-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <h3 className="font-semibold text-[var(--text-primary)] truncate">{trip.name}</h3>
+              <p className="text-sm text-[var(--text-secondary)] truncate">{trip.location}</p>
+            </div>
+            {totalAttentionCount > 0 && (
+              <Badge variant="warning" size="sm" dot>
+                {totalAttentionCount}
+              </Badge>
+            )}
+          </div>
+
+          <p className="text-sm text-[var(--text-secondary)]">{formatDateRange(trip.start_date, trip.end_date)}</p>
+
+          <StageRail status={trip.status} compact />
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="neutral" size="sm">
+              {getTripStatusLabel(trip.status)}
+            </Badge>
+            {isOngoing && (
+              <Badge variant="info" size="sm">
+                Happening now
+              </Badge>
+            )}
+            {isUpcoming && trip.confirmation_deadline && <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />}
+            <span className="text-xs text-[var(--text-muted)]">{trip.confirmed_count} confirmed</span>
+          </div>
+        </Card.Content>
+      </Card>
+    </div>
+  )
+}

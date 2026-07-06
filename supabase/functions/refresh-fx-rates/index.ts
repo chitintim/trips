@@ -1,8 +1,26 @@
-// Daily FX Rate Refresh Edge Function
-// Fetches ECB closing rates from frankfurter.app, caches in fx_rates table,
-// and updates expenses that were using provisional (previous-day) rates.
+// Daily FX Rate Refresh Edge Function v2 (plan §11 -- simplified)
 //
-// Schedule: Daily at 16:30 UTC (after ECB ~16:00 CET publish)
+// The "provisional rates" complexity is gone: an expense entered today gets
+// today's latest available rate immediately (client-side), and this nightly
+// job ONLY touches expenses where fx_rate_date < payment_date -- i.e. the
+// rate on record predates the payment date (the payment-date rate wasn't
+// published yet when the expense was entered). It resolves the correct
+// locked rate for each such expense's payment date and updates the expense
+// + its splits. Rate lock convention (plan §11): expense (payment) date;
+// weekends/holidays resolve to the most recent prior business day
+// (frankfurter does this server-side by returning the nearest prior
+// published date).
+//
+// Sources: frankfurter.app (ECB, keyless, historical to 1999) -> fallback
+// open.er-api.com (for non-ECB currencies; latest-only). All fetched rates
+// are cached in fx_rates so each pair/date hits the API once ever.
+//
+// Cron contract unchanged: same function name, same daily schedule
+// (16:30 UTC, after ECB ~16:00 CET publish), service-role invocation.
+//
+// Service-role use is sanctioned here (plan §16): fx_rates is one of the
+// three tables the service role may write (fx_rates, ai_usage, rate_limits);
+// expense fx fields are system-maintained financial plumbing -- matches v1.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
@@ -12,78 +30,78 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-const CURRENCIES = ['EUR', 'USD', 'CHF', 'JPY', 'AUD', 'CAD']
-const BASE = 'GBP'
+// Currencies pre-cached daily even if no expense needs them (the frequent
+// set; the per-expense refresh below fetches anything else on demand, so
+// this list is a warm-cache optimization, not a support boundary --
+// plan §11 opens the currency list to any ISO 4217).
+const PRECACHE_CURRENCIES = ['EUR', 'USD', 'CHF', 'JPY', 'AUD', 'CAD', 'SGD', 'HKD', 'NOK', 'SEK', 'DKK', 'THB', 'NZD']
+const FETCH_TIMEOUT_MS = 8000
 
-/**
- * Fetch rates from frankfurter.app (primary API)
- * Returns { date, rates: { EUR: 1.17, USD: 1.26, ... } } where rates are GBP→X
- */
-async function fetchFromFrankfurter(date: string, currencies: string[]): Promise<{ date: string; rates: Record<string, number> } | null> {
+interface RateResult {
+  /** The date the rate was actually published for (may be earlier than requested on weekends/holidays). */
+  date: string
+  /** Rate FROM the foreign currency TO the base currency (multiply foreign amount by this). */
+  rate: number
+  source: 'frankfurter' | 'open_er_api'
+}
+
+async function fetchWithTimeout(url: string): Promise<Response | null> {
   try {
     const controller = new AbortController()
-    const timeout = setTimeout(() => controller.abort(), 8000)
-
-    const targets = currencies.join(',')
-    const url = `https://api.frankfurter.app/${date}?from=${BASE}&to=${targets}`
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
     const response = await fetch(url, { signal: controller.signal })
     clearTimeout(timeout)
-
-    if (!response.ok) {
-      console.warn(`[refresh-fx-rates] Frankfurter API error: ${response.status} — trying fallback`)
-      return null
-    }
-
-    const data = await response.json()
-    return { date: data.date, rates: data.rates }
-  } catch (error) {
-    console.warn(`[refresh-fx-rates] Frankfurter API failed: ${(error as Error).message} — trying fallback`)
+    return response.ok ? response : null
+  } catch {
     return null
   }
 }
 
 /**
- * Fetch rates from fawazahmed0/currency-api (fallback API)
- * This API returns rates per base currency, so we fetch GBP rates and extract targets
+ * Fetch the rate from `fromCurrency` to `toCurrency` for `date` (YYYY-MM-DD).
+ * frankfurter resolves weekends/holidays to the most recent prior business
+ * day and reports the resolved date. Falls back to open.er-api.com (latest
+ * rates only -- used when frankfurter doesn't carry the currency).
  */
-async function fetchFromCurrencyApi(date: string, currencies: string[]): Promise<{ date: string; rates: Record<string, number> } | null> {
-  const urls = [
-    `https://${date}.currency-api.pages.dev/v1/currencies/gbp.json`,
-    `https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@${date}/v1/currencies/gbp.json`,
-  ]
-
-  for (const url of urls) {
+async function fetchRate(date: string, fromCurrency: string, toCurrency: string): Promise<RateResult | null> {
+  // Primary: frankfurter (historical, ECB).
+  const frankfurterResponse = await fetchWithTimeout(
+    `https://api.frankfurter.app/${date}?from=${fromCurrency}&to=${toCurrency}`
+  )
+  if (frankfurterResponse) {
     try {
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 8000)
-
-      const response = await fetch(url, { signal: controller.signal })
-      clearTimeout(timeout)
-
-      if (!response.ok) continue
-
-      const data = await response.json()
-      const gbpRates = data.gbp
-      if (!gbpRates) continue
-
-      // Extract only the currencies we need
-      const rates: Record<string, number> = {}
-      for (const cur of currencies) {
-        const rate = gbpRates[cur.toLowerCase()]
-        if (rate) rates[cur] = rate
+      const data = await frankfurterResponse.json()
+      const rate = data?.rates?.[toCurrency]
+      if (typeof rate === 'number' && rate > 0) {
+        return { date: data.date ?? date, rate, source: 'frankfurter' }
       }
-
-      if (Object.keys(rates).length === 0) continue
-
-      console.log(`[refresh-fx-rates] Fallback API (currency-api) returned ${Object.keys(rates).length} rates`)
-      return { date: data.date || date, rates }
-    } catch {
-      continue
-    }
+    } catch { /* fall through */ }
   }
 
-  console.error(`[refresh-fx-rates] All fallback CDNs failed`)
+  // Fallback: open.er-api.com (latest only -- acceptable for currencies the
+  // ECB doesn't publish; rate_source records the provenance).
+  const erApiResponse = await fetchWithTimeout(`https://open.er-api.com/v6/latest/${fromCurrency}`)
+  if (erApiResponse) {
+    try {
+      const data = await erApiResponse.json()
+      const rate = data?.rates?.[toCurrency]
+      if (typeof rate === 'number' && rate > 0) {
+        const resolvedDate = typeof data.time_last_update_utc === 'string'
+          ? new Date(data.time_last_update_utc).toISOString().split('T')[0]
+          : date
+        return { date: resolvedDate, rate, source: 'open_er_api' }
+      }
+    } catch { /* fall through */ }
+  }
+
   return null
+}
+
+/** YYYY-MM-DD date arithmetic without Date-object timezone drift. */
+function addDays(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d + days))
+  return dt.toISOString().split('T')[0]
 }
 
 Deno.serve(async (req) => {
@@ -102,109 +120,153 @@ Deno.serve(async (req) => {
 
     console.log(`[refresh-fx-rates] Running for date: ${todayStr}`)
 
-    // Fetch rates: try frankfurter first, fall back to currency-api
-    const apiResult = await fetchFromFrankfurter(todayStr, CURRENCIES)
-      ?? await fetchFromCurrencyApi(todayStr, CURRENCIES)
-
-    if (!apiResult) {
-      throw new Error('All FX rate APIs failed (frankfurter + currency-api fallback)')
+    // ---- 1. Pre-cache today's rates for the common currency set (X -> GBP) ----
+    // Kept from v1 so the client's 3-tier cache (memory -> fx_rates -> API)
+    // finds today's entries in the DB.
+    let ratesCached = 0
+    {
+      const targets = PRECACHE_CURRENCIES.join(',')
+      const response = await fetchWithTimeout(`https://api.frankfurter.app/${todayStr}?from=GBP&to=${targets}`)
+      if (response) {
+        try {
+          const data = await response.json()
+          const actualDate = data.date ?? todayStr
+          const upserts = Object.entries(data.rates ?? {}).map(([currency, gbpToX]) => ({
+            rate_date: actualDate,
+            from_currency: currency,
+            to_currency: 'GBP',
+            rate: 1 / (gbpToX as number), // API gives GBP->X; we store X->GBP
+            source: 'frankfurter',
+            fetched_at: new Date().toISOString(),
+          }))
+          if (upserts.length > 0) {
+            const { error } = await supabaseAdmin
+              .from('fx_rates')
+              .upsert(upserts, { onConflict: 'rate_date,from_currency,to_currency' })
+            if (error) console.error('[refresh-fx-rates] precache upsert error:', error)
+            else ratesCached = upserts.length
+          }
+        } catch (e) {
+          console.error('[refresh-fx-rates] precache parse error:', e)
+        }
+      }
     }
 
-    const actualDate = apiResult.date // May differ from todayStr on weekends/holidays
-
-    console.log(`[refresh-fx-rates] API returned rates for: ${actualDate}`)
-
-    // Build upsert rows: store X→GBP rates (what we use for expense conversion)
-    const upserts = Object.entries(apiResult.rates).map(([currency, gbpRate]) => ({
-      rate_date: actualDate,
-      from_currency: currency,
-      to_currency: BASE,
-      rate: 1 / (gbpRate as number), // API gives GBP→X, we need X→GBP
-      source: 'frankfurter',
-      fetched_at: new Date().toISOString()
-    }))
-
-    const { error: upsertError } = await supabaseAdmin
-      .from('fx_rates')
-      .upsert(upserts, { onConflict: 'rate_date,from_currency,to_currency' })
-
-    if (upsertError) {
-      console.error('[refresh-fx-rates] Upsert error:', upsertError)
-      throw upsertError
-    }
-
-    console.log(`[refresh-fx-rates] Cached ${upserts.length} rates for ${actualDate}`)
-
-    // Find expenses with provisional rates for this date
-    // (payment_date = actualDate but fx_rate_date < actualDate)
-    const { data: provisionalExpenses, error: fetchError } = await supabaseAdmin
+    // ---- 2. The one job that matters: fix expenses where fx_rate_date < payment_date ----
+    // (The rate on record predates the payment date, meaning the correct
+    // payment-date rate wasn't published yet when the expense was entered.)
+    // PostgREST can't compare two columns server-side, so fetch candidates
+    // with a rate + past-or-today payment_date and filter in code.
+    const { data: withRates, error: fetchError } = await supabaseAdmin
       .from('expenses')
-      .select('id, amount, currency, payment_date')
-      .neq('currency', BASE)
+      .select('id, trip_id, amount, currency, payment_date, fx_rate_date, rate_source, trips!inner(base_currency)')
       .not('fx_rate', 'is', null)
-      .eq('payment_date', actualDate)
-      .lt('fx_rate_date', actualDate)
+      .not('fx_rate_date', 'is', null)
+      .lte('payment_date', todayStr) // future-dated expenses wait until their date arrives
+    if (fetchError) throw fetchError
 
-    if (fetchError) {
-      console.error('[refresh-fx-rates] Error fetching provisional expenses:', fetchError)
-    }
+    const candidates = (withRates ?? []).filter(
+      (e) =>
+        e.rate_source !== 'manual' && // never clobber a user-overridden rate (plan §11)
+        e.fx_rate_date &&
+        e.fx_rate_date < e.payment_date
+    )
+
+    console.log(`[refresh-fx-rates] ${candidates.length} expenses need a payment-date rate refresh`)
 
     let expensesUpdated = 0
+    const rateCache = new Map<string, RateResult | null>() // key: `${from}:${to}:${date}`
 
-    if (provisionalExpenses && provisionalExpenses.length > 0) {
-      console.log(`[refresh-fx-rates] Found ${provisionalExpenses.length} expenses with provisional rates`)
+    for (const exp of candidates) {
+      // deno-lint-ignore no-explicit-any
+      const baseCurrency = ((exp as any).trips?.base_currency as string | undefined) ?? 'GBP'
+      if (exp.currency === baseCurrency) continue
 
-      for (const exp of provisionalExpenses) {
-        const rateRow = upserts.find(u => u.from_currency === exp.currency)
-        if (!rateRow) continue
-
-        const baseCurrencyAmount = exp.amount * rateRow.rate
-
-        // Update expense
-        const { error: updateError } = await supabaseAdmin
-          .from('expenses')
-          .update({
-            fx_rate: rateRow.rate,
-            fx_rate_date: actualDate,
-            base_currency_amount: baseCurrencyAmount
-          })
-          .eq('id', exp.id)
-
-        if (updateError) {
-          console.error(`[refresh-fx-rates] Failed to update expense ${exp.id}:`, updateError)
-          continue
-        }
-
-        // Update splits for this expense
-        const { data: splits } = await supabaseAdmin
-          .from('expense_splits')
-          .select('id, amount')
-          .eq('expense_id', exp.id)
-
-        if (splits) {
-          for (const split of splits) {
-            await supabaseAdmin
-              .from('expense_splits')
-              .update({ base_currency_amount: split.amount * rateRow.rate })
-              .eq('id', split.id)
+      const cacheKey = `${exp.currency}:${baseCurrency}:${exp.payment_date}`
+      let rateResult = rateCache.get(cacheKey)
+      if (rateResult === undefined) {
+        // Check the fx_rates DB cache first (each pair/date hits the API once ever).
+        const { data: cached } = await supabaseAdmin
+          .from('fx_rates')
+          .select('rate, rate_date, source')
+          .eq('from_currency', exp.currency)
+          .eq('to_currency', baseCurrency)
+          .lte('rate_date', exp.payment_date)
+          .order('rate_date', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (cached && cached.rate_date >= addDays(exp.payment_date, -5)) {
+          // A cached rate within 5 days before the payment date is the
+          // resolved prior-business-day rate -- use it, no API call.
+          rateResult = { date: cached.rate_date, rate: Number(cached.rate), source: (cached.source as RateResult['source']) ?? 'frankfurter' }
+        } else {
+          rateResult = await fetchRate(exp.payment_date, exp.currency, baseCurrency)
+          if (rateResult) {
+            // Cache it (keyed by the RESOLVED publish date).
+            await supabaseAdmin.from('fx_rates').upsert(
+              [{
+                rate_date: rateResult.date,
+                from_currency: exp.currency,
+                to_currency: baseCurrency,
+                rate: rateResult.rate,
+                source: rateResult.source,
+                fetched_at: new Date().toISOString(),
+              }],
+              { onConflict: 'rate_date,from_currency,to_currency' }
+            )
           }
         }
-
-        expensesUpdated++
+        rateCache.set(cacheKey, rateResult ?? null)
       }
+
+      if (!rateResult) {
+        console.warn(`[refresh-fx-rates] No rate found for ${exp.currency}->${baseCurrency} @ ${exp.payment_date}`)
+        continue
+      }
+
+      const baseCurrencyAmount = Number(exp.amount) * rateResult.rate
+
+      const { error: updateError } = await supabaseAdmin
+        .from('expenses')
+        .update({
+          fx_rate: rateResult.rate,
+          fx_rate_date: rateResult.date,
+          base_currency_amount: baseCurrencyAmount,
+          rate_source: rateResult.source,
+        })
+        .eq('id', exp.id)
+      if (updateError) {
+        console.error(`[refresh-fx-rates] Failed to update expense ${exp.id}:`, updateError)
+        continue
+      }
+
+      // Update this expense's splits to the new rate.
+      const { data: splits } = await supabaseAdmin
+        .from('expense_splits')
+        .select('id, amount')
+        .eq('expense_id', exp.id)
+      for (const split of splits ?? []) {
+        await supabaseAdmin
+          .from('expense_splits')
+          .update({ base_currency_amount: Number(split.amount) * rateResult.rate })
+          .eq('id', split.id)
+      }
+
+      expensesUpdated++
     }
 
     const result = {
       success: true,
-      date: actualDate,
-      ratesCached: upserts.length,
+      date: todayStr,
+      ratesCached,
       expensesUpdated,
+      candidatesScanned: candidates.length,
     }
 
     console.log('[refresh-fx-rates] Done:', result)
 
     return new Response(JSON.stringify(result), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   } catch (error) {
     console.error('[refresh-fx-rates] Error:', error)

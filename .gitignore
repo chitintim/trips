@@ -94,3 +94,4 @@ src/pages/ComponentShowcase.tsx
 # scratch/
 # notes/
 backups/
+supabase/functions/**/deno.lock

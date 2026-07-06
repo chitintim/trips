@@ -1,580 +1,358 @@
-// Trip Chat AI Assistant Edge Function
-// Shared chat visible to all trip participants, with write actions for organizers only
+// Trip Chat AI Assistant Edge Function v2 (plan §13)
+//
+// REWRITE: context-stuffing -> tool use.
+//  - Slim system prompt: trip header + participants + requester role only
+//    (v1 serialized the whole trip, ~15-20K tokens/query).
+//  - READ tools (get_expenses, get_balances, ...) are executed server-side
+//    as Supabase queries under the CALLER's JWT so RLS applies -- never the
+//    service role for reads.
+//  - WRITE intents (organizers only): the model emits a ProposedAction
+//    changeset via the propose_actions tool; the function validates it
+//    against ProposalSchema and INSERTS into ai_proposals (status pending),
+//    then streams back {type:'proposal', proposal_id}. The frontend renders
+//    review cards and applies under the approving user's JWT. This function
+//    NEVER writes trip data directly (v1 wrote timeline events with the
+//    service role -- that pathway is gone).
+//  - SSE envelope stays compatible with the current ChatDrawer
+//    ({type:'text'|'done'|'error'}), with {type:'proposal', proposal_id}
+//    added.
+//  - Rate limit via consume_rate_limit RPC: organizers 40/day,
+//    participants 15/day.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { corsHeaders, handleCorsPreflight } from '../_shared/cors.ts'
+import { errorResponse } from '../_shared/errors.ts'
+import { callerClient, serviceClient, requireUser, requireTripParticipant, isTripOrganizer } from '../_shared/supabaseClients.ts'
+import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
+import {
+  createMessageStream,
+  consumeAnthropicStream,
+  padForCaching,
+  CLAUDE_MODEL,
+  type AnthropicMessage,
+  type AnthropicUsage,
+  type AnthropicContentBlock,
+} from '../_shared/anthropic.ts'
+import { logAiUsage } from '../_shared/usage.ts'
+import { buildAnthropicToolDefs, executeReadTool } from './tools.ts'
+import { READ_TOOL_NAMES, type ChatToolName } from '../_shared/contracts/chatToolContracts.ts'
+import { ProposalSchema, ProposedActionSchema } from '../_shared/contracts/aiProposal.ts'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+const MAX_TOOL_ITERATIONS = 6
+const MAX_LENGTH_ORGANIZER = 10000
+const MAX_LENGTH_PARTICIPANT = 700
+
+/**
+ * The staged-write tool: instead of separate create_event/update_event/...
+ * write tools that execute directly (v1 behavior), organizers get ONE
+ * propose_actions tool whose input is a ProposedAction[] changeset. The
+ * function validates against ProposalSchema and stores it in ai_proposals
+ * for human review -- nothing is written to trip data here.
+ */
+const PROPOSE_ACTIONS_TOOL = {
+  name: 'propose_actions',
+  description:
+    'Stage a batch of proposed changes (create/update events, expense drafts, booking drafts, options, delete requests) for human review. ' +
+    'Nothing is applied until a human approves each card in the review UI. Use this for ANY request to add/change/delete trip data. ' +
+    'Each action needs a unique idempotency_key (short random string). Max 20 actions per proposal. ' +
+    'Deletes are delete_request actions carrying entity_type + entity_id -- they always require individual human confirmation.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      source_text: { type: 'string', description: "Short summary of the user's request that motivated these actions" },
+      actions: {
+        type: 'array',
+        maxItems: 20,
+        items: {
+          type: 'object',
+          description:
+            'A ProposedAction. type is one of create_event | create_option | create_booking_draft | create_expense_draft | update_event | delete_request. ' +
+            'Fields per type: create_event{trip_id,title,event_date(YYYY-MM-DD),start_time?,end_time?,all_day?,category?,location?,description?}; ' +
+            'create_option{section_id,title,description?,price?,currency?,price_type?}; ' +
+            'create_booking_draft{trip_id,option_id?,title,vendor?,confirmation_ref?,amount?,currency?,booking_date?,cancellation_deadline?}; ' +
+            'create_expense_draft{trip_id,description,amount,currency,paid_by?,payment_date?,category?,participant_ids?}; ' +
+            'update_event{event_id,...fields to change}; ' +
+            'delete_request{entity_type(event|option|booking|expense|checklist_item),entity_id,reason?}. ' +
+            'ALWAYS include type and idempotency_key.',
+          properties: {
+            type: {
+              type: 'string',
+              enum: ['create_event', 'create_option', 'create_booking_draft', 'create_expense_draft', 'update_event', 'delete_request'],
+            },
+            idempotency_key: { type: 'string' },
+          },
+          required: ['type', 'idempotency_key'],
+        },
+      },
+    },
+    required: ['actions'],
+  },
 }
 
-interface TimelineAction {
-  type: 'create_event' | 'update_event' | 'delete_event'
-  event_id?: string
-  event_date?: string
-  start_time?: string
-  end_time?: string
-  all_day?: boolean
-  title?: string
-  description?: string
-  category?: string
-  location?: string
-  event_title?: string // for summary display
-}
-
-interface LLMResponse {
-  message: string
-  actions?: TimelineAction[]
-}
-
-function buildSystemPrompt(
-  tripContext: any,
-  isOrganizer: boolean,
-  userName: string
-): string {
-  const { trip, participants, sections, timelineEvents, balances, pendingClaims, expenseOverview } = tripContext
-
+// deno-lint-ignore no-explicit-any
+function buildSystemPrompt(trip: any, participants: any[], userName: string, isOrganizer: boolean): string {
   const participantList = participants
-    .map((p: any) => `- ${p.user?.full_name || p.user?.email} (${p.role})`)
+    // deno-lint-ignore no-explicit-any
+    .map((p: any) => `- ${p.user?.full_name || p.user?.email || 'Unknown'} (id: ${p.user_id}, ${p.role})`)
     .join('\n')
 
-  // Build a user_id -> name lookup from participants
-  const nameMap: Record<string, string> = {}
-  for (const p of participants) {
-    nameMap[p.user_id] = p.user?.full_name || p.user?.email || 'Unknown'
-  }
-
-  const sectionSummary = sections
-    .map((s: any) => {
-      const opts = (s.options || [])
-        .map((o: any) => {
-          const selections = (o.selections || []) as Array<{ user_id: string }>
-          const selectedBy = selections.map((sel: any) => nameMap[sel.user_id] || 'Unknown')
-          const selectionInfo = selectedBy.length > 0 ? ` — selected by: ${selectedBy.join(', ')}` : ''
-          return `  - ${o.title} [${o.status}]${o.price ? ` ${o.currency || ''}${o.price}` : ''}${selectionInfo}`
-        })
-        .join('\n')
-      return `${s.title} (${s.section_type}, ${s.status}):\n${opts || '  (no options)'}`
-    })
-    .join('\n\n')
-
-  // Timeline events now include IDs so the AI can reference them for update/delete
-  const eventSummary = timelineEvents.length > 0
-    ? timelineEvents
-      .map((e: any) => `- [${e.id}] ${e.event_date} ${e.start_time || 'all day'}: ${e.title} [${e.category}]${e.location ? ` @ ${e.location}` : ''}${e.description ? ` — ${e.description.slice(0, 100)}` : ''}`)
-      .join('\n')
-    : '(no events yet)'
-
-  // Expense balances per user
-  const balanceSummary = balances.length > 0
-    ? balances
-      .map((b: any) => {
-        const name = nameMap[b.userId] || 'Unknown'
-        if (b.netBalance > 0.01) return `- ${name}: is owed ${b.currency}${b.netBalance.toFixed(2)} (paid ${b.currency}${b.totalPaid.toFixed(2)}, owes ${b.currency}${b.totalOwed.toFixed(2)})`
-        if (b.netBalance < -0.01) return `- ${name}: owes ${b.currency}${Math.abs(b.netBalance).toFixed(2)} (paid ${b.currency}${b.totalPaid.toFixed(2)}, owes ${b.currency}${b.totalOwed.toFixed(2)})`
-        return `- ${name}: settled up`
-      })
-      .join('\n')
-    : '(no expenses yet)'
-
-  // Pending claims for itemized expenses
-  const claimsSummary = pendingClaims.length > 0
-    ? pendingClaims
-      .map((c: any) => {
-        const missingNames = c.missingUsers.map((uid: string) => nameMap[uid] || 'Unknown').join(', ')
-        return `- "${c.description}" (${c.currency}${c.amount}) — ${c.status}${c.claimCode ? ` — claim code: ${c.claimCode}` : ''}\n  Awaiting claims from: ${missingNames || 'everyone'}`
-      })
-      .join('\n')
-    : null
-
-  // Expense overview
-  const expenseText = expenseOverview.totalCount > 0
-    ? `${expenseOverview.totalCount} expenses. ${expenseOverview.byCurrency.map((c: any) => `${c.currency}${c.total.toFixed(2)}`).join(', ')}.${expenseOverview.byCategory.length > 0 ? ` Categories: ${expenseOverview.byCategory.map((c: any) => `${c.category} (${c.count})`).join(', ')}.` : ''}`
-    : '(no expenses yet)'
-
-  let roleInstructions: string
-  if (isOrganizer) {
-    roleInstructions = `The current user "${userName}" is an ORGANIZER. They can ask you to create, update, or delete timeline events.
-
-When they ask to add/create events, return actions in the "actions" array. Each action should be:
-- type: "create_event" — include event_date (YYYY-MM-DD), title, category, and optionally start_time (HH:MM), end_time, description, location, all_day
-- type: "update_event" — include event_id (UUID from the timeline above) and fields to change
-- type: "delete_event" — include event_id (UUID from the timeline above)
-
-Valid categories: flight, accommodation, transport, activity, dining, transfer, meeting_point, free_time, other
-
-You can create multiple events in a single response (e.g., when importing a full itinerary).
-Always include event_title in each action for display purposes.`
-  } else {
-    roleInstructions = `The current user "${userName}" is a PARTICIPANT (not an organizer). They can ask questions about the trip, but you MUST NOT return any actions. Do NOT include an "actions" array in your response. If they ask to change something, politely tell them only organizers can make changes to the timeline.`
-  }
-
-  let expenseSection = `EXPENSES OVERVIEW: ${expenseText}
-
-BALANCES:
-${balanceSummary}`
-
-  if (claimsSummary) {
-    expenseSection += `
-
-PENDING ITEMIZED CLAIMS (these expenses need participants to select what they consumed):
-${claimsSummary}`
-  }
+  const roleInstructions = isOrganizer
+    ? `The current user "${userName}" is an ORGANIZER. When they ask you to add, change, or delete trip data (events, expenses, bookings, options), use the propose_actions tool to stage the changes for their review -- changes are NEVER applied directly; a human approves each one. After staging, tell them what you proposed and that it's awaiting their review.`
+    : `The current user "${userName}" is a PARTICIPANT (not an organizer). They can ask questions about the trip, but you MUST NOT stage any write actions. If they ask to change something, politely tell them only organizers can make changes.`
 
   return `You are a helpful trip planning assistant for the trip "${trip.name}".
 
-TRIP DETAILS:
+TRIP HEADER:
 - Destination: ${trip.location}
 - Dates: ${trip.start_date} to ${trip.end_date}
 - Status: ${trip.status}
+- Base currency: ${trip.base_currency || 'GBP'}
+- Trip ID: ${trip.id}
 
 PARTICIPANTS:
 ${participantList}
 
-PLANNING SECTIONS:
-${sectionSummary}
-
-CURRENT TIMELINE:
-${eventSummary}
-
-${expenseSection}
-
 ${roleInstructions}
 
-IMPORTANT: This is a SHARED chat. All participants can see all messages and your responses. Be helpful and informative to everyone.
-
-Respond with JSON only: { "message": "your response text", "actions": [...] }
-The "message" field is always shown to all participants. Keep it friendly and clear.
-If no actions needed, omit the "actions" field or use an empty array.
-Do NOT wrap the JSON in markdown code blocks.`
+HOW TO ANSWER:
+- Use the read tools (get_expenses, get_balances, get_itinerary, get_confirmation_status, ...) to look up live trip data before answering questions about money, plans, or people. Don't guess -- fetch.
+- Prefer one or two well-chosen tool calls over many. Summarize tool results in friendly, concise prose; never dump raw JSON at the user.
+- Amounts: mention the currency. Dates: be explicit (e.g. "Saturday 14 March").
+- This is a SHARED chat visible to all participants. Be helpful and informative to everyone, and don't reveal anything the tools didn't return.
+- When you used propose_actions, end your reply by summarizing the staged changes and noting they need review/approval.`
 }
 
 Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  const preflight = handleCorsPreflight(req)
+  if (preflight) return preflight
 
   try {
-    const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      throw new Error('Missing authorization header')
-    }
-
-    // User-scoped client for auth checks
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    )
-
-    // Service role client for inserting chat messages and timeline events
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    )
-
-    // Verify user
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-    if (userError || !user) {
-      throw new Error('Unauthorized')
-    }
+    const supabaseClient = callerClient(req)
+    const user = await requireUser(supabaseClient)
 
     const { tripId, message } = await req.json()
     if (!tripId || !message) {
       throw new Error('Missing tripId or message')
     }
 
-    // Verify trip participant
-    const { data: isParticipant } = await supabaseClient.rpc('is_trip_participant', {
-      p_trip_id: tripId,
-      p_user_id: user.id,
-    })
-    if (!isParticipant) {
-      throw new Error('User is not a participant in this trip')
-    }
+    await requireTripParticipant(supabaseClient, tripId, user.id)
+    const organizer = await isTripOrganizer(supabaseClient, tripId, user.id)
 
-    // Check organizer status
-    const { data: isOrganizer } = await supabaseClient.rpc('is_trip_organizer', {
-      p_trip_id: tripId,
-      p_user_id: user.id,
-    })
-
-    // Rate limiting & message length limits
-    const MAX_MESSAGES_ORGANIZER = 20
-    const MAX_MESSAGES_PARTICIPANT = 5
-    const MAX_LENGTH_ORGANIZER = 10000   // ~2000 words, enough for pasting booking details
-    const MAX_LENGTH_PARTICIPANT = 700   // ~100 words
-
-    const maxLength = isOrganizer ? MAX_LENGTH_ORGANIZER : MAX_LENGTH_PARTICIPANT
+    const maxLength = organizer ? MAX_LENGTH_ORGANIZER : MAX_LENGTH_PARTICIPANT
     if (message.length > maxLength) {
-      throw new Error(
-        isOrganizer
-          ? `Message too long (${message.length} chars). Maximum is ${MAX_LENGTH_ORGANIZER} characters.`
-          : `Message too long. Please keep messages under ${MAX_LENGTH_PARTICIPANT} characters (~100 words).`
-      )
+      throw new Error(`Message too long (${message.length} chars). Maximum is ${maxLength} characters.`)
     }
 
-    const maxMessages = isOrganizer ? MAX_MESSAGES_ORGANIZER : MAX_MESSAGES_PARTICIPANT
-    const todayStart = new Date()
-    todayStart.setUTCHours(0, 0, 0, 0)
-    const { count: todayCount } = await supabaseAdmin
-      .from('trip_chat_messages')
-      .select('*', { count: 'exact', head: true })
-      .eq('trip_id', tripId)
-      .eq('user_id', user.id)
-      .eq('role', 'user')
-      .gte('created_at', todayStart.toISOString())
-    if ((todayCount ?? 0) >= maxMessages) {
-      throw new Error(
-        `You've reached your daily limit of ${maxMessages} messages. Try again tomorrow.`
-      )
-    }
+    // Rate limit: organizers 40/day, participants 15/day (plan §13).
+    await consumeRateLimit(supabaseClient, organizer ? RATE_LIMITS.chatOrganizer : RATE_LIMITS.chatParticipant)
 
-    // Get user name
-    const { data: userData } = await supabaseAdmin
-      .from('users')
-      .select('full_name, email')
-      .eq('id', user.id)
-      .single()
-    const userName = userData?.full_name || userData?.email || 'Unknown'
-
-    // Gather trip context — expenses use nested selects for splits, claims, and allocation links
-    const [tripResult, participantsResult, sectionsResult, expensesResult, settlementsResult, eventsResult, chatResult] = await Promise.all([
-      supabaseAdmin.from('trips').select('*').eq('id', tripId).single(),
-      supabaseAdmin.from('trip_participants').select('*, user:user_id(full_name, email, avatar_data)').eq('trip_id', tripId).eq('active', true),
-      supabaseAdmin.from('planning_sections').select('*, options(*, selections(user_id))').eq('trip_id', tripId).order('order_index'),
-      supabaseAdmin.from('expenses').select('id, paid_by, amount, currency, base_currency_amount, description, category, status, ai_parsed, fx_rate, expense_splits(user_id, amount, base_currency_amount), expense_item_claims(user_id, amount_owed), expense_allocation_links(code)').eq('trip_id', tripId),
-      supabaseAdmin.from('settlements').select('from_user_id, to_user_id, amount').eq('trip_id', tripId),
-      supabaseAdmin.from('trip_timeline_events').select('*').eq('trip_id', tripId).order('event_date').order('start_time'),
-      supabaseAdmin.from('trip_chat_messages').select('role, content, user_id, created_at').eq('trip_id', tripId).order('created_at', { ascending: false }).limit(50),
+    // Slim context: trip header + participants + recent chat history.
+    // All reads under the caller's JWT.
+    const [tripResult, participantsResult, chatResult, userResult] = await Promise.all([
+      supabaseClient.from('trips').select('id, name, location, start_date, end_date, status, base_currency').eq('id', tripId).single(),
+      supabaseClient.from('trip_participants').select('user_id, role, user:user_id(full_name, email)').eq('trip_id', tripId).eq('active', true),
+      supabaseClient.from('trip_chat_messages').select('role, content, user_id').eq('trip_id', tripId).order('created_at', { ascending: false }).limit(30),
+      supabaseClient.from('users').select('full_name, email').eq('id', user.id).single(),
     ])
 
-    const expenses = expensesResult.data || []
-    const participants = participantsResult.data || []
-    const participantIds = participants.map((p: any) => p.user_id)
-    const settlements = settlementsResult.data || []
-
-    // Extract nested data from expenses
-    const splits = expenses.flatMap((e: any) => (e.expense_splits || []).map((s: any) => ({ ...s, expense_id: e.id })))
-    const claims = expenses.flatMap((e: any) => (e.expense_item_claims || []).map((c: any) => ({ ...c, expense_id: e.id })))
-    const allocationLinks = expenses.flatMap((e: any) => (e.expense_allocation_links || []).map((l: any) => ({ ...l, expense_id: e.id })))
-
-    // Compute per-user balances (mirrors frontend debtMinimization logic)
-    // Use base_currency_amount (GBP) when available, otherwise original amount
-    const baseCurrency = 'GBP'
-    const balances: Array<{ userId: string, totalPaid: number, totalOwed: number, netBalance: number, currency: string }> = []
-
-    for (const pid of participantIds) {
-      // Total paid by this user
-      const totalPaid = expenses
-        .filter((e: any) => e.paid_by === pid)
-        .reduce((sum: number, e: any) => sum + Number(e.base_currency_amount || e.amount), 0)
-
-      // Total owed from splits (non-itemized expenses)
-      const totalOwedSplits = splits
-        .filter((s: any) => s.user_id === pid)
-        .reduce((sum: number, s: any) => sum + Number(s.base_currency_amount || s.amount), 0)
-
-      // Total owed from claims (itemized expenses)
-      const totalOwedClaims = claims
-        .filter((c: any) => c.user_id === pid)
-        .reduce((sum: number, c: any) => {
-          const expense = expenses.find((e: any) => e.id === c.expense_id)
-          const fxRate = expense?.fx_rate ? Number(expense.fx_rate) : 1
-          return sum + Number(c.amount_owed) * fxRate
-        }, 0)
-
-      const totalOwed = totalOwedSplits + totalOwedClaims
-
-      // Settlements
-      const settledPaid = settlements
-        .filter((s: any) => s.from_user_id === pid)
-        .reduce((sum: number, s: any) => sum + Number(s.amount), 0)
-      const settledReceived = settlements
-        .filter((s: any) => s.to_user_id === pid)
-        .reduce((sum: number, s: any) => sum + Number(s.amount), 0)
-
-      const netBalance = totalPaid - totalOwed + settledPaid - settledReceived
-
-      balances.push({ userId: pid, totalPaid, totalOwed, netBalance, currency: baseCurrency })
+    if (tripResult.error || !tripResult.data) {
+      throw new Error('Trip not found')
     }
 
-    // Identify pending itemized claims (expenses needing user action)
-    const pendingClaims: Array<{ description: string, amount: number, currency: string, status: string, claimCode: string | null, missingUsers: string[] }> = []
-    const pendingExpenses = expenses.filter((e: any) => e.ai_parsed && e.status && ['unallocated', 'pending_allocation'].includes(e.status))
+    const participants = participantsResult.data ?? []
+    const userName = userResult.data?.full_name || userResult.data?.email || 'Unknown'
 
-    for (const expense of pendingExpenses) {
-      const expenseClaims = claims.filter((c: any) => c.expense_id === expense.id)
-      const claimedUserIds = [...new Set(expenseClaims.map((c: any) => c.user_id))]
-      // Everyone except the payer should claim
-      const missingUsers = participantIds.filter((pid: string) => pid !== expense.paid_by && !claimedUserIds.includes(pid))
-      const link = allocationLinks.find((l: any) => l.expense_id === expense.id)
-
-      pendingClaims.push({
-        description: expense.description,
-        amount: Number(expense.amount),
-        currency: expense.currency || baseCurrency,
-        status: expense.status,
-        claimCode: link?.code || null,
-        missingUsers,
-      })
+    // Build conversation history (oldest first), attributing user turns.
+    const nameByUserId = new Map<string, string>()
+    for (const p of participants) {
+      // deno-lint-ignore no-explicit-any
+      nameByUserId.set(p.user_id, (p.user as any)?.full_name || (p.user as any)?.email || 'Someone')
+    }
+    // deno-lint-ignore no-explicit-any
+    let history: AnthropicMessage[] = (chatResult.data ?? []).reverse().map((msg: any) =>
+      msg.role === 'assistant'
+        ? { role: 'assistant' as const, content: msg.content }
+        : { role: 'user' as const, content: `[${nameByUserId.get(msg.user_id) ?? 'Someone'}]: ${msg.content}` }
+    )
+    // The API requires the first message to be a user turn.
+    while (history.length > 0 && history[0].role === 'assistant') {
+      history = history.slice(1)
     }
 
-    // Expense overview (totals by currency and category)
-    const byCurrency: Record<string, number> = {}
-    const byCategory: Record<string, number> = {}
-    for (const e of expenses) {
-      const curr = e.currency || baseCurrency
-      byCurrency[curr] = (byCurrency[curr] || 0) + Number(e.amount)
-      byCategory[e.category] = (byCategory[e.category] || 0) + 1
-    }
+    const conversation: AnthropicMessage[] = [
+      ...history,
+      { role: 'user', content: `[${userName}]: ${message}` },
+    ]
 
-    const tripContext = {
-      trip: tripResult.data,
-      participants,
-      sections: sectionsResult.data || [],
-      timelineEvents: eventsResult.data || [],
-      balances,
-      pendingClaims,
-      expenseOverview: {
-        totalCount: expenses.length,
-        byCurrency: Object.entries(byCurrency).map(([currency, total]) => ({ currency, total })),
-        byCategory: Object.entries(byCategory).map(([category, count]) => ({ category, count })),
-      },
-    }
+    const systemPrompt = buildSystemPrompt(tripResult.data, participants, userName, organizer)
 
-    // Build conversation history for Claude
-    const recentMessages = (chatResult.data || []).reverse()
-    const conversationHistory = recentMessages.map((msg: any) => {
-      if (msg.role === 'assistant') {
-        return { role: 'assistant' as const, content: msg.content }
-      }
-      // Find user name for context
-      const msgUser = (participantsResult.data || []).find((p: any) => p.user_id === msg.user_id)
-      const msgUserName = msgUser?.user?.full_name || msgUser?.user?.email || 'Someone'
-      return { role: 'user' as const, content: `[${msgUserName}]: ${msg.content}` }
-    })
+    // Tools: read tools for everyone; propose_actions only for organizers.
+    const tools = [
+      ...buildAnthropicToolDefs(READ_TOOL_NAMES),
+      ...(organizer ? [PROPOSE_ACTIONS_TOOL] : []),
+    ]
 
-    // Add current message
-    conversationHistory.push({
-      role: 'user' as const,
-      content: `[${userName}]: ${message}`,
-    })
-
-    const systemPrompt = buildSystemPrompt(tripContext, !!isOrganizer, userName)
-
-    // Call Claude API
-    const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY')
-    if (!anthropicApiKey) {
-      throw new Error('Anthropic API key not configured')
-    }
-
-    // Store user message before calling AI
-    await supabaseAdmin.from('trip_chat_messages').insert({
+    // Store the user message before calling the AI (service role -- matches
+    // v1 behavior; trip_chat_messages inserts are server-authored).
+    const admin = serviceClient()
+    await admin.from('trip_chat_messages').insert({
       trip_id: tripId,
       user_id: user.id,
       role: 'user',
       content: message,
     })
 
-    // Call Claude API with streaming + prompt caching
-    const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'x-api-key': anthropicApiKey,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
-        stream: true,
-        // Prompt caching: cache the system prompt (trip context) so repeated
-        // messages in the same trip don't re-process all context tokens
-        cache_control: { type: 'ephemeral' },
-        system: [
-          {
-            type: 'text',
-            text: systemPrompt,
-            cache_control: { type: 'ephemeral' },
-          }
-        ],
-        messages: conversationHistory,
-      }),
-    })
-
-    if (!claudeResponse.ok) {
-      const errorText = await claudeResponse.text()
-      console.error('Claude API error:', claudeResponse.status, errorText)
-      throw new Error(`AI service error (${claudeResponse.status})`)
-    }
-
-    // Stream the response to the client as SSE
-    const reader = claudeResponse.body!.getReader()
-    const decoder = new TextDecoder()
-    let fullText = ''
+    // SSE response stream to the client.
+    const encoder = new TextEncoder()
+    const totalUsage: AnthropicUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
+    let modelUsed = CLAUDE_MODEL
 
     const stream = new ReadableStream({
       async start(controller) {
-        const encoder = new TextEncoder()
+        const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`))
 
         try {
-          let buffer = ''
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
+          let finalText = ''
+          let proposalId: string | null = null
+          const proposalSummaries: Array<{ type: string; summary: string }> = []
 
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
+          // Agentic tool loop: stream each model turn; execute read tools /
+          // stage proposals between turns; stop on end_turn.
+          for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+            const isLastAllowedIteration = iteration === MAX_TOOL_ITERATIONS - 1
+            const claudeResponse = await createMessageStream({
+              model: CLAUDE_MODEL,
+              max_tokens: 4096,
+              system: [
+                {
+                  type: 'text',
+                  text: padForCaching(systemPrompt),
+                  cache_control: { type: 'ephemeral' },
+                },
+              ],
+              messages: conversation,
+              // On the final permitted iteration, force a text answer.
+              tools: isLastAllowedIteration ? undefined : tools,
+            })
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                const data = line.slice(6).trim()
-                if (data === '[DONE]') continue
+            const turn = await consumeAnthropicStream(claudeResponse, (delta) => {
+              finalText += delta
+              send({ type: 'text', text: delta })
+            })
 
-                try {
-                  const event = JSON.parse(data)
+            totalUsage.input_tokens += turn.usage.input_tokens
+            totalUsage.output_tokens += turn.usage.output_tokens
+            totalUsage.cache_creation_input_tokens = (totalUsage.cache_creation_input_tokens ?? 0) + (turn.usage.cache_creation_input_tokens ?? 0)
+            totalUsage.cache_read_input_tokens = (totalUsage.cache_read_input_tokens ?? 0) + (turn.usage.cache_read_input_tokens ?? 0)
+            if (turn.model) modelUsed = turn.model
 
-                  if (event.type === 'content_block_delta' && event.delta?.text) {
-                    fullText += event.delta.text
-                    // Forward the text chunk to the client
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'text', text: event.delta.text })}\n\n`))
-                  }
-                } catch {
-                  // Skip unparseable SSE events
-                }
-              }
+            if (turn.stop_reason !== 'tool_use' || turn.toolUses.length === 0) {
+              break // done -- end_turn (or max_tokens etc.)
             }
-          }
 
-          // Parse the complete response for actions
-          let parsed: LLMResponse
-          try {
-            let jsonContent = fullText.trim()
-            // Strip markdown code fences if present
-            if (jsonContent.startsWith('```json')) {
-              jsonContent = jsonContent.replace(/```json\n?/g, '').replace(/```\n?/g, '')
-            } else if (jsonContent.startsWith('```')) {
-              jsonContent = jsonContent.replace(/```\n?/g, '')
+            // Append the assistant turn (text + tool_use blocks) to the conversation.
+            const assistantContent: AnthropicContentBlock[] = []
+            if (turn.text) assistantContent.push({ type: 'text', text: turn.text })
+            for (const tu of turn.toolUses) {
+              assistantContent.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input })
             }
-            parsed = JSON.parse(jsonContent)
-          } catch {
-            // LLM sometimes outputs natural language BEFORE the JSON object.
-            // Try to find and extract the JSON from the text.
-            let extracted = false
-            for (const pattern of ['{ "message"', '{"message"']) {
-              const idx = fullText.indexOf(pattern)
-              if (idx !== -1) {
-                try {
-                  parsed = JSON.parse(fullText.slice(idx))
-                  extracted = true
-                  break
-                } catch {
-                  // Try trimming trailing text after the JSON by finding balanced braces
-                  const jsonCandidate = fullText.slice(idx)
-                  let depth = 0
-                  let end = -1
-                  for (let i = 0; i < jsonCandidate.length; i++) {
-                    if (jsonCandidate[i] === '{') depth++
-                    else if (jsonCandidate[i] === '}') {
-                      depth--
-                      if (depth === 0) { end = i + 1; break }
-                    }
-                  }
-                  if (end !== -1) {
-                    try {
-                      parsed = JSON.parse(jsonCandidate.slice(0, end))
-                      extracted = true
-                      break
-                    } catch { /* continue */ }
-                  }
-                }
-              }
-            }
-            if (!extracted) {
-              parsed = { message: fullText, actions: [] }
-            }
-          }
+            conversation.push({ role: 'assistant', content: assistantContent })
 
-          // CRITICAL: Strip actions for non-organizers
-          if (!isOrganizer) {
-            parsed.actions = []
-          }
-
-          // Execute actions if organizer
-          const executedActions: TimelineAction[] = []
-          if (isOrganizer && parsed.actions && parsed.actions.length > 0) {
-            for (const action of parsed.actions) {
+            // Execute all requested tools; all results go back in ONE user message.
+            const toolResults: AnthropicContentBlock[] = []
+            for (const tu of turn.toolUses) {
               try {
-                if (action.type === 'create_event') {
-                  const { error } = await supabaseAdmin.from('trip_timeline_events').insert({
-                    trip_id: tripId,
-                    event_date: action.event_date!,
-                    start_time: action.start_time || null,
-                    end_time: action.end_time || null,
-                    all_day: action.all_day || false,
-                    title: action.title || action.event_title || 'Untitled',
-                    description: action.description || null,
-                    category: action.category || 'other',
-                    location: action.location || null,
-                    created_by: user.id,
-                  })
-                  if (!error) {
-                    executedActions.push({ ...action, event_title: action.title || action.event_title })
-                  } else {
-                    console.error('Error creating event:', error)
+                if (tu.name === 'propose_actions') {
+                  if (!organizer) {
+                    throw new Error('Only organizers can stage changes')
                   }
-                } else if (action.type === 'update_event' && action.event_id) {
-                  const updateData: Record<string, any> = { updated_at: new Date().toISOString() }
-                  if (action.title) updateData.title = action.title
-                  if (action.description !== undefined) updateData.description = action.description
-                  if (action.event_date) updateData.event_date = action.event_date
-                  if (action.start_time !== undefined) updateData.start_time = action.start_time
-                  if (action.end_time !== undefined) updateData.end_time = action.end_time
-                  if (action.category) updateData.category = action.category
-                  if (action.location !== undefined) updateData.location = action.location
-                  if (action.all_day !== undefined) updateData.all_day = action.all_day
-
-                  const { error } = await supabaseAdmin
-                    .from('trip_timeline_events')
-                    .update(updateData)
-                    .eq('id', action.event_id)
-                    .eq('trip_id', tripId)
-                  if (!error) executedActions.push(action)
-                  else console.error('Error updating event:', error)
-                } else if (action.type === 'delete_event' && action.event_id) {
-                  const { error } = await supabaseAdmin
-                    .from('trip_timeline_events')
-                    .delete()
-                    .eq('id', action.event_id)
-                    .eq('trip_id', tripId)
-                  if (!error) executedActions.push(action)
-                  else console.error('Error deleting event:', error)
+                  // Validate the changeset against the Proposal contract.
+                  const rawInput = tu.input as { source_text?: string; actions?: unknown[] }
+                  const actions = (rawInput.actions ?? []).map((a) => ProposedActionSchema.parse(a))
+                  const proposal = ProposalSchema.parse({
+                    trip_id: tripId,
+                    source_text: rawInput.source_text ?? message,
+                    actions,
+                  })
+                  // Insert under the CALLER's JWT -- the ai_proposals insert
+                  // policy requires created_by = auth.uid() and trip
+                  // membership, so RLS enforces this is legit.
+                  const { data: inserted, error: insertError } = await supabaseClient
+                    .from('ai_proposals')
+                    .insert({
+                      trip_id: proposal.trip_id,
+                      created_by: user.id,
+                      source_text: proposal.source_text ?? null,
+                      actions: proposal.actions,
+                      status: 'pending',
+                    })
+                    .select('id')
+                    .single()
+                  if (insertError || !inserted) {
+                    throw new Error(`Failed to store proposal: ${insertError?.message ?? 'no data'}`)
+                  }
+                  proposalId = inserted.id
+                  send({ type: 'proposal', proposal_id: proposalId })
+                  for (const a of proposal.actions) {
+                    // deno-lint-ignore no-explicit-any
+                    proposalSummaries.push({ type: a.type, summary: 'title' in a ? ((a as any).title ?? a.type) : a.type })
+                  }
+                  toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: tu.id,
+                    content: JSON.stringify({ ok: true, proposal_id: proposalId, staged_actions: proposal.actions.length }),
+                  })
+                } else if ((READ_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+                  const result = await executeReadTool(tu.name as ChatToolName, tu.input, {
+                    client: supabaseClient,
+                    tripId,
+                    isOrganizer: organizer,
+                  })
+                  toolResults.push({
+                    type: 'tool_result',
+                    tool_use_id: tu.id,
+                    content: JSON.stringify(result),
+                  })
+                } else {
+                  throw new Error(`Unknown tool: ${tu.name}`)
                 }
-              } catch (actionError) {
-                console.error('Error executing action:', actionError)
+              } catch (toolError) {
+                toolResults.push({
+                  type: 'tool_result',
+                  tool_use_id: tu.id,
+                  content: toolError instanceof Error ? toolError.message : 'Tool execution failed',
+                  is_error: true,
+                })
               }
             }
+            conversation.push({ role: 'user', content: toolResults })
           }
 
-          // Store assistant response
-          await supabaseAdmin.from('trip_chat_messages').insert({
+          // Persist the assistant reply (service role; metadata carries proposal linkage).
+          await admin.from('trip_chat_messages').insert({
             trip_id: tripId,
             user_id: null,
             role: 'assistant',
-            content: parsed.message,
-            actions_executed: executedActions,
-            had_write_actions: executedActions.length > 0,
+            content: finalText || '(no response)',
+            had_write_actions: proposalId != null,
+            metadata: proposalId ? { proposal_id: proposalId } : null,
           })
 
-          // Send final event with actions summary
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'done', message: parsed.message, actions_summary: executedActions })}\n\n`))
+          await logAiUsage({ userId: user.id, tripId, functionName: 'trip-chat', model: modelUsed, usage: totalUsage })
+
+          // Final done event -- actions_summary keeps its v1 field name for
+          // ChatDrawer compatibility; entries now describe STAGED proposals,
+          // not executed writes (nothing is executed here).
+          send({
+            type: 'done',
+            message: finalText,
+            actions_summary: proposalSummaries,
+            ...(proposalId ? { proposal_id: proposalId } : {}),
+          })
           controller.close()
         } catch (streamError) {
-          console.error('Stream error:', streamError)
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'error', error: 'Stream interrupted' })}\n\n`))
+          console.error('[trip-chat] stream error:', streamError)
+          send({ type: 'error', error: streamError instanceof Error ? streamError.message : 'Stream interrupted' })
           controller.close()
         }
       },
@@ -588,18 +366,7 @@ Deno.serve(async (req) => {
         'Connection': 'keep-alive',
       },
     })
-
   } catch (error) {
-    console.error('Trip chat error:', error)
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: error.message || 'Chat request failed',
-      }),
-      {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    )
+    return errorResponse(error)
   }
 })

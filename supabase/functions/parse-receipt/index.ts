@@ -1,18 +1,55 @@
-// Receipt Parsing Edge Function
-// Primary: Anthropic Claude Sonnet 4.6 | Fallback: OpenAI GPT-4o-mini
-// Extracts structured data from receipt images and PDFs
+// Receipt Parsing Edge Function v2 (plan §10)
+//
+// REWRITE, but keeps the existing request/response envelope fields the
+// current frontend sends/expects (src/lib/receiptParsing.ts) so the live
+// app keeps working until cutover -- new v2 fields are ADDED alongside the
+// legacy flat fields inside `data`, never replacing them.
+//
+// Model: claude-sonnet-5, structured outputs against ReceiptParseResult.
+// Then the adjustment disambiguation engine (pure TS, not the model) in
+// _shared/receiptReconciliation.ts verifies Σ(lines)=subtotal and
+// subtotal±adjustments=total in integer minor units; on mismatch, hypothesis-
+// tests standard interpretations and selects the one that reconciles exactly.
+// One repair re-prompt if nothing reconciles; still failing -> printed-total-
+// trusted result with per-line review flags. Never silently adjusts.
+//
+// Rate limit: 20 parses/day/user (plan §10).
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { handleCorsPreflight, corsHeaders } from '../_shared/cors.ts'
+import { errorResponse, jsonResponse, ForbiddenError, UnauthorizedError } from '../_shared/errors.ts'
+import { callerClient, requireUser, requireTripParticipant } from '../_shared/supabaseClients.ts'
+import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
+import { createMessage, padForCaching, CLAUDE_MODEL, type AnthropicContentBlock } from '../_shared/anthropic.ts'
+import { logAiUsage } from '../_shared/usage.ts'
+import { reconcileReceipt, buildRepairPrompt, type ReconciliationResult } from '../_shared/receiptReconciliation.ts'
+import { ReceiptParseResultSchema, ReceiptParseResultJsonSchema, type ReceiptParseResult } from '../_shared/contracts/receiptParseResult.ts'
 
-// CORS headers for requests from GitHub Pages
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-}
+const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB, matches existing bucket cap
 
-// Type definitions
-interface ReceiptLineItem {
+const SYSTEM_PROMPT_STATIC = `You are an expert receipt-parsing assistant. You will be shown an image (or PDF) of a purchase receipt and must extract every piece of structured information from it, precisely, into the ReceiptParseResult JSON schema you have been given as your required output format.
+
+CORE PRINCIPLES
+
+1. Extract EVERY line item visible on the receipt. Do not summarize or omit items, including small ones (side dishes, garnishes, single drinks).
+2. For each line item, determine whether the printed number next to the quantity is a UNIT PRICE or a LINE TOTAL, and record which in \`printed_field\`:
+   - If a receipt shows "2x ¥900" and the line reads ¥1800, the printed number is more likely the line total already reflecting quantity -- but you must reason from context. Cross-check: if summing the numbers-as-shown for all lines gets you close to the printed subtotal, they are line totals; if summing (quantity * number-as-shown) gets you close to the printed subtotal, they are unit prices.
+   - If you cannot tell with confidence, set printed_field to "ambiguous" rather than guessing.
+   - If both a unit price AND a line total are printed and they agree (unit_price * quantity == line_total), set printed_field to "both".
+3. Translate non-English item names into \`name_english\` while preserving \`name_original\` exactly as printed (including diacritics/non-Latin scripts).
+4. Extract EVERY tax line as a separate entry in the \`tax\` array with its rate (as a decimal, e.g. 0.08 for 8%) and whether it is already included in the displayed prices (\`inclusive: true\`) or an additional charge on top (\`inclusive: false\`). Japanese receipts often show a dual 8%/10% breakdown (8%対象／10%対象) -- these are informational breakdowns of tax ALREADY INCLUDED in the displayed prices; set inclusive: true for each. European VAT/TVA/MwSt/IVA lines are almost always inclusive: true (prices already include VAT by law). US sales tax and similar add-on taxes are inclusive: false.
+5. Extract the service charge (if any) as a single object noting whether it is automatic/mandatory (\`auto: true\`) or a voluntary suggestion (\`auto: false\`), and its amount or percent as printed.
+6. Extract any discounts (loyalty, voucher, promotional) at the receipt level in \`discounts\`, and any item-specific discounts nested under that line item's \`discounts\`.
+7. Extract a \`rounding_adjustment\` if the receipt shows cash-rounding (common in countries without 1-cent/1-yen coins in circulation, or JPY consumption-tax rounding).
+8. Record your confidence (0-1) for uncertain fields in the \`confidence\` array, and use \`notes\` for anything unusual you noticed.
+9. Do NOT perform any arithmetic reconciliation yourself, and do NOT adjust any number you read from the receipt to make totals match -- report exactly what is printed, even if it looks internally inconsistent. A separate verification pass handles reconciliation.
+10. The currency must be a 3-letter ISO 4217 code inferred from symbols/context (¥ + Japanese text -> JPY, € -> EUR, £ -> GBP, $ + US context -> USD, etc).
+11. \`receipt_date\` must be YYYY-MM-DD, or null if no date is visible.
+12. If the receipt is a PDF (e.g. an emailed invoice), read it the same way as an image.
+
+Return ONLY the structured ReceiptParseResult -- no prose commentary outside the schema.`
+
+interface LegacyLineItem {
   line_number: number
   name_original: string
   name_english?: string
@@ -26,7 +63,7 @@ interface ReceiptLineItem {
   total_amount: number
 }
 
-interface ReceiptData {
+interface LegacyReceiptData {
   vendor_name: string
   vendor_location?: string
   receipt_date?: string
@@ -41,493 +78,254 @@ interface ReceiptData {
   service_charge_amount?: number
   discount_amount?: number
   discount_percent?: number
-  line_items: ReceiptLineItem[]
+  line_items: LegacyLineItem[]
   total_matches: boolean
   calculation_notes?: string
-}
-
-// Shared prompt for receipt parsing (used by both Claude and OpenAI)
-function getReceiptParsingPrompt(): string {
-  return `You are a receipt parsing expert. Analyze this receipt image and extract ALL information in a structured JSON format.
-
-CRITICAL REQUIREMENTS:
-1. Extract EVERY line item visible on the receipt
-2. Translate foreign language items to English (keep original too)
-3. Handle tax and service charges correctly (see VAT RULES below)
-4. Ensure line items SUM EXACTLY to the grand total
-5. Categorize the expense based on vendor and items
-6. Correctly distinguish UNIT PRICE from LINE TOTAL (see QUANTITY HANDLING below)
-
-QUANTITY HANDLING (ALL RECEIPTS):
-When a line item shows a quantity (e.g., "×2", "2x", "Qty: 2", "2点"), the number shown alongside it could be EITHER the unit price OR the line total. You MUST determine which by cross-referencing against the receipt grand total:
-- If the right-side numbers (as-is) sum to the receipt subtotal/total → they are LINE TOTALS. Derive unit_price = number / quantity.
-- If (number × quantity) values sum to the receipt subtotal/total → they are UNIT PRICES. Derive subtotal = number × quantity.
-- Some receipts show both (e.g., "¥900 ×2 ¥1800") — use the final number as line total.
-- Always verify: SUM of all line subtotals must equal the receipt subtotal.
-
-EUROPEAN VAT RULES (CRITICAL — READ CAREFULLY):
-In Europe (France, Switzerland, Austria, Italy, Germany, Spain, and most EU/EEA countries), item prices displayed on receipts INCLUDE VAT/TVA/MwSt/IVA by law.
-
-- When you see "TVA 10%", "MwSt 7.7%", "IVA 22%" etc. on a European receipt, this is an INFORMATIONAL BREAKDOWN of tax already embedded in the item prices — it is NOT an additional charge
-- Set "vat_inclusive": true for European receipts
-- When vat_inclusive is true: set tax_percent to 0 and tax_amount to 0 for BOTH the receipt total AND each line item. The item unit_price and subtotal should match what's printed on the receipt (they already contain VAT)
-- When vat_inclusive is false (US receipts, some B2B invoices): tax IS an additional charge. Distribute it proportionally across line items
-
-JAPANESE / ASIAN RECEIPTS:
-- Japan: Consumption tax is already INCLUDED in displayed prices. For simplicity, treat Japanese receipts as vat_inclusive: true with tax_percent: 0 and tax_amount: 0 for all line items AND the receipt total. Ignore any tax breakdown lines (消費税, 内税, etc.) — they are informational only.
-- JPY amounts have NO decimal places. Return whole numbers (e.g., 1500 not 1500.00)
-- Translate Japanese item names to English in name_english field
-
-HOW TO DETECT VAT-INCLUSIVE vs VAT-EXCLUSIVE:
-- European consumer receipts (restaurants, shops, ski rentals) → vat_inclusive: true
-- Japanese consumer receipts → vat_inclusive: true, tax_percent: 0, tax_amount: 0 (treat all prices as tax-inclusive, ignore tax breakdown)
-- Look for clues: "TTC" (toutes taxes comprises), "inkl. MwSt", "IVA inclusa", currency EUR/CHF → likely VAT-inclusive
-- Look for clues: "Sales Tax", "Tax added", currency USD/CAD → likely VAT-exclusive
-- If the receipt shows item prices AND a separate tax line that when added equals the total → VAT-exclusive
-- If the receipt shows item prices that already sum to the total, with a VAT breakdown shown separately → VAT-inclusive
-
-SERVICE CHARGE RULES:
-- Service charges ("service compris", "Servicepauschale", "servizio") are ALWAYS separate additions to the subtotal, even on European receipts
-- Service charges are NOT included in item prices
-- Distribute service proportionally: line_service = (line_subtotal / receipt_subtotal) * total_service_charge
-
-Return JSON in this EXACT structure:
-{
-  "vendor_name": "Restaurant Name",
-  "vendor_location": "City, Country (if visible)",
-  "receipt_date": "YYYY-MM-DD (if visible)",
-  "currency": "GBP", "EUR", "USD", "CHF", "JPY", "AUD", "CAD" etc,
-  "expense_category": "food",
-  "vat_inclusive": true,
-
-  "subtotal": 100.00,
-  "total": 110.00,
-
-  "tax_percent": 0,
-  "tax_amount": 0,
-  "service_charge_percent": 10.0,
-  "service_charge_amount": 10.00,
-  "discount_amount": 0.00,
-  "discount_percent": 0.0,
-
-  "line_items": [
-    {
-      "line_number": 1,
-      "name_original": "Pizza Margherita",
-      "name_english": "Margherita Pizza",
-      "quantity": 2,
-      "unit_price": 12.50,
-      "line_discount_amount": 0.00,
-      "line_discount_percent": 0.0,
-      "subtotal": 25.00,
-      "tax_amount": 0,
-      "service_amount": 2.50,
-      "total_amount": 27.50
-    }
-  ],
-
-  "total_matches": true,
-  "calculation_notes": "VAT-inclusive European receipt. Tax amounts shown on receipt are informational only."
-}
-
-EXPENSE CATEGORY RULES:
-Choose ONE of these categories based on the vendor and line items:
-- "food": Restaurants, cafes, bars, grocery stores, dining, food delivery
-- "accommodation": Hotels, hostels, Airbnb, apartments, lodges, room bookings
-- "transport": Taxis, trains, buses, flights, parking, fuel, car rental, transfers
-- "activities": Ski passes, lift tickets, tours, museums, attractions, lessons, entertainment
-- "equipment": Ski rental, gear hire, sports equipment, helmet, boots
-- "other": Anything that doesn't fit the above categories
-
-CALCULATION RULES:
-For VAT-INCLUSIVE receipts (most European):
-- line_item.subtotal = quantity * unit_price - line_discount_amount (prices as printed on receipt)
-- line_item.tax_amount = 0 (tax already in price)
-- line_item.service_amount = (line_subtotal / receipt_subtotal) * total_service_charge
-- line_item.total_amount = subtotal + service_amount
-- receipt tax_percent = 0, receipt tax_amount = 0
-
-For VAT-EXCLUSIVE receipts (US, some B2B):
-- line_item.subtotal = quantity * unit_price - line_discount_amount
-- line_item.tax_amount = (line_subtotal / receipt_subtotal) * total_tax
-- line_item.service_amount = (line_subtotal / receipt_subtotal) * total_service
-- line_item.total_amount = subtotal + tax_amount + service_amount
-
-ALWAYS: SUM(all line_item.total_amount) MUST equal receipt total.
-
-If receipt is unclear or text is cut off, make best effort estimates and note in calculation_notes.
-Return ONLY valid JSON, no markdown formatting.`
-}
-
-// Call Anthropic Claude API
-async function callAnthropicAPI(
-  base64: string,
-  mimeType: string,
-  isPDF: boolean,
-  prompt: string
-): Promise<string> {
-  const anthropicApiKey = Deno.env.get('ANTHROPIC_API_KEY')
-  if (!anthropicApiKey) {
-    throw new Error('ANTHROPIC_API_KEY not configured')
+  // v2 additions (extend, don't break -- old frontend ignores unknown fields)
+  v2: {
+    receipt: ReceiptParseResult
+    reconciliation: ReconciliationResult
   }
+}
 
-  console.log('Calling Anthropic Claude API...')
+/** Guesses an expense_category from vendor name / line items -- best-effort heuristic, matches v1 categories. */
+function guessExpenseCategory(receipt: ReceiptParseResult): string {
+  const text = [receipt.vendor_name, ...receipt.line_items.map((l) => l.name_english || l.name_original)]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  if (/hotel|hostel|airbnb|lodge|apartment|room/.test(text)) return 'accommodation'
+  if (/taxi|train|bus|flight|airline|parking|fuel|car rental|transfer|uber|metro/.test(text)) return 'transport'
+  if (/ski|lift|pass|tour|museum|attraction|lesson|entrance|activity/.test(text)) return 'activities'
+  if (/rental|gear|equipment|helmet|boots/.test(text)) return 'equipment'
+  if (/restaurant|cafe|bar|food|grocery|bakery|pizza|ramen|izakaya|conbini|supermarket/.test(text)) return 'food'
+  return 'food' // default bias: receipts are usually food/dining
+}
 
-  // Build content block based on file type
-  const fileContentBlock = isPDF
-    ? {
-        type: 'document' as const,
-        source: {
-          type: 'base64' as const,
-          media_type: 'application/pdf' as const,
-          data: base64,
-        },
-      }
-    : {
-        type: 'image' as const,
-        source: {
-          type: 'base64' as const,
-          media_type: mimeType as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
-          data: base64,
-        },
-      }
+/** Maps the v2 ReceiptParseResult + reconciliation result into the legacy flat shape the current frontend expects. */
+function toLegacyShape(receipt: ReceiptParseResult, reconciliation: ReconciliationResult): LegacyReceiptData {
+  const isZeroDecimal = receipt.currency === 'JPY' || receipt.currency === 'KRW'
+  const inclusiveTax = receipt.tax.filter((t) => t.inclusive)
+  const exclusiveTax = receipt.tax.filter((t) => !t.inclusive)
+  const vatInclusive = inclusiveTax.length > 0 && exclusiveTax.length === 0
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': anthropicApiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 8192,
-      temperature: 0.1,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            fileContentBlock,
-            {
-              type: 'text',
-              text: prompt,
-            },
-          ],
-        },
-      ],
-    }),
+  const totalExclusiveTax = exclusiveTax.reduce((sum, t) => sum + t.amount, 0)
+  const totalExclusiveTaxRate = exclusiveTax.length > 0 && exclusiveTax[0].rate != null ? exclusiveTax[0].rate : undefined
+
+  const lineItemsTotal = receipt.line_items.length > 0
+    ? receipt.line_items.reduce((sum, l) => sum + l.line_total, 0)
+    : 0
+
+  const legacyLineItems: LegacyLineItem[] = receipt.line_items.map((l) => {
+    const lineDiscountAmount = l.discounts.reduce((s, d) => s + (d.amount ?? 0), 0) || undefined
+    const lineDiscountPercent = l.discounts.find((d) => d.percent != null)?.percent ?? undefined
+    // Proportional share of tax/service, matching v1's distribution convention.
+    const share = lineItemsTotal > 0 ? l.line_total / lineItemsTotal : 0
+    const taxAmount = vatInclusive ? 0 : totalExclusiveTax * share
+    const serviceAmount = receipt.service_charge?.amount
+      ? receipt.service_charge.amount * share
+      : receipt.service_charge?.percent
+        ? (l.line_total * receipt.service_charge.percent) / 100
+        : 0
+    return {
+      line_number: l.line_number,
+      name_original: l.name_original,
+      name_english: l.name_english ?? undefined,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+      line_discount_amount: lineDiscountAmount,
+      line_discount_percent: lineDiscountPercent,
+      subtotal: l.line_total,
+      tax_amount: isZeroDecimal ? Math.round(taxAmount) : Math.round(taxAmount * 100) / 100,
+      service_amount: isZeroDecimal ? Math.round(serviceAmount) : Math.round(serviceAmount * 100) / 100,
+      total_amount: isZeroDecimal
+        ? Math.round(l.line_total + taxAmount + serviceAmount)
+        : Math.round((l.line_total + taxAmount + serviceAmount) * 100) / 100,
+    }
   })
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('Anthropic API error:', response.status, errorText)
-    throw new Error(`Anthropic API failed (${response.status}): ${errorText}`)
+  return {
+    vendor_name: receipt.vendor_name ?? 'Unknown vendor',
+    vendor_location: receipt.vendor_address ?? undefined,
+    receipt_date: receipt.receipt_date ?? undefined,
+    currency: receipt.currency,
+    expense_category: guessExpenseCategory(receipt),
+    vat_inclusive: vatInclusive,
+    subtotal: receipt.subtotal ?? lineItemsTotal,
+    total: receipt.total,
+    tax_percent: totalExclusiveTaxRate != null ? totalExclusiveTaxRate * 100 : (vatInclusive ? 0 : undefined),
+    tax_amount: vatInclusive ? 0 : totalExclusiveTax,
+    service_charge_percent: receipt.service_charge?.percent ?? undefined,
+    service_charge_amount: receipt.service_charge?.amount ?? undefined,
+    discount_amount: receipt.discounts.reduce((s, d) => s + (d.amount ?? 0), 0) || undefined,
+    discount_percent: receipt.discounts.find((d) => d.percent != null)?.percent ?? undefined,
+    line_items: legacyLineItems,
+    total_matches: reconciliation.reconciled,
+    calculation_notes: reconciliation.reconciled
+      ? receipt.notes ?? undefined
+      : `${reconciliation.explanation}${receipt.notes ? ` ${receipt.notes}` : ''}`,
+    v2: { receipt, reconciliation },
   }
+}
 
-  const data = await response.json()
-  console.log('Anthropic response received')
+async function callClaudeForReceipt(
+  fileBlock: AnthropicContentBlock,
+  repairContext?: { previousReceipt: ReceiptParseResult; repairPrompt: string }
+) {
+  const messages = repairContext
+    ? [
+        {
+          role: 'user' as const,
+          content: [fileBlock, { type: 'text' as const, text: 'Extract this receipt into the ReceiptParseResult schema.' }],
+        },
+        {
+          role: 'assistant' as const,
+          content: JSON.stringify(repairContext.previousReceipt),
+        },
+        {
+          role: 'user' as const,
+          content: repairContext.repairPrompt,
+        },
+      ]
+    : [
+        {
+          role: 'user' as const,
+          content: [fileBlock, { type: 'text' as const, text: 'Extract this receipt into the ReceiptParseResult schema.' }],
+        },
+      ]
 
-  // Extract text content from Claude's response
-  const textBlock = data.content?.find((block: any) => block.type === 'text')
+  return await createMessage({
+    model: CLAUDE_MODEL,
+    max_tokens: 8192,
+    system: [
+      {
+        type: 'text',
+        text: padForCaching(SYSTEM_PROMPT_STATIC),
+        cache_control: { type: 'ephemeral' },
+      },
+    ],
+    messages,
+    output_config: {
+      format: { type: 'json_schema', schema: ReceiptParseResultJsonSchema.schema, name: ReceiptParseResultJsonSchema.name },
+    },
+  })
+}
+
+function extractJsonFromResponse(content: AnthropicContentBlock[]): unknown {
+  const textBlock = content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
   if (!textBlock?.text) {
-    throw new Error('No text content in Anthropic response')
+    throw new Error('No text content in Claude response')
   }
-
-  return textBlock.text
+  return JSON.parse(textBlock.text)
 }
 
-// Call OpenAI API (fallback)
-async function callOpenAIAPI(
-  base64: string,
-  mimeType: string,
-  isPDF: boolean,
-  prompt: string
-): Promise<string> {
-  const openaiApiKey = Deno.env.get('OPENAI_API_KEY')
-  if (!openaiApiKey) {
-    throw new Error('OPENAI_API_KEY not configured')
-  }
-
-  console.log('Calling OpenAI API (fallback)...')
-
-  const fileContent = isPDF ? {
-    type: 'file',
-    file: {
-      filename: 'receipt.pdf',
-      file_data: `data:${mimeType};base64,${base64}`
-    }
-  } : {
-    type: 'image_url',
-    image_url: {
-      url: `data:${mimeType};base64,${base64}`
-    }
-  }
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${openaiApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: prompt },
-            fileContent,
-          ],
-        },
-      ],
-      max_completion_tokens: 8192,
-      temperature: 0.1,
-    }),
-  })
-
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('OpenAI API error:', response.status, errorText)
-    throw new Error(`OpenAI API failed (${response.status}): ${errorText}`)
-  }
-
-  const data = await response.json()
-  console.log('OpenAI response received')
-
-  const content = data.choices[0]?.message?.content
-  if (!content) {
-    throw new Error('No content in OpenAI response')
-  }
-
-  return content
-}
-
-// Main handler
 Deno.serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
+  const preflight = handleCorsPreflight(req)
+  if (preflight) return preflight
+
+  let userId: string | null = null
+  let tripId: string | null = null
 
   try {
-    console.log('Parse-receipt function called')
+    const supabaseClient = callerClient(req)
+    const user = await requireUser(supabaseClient)
+    userId = user.id
 
-    // Verify authentication header
-    const authHeader = req.headers.get('Authorization')
-    if (!authHeader) {
-      throw new Error('Missing authorization header')
-    }
-
-    // Create Supabase client with user's auth token
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      {
-        global: {
-          headers: { Authorization: authHeader }
-        }
-      }
-    )
-
-    // Verify user is authenticated
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser()
-    if (userError || !user) {
-      console.error('Auth error:', userError)
-      throw new Error('Unauthorized')
-    }
-
-    console.log('User authenticated:', user.id)
-
-    // Parse request body
-    const { receiptPath, tripId } = await req.json()
-    if (!receiptPath || !tripId) {
+    const { receiptPath, tripId: bodyTripId } = await req.json()
+    if (!receiptPath || !bodyTripId) {
       throw new Error('Missing receiptPath or tripId')
     }
+    const currentTripId: string = bodyTripId
+    tripId = currentTripId
 
-    console.log('Receipt path:', receiptPath, 'Trip ID:', tripId)
+    await requireTripParticipant(supabaseClient, currentTripId, user.id)
 
-    // Verify user is trip participant
-    const { data: participant, error: participantError } = await supabaseClient
-      .from('trip_participants')
-      .select('user_id')
-      .eq('trip_id', tripId)
-      .eq('user_id', user.id)
-      .single()
+    await consumeRateLimit(supabaseClient, RATE_LIMITS.parseReceipt)
 
-    if (participantError || !participant) {
-      console.error('Participant check failed:', participantError)
-      throw new Error('User is not a participant in this trip')
-    }
-
-    console.log('User verified as trip participant')
-
-    // Download receipt image from Supabase Storage
-    console.log('Attempting to download from receipts bucket:', receiptPath)
-
+    // Download receipt from storage (via caller's client so RLS/storage policy applies)
     const { data: imageData, error: downloadError } = await supabaseClient
       .storage
       .from('receipts')
       .download(receiptPath)
 
-    if (downloadError) {
-      console.error('Download error:', downloadError)
-      throw new Error(`Failed to download receipt from path "${receiptPath}": ${JSON.stringify(downloadError)}`)
+    if (downloadError || !imageData) {
+      throw new Error(`Failed to download receipt from path "${receiptPath}": ${downloadError?.message ?? 'no data'}`)
     }
 
-    if (!imageData) {
-      throw new Error(`Receipt download returned no data for path: ${receiptPath}`)
-    }
-
-    console.log('Receipt downloaded, size:', imageData.size, 'bytes', 'type:', imageData.type)
-
-    // Check file size limit (5MB)
-    const maxFileSize = 5 * 1024 * 1024
-    if (imageData.size > maxFileSize) {
+    if (imageData.size > MAX_FILE_SIZE) {
       throw new Error('Image too large. Maximum 5MB allowed.')
     }
 
-    // Detect MIME type from blob or file extension
     let mimeType = imageData.type || 'image/jpeg'
     if (!mimeType || mimeType === 'application/octet-stream') {
       const ext = receiptPath.toLowerCase().split('.').pop()
       const mimeTypes: Record<string, string> = {
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'png': 'image/png',
-        'gif': 'image/gif',
-        'webp': 'image/webp',
-        'pdf': 'application/pdf'
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
       }
       mimeType = mimeTypes[ext || ''] || 'image/jpeg'
     }
 
-    console.log('Detected MIME type:', mimeType)
-
-    // Convert blob to base64 (process in chunks to avoid stack overflow)
     const arrayBuffer = await imageData.arrayBuffer()
     const uint8Array = new Uint8Array(arrayBuffer)
-
     let binaryString = ''
     const chunkSize = 8192
     for (let i = 0; i < uint8Array.length; i += chunkSize) {
-      const chunk = uint8Array.subarray(i, i + chunkSize)
-      binaryString += String.fromCharCode(...chunk)
+      binaryString += String.fromCharCode(...uint8Array.subarray(i, i + chunkSize))
     }
     const base64 = btoa(binaryString)
 
-    console.log('Image converted to base64, length:', base64.length)
+    const isPdf = mimeType === 'application/pdf'
+    const fileBlock: AnthropicContentBlock = isPdf
+      ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }
 
-    const isPDF = mimeType === 'application/pdf'
-    const prompt = getReceiptParsingPrompt()
+    // --- First pass ---
+    let response = await callClaudeForReceipt(fileBlock)
+    let totalUsage = { ...response.usage }
+    let parsed = ReceiptParseResultSchema.parse(extractJsonFromResponse(response.content))
+    let reconciliation = reconcileReceipt(parsed)
 
-    // Try Anthropic Claude first, fall back to OpenAI on failure
-    let rawContent: string
-
-    try {
-      rawContent = await callAnthropicAPI(base64, mimeType, isPDF, prompt)
-      console.log('Successfully parsed with Anthropic Claude')
-    } catch (anthropicError) {
-      console.warn('Anthropic API failed, falling back to OpenAI:', anthropicError.message)
+    // --- One repair re-prompt if nothing reconciled ---
+    if (!reconciliation.reconciled) {
+      const repairPrompt = buildRepairPrompt(parsed, reconciliation)
       try {
-        rawContent = await callOpenAIAPI(base64, mimeType, isPDF, prompt)
-        console.log('Successfully parsed with OpenAI (fallback)')
-      } catch (openaiError) {
-        console.error('Both APIs failed. Anthropic:', anthropicError.message, 'OpenAI:', openaiError.message)
-        throw new Error(`Receipt parsing failed with both providers. Last error: ${openaiError.message}`)
-      }
-    }
-
-    // Parse JSON response (remove markdown formatting if present)
-    let jsonContent = rawContent.trim()
-    if (jsonContent.startsWith('```json')) {
-      jsonContent = jsonContent.replace(/```json\n?/g, '').replace(/```\n?/g, '')
-    }
-    if (jsonContent.startsWith('```')) {
-      jsonContent = jsonContent.replace(/```\n?/g, '')
-    }
-
-    const parsedData: ReceiptData = JSON.parse(jsonContent)
-
-    // Ensure vat_inclusive field exists (default to false if missing)
-    if (parsedData.vat_inclusive === undefined) {
-      parsedData.vat_inclusive = false
-    }
-
-    // Server-side total validation: cross-check line item subtotals + receipt-level tax/service against total
-    const isZeroDecimal = parsedData.currency === 'JPY' || parsedData.currency === 'KRW'
-    const tolerance = isZeroDecimal ? 2 : 0.02 // Allow rounding tolerance
-    const fmt = (n: number) => isZeroDecimal ? Math.round(n).toString() : n.toFixed(2)
-
-    // Check 1: SUM(line_item.total_amount) should equal receipt total
-    const lineItemsTotal = parsedData.line_items.reduce((sum, item) => sum + item.total_amount, 0)
-    const lineItemsDiff = Math.abs(lineItemsTotal - parsedData.total)
-
-    // Check 2: SUM(line_item.subtotal) + tax + service - discount should equal receipt total
-    const lineItemsSubtotal = parsedData.line_items.reduce((sum, item) => sum + item.subtotal, 0)
-    const reconstructedTotal = lineItemsSubtotal
-      + (parsedData.tax_amount || 0)
-      + (parsedData.service_charge_amount || 0)
-      - (parsedData.discount_amount || 0)
-    const reconstructedDiff = Math.abs(reconstructedTotal - parsedData.total)
-
-    // Pass if either check is within tolerance
-    parsedData.total_matches = lineItemsDiff < tolerance || reconstructedDiff < tolerance
-
-    if (!parsedData.total_matches) {
-      parsedData.calculation_notes =
-        `Warning: Line items total=${fmt(lineItemsTotal)}, reconstructed (subtotals+tax+service-discount)=${fmt(reconstructedTotal)}, receipt total=${fmt(parsedData.total)}. ` +
-        (parsedData.calculation_notes || '')
-    }
-
-    console.log('Receipt parsed successfully:', parsedData.line_items.length, 'items, vat_inclusive:', parsedData.vat_inclusive)
-
-    // Return success response
-    return new Response(
-      JSON.stringify({
-        success: true,
-        data: parsedData
-      }),
-      {
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
+        const repairResponse = await callClaudeForReceipt(fileBlock, { previousReceipt: parsed, repairPrompt })
+        totalUsage = {
+          input_tokens: totalUsage.input_tokens + repairResponse.usage.input_tokens,
+          output_tokens: totalUsage.output_tokens + repairResponse.usage.output_tokens,
+          cache_creation_input_tokens: (totalUsage.cache_creation_input_tokens ?? 0) + (repairResponse.usage.cache_creation_input_tokens ?? 0),
+          cache_read_input_tokens: (totalUsage.cache_read_input_tokens ?? 0) + (repairResponse.usage.cache_read_input_tokens ?? 0),
         }
+        const repairedParsed = ReceiptParseResultSchema.parse(extractJsonFromResponse(repairResponse.content))
+        const repairedReconciliation = reconcileReceipt(repairedParsed)
+        // Only adopt the repair if it actually reconciles -- otherwise keep
+        // the original extraction (still printed-total-trusted either way).
+        if (repairedReconciliation.reconciled) {
+          parsed = repairedParsed
+          reconciliation = repairedReconciliation
+        }
+      } catch (repairError) {
+        console.error('[parse-receipt] repair re-prompt failed:', repairError)
+        // fall through with original (unreconciled) parse
       }
-    )
+    }
 
+    await logAiUsage({ userId: user.id, tripId, functionName: 'parse-receipt', model: response.model, usage: totalUsage })
+
+    const legacyData = toLegacyShape(parsed, reconciliation)
+
+    return jsonResponse({ success: true, data: legacyData })
   } catch (error) {
-    console.error('Error parsing receipt:', error)
-
-    return new Response(
-      JSON.stringify({
-        success: false,
-        error: error.message || 'Failed to parse receipt'
-      }),
-      {
-        status: 400,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
-        }
-      }
-    )
+    return errorResponse(error)
   }
 })
 
 /* To invoke locally:
 
-  1. Start Supabase local development:
-     supabase start
-
-  2. Set API keys:
-     supabase secrets set ANTHROPIC_API_KEY=sk-ant-your-key-here
-     supabase secrets set OPENAI_API_KEY=sk-your-key-here
-
-  3. Serve the function:
-     supabase functions serve parse-receipt
-
-  4. Test with curl:
-     curl -i --location --request POST 'http://127.0.0.1:54321/functions/v1/parse-receipt' \
+  1. supabase start
+  2. supabase secrets set ANTHROPIC_API_KEY=sk-ant-your-key-here
+  3. supabase functions serve parse-receipt
+  4. curl -i --location --request POST 'http://127.0.0.1:54321/functions/v1/parse-receipt' \
        --header 'Authorization: Bearer YOUR_SUPABASE_ANON_KEY' \
        --header 'Content-Type: application/json' \
        --data '{"receiptPath":"userId/receipt.jpg","tripId":"trip-uuid"}'

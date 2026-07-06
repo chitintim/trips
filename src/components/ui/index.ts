@@ -33,3 +33,14 @@ export { SelectionAvatars } from './SelectionAvatars'
 export { ConfirmationStatusBadge } from './ConfirmationStatusBadge'
 export { CapacityProgressBar } from './CapacityProgressBar'
 export { ConditionalDependencyDisplay } from './ConditionalDependencyDisplay'
+
+// Deadline / countdown chip (added by workstream C — reused across
+// confirmations, decisions/polls, bookings, waitlist offers)
+export { Deadline, getDeadlineUrgency, formatDeadlineLabel } from './Deadline'
+export type { DeadlineProps } from './Deadline'
+
+// Form & Flow Standard components (UPGRADE_MASTER_PLAN.md §5)
+export { Stepper } from './Stepper'
+export type { StepperProps, StepperStep } from './Stepper'
+export { ConfirmDiscardSheet } from './ConfirmDiscardSheet'
+export type { ConfirmDiscardSheetProps } from './ConfirmDiscardSheet'

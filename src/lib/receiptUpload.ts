@@ -16,7 +16,6 @@ const MAX_ORIGINAL_FILE_SIZE_MB = 15 // Maximum original file size (before compr
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/heic', 'image/heif', 'application/pdf']
 
 export interface UploadResult {
-  url: string
   path: string
   size: number
 }
@@ -192,13 +191,9 @@ export async function uploadReceipt(
       throw new Error(`Upload failed: ${error.message}`)
     }
 
-    // Step 6: Get public URL
-    const { data: urlData } = supabase.storage
-      .from('receipts')
-      .getPublicUrl(data.path)
-
+    // Bucket is private: callers derive display URLs from `path` via
+    // getReceiptUrl() (signed URL), so no URL is returned here.
     return {
-      url: urlData.publicUrl,
       path: data.path,
       size: processedFile.size
     }

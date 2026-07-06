@@ -72,6 +72,14 @@ Known pain to fix: 1,600-line components (ExpensesTab, AddExpenseModal), no quer
 
 **Modernized primitives:** rebuild `ui/` kit on Tailwind v4 tokens (`@theme` CSS variables), full-screen sheet modals on mobile, skeleton loaders (no spinner walls), empty states with a next action, pull-to-refresh on lists.
 
+**Form & Flow Standard (mandatory for every v2 screen — fixes v1's lost-input and stale-form bugs):**
+1. **Draft persistence:** every form autosaves to sessionStorage as the user types (`useFormDraft(key)`: debounced save, restore on mount if <24h old, clear on successful submit/explicit discard). Survives mobile tab-discard when app-switching to copy text.
+2. **Fresh-state guarantee:** create-modals mount with clean state every open (keyed remount or reset-on-open); edit-modals always seed from the record. Never leak previous submission's values.
+3. **Stepper everywhere:** all multi-step flows render the shared Stepper (step dots + labels + tappable back preserving data) so users always know where they are in the process.
+4. **Dirty-close guard:** closing a form with unsaved changes asks to keep or discard the draft (`useUnsavedChangesGuard`).
+5. **Refetch isolation:** realtime invalidations must never reset in-progress form state — form state is local, never derived from query data mid-edit.
+6. **Navigation feedback:** every tap gives instant visual response; route changes show skeletons, never blank screens; scroll position restored on back-navigation.
+
 **Auth UX:** rebuilt login with two tabs — password, and **"email me a code"** (Supabase `signInWithOtp` with a 6-digit email OTP; no new infrastructure, works for every existing account, solves forgotten passwords). Invitation signup keeps codes but offers OTP-first account creation (password optional, settable later in profile). Sessions stay long-lived on trusted devices.
 
 ---

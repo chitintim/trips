@@ -4,15 +4,21 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Card, Badge, Spinner, EmptyState } from '../components/ui'
 import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
+import { ErrorBoundary } from '../components/ErrorBoundary'
 import { PlanningTabV2 } from '../components/planning/PlanningTabV2'
 import { Trip, User, TripParticipant } from '../types'
 import { getTripStatusLabel } from '../lib/tripStatus'
 import { TimelineTab } from '../components/TimelineTab'
 import { ChatDrawer } from '../components/ChatDrawer'
 import { MySpendingTab } from '../components/my-spending/MySpendingTab'
-import { AppShell, StageRail } from '../components/layout'
+import { AppShell, StageRail, NeedsAttentionStrip } from '../components/layout'
 import type { AppShellTabItem } from '../components/layout'
 import { getTripAccentStyle } from '../components/layout/tripAccent'
+import { useTrip, useParticipants, useCurrentUserRow } from '../lib/queries/useTrip'
+import { useTripRealtime } from '../lib/queries/useTripRealtime'
+import { useNeedsAttention } from '../lib/queries/useNeedsAttention'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '../lib/queries/queryKeys'
 
 type TripTab = 'overview' | 'planning' | 'timeline' | 'expenses' | 'my-spending' | 'notes'
 
@@ -25,15 +31,32 @@ export function TripDetail() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
-  const [trip, setTrip] = useState<Trip | null>(null)
-  const [participants, setParticipants] = useState<ParticipantWithUser[]>([])
-  const [loading, setLoading] = useState(true)
+  const queryClient = useQueryClient()
+
+  // Data layer: TanStack Query hooks replace the old imperative fetchTripData.
+  const { data: trip = null, isLoading: tripLoading } = useTrip(tripId)
+  const { data: participants = [], isLoading: participantsLoading } = useParticipants(tripId)
+  const { data: currentUserRow } = useCurrentUserRow(user?.id)
+  const loading = tripLoading || participantsLoading
+
+  // One realtime subscription per trip, debounced, invalidating the
+  // matching query-key branch on any relevant postgres_changes event.
+  useTripRealtime(tripId)
+
+  const needsAttentionItems = useNeedsAttention(tripId)
+
   const [activeTab, setActiveTab] = useState<TripTab>('overview')
-  const [isAdmin, setIsAdmin] = useState(false)
+  const isAdmin = currentUserRow?.role === 'admin'
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
   const [hasSetInitialTab, setHasSetInitialTab] = useState(false)
+
+  const refetchTripData = () => {
+    if (!tripId) return
+    queryClient.invalidateQueries({ queryKey: queryKeys.tripDetail(tripId) })
+    queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) })
+  }
 
   // Handle tab query parameter (e.g., from "Back to Expenses" button)
   useEffect(() => {
@@ -87,67 +110,6 @@ export function TripDetail() {
       setHasSetInitialTab(true)
     }
   }, [trip, participants, user, hasSetInitialTab, searchParams])
-
-  useEffect(() => {
-    if (!tripId) {
-      setLoading(false)
-      return
-    }
-    fetchTripData()
-  }, [tripId])
-
-  useEffect(() => {
-    checkAdminStatus()
-  }, [user])
-
-  const checkAdminStatus = async () => {
-    if (!user) return
-    const { data } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (data) {
-      setIsAdmin(data.role === 'admin')
-    }
-  }
-
-  const fetchTripData = async () => {
-    if (!tripId) {
-      setLoading(false)
-      return
-    }
-
-    setLoading(true)
-
-    // Fetch trip details
-    const { data: tripData, error: tripError } = await supabase
-      .from('trips')
-      .select('*')
-      .eq('id', tripId)
-      .single()
-
-    if (tripError || !tripData) {
-      console.error('Error fetching trip:', tripError)
-      setLoading(false)
-      return
-    }
-
-    // Fetch participants with user details (only active ones)
-    const { data: participantsData } = await supabase
-      .from('trip_participants')
-      .select(`
-        *,
-        user:user_id (*)
-      `)
-      .eq('trip_id', tripId)
-      .eq('active', true)
-
-    setTrip(tripData)
-    setParticipants((participantsData as any[]) || [])
-    setLoading(false)
-  }
 
   const handleEditTrip = () => {
     setEditModalOpen(true)
@@ -319,6 +281,13 @@ export function TripDetail() {
               </span>
             </div>
 
+            {/* Needs your attention — the organizer-never-chases-manually strip */}
+            {needsAttentionItems.length > 0 && (
+              <div className="mb-3">
+                <NeedsAttentionStrip items={needsAttentionItems} />
+              </div>
+            )}
+
             {/* Tab Navigation (in-page sub-tabs; distinct from the app shell's
                 top-level nav — this trip has more sections than fit 4 shell slots) */}
             <nav className="flex items-center border-b border-[var(--border-subtle)] -mb-px">
@@ -349,14 +318,40 @@ export function TripDetail() {
           </div>
         </div>
 
-        {/* Tab Content */}
+        {/* Tab Content — each tab gets its own error boundary (per
+            UPGRADE_MASTER_PLAN §4/§16) so a bug in one tab can't take down
+            navigation or the rest of the trip page. */}
         <div className="max-w-6xl mx-auto px-4 py-8">
-          {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} onAddParticipant={handleAddParticipant} />}
-          {activeTab === 'planning' && <PlanningTabV2 trip={trip} participants={participants} />}
-          {activeTab === 'timeline' && <TimelineTab trip={trip} participants={participants} />}
-          {activeTab === 'expenses' && <ExpensesTab tripId={trip.id} participants={participants} />}
-          {activeTab === 'my-spending' && <MySpendingTab trip={trip} participants={participants} />}
-          {activeTab === 'notes' && <NotesTab trip={trip} />}
+          {activeTab === 'overview' && (
+            <ErrorBoundary label="People">
+              <TripOverviewTab trip={trip} participants={participants} onAddParticipant={handleAddParticipant} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'planning' && (
+            <ErrorBoundary label="Planning">
+              <PlanningTabV2 trip={trip} participants={participants} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'timeline' && (
+            <ErrorBoundary label="Timeline">
+              <TimelineTab trip={trip} participants={participants} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'expenses' && (
+            <ErrorBoundary label="Expenses">
+              <ExpensesTab tripId={trip.id} participants={participants} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'my-spending' && (
+            <ErrorBoundary label="My Spending">
+              <MySpendingTab trip={trip} participants={participants} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'notes' && (
+            <ErrorBoundary label="Notes">
+              <NotesTab trip={trip} />
+            </ErrorBoundary>
+          )}
         </div>
       </AppShell>
 
@@ -373,7 +368,7 @@ export function TripDetail() {
           <CreateTripModal
             isOpen={editModalOpen}
             onClose={() => setEditModalOpen(false)}
-            onSuccess={fetchTripData}
+            onSuccess={refetchTripData}
             editTrip={trip}
           />
           <AddParticipantModal
@@ -381,7 +376,7 @@ export function TripDetail() {
             onClose={() => setAddParticipantModalOpen(false)}
             tripId={trip.id}
             existingParticipantIds={participants.map((p) => p.user_id)}
-            onSuccess={fetchTripData}
+            onSuccess={refetchTripData}
           />
         </>
       )}

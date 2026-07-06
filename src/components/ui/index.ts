@@ -11,7 +11,8 @@ export { Avatar, UserAvatar } from './Avatar'
 
 // Feedback Components
 export { Modal } from './Modal'
-export { Toast } from './Toast'
+export { Toast, ToastProvider, useToast } from './Toast'
+export type { ToastOptions } from './Toast'
 export { Spinner } from './Spinner'
 export { EmptyState } from './EmptyState'
 export { Skeleton } from './Skeleton'

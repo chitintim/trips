@@ -2,6 +2,8 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthCallback } from './components/AuthCallback'
 import { InstallPrompt } from './components/InstallPrompt'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { ToastProvider } from './components/ui'
 import { Login } from './pages/Login'
 import { Signup } from './pages/Signup'
 import { ForgotPassword } from './pages/ForgotPassword'
@@ -12,51 +14,55 @@ import { ClaimItemsPage } from './pages/ClaimItemsPage'
 
 function App() {
   return (
-    <Router basename="/trips">
-      <AuthCallback />
-      <InstallPrompt />
-      <Routes>
-        {/* Public Routes */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
+    <ToastProvider>
+      <Router basename="/trips">
+        <AuthCallback />
+        <InstallPrompt />
+        <ErrorBoundary label="the app">
+          <Routes>
+            {/* Public Routes */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/signup" element={<Signup />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
 
-        {/* Protected Routes */}
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route path="/dashboard" element={<Navigate to="/" replace />} />
+            {/* Protected Routes */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Dashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/dashboard" element={<Navigate to="/" replace />} />
 
-        {/* Claim Items Route */}
-        <Route
-          path="/claim/:code"
-          element={
-            <ProtectedRoute>
-              <ClaimItemsPage />
-            </ProtectedRoute>
-          }
-        />
+            {/* Claim Items Route */}
+            <Route
+              path="/claim/:code"
+              element={
+                <ProtectedRoute>
+                  <ClaimItemsPage />
+                </ProtectedRoute>
+              }
+            />
 
-        {/* Trip Detail Route */}
-        <Route
-          path="/:tripId"
-          element={
-            <ProtectedRoute>
-              <TripDetail />
-            </ProtectedRoute>
-          }
-        />
+            {/* Trip Detail Route */}
+            <Route
+              path="/:tripId"
+              element={
+                <ProtectedRoute>
+                  <TripDetail />
+                </ProtectedRoute>
+              }
+            />
 
-        {/* Catch all - redirect to home */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </Router>
+            {/* Catch all - redirect to home */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </ErrorBoundary>
+      </Router>
+    </ToastProvider>
   )
 }
 

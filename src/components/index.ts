@@ -36,8 +36,8 @@ export type {
 export { Badge } from './ui/Badge'
 export type { BadgeProps } from './ui/Badge'
 
-export { Avatar } from './ui/Avatar'
-export type { AvatarProps } from './ui/Avatar'
+export { Avatar, UserAvatar } from './ui/Avatar'
+export type { AvatarProps, UserAvatarProps, AvatarData } from './ui/Avatar'
 
 // Feedback components
 export { Modal } from './ui/Modal'
@@ -52,6 +52,26 @@ export type { SpinnerProps } from './ui/Spinner'
 export { EmptyState } from './ui/EmptyState'
 export type { EmptyStateProps } from './ui/EmptyState'
 
+export { Skeleton } from './ui/Skeleton'
+export type { SkeletonProps } from './ui/Skeleton'
+
+// Navigation / selection
+export { Tabs } from './ui/Tabs'
+export type { TabsProps, TabsListProps, TabProps, TabPanelProps } from './ui/Tabs'
+
+export { SegmentedControl } from './ui/SegmentedControl'
+export type { SegmentedControlProps, SegmentedControlOption } from './ui/SegmentedControl'
+
+export { Chip } from './ui/Chip'
+export type { ChipProps } from './ui/Chip'
+
+// Data display
+export { ProgressBar } from './ui/ProgressBar'
+export type { ProgressBarProps } from './ui/ProgressBar'
+
+export { StatCard } from './ui/StatCard'
+export type { StatCardProps } from './ui/StatCard'
+
 // ============================================================================
 // LAYOUT COMPONENTS
 // ============================================================================
@@ -61,6 +81,17 @@ export type { HeaderProps, HeaderNavItemProps } from './layout/Header'
 
 export { BottomNav } from './layout/BottomNav'
 export type { BottomNavProps, BottomNavItemProps } from './layout/BottomNav'
+
+export { AppShell } from './layout/AppShell'
+export type { AppShellProps, AppShellTabItem } from './layout/AppShell'
+
+export { StageRail } from './layout/StageRail'
+export type { StageRailProps } from './layout/StageRail'
+
+export { NeedsAttentionStrip } from './layout/NeedsAttentionStrip'
+export type { NeedsAttentionStripProps, NeedsAttentionItem } from './layout/NeedsAttentionStrip'
+
+export { InstallPrompt } from './InstallPrompt'
 
 // ============================================================================
 // FEATURE COMPONENTS

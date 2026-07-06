@@ -1,6 +1,7 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthCallback } from './components/AuthCallback'
+import { InstallPrompt } from './components/InstallPrompt'
 import { Login } from './pages/Login'
 import { Signup } from './pages/Signup'
 import { ForgotPassword } from './pages/ForgotPassword'
@@ -13,6 +14,7 @@ function App() {
   return (
     <Router basename="/trips">
       <AuthCallback />
+      <InstallPrompt />
       <Routes>
         {/* Public Routes */}
         <Route path="/login" element={<Login />} />

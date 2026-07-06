@@ -1,96 +1,346 @@
 @import "tailwindcss";
 
-/* Custom theme colors */
+/*
+ * Trips v2 Design Tokens
+ * ----------------------
+ * Warm-neutral base, single swappable accent color (default: deep teal),
+ * dark mode via prefers-color-scheme AND a .dark class override,
+ * per-trip accent hue support via CSS custom properties set at the
+ * trip-page level (see [data-trip-accent] below).
+ */
+
 @theme {
-  /* Primary - Blue scale */
-  --color-primary-50: #f0f9ff;
-  --color-primary-100: #e0f2fe;
-  --color-primary-200: #bae6fd;
-  --color-primary-300: #7dd3fc;
-  --color-primary-400: #38bdf8;
-  --color-primary-500: #0ea5e9;
-  --color-primary-600: #0284c7;
-  --color-primary-700: #0369a1;
-  --color-primary-800: #075985;
-  --color-primary-900: #0c4a6e;
-  --color-primary-950: #082f49;
+  /* ------------------------------------------------------------------ */
+  /* Accent - Deep teal (default). Swap this single scale to re-theme.   */
+  /* ------------------------------------------------------------------ */
+  --color-accent-50: #effcfa;
+  --color-accent-100: #d6f5f0;
+  --color-accent-200: #b0eae1;
+  --color-accent-300: #7ad9cc;
+  --color-accent-400: #42bfb0;
+  --color-accent-500: #1f9d90;
+  --color-accent-600: #157d75;
+  --color-accent-700: #14645f;
+  --color-accent-800: #14504d;
+  --color-accent-900: #134441;
+  --color-accent-950: #072826;
 
-  /* Secondary - Orange scale */
-  --color-secondary-50: #fff7ed;
-  --color-secondary-100: #ffedd5;
-  --color-secondary-200: #fed7aa;
-  --color-secondary-300: #fdba74;
-  --color-secondary-400: #fb923c;
-  --color-secondary-500: #f97316;
-  --color-secondary-600: #ea580c;
-  --color-secondary-700: #c2410c;
-  --color-secondary-800: #9a3412;
-  --color-secondary-900: #7c2d12;
-  --color-secondary-950: #431407;
+  /* ------------------------------------------------------------------ */
+  /* Neutral - warm gray (not cool-blue slate) base for chrome & text.   */
+  /* ------------------------------------------------------------------ */
+  --color-neutral-0: #ffffff;
+  --color-neutral-50: #faf9f7;
+  --color-neutral-100: #f4f2ef;
+  --color-neutral-200: #e7e3dd;
+  --color-neutral-300: #d5cfc6;
+  --color-neutral-400: #aca397;
+  --color-neutral-500: #837a6e;
+  --color-neutral-600: #635c53;
+  --color-neutral-700: #49443d;
+  --color-neutral-800: #322e29;
+  --color-neutral-900: #211e1a;
+  --color-neutral-950: #14120f;
 
-  /* Neutral - Cool gray scale */
-  --color-neutral-50: #f8fafc;
-  --color-neutral-100: #f1f5f9;
-  --color-neutral-200: #e2e8f0;
-  --color-neutral-300: #cbd5e1;
-  --color-neutral-400: #94a3b8;
-  --color-neutral-500: #64748b;
-  --color-neutral-600: #475569;
-  --color-neutral-700: #334155;
-  --color-neutral-800: #1e293b;
-  --color-neutral-900: #0f172a;
-  --color-neutral-950: #020617;
+  /* ------------------------------------------------------------------ */
+  /* Semantic colors                                                     */
+  /* ------------------------------------------------------------------ */
+  --color-success-50: #f1faf3;
+  --color-success-100: #dcf2e1;
+  --color-success-200: #b6e3c1;
+  --color-success-300: #85cd99;
+  --color-success-400: #55b073;
+  --color-success-500: #33925a;
+  --color-success-600: #257446;
+  --color-success-700: #1f5c39;
+  --color-success-800: #1c4a30;
+  --color-success-900: #183d29;
 
-  /* Success */
-  --color-success-50: #f0fdf4;
-  --color-success-100: #dcfce7;
-  --color-success-200: #bbf7d0;
-  --color-success-300: #86efac;
-  --color-success-400: #4ade80;
-  --color-success-500: #10b981;
-  --color-success-600: #059669;
-  --color-success-700: #047857;
-  --color-success-800: #065f46;
-  --color-success-900: #064e3b;
+  --color-warn-50: #fdf8ed;
+  --color-warn-100: #faedc9;
+  --color-warn-200: #f4d88e;
+  --color-warn-300: #edbe57;
+  --color-warn-400: #e5a530;
+  --color-warn-500: #c9861e;
+  --color-warn-600: #a66717;
+  --color-warn-700: #834e17;
+  --color-warn-800: #6c4019;
+  --color-warn-900: #5b3619;
 
-  /* Error */
-  --color-error-50: #fef2f2;
-  --color-error-100: #fee2e2;
-  --color-error-200: #fecaca;
-  --color-error-300: #fca5a5;
-  --color-error-400: #f87171;
-  --color-error-500: #ef4444;
-  --color-error-600: #dc2626;
-  --color-error-700: #b91c1c;
-  --color-error-800: #991b1b;
-  --color-error-900: #7f1d1d;
+  --color-danger-50: #fdf3f2;
+  --color-danger-100: #fbe2e0;
+  --color-danger-200: #f8cac6;
+  --color-danger-300: #f0a29b;
+  --color-danger-400: #e4756b;
+  --color-danger-500: #d14f43;
+  --color-danger-600: #b53a2f;
+  --color-danger-700: #932f27;
+  --color-danger-800: #792a24;
+  --color-danger-900: #672822;
 
-  /* Warning */
-  --color-warning-50: #fefce8;
-  --color-warning-100: #fef9c3;
-  --color-warning-200: #fef08a;
-  --color-warning-300: #fde047;
-  --color-warning-400: #facc15;
-  --color-warning-500: #eab308;
-  --color-warning-600: #ca8a04;
-  --color-warning-700: #a16207;
-  --color-warning-800: #854d0e;
-  --color-warning-900: #713f12;
+  /* Back-compat aliases so any un-migrated component keeps working    */
+  --color-error-50: var(--color-danger-50);
+  --color-error-100: var(--color-danger-100);
+  --color-error-200: var(--color-danger-200);
+  --color-error-300: var(--color-danger-300);
+  --color-error-400: var(--color-danger-400);
+  --color-error-500: var(--color-danger-500);
+  --color-error-600: var(--color-danger-600);
+  --color-error-700: var(--color-danger-700);
+  --color-error-800: var(--color-danger-800);
+  --color-error-900: var(--color-danger-900);
 
-  /* Info */
-  --color-info-50: #eff6ff;
-  --color-info-100: #dbeafe;
-  --color-info-200: #bfdbfe;
-  --color-info-300: #93c5fd;
-  --color-info-400: #60a5fa;
-  --color-info-500: #3b82f6;
-  --color-info-600: #2563eb;
-  --color-info-700: #1d4ed8;
-  --color-info-800: #1e40af;
-  --color-info-900: #1e3a8a;
+  --color-warning-50: var(--color-warn-50);
+  --color-warning-100: var(--color-warn-100);
+  --color-warning-200: var(--color-warn-200);
+  --color-warning-300: var(--color-warn-300);
+  --color-warning-400: var(--color-warn-400);
+  --color-warning-500: var(--color-warn-500);
+  --color-warning-600: var(--color-warn-600);
+  --color-warning-700: var(--color-warn-700);
+  --color-warning-800: var(--color-warn-800);
+  --color-warning-900: var(--color-warn-900);
 
-  /* Z-index */
+  --color-info-50: var(--color-accent-50);
+  --color-info-100: var(--color-accent-100);
+  --color-info-200: var(--color-accent-200);
+  --color-info-300: var(--color-accent-300);
+  --color-info-400: var(--color-accent-400);
+  --color-info-500: var(--color-accent-500);
+  --color-info-600: var(--color-accent-600);
+  --color-info-700: var(--color-accent-700);
+  --color-info-800: var(--color-accent-800);
+  --color-info-900: var(--color-accent-900);
+
+  --color-primary-50: var(--color-accent-50);
+  --color-primary-100: var(--color-accent-100);
+  --color-primary-200: var(--color-accent-200);
+  --color-primary-300: var(--color-accent-300);
+  --color-primary-400: var(--color-accent-400);
+  --color-primary-500: var(--color-accent-500);
+  --color-primary-600: var(--color-accent-600);
+  --color-primary-700: var(--color-accent-700);
+  --color-primary-800: var(--color-accent-800);
+  --color-primary-900: var(--color-accent-900);
+  --color-primary-950: var(--color-accent-950);
+
+  --color-secondary-50: var(--color-warn-50);
+  --color-secondary-100: var(--color-warn-100);
+  --color-secondary-200: var(--color-warn-200);
+  --color-secondary-300: var(--color-warn-300);
+  --color-secondary-400: var(--color-warn-400);
+  --color-secondary-500: var(--color-warn-500);
+  --color-secondary-600: var(--color-warn-600);
+  --color-secondary-700: var(--color-warn-700);
+  --color-secondary-800: var(--color-warn-800);
+  --color-secondary-900: var(--color-warn-900);
+
+  /* ------------------------------------------------------------------ */
+  /* Typography                                                          */
+  /* ------------------------------------------------------------------ */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'SF Mono', Monaco, Inconsolata, 'Roboto Mono', monospace;
+
+  /* ------------------------------------------------------------------ */
+  /* Radius scale                                                        */
+  /* ------------------------------------------------------------------ */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+  --radius-2xl: 2rem;
+  --radius-full: 9999px;
+
+  /* ------------------------------------------------------------------ */
+  /* Shadow scale - soft, warm-tinted                                    */
+  /* ------------------------------------------------------------------ */
+  --shadow-xs: 0 1px 2px 0 rgb(33 30 26 / 0.04);
+  --shadow-sm: 0 1px 3px 0 rgb(33 30 26 / 0.06), 0 1px 2px -1px rgb(33 30 26 / 0.06);
+  --shadow-md: 0 4px 8px -2px rgb(33 30 26 / 0.08), 0 2px 4px -2px rgb(33 30 26 / 0.05);
+  --shadow-lg: 0 12px 20px -6px rgb(33 30 26 / 0.10), 0 4px 8px -4px rgb(33 30 26 / 0.06);
+  --shadow-xl: 0 24px 36px -10px rgb(33 30 26 / 0.14), 0 8px 12px -6px rgb(33 30 26 / 0.06);
+
+  /* ------------------------------------------------------------------ */
+  /* Z-index scale (preserved from v1)                                   */
+  /* ------------------------------------------------------------------ */
+  --z-dropdown: 1000;
   --z-sticky: 1100;
   --z-modal: 1200;
+  --z-popover: 1300;
+  --z-tooltip: 1400;
   --z-toast: 1500;
+}
+
+/* ====================================================================== */
+/* Base surface / text tokens - swap by color-scheme and .dark override   */
+/* ====================================================================== */
+
+:root {
+  color-scheme: light;
+
+  --surface-page: var(--color-neutral-50);
+  --surface-raised: var(--color-neutral-0);
+  --surface-sunken: var(--color-neutral-100);
+  --surface-overlay: color-mix(in srgb, var(--color-neutral-950) 45%, transparent);
+
+  --border-subtle: var(--color-neutral-200);
+  --border-default: var(--color-neutral-300);
+
+  --text-primary: var(--color-neutral-900);
+  --text-secondary: var(--color-neutral-600);
+  --text-muted: var(--color-neutral-500);
+  --text-on-accent: #ffffff;
+
+  /* Per-trip accent hue hook. Defaults to the global accent scale;
+     TripDetail (or any [data-trip-accent] ancestor) overrides these
+     with a trip-specific hue so `bg-accent-500` etc. re-theme per trip. */
+  --color-accent-50: #effcfa;
+  --color-accent-100: #d6f5f0;
+  --color-accent-200: #b0eae1;
+  --color-accent-300: #7adacc;
+  --color-accent-400: #42bfb0;
+  --color-accent-500: #1f9d90;
+  --color-accent-600: #157d75;
+  --color-accent-700: #14645f;
+  --color-accent-800: #14504d;
+  --color-accent-900: #134441;
+  --color-accent-950: #072826;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+
+    --surface-page: var(--color-neutral-950);
+    --surface-raised: var(--color-neutral-900);
+    --surface-sunken: var(--color-neutral-800);
+    --surface-overlay: color-mix(in srgb, black 60%, transparent);
+
+    --border-subtle: var(--color-neutral-800);
+    --border-default: var(--color-neutral-700);
+
+    --text-primary: var(--color-neutral-50);
+    --text-secondary: var(--color-neutral-300);
+    --text-muted: var(--color-neutral-400);
+  }
+}
+
+/* Explicit class override always wins regardless of OS preference */
+:root.dark {
+  color-scheme: dark;
+
+  --surface-page: var(--color-neutral-950);
+  --surface-raised: var(--color-neutral-900);
+  --surface-sunken: var(--color-neutral-800);
+  --surface-overlay: color-mix(in srgb, black 60%, transparent);
+
+  --border-subtle: var(--color-neutral-800);
+  --border-default: var(--color-neutral-700);
+
+  --text-primary: var(--color-neutral-50);
+  --text-secondary: var(--color-neutral-300);
+  --text-muted: var(--color-neutral-400);
+}
+
+:root.light {
+  color-scheme: light;
+
+  --surface-page: var(--color-neutral-50);
+  --surface-raised: var(--color-neutral-0);
+  --surface-sunken: var(--color-neutral-100);
+  --surface-overlay: color-mix(in srgb, var(--color-neutral-950) 45%, transparent);
+
+  --border-subtle: var(--color-neutral-200);
+  --border-default: var(--color-neutral-300);
+
+  --text-primary: var(--color-neutral-900);
+  --text-secondary: var(--color-neutral-600);
+  --text-muted: var(--color-neutral-500);
+}
+
+/* ====================================================================== */
+/* Global element defaults                                                */
+/* ====================================================================== */
+
+html {
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: var(--surface-page);
+  color: var(--text-primary);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* ====================================================================== */
+/* Safe-area utilities (iOS notch / home indicator)                       */
+/* ====================================================================== */
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+.pl-safe {
+  padding-left: env(safe-area-inset-left);
+}
+
+.pr-safe {
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Composed convenience: bottom tab bar height + safe area */
+.h-tabbar-safe {
+  height: calc(4rem + env(safe-area-inset-bottom));
+}
+
+.pb-tabbar-safe {
+  padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+}
+
+/* ====================================================================== */
+/* Motion                                                                  */
+/* ====================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ====================================================================== */
+/* Shared keyframes (Sheet/Modal, Toast)                                  */
+/* ====================================================================== */
+
+@keyframes fable-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes fable-sheet-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@keyframes fable-scale-in {
+  from { opacity: 0; transform: scale(0.96) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes fable-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fable-skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }

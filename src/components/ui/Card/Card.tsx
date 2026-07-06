@@ -19,6 +19,14 @@ export interface CardProps extends HTMLAttributes<HTMLDivElement> {
    * Remove padding from card body
    */
   noPadding?: boolean
+
+  /**
+   * Visual weight of the card surface
+   * - default: raised surface with border + soft shadow
+   * - flat: raised surface, no shadow (for nested cards)
+   * - sunken: recessed surface (for list rows / secondary content)
+   */
+  variant?: 'default' | 'flat' | 'sunken'
 }
 
 export interface CardHeaderProps extends HTMLAttributes<HTMLDivElement> {}
@@ -37,18 +45,23 @@ const CardRoot = forwardRef<HTMLDivElement, CardProps>(
       hoverable = false,
       clickable = false,
       noPadding = false,
+      variant = 'default',
       className = '',
       children,
       ...props
     },
     ref
   ) => {
+    const variantStyles = {
+      default: 'bg-[var(--surface-raised)] border border-[var(--border-subtle)] shadow-sm',
+      flat: 'bg-[var(--surface-raised)] border border-[var(--border-subtle)]',
+      sunken: 'bg-[var(--surface-sunken)] border border-transparent',
+    }
+
     const baseStyles = `
-      bg-white
-      rounded-lg
-      border border-neutral-200
-      shadow-sm
-      transition-all duration-200
+      rounded-[var(--radius-lg)]
+      transition-shadow duration-200
+      ${variantStyles[variant]}
     `
 
     const interactionStyles = `
@@ -56,7 +69,7 @@ const CardRoot = forwardRef<HTMLDivElement, CardProps>(
       ${clickable ? 'cursor-pointer' : ''}
     `
 
-    const paddingStyles = noPadding ? '' : 'p-6'
+    const paddingStyles = noPadding ? '' : 'p-5 sm:p-6'
 
     const cardClasses = `
       ${baseStyles}
@@ -100,7 +113,7 @@ const CardTitle = forwardRef<HTMLHeadingElement, CardTitleProps>(
     return (
       <h3
         ref={ref}
-        className={`text-xl font-semibold text-neutral-900 leading-tight ${className}`}
+        className={`text-lg font-semibold text-[var(--text-primary)] leading-tight ${className}`}
         {...props}
       >
         {children}
@@ -116,7 +129,7 @@ const CardDescription = forwardRef<HTMLParagraphElement, CardDescriptionProps>(
     return (
       <p
         ref={ref}
-        className={`text-sm text-neutral-500 ${className}`}
+        className={`text-sm text-[var(--text-secondary)] ${className}`}
         {...props}
       >
         {children}

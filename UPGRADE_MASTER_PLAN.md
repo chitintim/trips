@@ -72,6 +72,8 @@ Known pain to fix: 1,600-line components (ExpensesTab, AddExpenseModal), no quer
 
 **Modernized primitives:** rebuild `ui/` kit on Tailwind v4 tokens (`@theme` CSS variables), full-screen sheet modals on mobile, skeleton loaders (no spinner walls), empty states with a next action, pull-to-refresh on lists.
 
+**Auth UX:** rebuilt login with two tabs — password, and **"email me a code"** (Supabase `signInWithOtp` with a 6-digit email OTP; no new infrastructure, works for every existing account, solves forgotten passwords). Invitation signup keeps codes but offers OTP-first account creation (password optional, settable later in profile). Sessions stay long-lived on trusted devices.
+
 ---
 
 ## 6. Trip lifecycle (stage-driven UX)
@@ -126,7 +128,7 @@ New **`bookings`** table: id, trip_id, option_id (nullable), title, vendor, conf
 ## 10. Expenses & receipts v2
 
 ### Receipt parsing (rewrite of parse-receipt)
-- **Models:** `claude-haiku-4-5` first pass ($1/$5 per MTok); escalate automatically to `claude-sonnet-5` ($2/$10 intro until 2026-08-31, then $3/$15) when code-side validation fails or confidence is low. Drop the GPT-4o-mini fallback (second vendor key, weaker vision) — retry-with-escalation replaces it.
+- **Model:** `claude-sonnet-5` for all parsing ($2/$10 per MTok intro until 2026-08-31, then $3/$15) — one model, no escalation tiers (Tim: simplicity over cost-tiering). Drop the GPT-4o-mini fallback (second vendor key, weaker vision) — a single retry on validation failure replaces it.
 - **Structured outputs** via `output_config: {format: {type: "json_schema", …}}` with a shared Zod schema — no more prose-prompt JSON hoping. Image placed before text in content; client pre-resizes to ~1500px long edge.
 - **Explicit adjustment model** (replaces the flat tax/service columns as source of truth; old columns kept and populated for compatibility):
   - `line_items[]`: qty, unit_price, line_total, **which of the two was printed** (solves the Japanese 単価/金額 ambiguity structurally instead of by prompt heuristics), line-level discounts, original + English names.
@@ -134,6 +136,8 @@ New **`bookings`** table: id, trip_id, option_id (nullable), title, vendor, conf
   - `service_charge` (amount/percent, auto vs voluntary), `tip`, receipt-level `discounts[]`, `rounding_adjustment`.
   - `confidence` per field + `notes`.
 - **Reconciliation in code, not the model:** Σ(line) = subtotal, subtotal ± adjustments = total, tolerance ±1 minor unit per tax group. On mismatch → one automatic repair re-prompt quoting the discrepancy; still failing → trust printed total, flag lines for user review. Never silently adjust.
+- **Adjustment disambiguation engine (v1's #1 pain: service charge & tax detection):** the model must label each adjustment's *provenance* (printed_line | derived | embedded_in_prices) — but code makes the final call by **hypothesis testing**: given Σ(lines) and printed total, test the standard interpretations (all-inclusive; +N% service; +N% tax; tax-inclusive with service added; etc., using common rates 5/8/10/12.5/15/20%) and select the one that reconciles to the exact total. Model opinion breaks ties only. If no hypothesis reconciles, the confirm step shows an **adjustments review panel** with one-tap fixes (service: "included / added on top / none" + percent quick-selects; same for tax) — never free-form number surgery. Target: manual adjustment becomes the rare exception, and takes seconds when needed.
+- **Real-world regression corpus:** replay all existing v1 receipts (images in the receipts bucket + their stored `ai_parsed_data` and user-corrected final values in the DB) against the new parser before it ships; every historically-misparsed service-charge/tax case becomes a permanent test fixture (§16).
 - **Prompt caching:** static system prompt + schema behind a `cache_control` breakpoint (pad past the 2048/4096-token minimum) — repeat parses at ~0.1× input price.
 - New nullable columns on `expenses`: `tip_amount`, `tax_lines` JSONB, `rounding_adjustment`, `place_id`, `booking_id`.
 
@@ -177,7 +181,7 @@ New **`bookings`** table: id, trip_id, option_id (nullable), title, vendor, conf
 
 ### Architecture
 - One shared edge-function toolkit (`_shared/`): Anthropic client, Zod contracts, rate limiting, usage logging, prompt-cache helpers. Functions: `parse-receipt`, `trip-chat`, `ingest` (new, §9), `refresh-fx-rates` (no AI), `nudge-draft` (§14).
-- **Models:** trip-chat on `claude-sonnet-5`; receipt/ingest first pass `claude-haiku-4-5` with Sonnet escalation. (API notes: no temperature/prefill on the 5-family; use structured outputs / adaptive thinking.)
+- **Models:** `claude-sonnet-5` for everything (chat, receipts, ingest, nudge drafts) — one model everywhere, simple. (API notes: no temperature/prefill on the 5-family; use structured outputs / adaptive thinking.)
 
 ### trip-chat rewrite: context-stuffing → **tool use**
 Today the whole trip is serialized into the system prompt (~15–20K tokens/query). Replace with a slim system prompt (trip header, participants, user role) + **tools**: `get_expenses(filter)`, `get_expense_details(id)`, `get_balances()`, `get_pending_claims()`, `get_itinerary(range)`, `get_options(section)`, `get_confirmation_status()`, `search_places()`. Write tools (organizer, with inline confirmation cards in chat before execution): `create_event`, `update_event`, `delete_event`, `create_expense_draft`, `record_settlement`, `close_poll`, `draft_nudge`. Cheaper, more accurate, and unlocks the roadmap's Phase 2/3 in one design.
@@ -186,6 +190,14 @@ Today the whole trip is serialized into the system prompt (~15–20K tokens/quer
 - Contextual "Ask" affordances per tab with suggestion chips ("How much do I owe?", "What's unclaimed?", "What's the plan Saturday?").
 - Natural-language quick-add from the "+" button.
 - **Proactive digest** (opt-in, per trip): a scheduled function composes "Trip Pulse" — polls closing, unclaimed items, deadlines approaching, budget drift — posted to the activity feed / notes; organizer can forward to WhatsApp.
+
+### AI proposals & human approval layer (the write-safety spine)
+All AI-suggested modifications — from chat, paste-anything ingestion, or bulk **text dumps** ("here's our WhatsApp planning thread, set up the trip") — flow through one pipeline:
+1. AI output is a **structured changeset** (Zod-validated array of proposed actions: create_event, create_option, create_booking_draft, create_expense_draft, update_x…), never a direct write. Stored in a new **`ai_proposals`** table (trip_id, created_by, source_text, actions jsonb, status 'pending'|'approved'|'rejected'|'partially_applied', reviewed_by, applied_at).
+2. UI renders each action as a **review card** with per-card Approve / Edit / Discard (and approve-all for the brave). Validation preview runs before apply; invalid actions are flagged, not silently dropped.
+3. **Apply executes under the approving user's JWT** (client-side mutation or user-context RPC), so RLS is the enforcement layer — the AI cannot cause anything its human approver couldn't do by hand. The service role never writes user data on the AI's behalf.
+4. Guardrails: deletes are never batch-approved (each requires individual confirmation), hard cap ~20 actions per proposal, idempotency keys prevent double-apply, proposals expire after 7 days, every application logged to activity_feed as "proposed by AI, approved by X".
+This unifies §9 ingestion and chat write-tools into one reviewed pathway; chat's simple organizer actions (create one event) render the same card inline in the chat thread.
 
 ### Rate limiting & cost control (replaces msg/day counting queries)
 - **Postgres token buckets:** `rate_limits(user_id, feature, tokens, last_refill)` checked/decremented atomically via a `SECURITY DEFINER` RPC. Per-feature quotas (chat, parse, ingest), organizer > participant. No Redis dependency at this scale.
@@ -198,8 +210,18 @@ Today the whole trip is serialized into the system prompt (~15–20K tokens/quer
 
 - **`activity_feed`** table (trip_id, actor, verb, entity, metadata, created_at) written by mutations; powers a lightweight per-trip feed ("Alex claimed 3 items", "Poll 'Saturday dinner' closed — Kumo wins").
 - **Blockers board** (organizer view): one screen listing every open loop grouped by person — pending RSVPs (with dependency-graph insight), unvoted polls, unclaimed items per receipt, unpaid settlements, unbooked won-polls, expiring cancellation windows.
-- **One-tap nudge:** per person or per blocker, AI drafts a short friendly message (with the person's deep link: `/trips/:id/claim/:code` etc.) → **copies to clipboard for WhatsApp**. No email infrastructure, no push dependency — leans into where friend groups actually talk. (Web push ships later as progressive enhancement for installed PWAs, non-EU iOS caveat noted.)
-- Deep links: every entity gets a routable URL so nudges land people exactly on the action.
+- **One-tap nudge:** per person or per blocker, AI drafts a short friendly message (with the person's deep link: `/trips/:id/claim/:code` etc.) → **copies to clipboard for WhatsApp**. (Web push ships later as progressive enhancement for installed PWAs, non-EU iOS caveat noted.)
+- **Auto-chase engine (no more manual chasing):** a scheduled edge function (`auto-chase`, cron like refresh-fx-rates) scans **every open commitment loop** and **emails each laggard a deep link to their exact action**:
+  - unclaimed items on expenses older than the trip's threshold;
+  - polls approaching deadline with missing votes (incl. headcount-required restaurant/activity polls — card shows "9 confirmed, 3 unanswered — booking Friday");
+  - pending RSVPs near the confirmation deadline;
+  - **stated-date conditionals**: someone who said "I'll know by the 14th" (`conditional_date`) gets chased the day that date arrives — their own promise becomes the trigger;
+  - **waitlist lifecycle**: when a spot frees (decline/cancel or capacity raise), the first waitlisted person automatically receives a claim offer with an expiry (default 48h, `trip_participants.waitlist_offer_expires_at`, added in a feature migration); unclaimed offers cascade to the next in line; waitlisted users see their live queue position;
+  - settlements unpaid after N days.
+- **Question deflection:** beyond the AI concierge (§13), the trip brief page carries an **auto-generated FAQ** (arrival/departure, accommodation address + map link, what's booked, current per-person cost, what I owe) rebuilt from live trip data — people ask the app before they ask the organizer. Anti-chaos rules: max 1 chase email per person per day (multiple items bundle into one digest email), max 3 reminders per item then stop and escalate to the blockers board as "needs a personal nudge", per-user opt-out (`users.email_notifications_enabled`), per-trip settings (`trips.chase_settings` jsonb: enabled, delay hours, quiet hours, max reminders). All sends logged in a `notifications` table (dedupe keys enforce the caps).
+- **Expense involvement tagging feeds the chaser:** expense creation includes a "who was there?" chip row (defaults to all participants; itemized receipts chase only tagged people; `expenses.participant_ids uuid[]`).
+- **Email channel:** Brevo free tier (300/day, verified single-sender, no domain needed) behind a pluggable `EmailSender` adapter; if no `BREVO_API_KEY` secret is set, auto-chase degrades gracefully to queueing WhatsApp-ready drafts on the blockers board. (Setup task for Tim: create free Brevo account, verify sender address, `supabase secrets set BREVO_API_KEY=...`.)
+- Deep links: every entity gets a routable URL so nudges and chase emails land people exactly on the action.
 
 ---
 
@@ -216,13 +238,14 @@ Auto-generated when a trip hits `trip_completed` and settlement closes: **"Trip 
 - Date/time policy: dates as date-only strings end-to-end (no Date-object timezone drift — the timeline bug class); times stored as local trip-time.
 - Edge cases codified: deleted/deactivated participant with expenses (keep rows, show "(left trip)"), expense edits after claims (invalidate affected claims + notify), concurrent claim races (DB constraint + upsert), capacity race on confirm (RPC with row lock), invitation reuse, zero-amount and negative (refund) expenses (**new: allow negative amounts as refunds**), duplicate receipt uploads.
 - Sentry on frontend + functions; CI: typecheck, lint, unit, Playwright smoke, then deploy.
+- **Security audit (explicit gate before deploy):** review all existing 79 + new RLS policies against a per-table access matrix (who may select/insert/update/delete each table, verified by an automated RLS smoke script running as different test users); storage bucket policies (receipts + documents: owner-write, participant-read, signed-URL TTLs); every edge function verifies JWT + participant membership before any work; service role key never used to write user data (only fx_rates, ai_usage, rate_limits); invitation brute-force lockout (attempts table already exists — add rate check); OTP abuse limits (Supabase built-in email rate limits confirmed); no secrets in frontend bundle (audit `import.meta.env` usage); dependency audit (`npm audit`) in CI.
 
 ---
 
 ## 17. Schema changes (additive DDL summary)
 
-New tables: `places`, `bookings`, `option_votes`, `reactions`, `activity_feed`, `rate_limits`, `ai_usage`, `trip_checklists`, `settlement_carryovers`.
-New columns: `trips.base_currency`; `planning_sections.{vote_deadline, quorum, voting_method, hide_votes_until_close}`; `options.place_id`; `trip_timeline_events.place_id`; `expenses.{tip_amount, tax_lines, rounding_adjustment, place_id, booking_id, rate_source}`; `expense_splits.shares`; `settlements.{status, currency}`; `users.payment_details`.
+New tables: `places`, `bookings`, `option_votes`, `reactions`, `activity_feed`, `rate_limits`, `ai_usage`, `trip_checklists`, `settlement_carryovers`, `ai_proposals`, `notifications`.
+New columns: `trips.{base_currency, chase_settings}`; `planning_sections.{vote_deadline, quorum, voting_method, hide_votes_until_close}`; `options.place_id`; `trip_timeline_events.place_id`; `expenses.{tip_amount, tax_lines, rounding_adjustment, place_id, booking_id, rate_source, participant_ids}`; `expense_splits.shares`; `settlements.{status, currency}`; `users.{payment_details, email_notifications_enabled}`.
 New enum values: `split_type + 'shares'`; settlement status enum (new).
 New DB objects: split-sum trigger, rate-limit RPC, RLS policies for all new tables (mirror existing per-trip patterns).
 
@@ -254,5 +277,5 @@ Each workstream brief = relevant sections of this doc + the shared contracts. In
 - Keep GitHub Pages + current URL; keep app name "Trips" (rebrand is a find-replace later).
 - Leaflet/OSM + Google **links** (no paid Google Maps API).
 - WhatsApp-via-clipboard nudges now; web push later; no email infrastructure.
-- Claude-only AI (drop OpenAI fallback); Haiku→Sonnet-5 escalation for parsing; Sonnet 5 for chat.
+- Claude-only AI (drop OpenAI fallback); `claude-sonnet-5` for all AI features, no model tiering.
 - Poll votes hidden until close, by default.

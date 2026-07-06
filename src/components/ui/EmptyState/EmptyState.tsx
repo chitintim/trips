@@ -6,7 +6,8 @@ import { HTMLAttributes, forwardRef } from 'react'
 
 export interface EmptyStateProps extends HTMLAttributes<HTMLDivElement> {
   /**
-   * Icon to display (optional)
+   * Icon to display (optional). Accepts an emoji string or any ReactNode
+   * (e.g. a lucide-react icon).
    */
   icon?: React.ReactNode
 
@@ -24,6 +25,11 @@ export interface EmptyStateProps extends HTMLAttributes<HTMLDivElement> {
    * Action button or element to display
    */
   action?: React.ReactNode
+
+  /**
+   * Compact variant for use inside cards / smaller containers
+   */
+  compact?: boolean
 }
 
 // ============================================================================
@@ -37,6 +43,7 @@ export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(
       title,
       description,
       action,
+      compact = false,
       className = '',
       ...props
     },
@@ -45,29 +52,25 @@ export const EmptyState = forwardRef<HTMLDivElement, EmptyStateProps>(
     return (
       <div
         ref={ref}
-        className={`flex flex-col items-center justify-center py-12 px-6 text-center ${className}`}
+        className={`flex flex-col items-center justify-center text-center ${compact ? 'py-8 px-4' : 'py-14 px-6'} ${className}`}
         {...props}
       >
-        {/* Icon */}
         {icon && (
-          <div className="flex items-center justify-center w-16 h-16 mb-4 rounded-full bg-neutral-100 text-neutral-400">
+          <div className={`flex items-center justify-center rounded-full bg-[var(--surface-sunken)] text-[var(--text-muted)] ${compact ? 'w-12 h-12 mb-3 text-xl' : 'w-16 h-16 mb-4 text-2xl'}`}>
             {icon}
           </div>
         )}
 
-        {/* Title */}
-        <h3 className="text-lg font-semibold text-neutral-900 mb-2">
+        <h3 className={`font-semibold text-[var(--text-primary)] ${compact ? 'text-base mb-1' : 'text-lg mb-2'}`}>
           {title}
         </h3>
 
-        {/* Description */}
         {description && (
-          <p className="text-sm text-neutral-500 max-w-sm mb-6">
+          <p className="text-sm text-[var(--text-secondary)] max-w-sm mb-6">
             {description}
           </p>
         )}
 
-        {/* Action */}
         {action && (
           <div className="flex items-center gap-3">
             {action}

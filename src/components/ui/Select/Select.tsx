@@ -75,46 +75,41 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
     },
     ref
   ) => {
-    // Generate unique IDs for accessibility
     const generatedId = useId()
     const selectId = id || generatedId
     const errorId = `${selectId}-error`
     const helperId = `${selectId}-helper`
 
-    // Determine validation state
     const hasError = !!error
     const hasSuccess = success && !hasError
 
-    // Base select styles
     const baseStyles = `
       block
       w-full
-      rounded-lg
+      rounded-[var(--radius-md)]
       border
-      bg-white
-      transition-all duration-200
+      bg-[var(--surface-raised)]
+      text-[var(--text-primary)]
+      transition-colors duration-150
       focus:outline-none focus:ring-2 focus:ring-offset-0
-      disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500
+      disabled:cursor-not-allowed disabled:bg-[var(--surface-sunken)] disabled:text-[var(--text-muted)]
       appearance-none
       bg-no-repeat
       cursor-pointer
     `
 
-    // Size styles
     const sizeStyles = {
-      sm: 'h-8 px-3 pr-9 text-sm',
-      md: 'h-10 px-4 pr-10 text-base',
+      sm: 'h-9 px-3 pr-9 text-sm',
+      md: 'h-11 px-3.5 pr-10 text-[0.9375rem]',
       lg: 'h-12 px-4 pr-12 text-lg',
     }
 
-    // State-based styles
     const stateStyles = hasError
-      ? 'border-error-500 focus:border-error-500 focus:ring-error-500'
+      ? 'border-danger-500 focus:border-danger-500 focus:ring-danger-500'
       : hasSuccess
       ? 'border-success-500 focus:border-success-500 focus:ring-success-500'
-      : 'border-neutral-300 focus:border-primary-500 focus:ring-primary-500'
+      : 'border-[var(--border-default)] focus:border-accent-500 focus:ring-accent-500'
 
-    // Combine all select styles
     const selectClasses = `
       ${baseStyles}
       ${sizeStyles[size]}
@@ -122,7 +117,6 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
       ${className}
     `.trim().replace(/\s+/g, ' ')
 
-    // Chevron icon styles
     const chevronSize = {
       sm: 'w-4 h-4 right-2',
       md: 'w-5 h-5 right-3',
@@ -131,20 +125,17 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
 
     return (
       <div className={fullWidth ? 'w-full' : 'w-auto'}>
-        {/* Label */}
         {label && (
           <label
             htmlFor={selectId}
-            className="block text-sm font-medium text-neutral-700 mb-1.5"
+            className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5"
           >
             {label}
-            {required && <span className="text-error-500 ml-1">*</span>}
+            {required && <span className="text-danger-500 ml-1">*</span>}
           </label>
         )}
 
-        {/* Select container */}
         <div className="relative">
-          {/* Select element */}
           <select
             ref={ref}
             id={selectId}
@@ -157,14 +148,12 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             }
             {...props}
           >
-            {/* Placeholder option */}
             {placeholder && (
               <option value="" disabled>
                 {placeholder}
               </option>
             )}
 
-            {/* Options */}
             {options.map((option) => (
               <option
                 key={option.value}
@@ -176,9 +165,8 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             ))}
           </select>
 
-          {/* Chevron down icon */}
           <div
-            className={`absolute top-1/2 -translate-y-1/2 pointer-events-none text-neutral-400 ${chevronSize[size]}`}
+            className={`absolute top-1/2 -translate-y-1/2 pointer-events-none text-[var(--text-muted)] ${chevronSize[size]}`}
             aria-hidden="true"
           >
             <svg
@@ -197,23 +185,14 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
           </div>
         </div>
 
-        {/* Error message */}
         {hasError && (
-          <p
-            id={errorId}
-            className="mt-1.5 text-sm text-error-600"
-            role="alert"
-          >
+          <p id={errorId} className="mt-1.5 text-sm text-danger-600" role="alert">
             {error}
           </p>
         )}
 
-        {/* Helper text (only show if no error) */}
         {!hasError && helperText && (
-          <p
-            id={helperId}
-            className="mt-1.5 text-sm text-neutral-500"
-          >
+          <p id={helperId} className="mt-1.5 text-sm text-[var(--text-muted)]">
             {helperText}
           </p>
         )}

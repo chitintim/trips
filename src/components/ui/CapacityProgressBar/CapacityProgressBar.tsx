@@ -68,23 +68,23 @@ export function CapacityProgressBar({
 
   // Determine color based on capacity
   const getBarColor = () => {
-    if (!capacityLimit) return 'bg-primary-500'
-    if (confirmedCount >= capacityLimit) return 'bg-error-500'
-    if (confirmedPercentage >= 80) return 'bg-warning-500'
+    if (!capacityLimit) return 'bg-accent-500'
+    if (confirmedCount >= capacityLimit) return 'bg-danger-500'
+    if (confirmedPercentage >= 80) return 'bg-warn-500'
     return 'bg-success-500'
   }
 
   const getBarBgColor = () => {
-    if (!capacityLimit) return 'bg-primary-100'
-    if (confirmedCount >= capacityLimit) return 'bg-error-100'
-    if (confirmedPercentage >= 80) return 'bg-warning-100'
+    if (!capacityLimit) return 'bg-accent-100'
+    if (confirmedCount >= capacityLimit) return 'bg-danger-100'
+    if (confirmedPercentage >= 80) return 'bg-warn-100'
     return 'bg-success-100'
   }
 
   const getPipelineColor = () => {
-    if (!capacityLimit) return 'bg-primary-300'
-    if (confirmedCount >= capacityLimit) return 'bg-error-300'
-    if (confirmedPercentage >= 80) return 'bg-warning-300'
+    if (!capacityLimit) return 'bg-accent-300'
+    if (confirmedCount >= capacityLimit) return 'bg-danger-300'
+    if (confirmedPercentage >= 80) return 'bg-warn-300'
     return 'bg-success-300'
   }
 
@@ -128,7 +128,7 @@ export function CapacityProgressBar({
 
         {/* Simplified text - single line */}
         <div className={`flex items-center justify-between ${textSizeClasses[size]}`}>
-          <span className="font-medium text-gray-900">
+          <span className="font-medium text-[var(--text-primary)]">
             {capacityLimit ? (
               <>
                 {confirmedCount}/{capacityLimit} confirmed
@@ -140,7 +140,7 @@ export function CapacityProgressBar({
             )}
           </span>
           {conditionalCount > 0 && (
-            <span className="text-sm text-gray-500">
+            <span className="text-sm text-[var(--text-muted)]">
               +{conditionalCount} conditional
             </span>
           )}
@@ -148,7 +148,7 @@ export function CapacityProgressBar({
 
         {/* Waitlist indicator */}
         {waitlistCount > 0 && (
-          <div className="text-xs text-gray-500">
+          <div className="text-xs text-[var(--text-muted)]">
             {waitlistCount} on waitlist
           </div>
         )}

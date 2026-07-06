@@ -1,5 +1,4 @@
 import { ButtonHTMLAttributes, forwardRef } from 'react'
-import { components } from '../../../styles/design-tokens'
 
 // ============================================================================
 // TYPES
@@ -8,12 +7,12 @@ import { components } from '../../../styles/design-tokens'
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   /**
    * Visual style variant
-   * - primary: Blue background, white text (main actions)
-   * - secondary: Orange background, white text (accent actions)
-   * - outline: Transparent with border (secondary actions)
+   * - primary: Accent background, white text (main actions)
+   * - secondary: Neutral surface with border (secondary actions)
    * - ghost: Transparent, no border (subtle actions)
+   * - danger: Destructive actions
    */
-  variant?: 'primary' | 'secondary' | 'outline' | 'ghost'
+  variant?: 'primary' | 'secondary' | 'ghost' | 'danger' | 'outline'
 
   /**
    * Size of the button
@@ -45,10 +44,22 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 // COMPONENT
 // ============================================================================
 
+/**
+ * Back-compat note: v1 had an `outline` variant. It now renders identically
+ * to `secondary` so existing call sites (`variant="outline"`) keep
+ * compiling and rendering a sensible bordered button.
+ */
+function resolveVariant(
+  variant: ButtonProps['variant']
+): 'primary' | 'secondary' | 'ghost' | 'danger' {
+  if (variant === 'outline') return 'secondary'
+  return variant ?? 'primary'
+}
+
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   (
     {
-      variant = 'primary',
+      variant,
       size = 'md',
       isLoading = false,
       fullWidth = false,
@@ -61,85 +72,74 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     },
     ref
   ) => {
-    // Combine disabled state with loading
+    const resolvedVariant = resolveVariant(variant)
     const isDisabled = disabled || isLoading
 
-    // Base styles (shared by all variants)
     const baseStyles = `
       inline-flex items-center justify-center
       font-medium
-      rounded-lg
-      transition-all duration-200
-      focus:outline-none focus:ring-2 focus:ring-offset-2
+      rounded-[var(--radius-md)]
+      transition-colors duration-150
+      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-raised)]
       disabled:cursor-not-allowed disabled:opacity-50
+      select-none
       ${fullWidth ? 'w-full' : ''}
     `
 
-    // Size styles
     const sizeStyles = {
-      sm: `text-sm ${components.button.padding.sm} h-8`,
-      md: `text-base ${components.button.padding.md} h-10`,
-      lg: `text-lg ${components.button.padding.lg} h-12`,
+      sm: 'text-sm px-3 h-9 gap-1.5',
+      md: 'text-[0.9375rem] px-4 h-11 gap-2',
+      lg: 'text-base px-5 h-12 gap-2.5',
     }
 
-    // Variant styles
     const variantStyles = {
       primary: `
         text-white
-        bg-primary-500
-        hover:bg-primary-600
-        active:bg-primary-700
-        focus:ring-primary-500
+        bg-accent-600
+        hover:bg-accent-700
+        active:bg-accent-800
+        focus-visible:ring-accent-500
         shadow-sm
       `,
       secondary: `
-        text-white
-        bg-secondary-500
-        hover:bg-secondary-600
-        active:bg-secondary-700
-        focus:ring-secondary-500
-        shadow-sm
-      `,
-      outline: `
-        text-primary-600
-        bg-transparent
-        border-2 border-primary-500
-        hover:bg-primary-50
-        active:bg-primary-100
-        focus:ring-primary-500
+        text-[var(--text-primary)]
+        bg-[var(--surface-raised)]
+        border border-[var(--border-default)]
+        hover:bg-[var(--surface-sunken)]
+        active:bg-neutral-200
+        focus-visible:ring-accent-500
       `,
       ghost: `
-        text-primary-600
+        text-[var(--text-secondary)]
         bg-transparent
-        hover:bg-primary-50
-        active:bg-primary-100
-        focus:ring-primary-500
+        hover:bg-[var(--surface-sunken)]
+        active:bg-neutral-200
+        focus-visible:ring-accent-500
+      `,
+      danger: `
+        text-white
+        bg-danger-600
+        hover:bg-danger-700
+        active:bg-danger-800
+        focus-visible:ring-danger-500
+        shadow-sm
       `,
     }
 
-    // Combine all styles
     const buttonClasses = `
       ${baseStyles}
       ${sizeStyles[size]}
-      ${variantStyles[variant]}
+      ${variantStyles[resolvedVariant]}
       ${className}
     `.trim().replace(/\s+/g, ' ')
-
-    // Icon spacing based on size
-    const iconSpacing = {
-      sm: 'gap-1.5',
-      md: 'gap-2',
-      lg: 'gap-2.5',
-    }
 
     return (
       <button
         ref={ref}
         disabled={isDisabled}
-        className={`${buttonClasses} ${iconSpacing[size]}`}
+        className={buttonClasses}
         {...props}
       >
-        {/* Loading spinner */}
         {isLoading && (
           <svg
             className="animate-spin -ml-1 h-4 w-4"
@@ -164,18 +164,15 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
           </svg>
         )}
 
-        {/* Left icon */}
         {!isLoading && leftIcon && (
           <span className="inline-flex shrink-0" aria-hidden="true">
             {leftIcon}
           </span>
         )}
 
-        {/* Button text */}
         {children && <span>{children}</span>}
 
-        {/* Right icon */}
-        {rightIcon && (
+        {!isLoading && rightIcon && (
           <span className="inline-flex shrink-0" aria-hidden="true">
             {rightIcon}
           </span>

@@ -202,7 +202,7 @@ export function SelectionAvatars({
           const user = selection.user
           const emoji = (user?.avatar_data as any)?.emoji || '😊'
           const accessory = (user?.avatar_data as any)?.accessory
-          const bgColor = (user?.avatar_data as any)?.bgColor || '#0ea5e9'
+          const bgColor = (user?.avatar_data as any)?.bgColor || '#1f9d90'
           const displayName = user?.full_name || user?.email || 'Unknown'
 
           return (
@@ -227,7 +227,7 @@ export function SelectionAvatars({
         {/* Overflow Badge */}
         {overflowCount > 0 && (
           <div
-            className={`${classes.overflow} rounded-full flex items-center justify-center bg-gray-200 text-gray-700 font-medium ring-2 ring-white`}
+            className={`${classes.overflow} rounded-full flex items-center justify-center bg-[var(--surface-sunken)] text-[var(--text-secondary)] font-medium ring-2 ring-white`}
             title={`+${overflowCount} more ${overflowCount === 1 ? 'person' : 'people'}`}
           >
             +{overflowCount}
@@ -237,7 +237,7 @@ export function SelectionAvatars({
 
       {/* Optional Labels */}
       {showLabels && (
-        <div className={`${classes.label} text-gray-600`}>
+        <div className={`${classes.label} text-[var(--text-secondary)]`}>
           {visibleSelections.length === 1 && selections.length === 1 ? (
             <span>{visibleSelections[0].user?.full_name || visibleSelections[0].user?.email}</span>
           ) : (
@@ -252,17 +252,17 @@ export function SelectionAvatars({
       {showPopover && createPortal(
         <div
           ref={popoverRef}
-          className="z-popover w-72 bg-white rounded-lg shadow-xl border border-gray-200 max-h-96 overflow-y-auto"
+          className="z-popover w-72 bg-[var(--surface-raised)] rounded-lg shadow-xl border border-[var(--border-subtle)] max-h-96 overflow-y-auto"
           style={getPopoverStyles()}
         >
           {/* Header */}
-          <div className="sticky top-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between rounded-t-lg">
-            <h3 className="text-sm font-semibold text-gray-900">
+          <div className="sticky top-0 bg-[var(--surface-raised)] border-b border-[var(--border-subtle)] px-4 py-3 flex items-center justify-between rounded-t-lg">
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
               Who selected this ({selections.length})
             </h3>
             <button
               onClick={() => setShowPopover(false)}
-              className="text-gray-400 hover:text-gray-600 transition-colors p-1"
+              className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors p-1"
               aria-label="Close"
             >
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -277,13 +277,13 @@ export function SelectionAvatars({
               const user = selection.user
               const emoji = (user?.avatar_data as any)?.emoji || '😊'
               const accessory = (user?.avatar_data as any)?.accessory
-              const bgColor = (user?.avatar_data as any)?.bgColor || '#0ea5e9'
+              const bgColor = (user?.avatar_data as any)?.bgColor || '#1f9d90'
               const displayName = user?.full_name || user?.email || 'Unknown'
 
               return (
                 <div
                   key={selection.id}
-                  className="px-4 py-3 hover:bg-gray-50 transition-colors"
+                  className="px-4 py-3 hover:bg-[var(--surface-sunken)] transition-colors"
                 >
                   <div className="flex items-center gap-3">
                     <div
@@ -300,10 +300,10 @@ export function SelectionAvatars({
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">
+                      <div className="text-sm font-medium text-[var(--text-primary)] truncate">
                         {displayName}
                       </div>
-                      <div className="text-xs text-gray-500">
+                      <div className="text-xs text-[var(--text-muted)]">
                         {formatTimestamp(selection.selected_at)}
                       </div>
                     </div>

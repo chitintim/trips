@@ -2,15 +2,17 @@ import { useState, useEffect } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { useScrollDirection } from '../hooks/useScrollDirection'
 import { Button, Card, Badge, Spinner, EmptyState } from '../components/ui'
 import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
 import { PlanningTabV2 } from '../components/planning/PlanningTabV2'
 import { Trip, User, TripParticipant } from '../types'
-import { getTripStatusBadgeVariant, getTripStatusLabel } from '../lib/tripStatus'
+import { getTripStatusLabel } from '../lib/tripStatus'
 import { TimelineTab } from '../components/TimelineTab'
 import { ChatDrawer } from '../components/ChatDrawer'
 import { MySpendingTab } from '../components/my-spending/MySpendingTab'
+import { AppShell, StageRail } from '../components/layout'
+import type { AppShellTabItem } from '../components/layout'
+import { getTripAccentStyle } from '../components/layout/tripAccent'
 
 type TripTab = 'overview' | 'planning' | 'timeline' | 'expenses' | 'my-spending' | 'notes'
 
@@ -23,7 +25,6 @@ export function TripDetail() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
-  const scrollDirection = useScrollDirection()
   const [trip, setTrip] = useState<Trip | null>(null)
   const [participants, setParticipants] = useState<ParticipantWithUser[]>([])
   const [loading, setLoading] = useState(true)
@@ -158,7 +159,7 @@ export function TripDetail() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--surface-page)] flex items-center justify-center">
         <Spinner size="lg" />
       </div>
     )
@@ -166,7 +167,7 @@ export function TripDetail() {
 
   if (!trip) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--surface-page)] flex items-center justify-center">
         <Card className="max-w-md">
           <Card.Content className="py-12">
             <EmptyState
@@ -229,148 +230,135 @@ export function TripDetail() {
     }
   }
 
+  const tripTabs: { key: TripTab; label: string; icon: string }[] = [
+    { key: 'overview', label: 'People', icon: '👥' },
+    { key: 'planning', label: 'Planning', icon: '🗓️' },
+    { key: 'timeline', label: 'Timeline', icon: '📋' },
+    { key: 'expenses', label: 'Expenses', icon: '💰' },
+    { key: 'my-spending', label: 'My Spending', icon: '📊' },
+    { key: 'notes', label: 'Notes', icon: '📝' },
+  ]
+
+  const shellTabs: AppShellTabItem[] = tripTabs.map((t) => ({
+    key: t.key,
+    label: t.label,
+    icon: <span className="text-lg leading-none">{t.icon}</span>,
+    isActive: activeTab === t.key,
+    onClick: () => setActiveTab(t.key),
+  }))
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div
-        className={`bg-white border-b border-gray-200 sticky top-0 z-sticky transition-transform duration-300 ease-in-out ${
-          scrollDirection === 'down' ? '-translate-y-full' : 'translate-y-0'
-        }`}
+    <div data-trip-accent style={getTripAccentStyle(trip.id)} className="min-h-screen bg-[var(--surface-page)]">
+      <AppShell
+        tabs={shellTabs}
+        onQuickAdd={() => setChatOpen(true)}
+        quickAddIcon={<span className="text-xl leading-none">🤖</span>}
+        quickAddLabel="Trip Assistant"
+        sidebarHeader={
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            Back to Dashboard
+          </button>
+        }
       >
-        <div className="max-w-6xl mx-auto px-4 py-3">
-          {/* Trip Title Row */}
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="flex items-center gap-2 min-w-0 flex-1">
-              <button
-                onClick={() => navigate('/dashboard')}
-                className="text-gray-500 hover:text-gray-700 transition-colors flex-shrink-0"
-                aria-label="Back to Dashboard"
-              >
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                </svg>
-              </button>
-              <h1 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{trip.name}</h1>
-              <Badge
-                variant={getTripStatusBadgeVariant(trip.status)}
-                className="flex-shrink-0"
-              >
-                {getTripStatusLabel(trip.status)}
-              </Badge>
-            </div>
-            {isAdmin && (
-              <div className="flex gap-1 flex-shrink-0">
-                <Button variant="outline" size="sm" onClick={handleEditTrip} className="hidden sm:inline-flex">
-                  Edit
-                </Button>
-                {/* Mobile: Compact menu button */}
-                <Button variant="outline" size="sm" onClick={handleEditTrip} className="sm:hidden">
-                  •••
-                </Button>
+        {/* Header */}
+        <div className="bg-[var(--surface-raised)]/90 backdrop-blur-sm border-b border-[var(--border-subtle)] sticky top-0 z-sticky">
+          <div className="max-w-6xl mx-auto px-4 py-3">
+            {/* Trip Title Row */}
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div className="flex items-center gap-2 min-w-0 flex-1">
+                <button
+                  onClick={() => navigate('/dashboard')}
+                  className="text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors flex-shrink-0 md:hidden"
+                  aria-label="Back to Dashboard"
+                >
+                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+                <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-primary)] truncate">{trip.name}</h1>
               </div>
-            )}
-          </div>
-
-          {/* Trip Details Row */}
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600 mb-3">
-            <span className="flex items-center gap-1">
-              <span className="text-base">📍</span>
-              {trip.location}
-            </span>
-            <span className="flex items-center gap-1">
-              <span className="text-base">📅</span>
-              {formatDateRange(trip.start_date, trip.end_date)}
-            </span>
-            <span className="flex items-center gap-1 text-sky-600 font-medium">
-              {getCountdown(trip.start_date)}
-            </span>
-          </div>
-
-          {/* Tab Navigation */}
-          <nav className="flex items-center border-b border-gray-200 -mb-px">
-            <div className="flex gap-1 flex-1 min-w-0 overflow-x-auto">
-              <button
-                onClick={() => setActiveTab('overview')}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                  activeTab === 'overview'
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                👥 People
-              </button>
-              <button
-                onClick={() => setActiveTab('planning')}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                  activeTab === 'planning'
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                🗓️ Planning
-              </button>
-              <button
-                onClick={() => setActiveTab('timeline')}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                  activeTab === 'timeline'
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                📋 Timeline
-              </button>
-              <button
-                onClick={() => setActiveTab('expenses')}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                  activeTab === 'expenses'
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                💰 Expenses
-              </button>
-              <button
-                onClick={() => setActiveTab('my-spending')}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                  activeTab === 'my-spending'
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                📊 My Spending
-              </button>
-              <button
-                onClick={() => setActiveTab('notes')}
-                className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                  activeTab === 'notes'
-                    ? 'border-primary text-primary'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                📝 Notes
-              </button>
+              {isAdmin && (
+                <div className="flex gap-1 flex-shrink-0">
+                  <Button variant="secondary" size="sm" onClick={handleEditTrip} className="hidden sm:inline-flex">
+                    Edit
+                  </Button>
+                  {/* Mobile: Compact menu button */}
+                  <Button variant="secondary" size="sm" onClick={handleEditTrip} className="sm:hidden">
+                    •••
+                  </Button>
+                </div>
+              )}
             </div>
-            {/* AI Chat button in tab bar */}
-            <button
-              onClick={() => setChatOpen(true)}
-              className="flex-shrink-0 ml-2 px-3 py-1.5 text-sm font-medium text-purple-600 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors flex items-center gap-1.5 border border-purple-200"
-              title="Open Trip Assistant"
-            >
-              🤖 AI Chat
-            </button>
-          </nav>
-        </div>
-      </div>
 
-      {/* Tab Content */}
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} onAddParticipant={handleAddParticipant} />}
-        {activeTab === 'planning' && <PlanningTabV2 trip={trip} participants={participants} />}
-        {activeTab === 'timeline' && <TimelineTab trip={trip} participants={participants} />}
-        {activeTab === 'expenses' && <ExpensesTab tripId={trip.id} participants={participants} />}
-        {activeTab === 'my-spending' && <MySpendingTab trip={trip} participants={participants} />}
-        {activeTab === 'notes' && <NotesTab trip={trip} />}
-      </div>
+            {/* Trip Details Row */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-[var(--text-secondary)] mb-3">
+              <span className="flex items-center gap-1">
+                <span className="text-base">📍</span>
+                {trip.location}
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="text-base">📅</span>
+                {formatDateRange(trip.start_date, trip.end_date)}
+              </span>
+              <span className="flex items-center gap-1 text-accent-700 dark:text-accent-400 font-medium">
+                {getCountdown(trip.start_date)}
+              </span>
+            </div>
+
+            {/* Stage rail */}
+            <div className="flex items-center gap-3 mb-3">
+              <StageRail status={trip.status} compact />
+              <span className="text-xs font-medium text-[var(--text-muted)] whitespace-nowrap">
+                {getTripStatusLabel(trip.status)}
+              </span>
+            </div>
+
+            {/* Tab Navigation (in-page sub-tabs; distinct from the app shell's
+                top-level nav — this trip has more sections than fit 4 shell slots) */}
+            <nav className="flex items-center border-b border-[var(--border-subtle)] -mb-px">
+              <div className="flex gap-1 flex-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {tripTabs.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => setActiveTab(t.key)}
+                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                      activeTab === t.key
+                        ? 'border-accent-600 text-accent-700 dark:text-accent-400'
+                        : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
+                    }`}
+                  >
+                    {t.icon} {t.label}
+                  </button>
+                ))}
+              </div>
+              {/* AI Chat button in tab bar (desktop only — mobile uses the shell FAB) */}
+              <button
+                onClick={() => setChatOpen(true)}
+                className="hidden md:flex flex-shrink-0 ml-2 px-3 py-1.5 text-sm font-medium text-accent-700 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-950 rounded-[var(--radius-md)] transition-colors items-center gap-1.5 border border-accent-200 dark:border-accent-800"
+                title="Open Trip Assistant"
+              >
+                🤖 AI Chat
+              </button>
+            </nav>
+          </div>
+        </div>
+
+        {/* Tab Content */}
+        <div className="max-w-6xl mx-auto px-4 py-8">
+          {activeTab === 'overview' && <TripOverviewTab trip={trip} participants={participants} onAddParticipant={handleAddParticipant} />}
+          {activeTab === 'planning' && <PlanningTabV2 trip={trip} participants={participants} />}
+          {activeTab === 'timeline' && <TimelineTab trip={trip} participants={participants} />}
+          {activeTab === 'expenses' && <ExpensesTab tripId={trip.id} participants={participants} />}
+          {activeTab === 'my-spending' && <MySpendingTab trip={trip} participants={participants} />}
+          {activeTab === 'notes' && <NotesTab trip={trip} />}
+        </div>
+      </AppShell>
 
       {/* Chat Drawer */}
       <ChatDrawer

@@ -69,58 +69,44 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     },
     ref
   ) => {
-    // Generate unique IDs for accessibility
     const generatedId = useId()
     const inputId = id || generatedId
     const errorId = `${inputId}-error`
     const helperId = `${inputId}-helper`
 
-    // Determine validation state
     const hasError = !!error
     const hasSuccess = success && !hasError
 
-    // Base input styles
     const baseStyles = `
       block
       w-full
-      rounded-lg
+      rounded-[var(--radius-md)]
       border
-      bg-white
-      transition-all duration-200
-      placeholder:text-neutral-400
+      bg-[var(--surface-raised)]
+      text-[var(--text-primary)]
+      transition-colors duration-150
+      placeholder:text-[var(--text-muted)]
       focus:outline-none focus:ring-2 focus:ring-offset-0
-      disabled:cursor-not-allowed disabled:bg-neutral-100 disabled:text-neutral-500
+      disabled:cursor-not-allowed disabled:bg-[var(--surface-sunken)] disabled:text-[var(--text-muted)]
     `
 
-    // Size styles
     const sizeStyles = {
-      sm: 'h-8 px-3 text-sm',
-      md: 'h-10 px-4 text-base',
+      sm: 'h-9 px-3 text-sm',
+      md: 'h-11 px-3.5 text-[0.9375rem]',
       lg: 'h-12 px-4 text-lg',
     }
 
-    // Padding adjustments for addons
     const addonPaddingStyles = {
-      left: {
-        sm: 'pl-9',
-        md: 'pl-10',
-        lg: 'pl-12',
-      },
-      right: {
-        sm: 'pr-9',
-        md: 'pr-10',
-        lg: 'pr-12',
-      },
+      left: { sm: 'pl-9', md: 'pl-10', lg: 'pl-12' },
+      right: { sm: 'pr-9', md: 'pr-10', lg: 'pr-12' },
     }
 
-    // State-based styles
     const stateStyles = hasError
-      ? 'border-error-500 focus:border-error-500 focus:ring-error-500'
+      ? 'border-danger-500 focus:border-danger-500 focus:ring-danger-500'
       : hasSuccess
       ? 'border-success-500 focus:border-success-500 focus:ring-success-500'
-      : 'border-neutral-300 focus:border-primary-500 focus:ring-primary-500'
+      : 'border-[var(--border-default)] focus:border-accent-500 focus:ring-accent-500'
 
-    // Combine all input styles
     const inputClasses = `
       ${baseStyles}
       ${sizeStyles[size]}
@@ -130,40 +116,24 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
       ${className}
     `.trim().replace(/\s+/g, ' ')
 
-    // Addon positioning styles
-    const addonBaseStyles = 'absolute top-1/2 -translate-y-1/2 flex items-center pointer-events-none text-neutral-400'
-    const addonSizeStyles = {
-      sm: 'text-sm',
-      md: 'text-base',
-      lg: 'text-lg',
-    }
-    const leftAddonPosition = {
-      sm: 'left-3',
-      md: 'left-3',
-      lg: 'left-4',
-    }
-    const rightAddonPosition = {
-      sm: 'right-3',
-      md: 'right-3',
-      lg: 'right-4',
-    }
+    const addonBaseStyles = 'absolute top-1/2 -translate-y-1/2 flex items-center pointer-events-none text-[var(--text-muted)]'
+    const addonSizeStyles = { sm: 'text-sm', md: 'text-base', lg: 'text-lg' }
+    const leftAddonPosition = { sm: 'left-3', md: 'left-3', lg: 'left-4' }
+    const rightAddonPosition = { sm: 'right-3', md: 'right-3', lg: 'right-4' }
 
     return (
       <div className={fullWidth ? 'w-full' : 'w-auto'}>
-        {/* Label */}
         {label && (
           <label
             htmlFor={inputId}
-            className="block text-sm font-medium text-neutral-700 mb-1.5"
+            className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5"
           >
             {label}
-            {required && <span className="text-error-500 ml-1">*</span>}
+            {required && <span className="text-danger-500 ml-1">*</span>}
           </label>
         )}
 
-        {/* Input container */}
         <div className="relative">
-          {/* Left addon */}
           {leftAddon && (
             <div
               className={`${addonBaseStyles} ${addonSizeStyles[size]} ${leftAddonPosition[size]}`}
@@ -173,7 +143,6 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             </div>
           )}
 
-          {/* Input field */}
           <input
             ref={ref}
             id={inputId}
@@ -187,7 +156,6 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             {...props}
           />
 
-          {/* Right addon */}
           {rightAddon && (
             <div
               className={`${addonBaseStyles} ${addonSizeStyles[size]} ${rightAddonPosition[size]}`}
@@ -198,23 +166,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           )}
         </div>
 
-        {/* Error message */}
         {hasError && (
-          <p
-            id={errorId}
-            className="mt-1.5 text-sm text-error-600"
-            role="alert"
-          >
+          <p id={errorId} className="mt-1.5 text-sm text-danger-600" role="alert">
             {error}
           </p>
         )}
 
-        {/* Helper text (only show if no error) */}
         {!hasError && helperText && (
-          <p
-            id={helperId}
-            className="mt-1.5 text-sm text-neutral-500"
-          >
+          <p id={helperId} className="mt-1.5 text-sm text-[var(--text-muted)]">
             {helperText}
           </p>
         )}

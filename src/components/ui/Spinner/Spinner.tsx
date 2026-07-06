@@ -25,6 +25,21 @@ export interface SpinnerProps extends HTMLAttributes<HTMLDivElement> {
 // COMPONENT
 // ============================================================================
 
+const sizeStyles = {
+  xs: 'w-3.5 h-3.5 border-2',
+  sm: 'w-4 h-4 border-2',
+  md: 'w-6 h-6 border-2',
+  lg: 'w-8 h-8 border-[3px]',
+  xl: 'w-12 h-12 border-4',
+}
+
+const variantStyles = {
+  primary: 'border-accent-200 border-t-accent-600',
+  secondary: 'border-warn-200 border-t-warn-600',
+  white: 'border-white/30 border-t-white',
+  neutral: 'border-[var(--border-subtle)] border-t-[var(--text-secondary)]',
+}
+
 export const Spinner = forwardRef<HTMLDivElement, SpinnerProps>(
   (
     {
@@ -36,58 +51,18 @@ export const Spinner = forwardRef<HTMLDivElement, SpinnerProps>(
     },
     ref
   ) => {
-    // Size styles
-    const containerSizeStyles = {
-      xs: 'gap-0.5',
-      sm: 'gap-1',
-      md: 'gap-1.5',
-      lg: 'gap-2',
-      xl: 'gap-2.5',
-    }
-
-    const snowflakeSizeStyles = {
-      xs: 'text-xs',
-      sm: 'text-sm',
-      md: 'text-base',
-      lg: 'text-xl',
-      xl: 'text-2xl',
-    }
-
     return (
       <div
         ref={ref}
         role="status"
         aria-label={label}
-        className={`inline-flex items-center ${containerSizeStyles[size]} ${className}`}
+        className={`inline-flex items-center justify-center ${className}`}
         {...props}
       >
-        {/* Snowflake 1 */}
         <span
-          className={`${snowflakeSizeStyles[size]} animate-pulse`}
-          style={{ animationDelay: '0ms', animationDuration: '1000ms' }}
+          className={`inline-block rounded-full animate-spin ${sizeStyles[size]} ${variantStyles[variant]}`}
           aria-hidden="true"
-        >
-          ❄️
-        </span>
-
-        {/* Snowflake 2 */}
-        <span
-          className={`${snowflakeSizeStyles[size]} animate-pulse`}
-          style={{ animationDelay: '200ms', animationDuration: '1000ms' }}
-          aria-hidden="true"
-        >
-          ❄️
-        </span>
-
-        {/* Snowflake 3 */}
-        <span
-          className={`${snowflakeSizeStyles[size]} animate-pulse`}
-          style={{ animationDelay: '400ms', animationDuration: '1000ms' }}
-          aria-hidden="true"
-        >
-          ❄️
-        </span>
-
+        />
         <span className="sr-only">{label}</span>
       </div>
     )

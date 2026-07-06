@@ -75,30 +75,32 @@ export function Dashboard() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-sky-50 to-orange-50 flex items-center justify-center">
+      <div className="min-h-screen bg-[var(--surface-page)] flex items-center justify-center">
         <Spinner size="lg" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-sky-50 to-orange-50">
+    <div className="min-h-screen bg-[var(--surface-page)]">
       {/* Header */}
       <header
-        className={`bg-white shadow-sm border-b border-gray-200 sticky top-0 z-sticky transition-transform duration-300 ease-in-out ${
+        className={`bg-[var(--surface-raised)] shadow-sm border-b border-[var(--border-subtle)] sticky top-0 z-sticky transition-transform duration-300 ease-in-out ${
           scrollDirection === 'down' ? '-translate-y-full' : 'translate-y-0'
         }`}
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="text-2xl">🎿</span>
+              <span className="inline-flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] bg-accent-600 text-white font-semibold">
+                T
+              </span>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">
-                  Tim's Super Trip Planner
+                <h1 className="text-xl font-bold text-[var(--text-primary)]">
+                  Trips
                 </h1>
                 {isAdmin && (
-                  <span className="text-xs text-sky-600 font-medium">
+                  <span className="text-xs text-accent-600 dark:text-accent-400 font-medium">
                     Admin Dashboard
                   </span>
                 )}
@@ -108,12 +110,12 @@ export function Dashboard() {
               {currentUser && (
                 <button
                   onClick={() => setProfileModalOpen(true)}
-                  className="flex items-center gap-2 text-sm text-gray-700 hover:text-gray-900 transition-colors"
+                  className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
                 >
                   <div
                     className="w-8 h-8 rounded-full flex flex-col items-center justify-center text-base"
                     style={{
-                      backgroundColor: (currentUser.avatar_data as any)?.bgColor || '#0ea5e9',
+                      backgroundColor: (currentUser.avatar_data as any)?.bgColor || '#1f9d90',
                     }}
                   >
                     {(currentUser.avatar_data as any)?.accessory && (
@@ -131,7 +133,7 @@ export function Dashboard() {
                 </button>
               )}
               <Button
-                variant="outline"
+                variant="secondary"
                 size="sm"
                 onClick={handleSignOut}
                 disabled={signingOut}
@@ -145,15 +147,15 @@ export function Dashboard() {
 
         {/* Admin Tabs */}
         {isAdmin && (
-          <div className="border-t border-gray-200">
+          <div className="border-t border-[var(--border-subtle)]">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
               <nav className="flex gap-6" aria-label="Admin sections">
                 <button
                   onClick={() => setActiveTab('trips')}
                   className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
                     activeTab === 'trips'
-                      ? 'border-sky-500 text-sky-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      ? 'border-accent-600 text-accent-700 dark:text-accent-400'
+                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
                   }`}
                 >
                   🏔️ Trips
@@ -162,8 +164,8 @@ export function Dashboard() {
                   onClick={() => setActiveTab('users')}
                   className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
                     activeTab === 'users'
-                      ? 'border-sky-500 text-sky-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      ? 'border-accent-600 text-accent-700 dark:text-accent-400'
+                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
                   }`}
                 >
                   👥 Users
@@ -172,8 +174,8 @@ export function Dashboard() {
                   onClick={() => setActiveTab('invitations')}
                   className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
                     activeTab === 'invitations'
-                      ? 'border-sky-500 text-sky-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      ? 'border-accent-600 text-accent-700 dark:text-accent-400'
+                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
                   }`}
                 >
                   🎫 Invitations

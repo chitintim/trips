@@ -7,12 +7,12 @@ import { HTMLAttributes, forwardRef } from 'react'
 export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   /**
    * Visual style variant
-   * - primary: Blue (default/general)
-   * - secondary: Orange (accent/special)
+   * - primary: Accent (default/general)
+   * - secondary: Warm amber (accent/special)
    * - success: Green (completed/booked)
-   * - warning: Yellow (planning/in-progress)
+   * - warning: Amber (planning/in-progress)
    * - error: Red (cancelled/error)
-   * - info: Blue (information)
+   * - info: Accent (information)
    * - neutral: Gray (inactive/neutral)
    */
   variant?: 'primary' | 'secondary' | 'success' | 'warning' | 'error' | 'info' | 'neutral'
@@ -44,79 +44,47 @@ export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
     },
     ref
   ) => {
-    // Base styles
     const baseStyles = `
       inline-flex
       items-center
       font-medium
-      rounded-full
+      rounded-[var(--radius-full)]
       border
+      whitespace-nowrap
     `
 
-    // Size styles
     const sizeStyles = {
       sm: 'px-2 py-0.5 text-xs',
-      md: 'px-2.5 py-1 text-sm',
-      lg: 'px-3 py-1.5 text-base',
+      md: 'px-2.5 py-1 text-xs',
+      lg: 'px-3 py-1.5 text-sm',
     }
 
     const dotSizeStyles = {
       sm: 'w-1.5 h-1.5 mr-1',
-      md: 'w-2 h-2 mr-1.5',
-      lg: 'w-2.5 h-2.5 mr-2',
+      md: 'w-1.5 h-1.5 mr-1.5',
+      lg: 'w-2 h-2 mr-2',
     }
 
-    // Variant styles
     const variantStyles = {
-      primary: `
-        bg-primary-50
-        text-primary-700
-        border-primary-200
-      `,
-      secondary: `
-        bg-secondary-50
-        text-secondary-700
-        border-secondary-200
-      `,
-      success: `
-        bg-success-50
-        text-success-700
-        border-success-200
-      `,
-      warning: `
-        bg-warning-50
-        text-warning-700
-        border-warning-200
-      `,
-      error: `
-        bg-error-50
-        text-error-700
-        border-error-200
-      `,
-      info: `
-        bg-info-50
-        text-info-700
-        border-info-200
-      `,
-      neutral: `
-        bg-neutral-100
-        text-neutral-700
-        border-neutral-300
-      `,
+      primary: 'bg-accent-50 text-accent-700 border-accent-200 dark:bg-accent-950 dark:text-accent-300 dark:border-accent-800',
+      secondary: 'bg-warn-50 text-warn-700 border-warn-200 dark:bg-warn-900 dark:text-warn-300 dark:border-warn-800',
+      success: 'bg-success-50 text-success-700 border-success-200 dark:bg-success-900 dark:text-success-300 dark:border-success-800',
+      warning: 'bg-warn-50 text-warn-700 border-warn-200 dark:bg-warn-900 dark:text-warn-300 dark:border-warn-800',
+      error: 'bg-danger-50 text-danger-700 border-danger-200 dark:bg-danger-900 dark:text-danger-300 dark:border-danger-800',
+      info: 'bg-accent-50 text-accent-700 border-accent-200 dark:bg-accent-950 dark:text-accent-300 dark:border-accent-800',
+      neutral: 'bg-[var(--surface-sunken)] text-[var(--text-secondary)] border-[var(--border-subtle)]',
     }
 
-    // Dot color based on variant
     const dotColorStyles = {
-      primary: 'bg-primary-500',
-      secondary: 'bg-secondary-500',
+      primary: 'bg-accent-500',
+      secondary: 'bg-warn-500',
       success: 'bg-success-500',
-      warning: 'bg-warning-500',
-      error: 'bg-error-500',
-      info: 'bg-info-500',
-      neutral: 'bg-neutral-500',
+      warning: 'bg-warn-500',
+      error: 'bg-danger-500',
+      info: 'bg-accent-500',
+      neutral: 'bg-neutral-400',
     }
 
-    // Combine all styles
     const badgeClasses = `
       ${baseStyles}
       ${sizeStyles[size]}

@@ -1,0 +1,228 @@
+import { useRef, useState } from 'react'
+import { Modal, Button, Input, Select, Spinner, useToast } from '../../../components/ui'
+import { useAuth } from '../../../hooks/useAuth'
+import { uploadReceipt } from '../../../lib/receiptUpload'
+import { parseReceipt } from '../../../lib/receiptParsing'
+import { useCreateExpense } from '../../../lib/queries/useExpenses'
+import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
+import { ALL_CATEGORIES, categoryIcon, categoryLabel } from '../lib/categoryStyle'
+import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
+import { initialQuickCaptureState, applyParseResult } from './quickCaptureState'
+import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
+import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
+import type { Trip } from '../../../types'
+
+export interface QuickCaptureSheetProps {
+  isOpen: boolean
+  onClose: () => void
+  trip: Trip
+  participants: ParticipantWithUser[]
+  allExpenses: ExpenseWithDetails[]
+}
+
+/**
+ * Quick capture (plan §10 #1, the flagship flow): photo/file -> upload ->
+ * parse-receipt -> "does this look right?" confirmation card with smart
+ * defaults (payer=me, date=today, split=all tagged participants equally)
+ * -> save in <=3 taps. "Refine later" opens the full editor. If parsing
+ * fails, falls back to graceful manual entry with the photo attached.
+ *
+ * Remount this component with a fresh `key` (e.g. tied to a
+ * `openCount`/timestamp) every time it's opened from the shell's "+" FAB so
+ * no previous capture's state leaks in (Form & Flow Standard point 2).
+ */
+export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpenses }: QuickCaptureSheetProps) {
+  const { user } = useAuth()
+  const { showToast } = useToast()
+  const createExpense = useCreateExpense(trip.id)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const today = new Date().toISOString().slice(0, 10)
+  const [state, setState] = useState(() => initialQuickCaptureState(today))
+  const [showFullEditor, setShowFullEditor] = useState(false)
+
+  const resetAndClose = () => {
+    setState(initialQuickCaptureState(today))
+    setShowFullEditor(false)
+    onClose()
+  }
+
+  const handleFilePicked = async (file: File) => {
+    if (!user) return
+    setState((s) => ({ ...s, file, stage: 'uploading' }))
+    try {
+      const uploaded = await uploadReceipt(file, user.id)
+      setState((s) => ({ ...s, receiptPath: uploaded.path, stage: 'parsing' }))
+
+      try {
+        const parsed = await parseReceipt(uploaded.path, trip.id)
+        setState((s) => applyParseResult(s, parsed, today))
+      } catch (parseErr) {
+        setState((s) => ({
+          ...s,
+          stage: 'manual',
+          parseError: parseErr instanceof Error ? parseErr.message : 'Could not read this receipt',
+        }))
+      }
+    } catch (uploadErr) {
+      showToast({
+        type: 'error',
+        message: 'Upload failed',
+        description: uploadErr instanceof Error ? uploadErr.message : undefined,
+      })
+      setState((s) => ({ ...s, stage: 'pick' }))
+    }
+  }
+
+  const handleQuickSave = async () => {
+    if (!user) return
+    const totalMajor = parseFloat(state.total) || 0
+    if (totalMajor <= 0) {
+      showToast({ type: 'error', message: 'Enter a valid amount' })
+      return
+    }
+
+    setState((s) => ({ ...s, stage: 'saving' }))
+    try {
+      // Smart defaults (plan): payer = me, split = all tagged participants
+      // equally. "Tagged participants" defaults to every active trip
+      // participant for quick capture (refine later lets you narrow it).
+      const participantIds = participants.map((p) => p.user_id)
+      const totalMinor = toMinorUnits(totalMajor, state.currency)
+      const shares = largestRemainderDistribute(totalMinor, participantIds.map(() => 1))
+
+      await createExpense.mutateAsync({
+        expense: {
+          description: state.vendor || 'Receipt',
+          amount: totalMajor,
+          currency: state.currency,
+          category: state.category as ExpenseWithDetails['category'],
+          vendor_name: state.vendor || null,
+          payment_date: state.date,
+          paid_by: user.id,
+          participant_ids: participantIds,
+          receipt_url: state.receiptPath,
+          ai_parsed: !!state.parsed,
+        },
+        splits: participantIds.map((userId, i) => ({
+          user_id: userId,
+          amount: fromMinorUnits(shares[i], state.currency),
+          split_type: 'equal' as const,
+        })),
+      })
+
+      showToast({ type: 'success', message: 'Expense saved' })
+      resetAndClose()
+    } catch (err) {
+      showToast({ type: 'error', message: 'Failed to save', description: err instanceof Error ? err.message : undefined })
+      setState((s) => ({ ...s, stage: 'confirm' }))
+    }
+  }
+
+  if (showFullEditor) {
+    return (
+      <ExpenseEditorWizard
+        key={state.receiptPath ?? 'quick-capture-refine'}
+        isOpen={isOpen}
+        onClose={resetAndClose}
+        trip={trip}
+        participants={participants}
+        allExpenses={allExpenses}
+        initialReceiptPath={state.receiptPath}
+      />
+    )
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={resetAndClose} title="Quick capture" size="sm">
+      {state.stage === 'pick' && (
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--text-secondary)]">Snap a receipt or pick a photo — we'll read it for you.</p>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
+            capture="environment"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) void handleFilePicked(file)
+            }}
+          />
+          <Button variant="primary" fullWidth leftIcon={<span>📷</span>} onClick={() => fileInputRef.current?.click()}>
+            Take photo / choose file
+          </Button>
+          <Button variant="ghost" fullWidth onClick={() => setShowFullEditor(true)}>
+            Enter manually instead
+          </Button>
+        </div>
+      )}
+
+      {(state.stage === 'uploading' || state.stage === 'parsing') && (
+        <div className="flex flex-col items-center justify-center py-10 gap-3">
+          <Spinner size="lg" />
+          <p className="text-sm text-[var(--text-secondary)]">
+            {state.stage === 'uploading' ? 'Uploading receipt...' : 'Reading receipt...'}
+          </p>
+        </div>
+      )}
+
+      {state.stage === 'confirm' && (
+        <div className="space-y-4">
+          <p className="text-sm font-medium text-[var(--text-primary)]">Does this look right?</p>
+
+          <Input label="Vendor" value={state.vendor} onChange={(e) => setState((s) => ({ ...s, vendor: e.target.value }))} />
+
+          <div className="grid grid-cols-2 gap-3">
+            <Input
+              label="Total"
+              inputMode="decimal"
+              value={state.total}
+              onChange={(e) => setState((s) => ({ ...s, total: e.target.value }))}
+              leftAddon={state.currency}
+            />
+            <Input type="date" label="Date" value={state.date} onChange={(e) => setState((s) => ({ ...s, date: e.target.value }))} />
+          </div>
+
+          <Select
+            label="Category"
+            value={state.category}
+            onChange={(e) => setState((s) => ({ ...s, category: e.target.value }))}
+            options={ALL_CATEGORIES.map((c) => ({ value: c, label: `${categoryIcon(c)} ${categoryLabel(c)}` }))}
+          />
+
+          <p className="text-xs text-[var(--text-muted)]">
+            Split equally among all {participants.length} trip participants. Paid by you. Refine later to change either.
+          </p>
+
+          <div className="flex items-center gap-3 pt-1">
+            <Button variant="secondary" onClick={() => setShowFullEditor(true)} disabled={state.stage !== 'confirm'}>
+              Refine later
+            </Button>
+            <Button variant="primary" fullWidth onClick={handleQuickSave} isLoading={state.stage === ('saving' as typeof state.stage)}>
+              Save
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {state.stage === 'manual' && (
+        <div className="space-y-4">
+          <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300">
+            Couldn't read this receipt automatically{state.parseError ? `: ${state.parseError}` : ''}. The photo's attached — just fill in the details.
+          </div>
+          <Button variant="primary" fullWidth onClick={() => setShowFullEditor(true)}>
+            Enter details manually
+          </Button>
+        </div>
+      )}
+
+      {state.stage === 'saving' && (
+        <div className="flex flex-col items-center justify-center py-10 gap-3">
+          <Spinner size="lg" />
+          <p className="text-sm text-[var(--text-secondary)]">Saving...</p>
+        </div>
+      )}
+    </Modal>
+  )
+}

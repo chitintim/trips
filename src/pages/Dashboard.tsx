@@ -1,82 +1,80 @@
-import { useState, useEffect } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../hooks/useAuth'
 import { useScrollDirection } from '../hooks/useScrollDirection'
 import { supabase } from '../lib/supabase'
-import { Button, Card, EmptyState, Badge, Spinner } from '../components/ui'
+import {
+  Badge,
+  Button,
+  Card,
+  ConfirmDiscardSheet,
+  EmptyState,
+  Input,
+  Modal,
+  Select,
+  Skeleton,
+  StatCard,
+  Tabs,
+  UserAvatar,
+  useToast,
+} from '../components/ui'
 import { ProfileModal } from '../components/ProfileModal'
-import { CreateInvitationModal } from '../components/CreateInvitationModal'
 import { CreateTripModal } from '../components/CreateTripModal'
 import { ViewUserTripsModal } from '../components/ViewUserTripsModal'
+import { MemberDashboard } from '../features/dashboard'
+import { useTrips, useCurrentUserRow, type TripWithCount } from '../lib/queries/useTrip'
+import { useInvitations, useCreateInvitation, useDeleteInvitation } from '../lib/queries/useInvitations'
+import { queryKeys } from '../lib/queries/queryKeys'
+import { useFormDraft, useUnsavedChangesGuard } from '../lib/forms'
 import { User, Trip, Invitation } from '../types'
 import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming } from '../lib/tripStatus'
 
 type AdminTab = 'trips' | 'users' | 'invitations'
 
+/**
+ * Dashboard page (workstream G rebuild): non-admins get the new
+ * MemberDashboard (src/features/dashboard); admins get the Users /
+ * Invitations / Trips console rebuilt on the v2 design system. Data layer
+ * unchanged — same tables/RPCs as the legacy page (users select,
+ * create_invitation RPC, trips + confirmed counts via useTrips).
+ */
 export function Dashboard() {
   const { user, signOut } = useAuth()
+  const queryClient = useQueryClient()
   const scrollDirection = useScrollDirection()
-  const [isAdmin, setIsAdmin] = useState(false)
   const [activeTab, setActiveTab] = useState<AdminTab>('trips')
-  const [loading, setLoading] = useState(true)
   const [signingOut, setSigningOut] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
-  const [currentUser, setCurrentUser] = useState<User | null>(null)
 
-  // Fetch user data and check admin status
-  useEffect(() => {
-    fetchUserData()
-  }, [user])
-
-  const fetchUserData = async () => {
-    if (!user) return
-
-    const { data } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', user.id)
-      .single()
-
-    if (data) {
-      setCurrentUser(data)
-      setIsAdmin(data.role === 'admin')
-    }
-    setLoading(false)
-  }
+  const { data: currentUser, isLoading } = useCurrentUserRow(user?.id)
+  const isAdmin = currentUser?.role === 'admin'
 
   const handleSignOut = async () => {
-    // Confirm before signing out
-    if (!window.confirm('Are you sure you want to sign out?')) {
-      return
-    }
-
+    if (!window.confirm('Are you sure you want to sign out?')) return
     try {
       setSigningOut(true)
-
-      // Call Supabase sign out
       const { error } = await signOut()
-
       if (error) {
-        console.error('Sign out error:', error)
         alert(`Sign out failed: ${error.message}`)
         setSigningOut(false)
         return
       }
-
-      // Sign out succeeded - force full page reload to clear state
-      // Using window.location.href works better on mobile Safari
+      // Full reload clears state; window.location works best on mobile Safari.
       window.location.href = window.location.origin + '/trips/login'
-    } catch (err: any) {
-      console.error('Unexpected sign out error:', err)
-      alert(`Unexpected error: ${err?.message || 'Please try again'}`)
+    } catch (err) {
+      alert(`Unexpected error: ${(err as Error)?.message || 'Please try again'}`)
       setSigningOut(false)
     }
   }
 
-  if (loading) {
+  if (isLoading) {
     return (
-      <div className="min-h-screen bg-[var(--surface-page)] flex items-center justify-center">
-        <Spinner size="lg" />
+      <div className="min-h-screen bg-[var(--surface-page)] p-4">
+        <div className="mx-auto max-w-7xl space-y-4 pt-8">
+          <Skeleton variant="card" height={56} />
+          <Skeleton variant="card" height={160} />
+        </div>
       </div>
     )
   }
@@ -85,715 +83,337 @@ export function Dashboard() {
     <div className="min-h-screen bg-[var(--surface-page)]">
       {/* Header */}
       <header
-        className={`bg-[var(--surface-raised)] shadow-sm border-b border-[var(--border-subtle)] sticky top-0 z-sticky transition-transform duration-300 ease-in-out ${
+        className={`sticky top-0 z-sticky border-b border-[var(--border-subtle)] bg-[var(--surface-raised)] shadow-sm transition-transform duration-300 ease-in-out ${
           scrollDirection === 'down' ? '-translate-y-full' : 'translate-y-0'
         }`}
       >
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+        <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <span className="inline-flex items-center justify-center w-9 h-9 rounded-[var(--radius-md)] bg-accent-600 text-white font-semibold">
+              <span className="inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-accent-600 font-semibold text-white">
                 T
               </span>
               <div>
-                <h1 className="text-xl font-bold text-[var(--text-primary)]">
-                  Trips
-                </h1>
-                {isAdmin && (
-                  <span className="text-xs text-accent-600 dark:text-accent-400 font-medium">
-                    Admin Dashboard
-                  </span>
-                )}
+                <h1 className="text-xl font-bold text-[var(--text-primary)]">Trips</h1>
+                {isAdmin && <span className="text-xs font-medium text-accent-600 dark:text-accent-400">Admin</span>}
               </div>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
               {currentUser && (
                 <button
                   onClick={() => setProfileModalOpen(true)}
-                  className="flex items-center gap-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                  className="flex items-center gap-2 text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                 >
-                  <div
-                    className="w-8 h-8 rounded-full flex flex-col items-center justify-center text-base"
-                    style={{
-                      backgroundColor: (currentUser.avatar_data as any)?.bgColor || '#1f9d90',
-                    }}
-                  >
-                    {(currentUser.avatar_data as any)?.accessory && (
-                      <span className="text-xs -mb-1">
-                        {(currentUser.avatar_data as any)?.accessory}
-                      </span>
-                    )}
-                    <span>
-                      {(currentUser.avatar_data as any)?.emoji || '😊'}
-                    </span>
-                  </div>
-                  <span className="hidden sm:inline">
-                    {currentUser.full_name || user?.email}
-                  </span>
+                  <UserAvatar avatarData={currentUser.avatar_data} size="sm" />
+                  <span className="hidden sm:inline">{currentUser.full_name || user?.email}</span>
                 </button>
               )}
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleSignOut}
-                disabled={signingOut}
-                isLoading={signingOut}
-              >
-                {signingOut ? 'Signing out...' : 'Sign Out'}
+              <Button variant="secondary" size="sm" onClick={handleSignOut} isLoading={signingOut}>
+                Sign out
               </Button>
             </div>
           </div>
         </div>
 
-        {/* Admin Tabs */}
         {isAdmin && (
           <div className="border-t border-[var(--border-subtle)]">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-              <nav className="flex gap-6" aria-label="Admin sections">
-                <button
-                  onClick={() => setActiveTab('trips')}
-                  className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
-                    activeTab === 'trips'
-                      ? 'border-accent-600 text-accent-700 dark:text-accent-400'
-                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
-                  }`}
-                >
-                  🏔️ Trips
-                </button>
-                <button
-                  onClick={() => setActiveTab('users')}
-                  className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
-                    activeTab === 'users'
-                      ? 'border-accent-600 text-accent-700 dark:text-accent-400'
-                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
-                  }`}
-                >
-                  👥 Users
-                </button>
-                <button
-                  onClick={() => setActiveTab('invitations')}
-                  className={`py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
-                    activeTab === 'invitations'
-                      ? 'border-accent-600 text-accent-700 dark:text-accent-400'
-                      : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
-                  }`}
-                >
-                  🎫 Invitations
-                </button>
-              </nav>
+            <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+              <Tabs value={activeTab} onChange={(v) => setActiveTab(v as AdminTab)}>
+                <Tabs.List>
+                  <Tabs.Tab value="trips">🏔️ Trips</Tabs.Tab>
+                  <Tabs.Tab value="users">👥 Users</Tabs.Tab>
+                  <Tabs.Tab value="invitations">🎫 Invitations</Tabs.Tab>
+                </Tabs.List>
+              </Tabs>
             </div>
           </div>
         )}
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* Main */}
+      <main className={isAdmin ? 'mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8' : 'py-4'}>
         {isAdmin ? (
           <>
-            {activeTab === 'trips' && <TripsTab />}
-            {activeTab === 'users' && <UsersTab />}
-            {activeTab === 'invitations' && <InvitationsTab />}
+            {activeTab === 'trips' && <AdminTripsTab />}
+            {activeTab === 'users' && <AdminUsersTab />}
+            {activeTab === 'invitations' && <AdminInvitationsTab />}
           </>
         ) : (
-          <MemberView />
+          <MemberDashboard />
         )}
       </main>
 
-      {/* Profile Modal */}
       {currentUser && (
         <ProfileModal
           isOpen={profileModalOpen}
           onClose={() => setProfileModalOpen(false)}
           user={currentUser}
-          onUpdate={fetchUserData}
+          onUpdate={() => queryClient.invalidateQueries({ queryKey: queryKeys.currentUser(user?.id) })}
         />
       )}
     </div>
   )
 }
 
-// Member view (non-admin users)
-function MemberView() {
-  const navigate = useNavigate()
-  const { user } = useAuth()
-  const [myTrips, setMyTrips] = useState<(Trip & { confirmed_count: number })[]>([])
-  const [publicTrips, setPublicTrips] = useState<(Trip & { confirmed_count: number })[]>([])
-  const [loading, setLoading] = useState(true)
+// ---------------------------------------------------------------------------
+// Shared: date-bucketed trip ordering (ongoing → upcoming → past), matching
+// the legacy Dashboard's sort exactly.
+// ---------------------------------------------------------------------------
 
-  useEffect(() => {
-    if (user) {
-      fetchMyTrips()
-    }
-  }, [user])
-
-  const fetchMyTrips = async () => {
-    setLoading(true)
-
-    if (!user) {
-      setLoading(false)
-      return
-    }
-
-    // Fetch all trips (RLS now allows viewing public trips)
-    const { data: tripsData, error } = await supabase
-      .from('trips')
-      .select('*')
-      .order('start_date', { ascending: false })
-
-    if (error) {
-      console.error('Error fetching my trips:', error)
-      alert(`Error loading trips: ${error.message}`)
-      setLoading(false)
-      return
-    }
-
-    console.log('All trips data:', tripsData)
-
-    if (tripsData) {
-      // Get user's trip participations
-      const { data: participations, error: participationError } = await supabase
-        .from('trip_participants')
-        .select('trip_id')
-        .eq('user_id', user.id)
-
-      if (participationError) {
-        console.error('Error fetching participations:', participationError)
-      }
-
-      console.log('User participations:', participations)
-      const userTripIds = new Set(participations?.map(p => p.trip_id) || [])
-
-      // For each trip, get the confirmed count and separate into my trips vs public trips
-      const tripsWithCounts = await Promise.all(
-        tripsData.map(async (trip) => {
-          const { count } = await supabase
-            .from('trip_participants')
-            .select('*', { count: 'exact', head: true })
-            .eq('trip_id', trip.id)
-            .eq('confirmation_status', 'confirmed')
-
-          return {
-            ...trip,
-            confirmed_count: count || 0
-          }
-        })
-      )
-
-      // Get today's date for comparison
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-
-      // Separate user's trips into ongoing, upcoming, and past
-      const userTripsAll = tripsWithCounts.filter(trip => userTripIds.has(trip.id))
-
-      // Ongoing: started but not ended yet (start_date <= today AND end_date >= today)
-      const ongoingUserTrips = userTripsAll
-        .filter(trip => new Date(trip.start_date) <= today && new Date(trip.end_date) >= today)
-        .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime()) // Ending soonest first
-
-      // Upcoming: hasn't started yet (start_date > today)
-      const upcomingUserTrips = userTripsAll
-        .filter(trip => new Date(trip.start_date) > today)
-        .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
-
-      // Past: already ended (end_date < today)
-      const pastUserTrips = userTripsAll
-        .filter(trip => new Date(trip.end_date) < today)
-        .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()) // Descending (most recent first)
-
-      // Combine: ongoing first, then upcoming, then past
-      const userTrips = [...ongoingUserTrips, ...upcomingUserTrips, ...pastUserTrips]
-
-      // Public trips: only show upcoming trips user is NOT part of
-      const otherPublicTrips = tripsWithCounts
-        .filter(trip =>
-          trip.is_public &&
-          !userTripIds.has(trip.id) &&
-          new Date(trip.start_date) >= today
-        )
-        .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
-
-      console.log('Fetched my trips:', userTrips)
-      console.log('Fetched public trips:', otherPublicTrips)
-      setMyTrips(userTrips)
-      setPublicTrips(otherPublicTrips)
-    }
-    setLoading(false)
-  }
-
-  const handleViewTrip = (tripId: string) => {
-    navigate(`/${tripId}`)
-  }
-
-  const formatDateRange = (startDate: string, endDate: string) => {
-    const start = new Date(startDate)
-    const end = new Date(endDate)
-    const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' }
-
-    if (start.getFullYear() === end.getFullYear()) {
-      return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', options)}, ${start.getFullYear()}`
-    }
-    return `${start.toLocaleDateString('en-US', { ...options, year: 'numeric' })} - ${end.toLocaleDateString('en-US', { ...options, year: 'numeric' })}`
-  }
-
-  if (loading) {
-    return (
-      <div className="flex justify-center py-12">
-        <Spinner size="lg" />
-      </div>
-    )
-  }
-
-  return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">
-          Welcome Back! 👋
-        </h2>
-        <p className="text-gray-600">
-          Your ski trips and adventures await
-        </p>
-      </div>
-
-      {/* My Trips Section */}
-      <div className="mb-8">
-        <h3 className="text-xl font-semibold text-gray-800 mb-4">My Trips</h3>
-        {myTrips.length === 0 ? (
-          <Card>
-            <Card.Content className="py-12">
-              <EmptyState
-                icon="🎿"
-                title="No trips yet"
-                description="You haven't been added to any trips yet. Tim will add you soon!"
-              />
-            </Card.Content>
-          </Card>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {myTrips.map((trip) => {
-              const timing = getTripTiming(trip.start_date, trip.end_date)
-              return (
-                <Card key={trip.id} className="hover:shadow-lg transition-shadow cursor-pointer !p-4" onClick={() => handleViewTrip(trip.id)}>
-                  <Card.Header>
-                    <div className="flex items-start justify-between gap-2">
-                      <Card.Title className="text-lg">{trip.name}</Card.Title>
-                      <div className="flex flex-col gap-1 items-end flex-shrink-0">
-                        <Badge variant={getTripStatusBadgeVariant(trip.status)}>
-                          {getTripStatusLabel(trip.status)}
-                        </Badge>
-                        {timing && (
-                          <Badge variant={timing.variant}>
-                            {timing.label}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                    <Card.Description className="mt-2">
-                      <div className="flex flex-col gap-1 text-sm">
-                        <span className="flex items-center gap-1">
-                          <span>📍</span> {trip.location}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span>📅</span> {formatDateRange(trip.start_date, trip.end_date)}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span>👥</span> {trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit} confirmed` : `${trip.confirmed_count} confirmed`}
-                        </span>
-                      </div>
-                    </Card.Description>
-                  </Card.Header>
-                  <Card.Footer>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="w-full"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleViewTrip(trip.id)
-                      }}
-                    >
-                      View Trip Details
-                    </Button>
-                  </Card.Footer>
-                </Card>
-              )
-            })}
-          </div>
-        )}
-      </div>
-
-      {/* Public Trips Section (trips user is not in) */}
-      {publicTrips.length > 0 && (
-        <div>
-          <h3 className="text-xl font-semibold text-gray-800 mb-4">Other Public Trips</h3>
-          <p className="text-sm text-gray-600 mb-4">
-            Interested in joining? Contact Tim to express your interest!
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {publicTrips.map((trip) => {
-              const timing = getTripTiming(trip.start_date, trip.end_date)
-              return (
-                <Card key={trip.id} className="opacity-60 !p-4 pointer-events-none">
-                  <Card.Header>
-                    <div className="flex items-start justify-between gap-2">
-                      <Card.Title className="text-lg">{trip.name}</Card.Title>
-                      <div className="flex flex-col gap-1 items-end flex-shrink-0">
-                        <Badge variant={getTripStatusBadgeVariant(trip.status)}>
-                          {getTripStatusLabel(trip.status)}
-                        </Badge>
-                        {timing && (
-                          <Badge variant={timing.variant}>
-                            {timing.label}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                    <Card.Description className="mt-2">
-                      <div className="flex flex-col gap-1 text-sm">
-                        <span className="flex items-center gap-1">
-                          <span>📍</span> {trip.location}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span>📅</span> {formatDateRange(trip.start_date, trip.end_date)}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <span>👥</span> {trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit} confirmed` : `${trip.confirmed_count} confirmed`}
-                        </span>
-                      </div>
-                    </Card.Description>
-                  </Card.Header>
-                  <Card.Footer>
-                    <div className="text-xs text-gray-600 text-center py-2">
-                      Contact Tim to join this trip
-                    </div>
-                  </Card.Footer>
-                </Card>
-              )
-            })}
-          </div>
-        </div>
-      )}
-    </>
-  )
+function bucketAndSortTrips<T extends Trip>(trips: T[]): { ongoing: T[]; upcoming: T[]; past: T[]; ordered: T[] } {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const ongoing = trips
+    .filter((t) => new Date(t.start_date) <= today && new Date(t.end_date) >= today)
+    .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime())
+  const upcoming = trips
+    .filter((t) => new Date(t.start_date) > today)
+    .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime())
+  const past = trips
+    .filter((t) => new Date(t.end_date) < today)
+    .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime())
+  return { ongoing, upcoming, past, ordered: [...ongoing, ...upcoming, ...past] }
 }
 
-// Trips management tab (admin only)
-function TripsTab() {
+function formatDate(date: string): string {
+  return new Date(date).toLocaleDateString()
+}
+
+// ---------------------------------------------------------------------------
+// Trips tab (admin)
+// ---------------------------------------------------------------------------
+
+function AdminTripsTab() {
   const navigate = useNavigate()
-  const [trips, setTrips] = useState<(Trip & { confirmed_count: number })[]>([])
-  const [loading, setLoading] = useState(true)
+  const { data: trips, isLoading } = useTrips()
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [editingTrip, setEditingTrip] = useState<Trip | null>(null)
+  const queryClient = useQueryClient()
 
-  useEffect(() => {
-    fetchTrips()
-  }, [])
+  const buckets = useMemo(() => bucketAndSortTrips<TripWithCount>(trips ?? []), [trips])
 
-  const fetchTrips = async () => {
-    setLoading(true)
-    const { data: tripsData, error } = await supabase
-      .from('trips')
-      .select('*')
-      .order('start_date', { ascending: false })
-
-    if (error) {
-      console.error('Error fetching trips:', error)
-      alert(`Error loading trips: ${error.message}`)
-      setLoading(false)
-      return
-    }
-
-    if (tripsData) {
-      // For each trip, get the confirmed count
-      const tripsWithCounts = await Promise.all(
-        tripsData.map(async (trip) => {
-          const { count } = await supabase
-            .from('trip_participants')
-            .select('*', { count: 'exact', head: true })
-            .eq('trip_id', trip.id)
-            .eq('confirmation_status', 'confirmed')
-
-          return {
-            ...trip,
-            confirmed_count: count || 0
-          }
-        })
-      )
-
-      // Get today's date for comparison
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-
-      // Ongoing: started but not ended yet
-      const ongoingTrips = tripsWithCounts
-        .filter(trip => new Date(trip.start_date) <= today && new Date(trip.end_date) >= today)
-        .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime()) // Ending soonest first
-
-      // Upcoming: hasn't started yet
-      const upcomingTrips = tripsWithCounts
-        .filter(trip => new Date(trip.start_date) > today)
-        .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()) // Ascending (soonest first)
-
-      // Past: already ended
-      const pastTrips = tripsWithCounts
-        .filter(trip => new Date(trip.end_date) < today)
-        .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime()) // Descending (most recent first)
-
-      // Combine: ongoing first, then upcoming, then past
-      const sortedTrips = [...ongoingTrips, ...upcomingTrips, ...pastTrips]
-
-      console.log('Fetched trips:', sortedTrips)
-      setTrips(sortedTrips)
-    }
-    setLoading(false)
-  }
-
-  const handleCreateTrip = () => {
-    setEditingTrip(null)
-    setCreateModalOpen(true)
-  }
-
-  const handleEditTrip = (trip: Trip) => {
-    setEditingTrip(trip)
-    setCreateModalOpen(true)
-  }
-
-  const handleViewTrip = (tripId: string) => {
-    navigate(`/${tripId}`)
-  }
-
-  const handleModalClose = () => {
-    setCreateModalOpen(false)
-    setEditingTrip(null)
-  }
-
-  if (loading) {
+  if (isLoading) {
     return (
-      <div className="flex justify-center py-12">
-        <Spinner size="lg" />
+      <div className="space-y-4">
+        <Skeleton variant="card" height={80} />
+        <Skeleton variant="card" height={160} />
       </div>
     )
   }
 
+  const openCreate = () => {
+    setEditingTrip(null)
+    setCreateModalOpen(true)
+  }
+
   return (
-    <>
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-1">
-            Trips
-          </h2>
-          <p className="text-gray-600">
-            Manage all your ski trip adventures
-          </p>
+          <h2 className="text-2xl font-semibold text-[var(--text-primary)]">Trips</h2>
+          <p className="text-sm text-[var(--text-secondary)]">Every trip on the platform</p>
         </div>
-        <Button variant="primary" onClick={handleCreateTrip}>
-          + Create Trip
-        </Button>
+        <Button onClick={openCreate}>+ Create trip</Button>
       </div>
 
-      {trips.length === 0 ? (
+      <div className="grid grid-cols-3 gap-3">
+        <StatCard label="Ongoing" value={String(buckets.ongoing.length)} icon={<span>🎿</span>} size="sm" />
+        <StatCard label="Upcoming" value={String(buckets.upcoming.length)} icon={<span>📅</span>} size="sm" />
+        <StatCard label="Past" value={String(buckets.past.length)} icon={<span>🏁</span>} size="sm" />
+      </div>
+
+      {buckets.ordered.length === 0 ? (
         <Card>
           <Card.Content className="py-12">
             <EmptyState
               icon="🏔️"
-              title="No trips created yet"
-              description="Create your first trip to get started organizing your ski adventure!"
-              action={
-                <Button variant="primary" onClick={handleCreateTrip}>
-                  Create Your First Trip
-                </Button>
-              }
+              title="No trips yet"
+              description="Create the first trip to start organizing an adventure."
+              action={<Button onClick={openCreate}>Create your first trip</Button>}
             />
           </Card.Content>
         </Card>
       ) : (
-        <div className="grid gap-4">
-          {trips.map((trip) => {
-            const timing = getTripTiming(trip.start_date, trip.end_date)
-            return (
-              <Card key={trip.id}>
-                <Card.Content className="p-6">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2 flex-wrap">
-                        <h3 className="text-lg font-semibold text-gray-900">
-                          {trip.name}
-                        </h3>
-                        <Badge variant={getTripStatusBadgeVariant(trip.status)}>
-                          {getTripStatusLabel(trip.status)}
-                        </Badge>
-                        {timing && (
-                          <Badge variant={timing.variant}>
-                            {timing.label}
+        <Card noPadding>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)]">
+                <tr>
+                  {['Trip', 'Stage', 'Dates', 'Confirmed', ''].map((h, i) => (
+                    <th
+                      key={i}
+                      className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]"
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-subtle)]">
+                {buckets.ordered.map((trip) => {
+                  const timing = getTripTiming(trip.start_date, trip.end_date)
+                  return (
+                    <tr
+                      key={trip.id}
+                      className="cursor-pointer transition-colors hover:bg-[var(--surface-sunken)]"
+                      onClick={() => navigate(`/${trip.id}`)}
+                    >
+                      <td className="px-4 py-3">
+                        <p className="font-medium text-[var(--text-primary)]">{trip.name}</p>
+                        <p className="text-xs text-[var(--text-muted)]">📍 {trip.location}</p>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex flex-wrap gap-1">
+                          <Badge variant={getTripStatusBadgeVariant(trip.status)} size="sm">
+                            {getTripStatusLabel(trip.status)}
                           </Badge>
-                        )}
-                      </div>
-                      <div className="flex flex-col gap-1 text-sm text-gray-600">
-                        <div className="flex items-center gap-4">
-                          <span>📍 {trip.location}</span>
+                          {timing && (
+                            <Badge variant={timing.variant} size="sm">
+                              {timing.label}
+                            </Badge>
+                          )}
                         </div>
-                        <div className="flex items-center gap-4">
-                          <span>
-                            📅 {new Date(trip.start_date).toLocaleDateString()} -{' '}
-                            {new Date(trip.end_date).toLocaleDateString()}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <span>👥</span>
-                          <span>{trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit} confirmed` : `${trip.confirmed_count} confirmed`}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleEditTrip(trip)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleViewTrip(trip.id)}
-                      >
-                        View
-                      </Button>
-                    </div>
-                  </div>
-                </Card.Content>
-              </Card>
-            )
-          })}
-        </div>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+                        {formatDate(trip.start_date)} – {formatDate(trip.end_date)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+                        👥 {trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit}` : trip.confirmed_count}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setEditingTrip(trip)
+                            setCreateModalOpen(true)
+                          }}
+                        >
+                          Edit
+                        </Button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
-      {/* Create/Edit Trip Modal */}
       <CreateTripModal
         isOpen={createModalOpen}
-        onClose={handleModalClose}
-        onSuccess={fetchTrips}
+        onClose={() => {
+          setCreateModalOpen(false)
+          setEditingTrip(null)
+        }}
+        onSuccess={() => queryClient.invalidateQueries({ queryKey: queryKeys.trips() })}
         editTrip={editingTrip}
       />
-    </>
+    </div>
   )
 }
 
-// Users management tab (admin only)
-function UsersTab() {
-  const [users, setUsers] = useState<User[]>([])
-  const [loading, setLoading] = useState(true)
+// ---------------------------------------------------------------------------
+// Users tab (admin)
+// ---------------------------------------------------------------------------
+
+function AdminUsersTab() {
+  const { data: users, isLoading } = useQuery({
+    queryKey: ['adminUsers'] as const,
+    queryFn: async (): Promise<User[]> => {
+      const { data, error } = await supabase.from('users').select('*').order('created_at', { ascending: false })
+      if (error) throw error
+      return data || []
+    },
+  })
+
+  // Trips-per-user badge: one lightweight membership query, counted client-side.
+  const { data: tripCounts } = useQuery({
+    queryKey: ['adminUserTripCounts'] as const,
+    queryFn: async (): Promise<Map<string, number>> => {
+      const { data, error } = await supabase.from('trip_participants').select('user_id')
+      if (error) throw error
+      const counts = new Map<string, number>()
+      for (const row of data || []) counts.set(row.user_id, (counts.get(row.user_id) ?? 0) + 1)
+      return counts
+    },
+  })
+
   const [selectedUser, setSelectedUser] = useState<User | null>(null)
-  const [viewTripsModalOpen, setViewTripsModalOpen] = useState(false)
 
-  useEffect(() => {
-    fetchUsers()
-  }, [])
-
-  const fetchUsers = async () => {
-    setLoading(true)
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (!error && data) {
-      setUsers(data)
-    }
-    setLoading(false)
-  }
-
-  const handleViewUserTrips = (user: User) => {
-    setSelectedUser(user)
-    setViewTripsModalOpen(true)
-  }
-
-  if (loading) {
+  if (isLoading) {
     return (
-      <div className="flex justify-center py-12">
-        <Spinner size="lg" />
+      <div className="space-y-4">
+        <Skeleton variant="card" height={80} />
+        <Skeleton variant="list" lines={5} />
       </div>
     )
   }
 
+  const admins = (users ?? []).filter((u) => u.role === 'admin')
+
   return (
-    <>
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-gray-900 mb-1">
-          Users
-        </h2>
-        <p className="text-gray-600">
-          Manage all users and their trip assignments
-        </p>
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-2xl font-semibold text-[var(--text-primary)]">Users</h2>
+        <p className="text-sm text-[var(--text-secondary)]">Everyone with an account, and their trips</p>
       </div>
 
-      <Card>
-        <Card.Content className="p-0">
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard label="Users" value={String(users?.length ?? 0)} icon={<span>👥</span>} size="sm" />
+        <StatCard label="Admins" value={String(admins.length)} icon={<span>🛡️</span>} size="sm" />
+      </div>
+
+      {(users ?? []).length === 0 ? (
+        <Card>
+          <Card.Content className="py-12">
+            <EmptyState icon="👥" title="No users yet" description="New signups will appear here." />
+          </Card.Content>
+        </Card>
+      ) : (
+        <Card noPadding>
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
+              <thead className="border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)]">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    User
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Email
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Role
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Joined
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
+                  {['User', 'Role', 'Trips', 'Joined', ''].map((h, i) => (
+                    <th
+                      key={i}
+                      className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]"
+                    >
+                      {h}
+                    </th>
+                  ))}
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {users.map((user) => (
-                  <tr key={user.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
+              <tbody className="divide-y divide-[var(--border-subtle)]">
+                {(users ?? []).map((u) => (
+                  <tr key={u.id} className="transition-colors hover:bg-[var(--surface-sunken)]">
+                    <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <div
-                          className="w-10 h-10 rounded-full flex flex-col items-center justify-center text-lg"
-                          style={{
-                            backgroundColor:
-                              (user.avatar_data as any)?.bgColor || '#0ea5e9',
-                          }}
-                        >
-                          {(user.avatar_data as any)?.accessory && (
-                            <span className="text-xs -mb-1">
-                              {(user.avatar_data as any)?.accessory}
-                            </span>
-                          )}
-                          <span>
-                            {(user.avatar_data as any)?.emoji || '😊'}
-                          </span>
-                        </div>
-                        <div className="font-medium text-gray-900">
-                          {user.full_name || 'Unnamed User'}
+                        <UserAvatar avatarData={u.avatar_data} size="sm" />
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-[var(--text-primary)]">{u.full_name || 'Unnamed user'}</p>
+                          <p className="truncate text-xs text-[var(--text-muted)]">{u.email}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                      {user.email}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <Badge variant={user.role === 'admin' ? 'info' : 'neutral'}>
-                        {user.role}
+                    <td className="whitespace-nowrap px-4 py-3">
+                      <Badge variant={u.role === 'admin' ? 'info' : 'neutral'} size="sm">
+                        {u.role}
                       </Badge>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                      {new Date(user.created_at).toLocaleDateString()}
+                    <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+                      {tripCounts?.get(u.id) ?? 0}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleViewUserTrips(user)}
-                      >
-                        View Trips
+                    <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+                      {formatDate(u.created_at)}
+                    </td>
+                    <td className="whitespace-nowrap px-4 py-3 text-right">
+                      <Button variant="ghost" size="sm" onClick={() => setSelectedUser(u)}>
+                        View trips
                       </Button>
                     </td>
                   </tr>
@@ -801,228 +421,290 @@ function UsersTab() {
               </tbody>
             </table>
           </div>
-        </Card.Content>
-      </Card>
-
-      {/* View User Trips Modal */}
-      {selectedUser && (
-        <ViewUserTripsModal
-          isOpen={viewTripsModalOpen}
-          onClose={() => setViewTripsModalOpen(false)}
-          user={selectedUser}
-        />
+        </Card>
       )}
-    </>
+
+      {selectedUser && <ViewUserTripsModal isOpen onClose={() => setSelectedUser(null)} user={selectedUser} />}
+    </div>
   )
 }
 
-// Invitations management tab (admin only)
-function InvitationsTab() {
-  const [invitations, setInvitations] = useState<Invitation[]>([])
-  const [trips, setTrips] = useState<Trip[]>([])
-  const [loading, setLoading] = useState(true)
-  const [createModalOpen, setCreateModalOpen] = useState(false)
+// ---------------------------------------------------------------------------
+// Invitations tab (admin)
+// ---------------------------------------------------------------------------
 
-  useEffect(() => {
-    fetchData()
-  }, [])
+function invitationStatus(inv: Invitation): 'active' | 'pending_verification' | 'completed' | 'expired' {
+  if (inv.status) return inv.status
+  if (inv.used_by) return 'completed'
+  if (inv.expires_at && new Date(inv.expires_at) < new Date()) return 'expired'
+  return 'active'
+}
 
-  const fetchData = async () => {
-    setLoading(true)
+const INVITATION_BADGE: Record<string, { label: string; variant: 'success' | 'warning' | 'error' | 'neutral' }> = {
+  active: { label: 'Active', variant: 'success' },
+  pending_verification: { label: 'Pending email', variant: 'warning' },
+  completed: { label: 'Completed', variant: 'neutral' },
+  expired: { label: 'Expired', variant: 'error' },
+}
 
-    // Fetch invitations
-    const { data: invitationsData } = await supabase
-      .from('invitations')
-      .select('*')
-      .order('created_at', { ascending: false })
+function invitationLink(code: string): string {
+  return `${window.location.origin}/trips/signup?code=${code}`
+}
 
-    // Fetch trips for dropdown
-    const { data: tripsData } = await supabase
-      .from('trips')
-      .select('*')
-      .order('start_date', { ascending: false })
+function AdminInvitationsTab() {
+  const { showToast } = useToast()
+  const { data: invitations, isLoading } = useInvitations()
+  const { data: trips } = useTrips()
+  const deleteInvitation = useDeleteInvitation()
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createKey, setCreateKey] = useState(0)
 
-    if (invitationsData) setInvitations(invitationsData)
-    if (tripsData) setTrips(tripsData)
+  const counts = useMemo(() => {
+    const c = { active: 0, pending_verification: 0, completed: 0, expired: 0 }
+    for (const inv of invitations ?? []) c[invitationStatus(inv)]++
+    return c
+  }, [invitations])
 
-    setLoading(false)
+  const copyLink = async (code: string) => {
+    try {
+      await navigator.clipboard.writeText(invitationLink(code))
+      showToast({ type: 'success', message: 'Invitation link copied' })
+    } catch {
+      showToast({ type: 'error', message: 'Could not copy link' })
+    }
   }
 
-  const copyInvitationLink = (code: string) => {
-    const link = `${window.location.origin}/trips/signup?code=${code}`
-    navigator.clipboard.writeText(link)
-  }
-
-  const handleDeleteInvitation = async (invitation: Invitation) => {
-    const status = getInvitationStatus(invitation)
+  const handleDelete = async (invitation: Invitation) => {
+    const status = invitationStatus(invitation)
     const confirmMessage =
-      status === 'completed'
-        ? `Delete completed invitation code "${invitation.code}"?\n\nThis invitation was used and the user has verified their email. Safe to remove.`
-        : status === 'pending_verification'
-        ? `Delete invitation code "${invitation.code}"?\n\nUser has signed up but hasn't verified their email yet. Are you sure?`
-        : status === 'expired'
-        ? `Delete expired invitation code "${invitation.code}"?\n\nThis invitation has expired and can be safely removed.`
-        : `⚠️ Delete ACTIVE invitation code "${invitation.code}"?\n\nWARNING: This invitation is still active and can be used to sign up. Once deleted, the code will no longer work.\n\nAre you sure you want to delete it?`
-
-    if (!window.confirm(confirmMessage)) {
-      return
+      status === 'active'
+        ? `Delete ACTIVE invitation "${invitation.code}"? It can still be used to sign up — once deleted, the code stops working.`
+        : `Delete ${status.replace(/_/g, ' ')} invitation "${invitation.code}"?`
+    if (!window.confirm(confirmMessage)) return
+    try {
+      await deleteInvitation.mutateAsync(invitation.id)
+      showToast({ type: 'success', message: 'Invitation deleted' })
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not delete invitation', description: (err as Error).message })
     }
-
-    const { error } = await supabase
-      .from('invitations')
-      .delete()
-      .eq('id', invitation.id)
-
-    if (error) {
-      alert(`Error deleting invitation: ${error.message}`)
-      return
-    }
-
-    // Refresh the list
-    fetchData()
   }
 
-  if (loading) {
+  if (isLoading) {
     return (
-      <div className="flex justify-center py-12">
-        <Spinner size="lg" />
+      <div className="space-y-4">
+        <Skeleton variant="card" height={80} />
+        <Skeleton variant="list" lines={4} />
       </div>
     )
   }
 
-  const getInvitationStatus = (inv: Invitation): 'active' | 'pending_verification' | 'completed' | 'expired' => {
-    // Use the database status if available
-    if (inv.status) {
-      return inv.status
-    }
-    // Fallback for old data without status
-    if (inv.used_by) return 'completed'
-    if (inv.expires_at && new Date(inv.expires_at) < new Date()) return 'expired'
-    return 'active'
+  const openCreate = () => {
+    setCreateKey((k) => k + 1)
+    setCreateOpen(true)
   }
 
   return (
-    <>
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900 mb-1">
-            Invitations
-          </h2>
-          <p className="text-gray-600">
-            Create and manage invitation codes
-          </p>
+          <h2 className="text-2xl font-semibold text-[var(--text-primary)]">Invitations</h2>
+          <p className="text-sm text-[var(--text-secondary)]">Codes that let new people join</p>
         </div>
-        <Button variant="primary" onClick={() => setCreateModalOpen(true)}>
-          + Create Invitation
-        </Button>
+        <Button onClick={openCreate}>+ Create invitation</Button>
       </div>
 
-      {invitations.length === 0 ? (
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <StatCard label="Active" value={String(counts.active)} icon={<span>🟢</span>} size="sm" />
+        <StatCard label="Pending email" value={String(counts.pending_verification)} icon={<span>✉️</span>} size="sm" />
+        <StatCard label="Completed" value={String(counts.completed)} icon={<span>✅</span>} size="sm" />
+        <StatCard label="Expired" value={String(counts.expired)} icon={<span>⌛</span>} size="sm" />
+      </div>
+
+      {(invitations ?? []).length === 0 ? (
         <Card>
           <Card.Content className="py-12">
             <EmptyState
               icon="🎫"
-              title="No invitations created yet"
-              description="Create invitation codes to allow new users to join your trips!"
-              action={
-                <Button variant="primary" onClick={() => setCreateModalOpen(true)}>
-                  Create First Invitation
-                </Button>
-              }
+              title="No invitations yet"
+              description="Create an invitation code so new people can sign up and join a trip."
+              action={<Button onClick={openCreate}>Create first invitation</Button>}
             />
           </Card.Content>
         </Card>
       ) : (
-        <Card>
-          <Card.Content className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Code
+        <Card noPadding>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)]">
+                <tr>
+                  {['Code', 'Status', 'Expires', 'Created', ''].map((h, i) => (
+                    <th
+                      key={i}
+                      className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]"
+                    >
+                      {h}
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Status
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Expires
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Created
-                    </th>
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {invitations.map((invitation) => {
-                    const status = getInvitationStatus(invitation)
-                    return (
-                      <tr key={invitation.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap font-mono text-sm">
-                          {invitation.code}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <Badge
-                            variant={
-                              status === 'completed'
-                                ? 'neutral'
-                                : status === 'expired'
-                                ? 'error'
-                                : status === 'pending_verification'
-                                ? 'warning'
-                                : 'success'
-                            }
-                          >
-                            {status === 'pending_verification' ? 'Pending Email' : status === 'completed' ? 'Completed' : status}
-                          </Badge>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                          {invitation.expires_at
-                            ? new Date(invitation.expires_at).toLocaleDateString()
-                            : 'Never'}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                          {new Date(invitation.created_at).toLocaleDateString()}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-right">
-                          <div className="flex gap-2 justify-end">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => copyInvitationLink(invitation.code)}
-                            >
-                              Copy Link
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleDeleteInvitation(invitation)}
-                              className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                            >
-                              Delete
-                            </Button>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </Card.Content>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border-subtle)]">
+                {(invitations ?? []).map((invitation) => {
+                  const status = invitationStatus(invitation)
+                  const badge = INVITATION_BADGE[status]
+                  return (
+                    <tr key={invitation.id} className="transition-colors hover:bg-[var(--surface-sunken)]">
+                      <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-[var(--text-primary)]">
+                        {invitation.code}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <Badge variant={badge.variant} size="sm">
+                          {badge.label}
+                        </Badge>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+                        {invitation.expires_at ? formatDate(invitation.expires_at) : 'Never'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
+                        {formatDate(invitation.created_at)}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => copyLink(invitation.code)}>
+                            Copy link
+                          </Button>
+                          <Button variant="ghost" size="sm" className="text-danger-600" onClick={() => handleDelete(invitation)}>
+                            Delete
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
         </Card>
       )}
 
-      {/* Create Invitation Modal */}
-      <CreateInvitationModal
-        isOpen={createModalOpen}
-        onClose={() => setCreateModalOpen(false)}
-        trips={trips}
-        onSuccess={fetchData}
+      <CreateInvitationSheet key={createKey} isOpen={createOpen} onClose={() => setCreateOpen(false)} trips={trips ?? []} />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Create-invitation sheet (Form & Flow Standard): trip + expiry, then the
+// created code with a one-tap copy-link. Same create_invitation RPC as the
+// legacy modal, via the shared hook.
+// ---------------------------------------------------------------------------
+
+interface InvitationFormValues {
+  tripId: string
+  expiresInDays: string
+}
+
+function CreateInvitationSheet({ isOpen, onClose, trips }: { isOpen: boolean; onClose: () => void; trips: Trip[] }) {
+  const { showToast } = useToast()
+  const createInvitation = useCreateInvitation()
+  const [createdCode, setCreatedCode] = useState<string | null>(null)
+
+  const initial: InvitationFormValues = { tripId: '', expiresInDays: '7' }
+  const { values, updateField, clearDraft } = useFormDraft<InvitationFormValues>('admin-create-invitation', initial)
+  const isDirty = !createdCode && JSON.stringify(values) !== JSON.stringify(initial)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(onClose)
+
+  const handleCreate = async () => {
+    if (!values.tripId) {
+      showToast({ type: 'error', message: 'Pick a trip for the invitation' })
+      return
+    }
+    const expiresAt = new Date()
+    expiresAt.setDate(expiresAt.getDate() + parseInt(values.expiresInDays, 10))
+    try {
+      const data = await createInvitation.mutateAsync({ tripId: values.tripId, expiresAt: expiresAt.toISOString() })
+      setCreatedCode((data as { code: string }).code)
+      clearDraft()
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not create invitation', description: (err as Error).message })
+    }
+  }
+
+  const handleCopyCreated = async () => {
+    if (!createdCode) return
+    try {
+      await navigator.clipboard.writeText(invitationLink(createdCode))
+      showToast({ type: 'success', message: 'Invitation link copied' })
+      onClose()
+    } catch {
+      showToast({ type: 'error', message: 'Could not copy link' })
+    }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={createdCode ? onClose : handleClose} size="md" title="Create invitation">
+      {createdCode ? (
+        <div className="space-y-4">
+          <div className="rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-4 text-center">
+            <p className="text-xs uppercase tracking-wide text-[var(--text-muted)]">Invitation code</p>
+            <p className="mt-1 font-mono text-2xl font-semibold text-[var(--text-primary)]">{createdCode}</p>
+            <p className="mt-2 break-all text-xs text-[var(--text-muted)]">{invitationLink(createdCode)}</p>
+          </div>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={onClose}>
+              Done
+            </Button>
+            <Button onClick={handleCopyCreated}>📋 Copy link</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <Select
+            label="Trip"
+            value={values.tripId}
+            onChange={(e) => updateField('tripId', e.target.value)}
+            options={[
+              { value: '', label: 'Choose a trip…', disabled: true },
+              ...trips.map((t) => ({ value: t.id, label: t.name })),
+            ]}
+          />
+          <div className="grid grid-cols-2 items-end gap-3">
+            <Select
+              label="Expires in"
+              value={values.expiresInDays}
+              onChange={(e) => updateField('expiresInDays', e.target.value)}
+              options={[
+                { value: '1', label: '1 day' },
+                { value: '3', label: '3 days' },
+                { value: '7', label: '7 days' },
+                { value: '14', label: '14 days' },
+                { value: '30', label: '30 days' },
+              ]}
+            />
+            <Input
+              label="Expiry date"
+              value={new Date(Date.now() + parseInt(values.expiresInDays, 10) * 86400000).toLocaleDateString()}
+              disabled
+            />
+          </div>
+          <div className="flex justify-end gap-3 border-t border-[var(--border-subtle)] pt-3">
+            <Button variant="ghost" onClick={handleClose} disabled={createInvitation.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreate} isLoading={createInvitation.isPending}>
+              Create invitation
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDiscardSheet
+        isOpen={guardProps.showConfirm}
+        onKeep={guardProps.onKeep}
+        onDiscard={() => {
+          clearDraft()
+          guardProps.onDiscard()
+        }}
       />
-    </>
+    </Modal>
   )
 }

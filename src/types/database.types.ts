@@ -12,8 +12,308 @@ export type Database = {
   __InternalSupabase: {
     PostgrestVersion: "13.0.5"
   }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
+      activity_feed: {
+        Row: {
+          actor: string | null
+          created_at: string
+          entity: Json | null
+          id: string
+          metadata: Json | null
+          trip_id: string
+          verb: string
+        }
+        Insert: {
+          actor?: string | null
+          created_at?: string
+          entity?: Json | null
+          id?: string
+          metadata?: Json | null
+          trip_id: string
+          verb: string
+        }
+        Update: {
+          actor?: string | null
+          created_at?: string
+          entity?: Json | null
+          id?: string
+          metadata?: Json | null
+          trip_id?: string
+          verb?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "activity_feed_actor_fkey"
+            columns: ["actor"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "activity_feed_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_proposals: {
+        Row: {
+          actions: Json
+          applied_at: string | null
+          created_at: string
+          created_by: string
+          expires_at: string | null
+          id: string
+          reviewed_by: string | null
+          source_text: string | null
+          status: string
+          trip_id: string
+        }
+        Insert: {
+          actions: Json
+          applied_at?: string | null
+          created_at?: string
+          created_by: string
+          expires_at?: string | null
+          id?: string
+          reviewed_by?: string | null
+          source_text?: string | null
+          status?: string
+          trip_id: string
+        }
+        Update: {
+          actions?: Json
+          applied_at?: string | null
+          created_at?: string
+          created_by?: string
+          expires_at?: string | null
+          id?: string
+          reviewed_by?: string | null
+          source_text?: string | null
+          status?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_proposals_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_proposals_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_proposals_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_usage: {
+        Row: {
+          cache_read_tokens: number | null
+          cache_write_tokens: number | null
+          created_at: string
+          estimated_cost_usd: number | null
+          function_name: string
+          id: string
+          input_tokens: number | null
+          model: string
+          output_tokens: number | null
+          trip_id: string | null
+          user_id: string | null
+        }
+        Insert: {
+          cache_read_tokens?: number | null
+          cache_write_tokens?: number | null
+          created_at?: string
+          estimated_cost_usd?: number | null
+          function_name: string
+          id?: string
+          input_tokens?: number | null
+          model: string
+          output_tokens?: number | null
+          trip_id?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          cache_read_tokens?: number | null
+          cache_write_tokens?: number | null
+          created_at?: string
+          estimated_cost_usd?: number | null
+          function_name?: string
+          id?: string
+          input_tokens?: number | null
+          model?: string
+          output_tokens?: number | null
+          trip_id?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_usage_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_usage_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      bookings: {
+        Row: {
+          amount: number | null
+          booked_by: string
+          booking_date: string | null
+          cancellation_deadline: string | null
+          confirmation_ref: string | null
+          created_at: string
+          currency: string | null
+          document_url: string | null
+          expense_id: string | null
+          id: string
+          notes: string | null
+          option_id: string | null
+          place_id: string | null
+          refundable: boolean | null
+          status: string
+          timeline_event_id: string | null
+          title: string
+          trip_id: string
+          updated_at: string
+          vendor: string | null
+        }
+        Insert: {
+          amount?: number | null
+          booked_by: string
+          booking_date?: string | null
+          cancellation_deadline?: string | null
+          confirmation_ref?: string | null
+          created_at?: string
+          currency?: string | null
+          document_url?: string | null
+          expense_id?: string | null
+          id?: string
+          notes?: string | null
+          option_id?: string | null
+          place_id?: string | null
+          refundable?: boolean | null
+          status?: string
+          timeline_event_id?: string | null
+          title: string
+          trip_id: string
+          updated_at?: string
+          vendor?: string | null
+        }
+        Update: {
+          amount?: number | null
+          booked_by?: string
+          booking_date?: string | null
+          cancellation_deadline?: string | null
+          confirmation_ref?: string | null
+          created_at?: string
+          currency?: string | null
+          document_url?: string | null
+          expense_id?: string | null
+          id?: string
+          notes?: string | null
+          option_id?: string | null
+          place_id?: string | null
+          refundable?: boolean | null
+          status?: string
+          timeline_event_id?: string | null
+          title?: string
+          trip_id?: string
+          updated_at?: string
+          vendor?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bookings_booked_by_fkey"
+            columns: ["booked_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_expense_id_fkey"
+            columns: ["expense_id"]
+            isOneToOne: false
+            referencedRelation: "expenses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_option_id_fkey"
+            columns: ["option_id"]
+            isOneToOne: false
+            referencedRelation: "options"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_place_id_fkey"
+            columns: ["place_id"]
+            isOneToOne: false
+            referencedRelation: "places"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_timeline_event_id_fkey"
+            columns: ["timeline_event_id"]
+            isOneToOne: false
+            referencedRelation: "trip_timeline_events"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "bookings_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       comments: {
         Row: {
           content: string
@@ -246,6 +546,7 @@ export type Database = {
           expense_id: string
           id: string
           percentage: number | null
+          shares: number | null
           split_type: Database["public"]["Enums"]["split_type"]
           user_id: string
         }
@@ -256,6 +557,7 @@ export type Database = {
           expense_id: string
           id?: string
           percentage?: number | null
+          shares?: number | null
           split_type?: Database["public"]["Enums"]["split_type"]
           user_id: string
         }
@@ -266,6 +568,7 @@ export type Database = {
           expense_id?: string
           id?: string
           percentage?: number | null
+          shares?: number | null
           split_type?: Database["public"]["Enums"]["split_type"]
           user_id?: string
         }
@@ -292,6 +595,7 @@ export type Database = {
           ai_parsed_data: Json | null
           amount: number
           base_currency_amount: number | null
+          booking_id: string | null
           category: Database["public"]["Enums"]["expense_category"]
           created_at: string
           currency: string
@@ -305,15 +609,21 @@ export type Database = {
           option_id: string | null
           paid_by: string
           parsing_error: string | null
+          participant_ids: string[] | null
           payment_date: string
+          place_id: string | null
+          rate_source: string | null
           receipt_date: string | null
           receipt_url: string | null
+          rounding_adjustment: number | null
           service_charge_amount: number | null
           service_charge_percent: number | null
           status: Database["public"]["Enums"]["expense_status"] | null
           subtotal: number | null
           tax_amount: number | null
+          tax_lines: Json | null
           tax_percent: number | null
+          tip_amount: number | null
           trip_id: string
           updated_at: string
           vendor_name: string | null
@@ -323,6 +633,7 @@ export type Database = {
           ai_parsed_data?: Json | null
           amount: number
           base_currency_amount?: number | null
+          booking_id?: string | null
           category?: Database["public"]["Enums"]["expense_category"]
           created_at?: string
           currency?: string
@@ -336,15 +647,21 @@ export type Database = {
           option_id?: string | null
           paid_by: string
           parsing_error?: string | null
+          participant_ids?: string[] | null
           payment_date?: string
+          place_id?: string | null
+          rate_source?: string | null
           receipt_date?: string | null
           receipt_url?: string | null
+          rounding_adjustment?: number | null
           service_charge_amount?: number | null
           service_charge_percent?: number | null
           status?: Database["public"]["Enums"]["expense_status"] | null
           subtotal?: number | null
           tax_amount?: number | null
+          tax_lines?: Json | null
           tax_percent?: number | null
+          tip_amount?: number | null
           trip_id: string
           updated_at?: string
           vendor_name?: string | null
@@ -354,6 +671,7 @@ export type Database = {
           ai_parsed_data?: Json | null
           amount?: number
           base_currency_amount?: number | null
+          booking_id?: string | null
           category?: Database["public"]["Enums"]["expense_category"]
           created_at?: string
           currency?: string
@@ -367,20 +685,33 @@ export type Database = {
           option_id?: string | null
           paid_by?: string
           parsing_error?: string | null
+          participant_ids?: string[] | null
           payment_date?: string
+          place_id?: string | null
+          rate_source?: string | null
           receipt_date?: string | null
           receipt_url?: string | null
+          rounding_adjustment?: number | null
           service_charge_amount?: number | null
           service_charge_percent?: number | null
           status?: Database["public"]["Enums"]["expense_status"] | null
           subtotal?: number | null
           tax_amount?: number | null
+          tax_lines?: Json | null
           tax_percent?: number | null
+          tip_amount?: number | null
           trip_id?: string
           updated_at?: string
           vendor_name?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "expenses_booking_id_fkey"
+            columns: ["booking_id"]
+            isOneToOne: false
+            referencedRelation: "bookings"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "expenses_option_id_fkey"
             columns: ["option_id"]
@@ -393,6 +724,13 @@ export type Database = {
             columns: ["paid_by"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expenses_place_id_fkey"
+            columns: ["place_id"]
+            isOneToOne: false
+            referencedRelation: "places"
             referencedColumns: ["id"]
           },
           {
@@ -525,6 +863,96 @@ export type Database = {
           },
         ]
       }
+      notifications: {
+        Row: {
+          channel: string
+          dedupe_key: string
+          entity_id: string | null
+          entity_type: string | null
+          id: string
+          kind: string
+          sent_at: string
+          trip_id: string
+          user_id: string
+        }
+        Insert: {
+          channel?: string
+          dedupe_key: string
+          entity_id?: string | null
+          entity_type?: string | null
+          id?: string
+          kind: string
+          sent_at?: string
+          trip_id: string
+          user_id: string
+        }
+        Update: {
+          channel?: string
+          dedupe_key?: string
+          entity_id?: string | null
+          entity_type?: string | null
+          id?: string
+          kind?: string
+          sent_at?: string
+          trip_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "notifications_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "notifications_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      option_votes: {
+        Row: {
+          created_at: string
+          id: string
+          option_id: string
+          rank: number | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          option_id: string
+          rank?: number | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          option_id?: string
+          rank?: number | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "option_votes_option_id_fkey"
+            columns: ["option_id"]
+            isOneToOne: false
+            referencedRelation: "options"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "option_votes_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       options: {
         Row: {
           created_at: string
@@ -534,6 +962,7 @@ export type Database = {
           locked: boolean
           metadata: Json | null
           order_index: number
+          place_id: string | null
           price: number | null
           price_type: Database["public"]["Enums"]["price_type"]
           section_id: string
@@ -549,6 +978,7 @@ export type Database = {
           locked?: boolean
           metadata?: Json | null
           order_index?: number
+          place_id?: string | null
           price?: number | null
           price_type?: Database["public"]["Enums"]["price_type"]
           section_id: string
@@ -564,6 +994,7 @@ export type Database = {
           locked?: boolean
           metadata?: Json | null
           order_index?: number
+          place_id?: string | null
           price?: number | null
           price_type?: Database["public"]["Enums"]["price_type"]
           section_id?: string
@@ -573,10 +1004,64 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "options_place_id_fkey"
+            columns: ["place_id"]
+            isOneToOne: false
+            referencedRelation: "places"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "options_section_id_fkey"
             columns: ["section_id"]
             isOneToOne: false
             referencedRelation: "planning_sections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      places: {
+        Row: {
+          address: string | null
+          created_at: string
+          google_maps_link: string | null
+          google_place_url: string | null
+          id: string
+          lat: number | null
+          lng: number | null
+          name: string
+          source: string
+          trip_id: string
+        }
+        Insert: {
+          address?: string | null
+          created_at?: string
+          google_maps_link?: string | null
+          google_place_url?: string | null
+          id?: string
+          lat?: number | null
+          lng?: number | null
+          name: string
+          source?: string
+          trip_id: string
+        }
+        Update: {
+          address?: string | null
+          created_at?: string
+          google_maps_link?: string | null
+          google_place_url?: string | null
+          id?: string
+          lat?: number | null
+          lng?: number | null
+          name?: string
+          source?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "places_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
             referencedColumns: ["id"]
           },
         ]
@@ -586,37 +1071,49 @@ export type Database = {
           allow_multiple_selections: boolean
           created_at: string
           description: string | null
+          hide_votes_until_close: boolean
           id: string
           order_index: number
+          quorum: number | null
           section_type: Database["public"]["Enums"]["section_type"]
           status: Database["public"]["Enums"]["section_status"]
           title: string
           trip_id: string
           updated_at: string
+          vote_deadline: string | null
+          voting_method: string
         }
         Insert: {
           allow_multiple_selections?: boolean
           created_at?: string
           description?: string | null
+          hide_votes_until_close?: boolean
           id?: string
           order_index?: number
+          quorum?: number | null
           section_type: Database["public"]["Enums"]["section_type"]
           status?: Database["public"]["Enums"]["section_status"]
           title: string
           trip_id: string
           updated_at?: string
+          vote_deadline?: string | null
+          voting_method?: string
         }
         Update: {
           allow_multiple_selections?: boolean
           created_at?: string
           description?: string | null
+          hide_votes_until_close?: boolean
           id?: string
           order_index?: number
+          quorum?: number | null
           section_type?: Database["public"]["Enums"]["section_type"]
           status?: Database["public"]["Enums"]["section_status"]
           title?: string
           trip_id?: string
           updated_at?: string
+          vote_deadline?: string | null
+          voting_method?: string
         }
         Relationships: [
           {
@@ -624,6 +1121,97 @@ export type Database = {
             columns: ["trip_id"]
             isOneToOne: false
             referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      rate_limits: {
+        Row: {
+          feature: string
+          id: string
+          last_refill: string
+          tokens: number
+          user_id: string
+        }
+        Insert: {
+          feature: string
+          id?: string
+          last_refill?: string
+          tokens: number
+          user_id: string
+        }
+        Update: {
+          feature?: string
+          id?: string
+          last_refill?: string
+          tokens?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "rate_limits_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      reactions: {
+        Row: {
+          comment_id: string | null
+          created_at: string
+          emoji: string
+          id: string
+          option_id: string | null
+          trip_id: string
+          user_id: string
+        }
+        Insert: {
+          comment_id?: string | null
+          created_at?: string
+          emoji: string
+          id?: string
+          option_id?: string | null
+          trip_id: string
+          user_id: string
+        }
+        Update: {
+          comment_id?: string | null
+          created_at?: string
+          emoji?: string
+          id?: string
+          option_id?: string | null
+          trip_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "reactions_comment_id_fkey"
+            columns: ["comment_id"]
+            isOneToOne: false
+            referencedRelation: "comments"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reactions_option_id_fkey"
+            columns: ["option_id"]
+            isOneToOne: false
+            referencedRelation: "options"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reactions_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "reactions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -667,16 +1255,90 @@ export type Database = {
           },
         ]
       }
+      settlement_carryovers: {
+        Row: {
+          amount: number
+          created_at: string
+          created_by: string
+          currency: string
+          from_user_id: string
+          id: string
+          source_trip_id: string
+          to_user_id: string
+          trip_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          created_by: string
+          currency: string
+          from_user_id: string
+          id?: string
+          source_trip_id: string
+          to_user_id: string
+          trip_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          created_by?: string
+          currency?: string
+          from_user_id?: string
+          id?: string
+          source_trip_id?: string
+          to_user_id?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "settlement_carryovers_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "settlement_carryovers_from_user_id_fkey"
+            columns: ["from_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "settlement_carryovers_source_trip_id_fkey"
+            columns: ["source_trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "settlement_carryovers_to_user_id_fkey"
+            columns: ["to_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "settlement_carryovers_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       settlements: {
         Row: {
           amount: number
           created_at: string | null
           created_by: string
+          currency: string | null
           from_user_id: string
           id: string
           notes: string | null
           payment_method: string | null
           settled_at: string
+          status: string
           to_user_id: string
           trip_id: string
         }
@@ -684,11 +1346,13 @@ export type Database = {
           amount: number
           created_at?: string | null
           created_by: string
+          currency?: string | null
           from_user_id: string
           id?: string
           notes?: string | null
           payment_method?: string | null
           settled_at: string
+          status?: string
           to_user_id: string
           trip_id: string
         }
@@ -696,11 +1360,13 @@ export type Database = {
           amount?: number
           created_at?: string | null
           created_by?: string
+          currency?: string | null
           from_user_id?: string
           id?: string
           notes?: string | null
           payment_method?: string | null
           settled_at?: string
+          status?: string
           to_user_id?: string
           trip_id?: string
         }
@@ -782,6 +1448,61 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trip_checklists: {
+        Row: {
+          assigned_to: string | null
+          created_at: string
+          created_by: string
+          done: boolean
+          done_at: string | null
+          id: string
+          title: string
+          trip_id: string
+        }
+        Insert: {
+          assigned_to?: string | null
+          created_at?: string
+          created_by: string
+          done?: boolean
+          done_at?: string | null
+          id?: string
+          title: string
+          trip_id: string
+        }
+        Update: {
+          assigned_to?: string | null
+          created_at?: string
+          created_by?: string
+          done?: boolean
+          done_at?: string | null
+          id?: string
+          title?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_checklists_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_checklists_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_checklists_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
             referencedColumns: ["id"]
           },
         ]
@@ -916,6 +1637,7 @@ export type Database = {
           location: string | null
           metadata: Json | null
           participant_ids: string[] | null
+          place_id: string | null
           sort_order: number | null
           source_option_id: string | null
           start_time: string | null
@@ -935,6 +1657,7 @@ export type Database = {
           location?: string | null
           metadata?: Json | null
           participant_ids?: string[] | null
+          place_id?: string | null
           sort_order?: number | null
           source_option_id?: string | null
           start_time?: string | null
@@ -954,6 +1677,7 @@ export type Database = {
           location?: string | null
           metadata?: Json | null
           participant_ids?: string[] | null
+          place_id?: string | null
           sort_order?: number | null
           source_option_id?: string | null
           start_time?: string | null
@@ -967,6 +1691,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_timeline_events_place_id_fkey"
+            columns: ["place_id"]
+            isOneToOne: false
+            referencedRelation: "places"
             referencedColumns: ["id"]
           },
           {
@@ -988,7 +1719,9 @@ export type Database = {
       trips: {
         Row: {
           accommodation_cost_currency: string | null
+          base_currency: string
           capacity_limit: number | null
+          chase_settings: Json | null
           confirmation_deadline: string | null
           confirmation_enabled: boolean | null
           confirmation_message: string | null
@@ -1010,7 +1743,9 @@ export type Database = {
         }
         Insert: {
           accommodation_cost_currency?: string | null
+          base_currency?: string
           capacity_limit?: number | null
+          chase_settings?: Json | null
           confirmation_deadline?: string | null
           confirmation_enabled?: boolean | null
           confirmation_message?: string | null
@@ -1032,7 +1767,9 @@ export type Database = {
         }
         Update: {
           accommodation_cost_currency?: string | null
+          base_currency?: string
           capacity_limit?: number | null
+          chase_settings?: Json | null
           confirmation_deadline?: string | null
           confirmation_enabled?: boolean | null
           confirmation_message?: string | null
@@ -1075,10 +1812,12 @@ export type Database = {
           avatar_url: string | null
           created_at: string
           email: string
+          email_notifications_enabled: boolean
           first_name: string | null
           full_name: string | null
           id: string
           last_name: string | null
+          payment_details: Json | null
           role: Database["public"]["Enums"]["user_role"]
           updated_at: string
         }
@@ -1087,10 +1826,12 @@ export type Database = {
           avatar_url?: string | null
           created_at?: string
           email: string
+          email_notifications_enabled?: boolean
           first_name?: string | null
           full_name?: string | null
           id: string
           last_name?: string | null
+          payment_details?: Json | null
           role?: Database["public"]["Enums"]["user_role"]
           updated_at?: string
         }
@@ -1099,10 +1840,12 @@ export type Database = {
           avatar_url?: string | null
           created_at?: string
           email?: string
+          email_notifications_enabled?: boolean
           first_name?: string | null
           full_name?: string | null
           id?: string
           last_name?: string | null
+          payment_details?: Json | null
           role?: Database["public"]["Enums"]["user_role"]
           updated_at?: string
         }
@@ -1130,6 +1873,14 @@ export type Database = {
         Returns: boolean
       }
       cleanup_expired_invitations: { Args: never; Returns: number }
+      consume_rate_limit: {
+        Args: {
+          p_capacity: number
+          p_feature: string
+          p_refill_per_day: number
+        }
+        Returns: boolean
+      }
       create_invitation: {
         Args: { p_expires_at: string; p_trip_id: string }
         Returns: {
@@ -1229,7 +1980,7 @@ export type Database = {
         | "insurance"
         | "activities"
         | "lessons"
-      split_type: "equal" | "custom" | "percentage"
+      split_type: "equal" | "custom" | "percentage" | "shares"
       timeline_event_category:
         | "flight"
         | "accommodation"
@@ -1373,6 +2124,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       chat_message_role: ["user", "assistant", "system"],
@@ -1420,7 +2174,7 @@ export const Constants = {
         "activities",
         "lessons",
       ],
-      split_type: ["equal", "custom", "percentage"],
+      split_type: ["equal", "custom", "percentage", "shares"],
       timeline_event_category: [
         "flight",
         "accommodation",

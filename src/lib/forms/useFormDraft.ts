@@ -92,6 +92,13 @@ export function clearDraft(key: string): void {
 export interface UseFormDraftOptions {
   /** Milliseconds a saved draft remains valid for restoration. Default 24h. */
   ttlMs?: number
+  /**
+   * When false, disables draft persistence entirely: no restore-on-mount and
+   * no debounced saves. Use for EDIT forms, which must always seed from the
+   * record being edited, never from a stale autosaved draft (Form & Flow
+   * Standard §5.2). Default true.
+   */
+  enabled?: boolean
 }
 
 export interface UseFormDraftResult<T> {
@@ -116,10 +123,11 @@ export function useFormDraft<T>(
   opts: UseFormDraftOptions = {}
 ): UseFormDraftResult<T> {
   const ttlMs = opts.ttlMs ?? DEFAULT_DRAFT_TTL_MS
+  const enabled = opts.enabled ?? true
 
   // Lazy-init so restoration only ever runs once, at mount, per key.
   const [{ values, isRestored }, setState] = useState<{ values: T; isRestored: boolean }>(() => {
-    const restored = loadDraft<T>(key, ttlMs)
+    const restored = enabled ? loadDraft<T>(key, ttlMs) : null
     return restored !== null ? { values: restored, isRestored: true } : { values: initial, isRestored: false }
   })
 
@@ -127,6 +135,8 @@ export function useFormDraft<T>(
 
   // Debounced persistence whenever values change.
   useEffect(() => {
+    if (!enabled) return
+
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
     }
@@ -141,7 +151,7 @@ export function useFormDraft<T>(
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, values])
+  }, [key, values, enabled])
 
   const setValues: React.Dispatch<React.SetStateAction<T>> = useCallback((update) => {
     setState((prev) => ({

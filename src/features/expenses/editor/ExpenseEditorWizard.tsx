@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { Modal, Button } from '../../../components/ui'
+import { useMemo, useRef, useState } from 'react'
+import { Modal, Button, Stepper, ConfirmDiscardSheet } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useCreateExpense, useUpdateExpense, type SplitRow } from '../../../lib/queries/useExpenses'
 import { useCreateItemizedExpense } from '../../../lib/queries/useExpenses'
@@ -7,10 +7,7 @@ import { useTimeline } from '../../../lib/queries/useTimeline'
 import { uploadReceipt } from '../../../lib/receiptUpload'
 import { generateLinkCode } from '../../../lib/receiptParsing'
 import { useToast } from '../../../components/ui'
-import { Stepper } from '../components/Stepper'
-import { ConfirmDiscardSheet } from '../components/ConfirmDiscardSheet'
-import { useFormDraft } from '../lib/useFormDraft'
-import { useUnsavedChangesGuard } from '../lib/useUnsavedChangesGuard'
+import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { findDuplicateCandidates } from '../lib/duplicateDetection'
 import { DetailsStep } from './DetailsStep'
 import { PayerStep } from './PayerStep'
@@ -97,12 +94,35 @@ export function ExpenseEditorWizard({
 
   // Draft persistence only makes sense for fresh creates (edit mode always
   // seeds from the record -- Form & Flow Standard point 2's "edit-modals
-  // always seed from the record", not from a stale autosave).
-  const { value: draft, setValue: setDraft, clearDraft } = useFormDraft<ExpenseWizardDraft>({
-    key: draftKey,
-    initialValue: initialReceiptPath ? { ...initialValue, receiptPath: initialReceiptPath } : initialValue,
-    enabled: !isEditMode,
-  })
+  // always seed from the record", not from a stale autosave). The shared
+  // useFormDraft has no `enabled` flag (unlike the old local shim, which
+  // skipped sessionStorage restore/writes entirely when disabled): it
+  // always restores-on-mount and debounce-writes. To preserve the "edit
+  // mode never restores a stale autosave" guarantee, seed the hook's
+  // initial value from the record and immediately overwrite (in the same
+  // render, before paint) any value it may have restored from a leftover
+  // draft under this key. Debounced writes still occur in edit mode, but
+  // that's harmless -- clearDraft() below wipes the key on every close path
+  // (submit success, discard, cancel), so no stale draft can outlive this
+  // session to be wrongly restored later.
+  const seededInitialValue = initialReceiptPath ? { ...initialValue, receiptPath: initialReceiptPath } : initialValue
+  const {
+    values: draftValues,
+    setValues: setDraftValues,
+    clearDraft,
+  } = useFormDraft<ExpenseWizardDraft>(draftKey, seededInitialValue)
+  // Discard any value restored from a leftover sessionStorage draft when in
+  // edit mode -- computed during render (not an effect) so the very first
+  // paint already shows the seeded record, never a stale autosave. React
+  // re-renders synchronously before commit when state is set during render,
+  // so `draft` below is never observed with the stale restored value.
+  const didResetEditDraft = useRef(false)
+  if (isEditMode && !didResetEditDraft.current) {
+    didResetEditDraft.current = true
+    if (draftValues !== seededInitialValue) setDraftValues(seededInitialValue)
+  }
+  const draft = draftValues
+  const setDraft = setDraftValues
 
   const [stepIndex, setStepIndex] = useState(0)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
@@ -123,7 +143,8 @@ export function ExpenseEditorWizard({
     onClose()
   }
 
-  const guard = useUnsavedChangesGuard(isDirty && !isSaving, handleClosed)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty && !isSaving)
+  const requestClose = () => confirmClose(handleClosed)
 
   const participantNames = useMemo(
     () => Object.fromEntries(participants.map((p) => [p.user_id, p.user.full_name || p.user.email])),
@@ -280,22 +301,22 @@ export function ExpenseEditorWizard({
 
   if (showItemized) {
     return (
-      <Modal isOpen={isOpen} onClose={guard.requestClose} title="Itemize receipt" size="lg">
+      <Modal isOpen={isOpen} onClose={requestClose} title="Itemize receipt" size="lg">
         <ItemizedEditorScreen
           initialDraft={emptyItemizedDraft(draft.currency)}
           onBack={() => setShowItemized(false)}
           onSave={handleItemizedSave}
           isSaving={isSaving}
         />
-        <ConfirmDiscardSheet isOpen={guard.isConfirmOpen} onKeepEditing={guard.cancelDiscard} onDiscard={guard.confirmDiscard} />
+        <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
       </Modal>
     )
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={guard.requestClose} title={isEditMode ? 'Edit expense' : 'Add expense'} size="lg">
+    <Modal isOpen={isOpen} onClose={requestClose} title={isEditMode ? 'Edit expense' : 'Add expense'} size="lg">
       <div className="space-y-5">
-        <Stepper steps={[...WIZARD_STEPS]} currentIndex={stepIndex} onStepClick={setStepIndex} />
+        <Stepper steps={[...WIZARD_STEPS]} current={stepIndex} onStepClick={setStepIndex} />
 
         {duplicates.length > 0 && stepIndex === 0 && (
           <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300">
@@ -343,7 +364,7 @@ export function ExpenseEditorWizard({
         </div>
       </div>
 
-      <ConfirmDiscardSheet isOpen={guard.isConfirmOpen} onKeepEditing={guard.cancelDiscard} onDiscard={guard.confirmDiscard} />
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

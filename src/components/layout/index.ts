@@ -13,5 +13,8 @@ export type { StageRailProps } from './StageRail'
 export { NeedsAttentionStrip } from './NeedsAttentionStrip'
 export type { NeedsAttentionStripProps, NeedsAttentionItem } from './NeedsAttentionStrip'
 
+export { QuickActionsSheet } from './QuickActionsSheet'
+export type { QuickActionsSheetProps, QuickAction } from './QuickActionsSheet'
+
 export { hueFromSeed, buildAccentScale, getTripAccentStyle } from './tripAccent'
 export type { TripAccentScale } from './tripAccent'

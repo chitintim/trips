@@ -4,6 +4,7 @@ import { useCreateOption, useUpdateOption, useDeleteOption } from '../../../lib/
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useUnsavedChangesGuard } from '../../../lib/forms/useUnsavedChangesGuard'
 import { ConfirmDiscardSheet } from '../../../components/ui'
+import { useTripActivityLog } from '../../organizer/lib/activity'
 import type { Option } from '../../../types'
 import type { Enums } from '../../../types/database.types'
 import type { OptionDraft } from '../../../shared/contracts'
@@ -78,6 +79,7 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
   const createOption = useCreateOption(tripId)
   const updateOption = useUpdateOption(tripId)
   const deleteOption = useDeleteOption(tripId)
+  const logActivity = useTripActivityLog(tripId)
   const { showToast } = useToast()
 
   const isEditing = !!option
@@ -130,7 +132,7 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
         })
         showToast({ type: 'success', message: 'Option updated' })
       } else {
-        await createOption.mutateAsync({
+        const created = await createOption.mutateAsync({
           section_id: sectionId,
           title: values.title.trim(),
           description: values.description.trim() || null,
@@ -139,6 +141,7 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
           price_type: values.priceType,
           metadata,
         })
+        logActivity({ verb: 'option_added', entity: { type: 'option', id: created.id, label: values.title.trim() } })
         showToast({ type: 'success', message: 'Option added' })
       }
       clearDraft()

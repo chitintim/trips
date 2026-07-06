@@ -13,6 +13,7 @@ import {
 import { Tables, TablesInsert } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
+import { useTripActivityLog } from '../../features/organizer/lib/activity'
 
 export type OptionVote = Tables<'option_votes'>
 export type Reaction = Tables<'reactions'>
@@ -284,6 +285,7 @@ export function useToggleSelection(tripId: string) {
 
 /** Vote toggle (poll mechanics, option_votes table) — optimistic. */
 export function useToggleVote(tripId: string) {
+  const logActivity = useTripActivityLog(tripId)
   return useOptimisticMutation<
     void,
     { optionId: string; userId: string; action: 'add' | 'remove'; voteId?: string; rank?: number | null },
@@ -308,6 +310,13 @@ export function useToggleVote(tripId: string) {
         ...list.filter((v) => !(v.option_id === optionId && v.user_id === userId)),
         { id: `optimistic-${optionId}-${userId}`, option_id: optionId, user_id: userId, rank: rank ?? null, created_at: new Date().toISOString() },
       ]
+    },
+    options: {
+      onSuccess: (_data, vars) => {
+        if (vars.action === 'add') {
+          logActivity({ verb: 'vote_cast', entity: { type: 'option', id: vars.optionId } })
+        }
+      },
     },
   })
 }

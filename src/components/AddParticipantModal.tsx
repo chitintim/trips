@@ -1,6 +1,7 @@
 import { useState, useEffect, FormEvent } from 'react'
 import { Modal, Button, Select } from './ui'
 import { supabase } from '../lib/supabase'
+import { useAddParticipant } from '../lib/queries/useConfirmations'
 import { User } from '../types'
 
 interface AddParticipantModalProps {
@@ -24,6 +25,7 @@ export function AddParticipantModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const addParticipant = useAddParticipant(tripId)
 
   useEffect(() => {
     if (isOpen) {
@@ -63,20 +65,7 @@ export function AddParticipantModal({
         return
       }
 
-      const { error: insertError } = await supabase
-        .from('trip_participants')
-        .insert({
-          trip_id: tripId,
-          user_id: selectedUserId,
-          role,
-        })
-
-      if (insertError) {
-        console.error('Participant add error:', insertError)
-        setError(insertError.message)
-        setLoading(false)
-        return
-      }
+      await addParticipant.mutateAsync({ userId: selectedUserId, role })
 
       setLoading(false)
       setSuccess(true)
@@ -92,8 +81,8 @@ export function AddParticipantModal({
         setSuccess(false)
       }, 800)
     } catch (err) {
-      console.error('Unexpected error:', err)
-      setError('An unexpected error occurred')
+      console.error('Participant add error:', err)
+      setError(err instanceof Error ? err.message : 'An unexpected error occurred')
       setLoading(false)
     }
   }

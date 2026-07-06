@@ -1,29 +1,91 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
 import { useAuth } from '../hooks/useAuth'
-import { Button, Card, Badge, Spinner, EmptyState } from '../components/ui'
-import { CreateTripModal, AddParticipantModal, TripNotesSection, ExpensesTab, ConfirmationDashboard, ConfirmationSettingsPanel } from '../components'
+import { Button, Card, Spinner, EmptyState, Tabs } from '../components/ui'
+import { CreateTripModal, AddParticipantModal } from '../components'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { PlanningTabV2 } from '../components/planning/PlanningTabV2'
-import { Trip, User, TripParticipant } from '../types'
-import { getTripStatusLabel } from '../lib/tripStatus'
-import { TimelineTab } from '../components/TimelineTab'
-import { ChatDrawer } from '../components/ChatDrawer'
-import { MySpendingTab } from '../components/my-spending/MySpendingTab'
-import { AppShell, StageRail, NeedsAttentionStrip } from '../components/layout'
-import type { AppShellTabItem } from '../components/layout'
+import { AppShell, StageRail, NeedsAttentionStrip, QuickActionsSheet } from '../components/layout'
+import type { AppShellTabItem, QuickAction } from '../components/layout'
 import { getTripAccentStyle } from '../components/layout/tripAccent'
 import { useTrip, useParticipants, useCurrentUserRow } from '../lib/queries/useTrip'
 import { useTripRealtime } from '../lib/queries/useTripRealtime'
 import { useNeedsAttention } from '../lib/queries/useNeedsAttention'
+import { useExpenses } from '../lib/queries/useExpenses'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queries/queryKeys'
+import { getTripStatusLabel } from '../lib/tripStatus'
+import type { Trip, TripStatus } from '../types'
 
-type TripTab = 'overview' | 'planning' | 'timeline' | 'expenses' | 'my-spending' | 'notes'
+import { briefTabConfig } from '../features/brief'
+import { peopleTabConfig } from '../features/people'
+import { decisionsTabConfig } from '../features/decisions'
+import { timelineTabConfig, OPEN_QUICK_CAPTURE_EVENT, EventEditorSheet } from '../features/timeline'
+import { tripMapTabConfig } from '../features/places'
+import { notesTabConfig } from '../features/notes'
+import { checklistTabConfig } from '../features/checklists'
+import { organizerTabConfig } from '../features/organizer'
+import { retroConfig } from '../features/retrospective'
+import { chatEntryConfig, ChatSheet } from '../features/chat'
+import { EXPENSE_TAB_CONFIGS, QuickCaptureSheet } from '../features/expenses'
 
-interface ParticipantWithUser extends TripParticipant {
-  user: User
+/**
+ * Trip tab registry: one source of truth, assembled from each feature's
+ * exported tab config (per UPGRADE_MASTER_PLAN §5/§6). "Money" is a hub
+ * entry — its content renders the three EXPENSE_TAB_CONFIGS as inner tabs
+ * rather than being one of them directly. Stage/role filtering happens in
+ * `useTripTabs` below, not here.
+ */
+interface TabEntry {
+  tabId: string
+  label: string
+  icon: string
+  organizerOnly?: boolean
+  /** Only present for stage-gated tabs (currently just Recap). */
+  showWhen?: (trip: Pick<Trip, 'status'>) => boolean
+}
+
+const MONEY_TAB: TabEntry = { tabId: 'money', label: 'Money', icon: '💰' }
+
+const BASE_TAB_ENTRIES: TabEntry[] = [
+  { tabId: briefTabConfig.tabId, label: 'Home', icon: briefTabConfig.icon },
+  { tabId: peopleTabConfig.tabId, label: peopleTabConfig.label, icon: peopleTabConfig.icon },
+  { tabId: decisionsTabConfig.tabId, label: 'Plan', icon: decisionsTabConfig.icon },
+  { tabId: timelineTabConfig.tabId, label: timelineTabConfig.label, icon: timelineTabConfig.icon },
+  MONEY_TAB,
+  { tabId: tripMapTabConfig.tabId, label: tripMapTabConfig.label, icon: tripMapTabConfig.icon },
+  { tabId: notesTabConfig.tabId, label: notesTabConfig.label, icon: notesTabConfig.icon },
+  { tabId: checklistTabConfig.tabId, label: checklistTabConfig.label, icon: checklistTabConfig.icon },
+  { tabId: organizerTabConfig.tabId, label: organizerTabConfig.label, icon: organizerTabConfig.icon, organizerOnly: true },
+  { tabId: retroConfig.tabId, label: retroConfig.label, icon: retroConfig.icon, showWhen: retroConfig.showWhen },
+]
+
+/** The 4 shell bottom-bar / sidebar-priority slots (plan §5: 4 tabs + FAB). */
+const SHELL_SLOT_IDS = ['brief', 'decisions', 'timeline', 'money']
+
+/**
+ * Stage-aware default tab (ports the legacy auto-select intent from the v1
+ * TripDetail). TripBrief is a pre-confirmation "gather interest" surface —
+ * it does not adapt into a Today/live-balance screen during trip_ongoing,
+ * so trip_ongoing defaults to Timeline instead of Home (see coordinator
+ * task notes).
+ */
+function defaultTabForStage(status: TripStatus, isConfirmed: boolean): string {
+  if (!isConfirmed) return 'people'
+  switch (status) {
+    case 'gathering_interest':
+    case 'confirming_participants':
+      return 'brief'
+    case 'booking_details':
+      return 'decisions'
+    case 'booked_awaiting_departure':
+      return 'timeline'
+    case 'trip_ongoing':
+      return 'timeline'
+    case 'trip_completed':
+      return 'money'
+    default:
+      return 'brief'
+  }
 }
 
 export function TripDetail() {
@@ -33,23 +95,32 @@ export function TripDetail() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
 
-  // Data layer: TanStack Query hooks replace the old imperative fetchTripData.
   const { data: trip = null, isLoading: tripLoading } = useTrip(tripId)
   const { data: participants = [], isLoading: participantsLoading } = useParticipants(tripId)
   const { data: currentUserRow } = useCurrentUserRow(user?.id)
+  const { data: expensesData } = useExpenses(tripId)
   const loading = tripLoading || participantsLoading
 
   // One realtime subscription per trip, debounced, invalidating the
   // matching query-key branch on any relevant postgres_changes event.
   useTripRealtime(tripId)
 
-  const needsAttentionItems = useNeedsAttention(tripId)
+  const [activeTab, setActiveTab] = useState<string>('brief')
+  const [moneySubTab, setMoneySubTab] = useState<string>(EXPENSE_TAB_CONFIGS[0].tabId)
+  const needsAttentionItems = useNeedsAttention(tripId, setActiveTab)
 
-  const [activeTab, setActiveTab] = useState<TripTab>('overview')
-  const isAdmin = currentUserRow?.role === 'admin'
+  const myParticipant = participants.find((p) => p.user_id === user?.id) || null
+  const isSystemAdmin = currentUserRow?.role === 'admin'
+  const isTripOrganizer = myParticipant?.role === 'organizer'
+  const isOrganizer = isSystemAdmin || isTripOrganizer || trip?.created_by === user?.id
+
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [quickActionsOpen, setQuickActionsOpen] = useState(false)
+  const [quickCaptureOpenCount, setQuickCaptureOpenCount] = useState(0)
+  const [quickCaptureOpen, setQuickCaptureOpen] = useState(false)
+  const [eventEditorOpen, setEventEditorOpen] = useState(false)
   const [hasSetInitialTab, setHasSetInitialTab] = useState(false)
 
   const refetchTripData = () => {
@@ -58,66 +129,44 @@ export function TripDetail() {
     queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) })
   }
 
-  // Handle tab query parameter (e.g., from "Back to Expenses" button)
+  // Tab registry: stage- and role-filtered (plan §5/§6). Recap only once
+  // the trip is completed; Console only for organizers.
+  const tabEntries = useMemo(() => {
+    if (!trip) return []
+    return BASE_TAB_ENTRIES.filter((t) => {
+      if (t.organizerOnly && !isOrganizer) return false
+      if (t.showWhen && !t.showWhen(trip)) return false
+      return true
+    })
+  }, [trip, isOrganizer])
+
+  // Handle ?tab= query param (e.g. from a shared link or a "back to X" button).
   useEffect(() => {
     const tabParam = searchParams.get('tab')
-    if (tabParam && ['overview', 'planning', 'timeline', 'expenses', 'my-spending', 'notes'].includes(tabParam)) {
-      setActiveTab(tabParam as TripTab)
+    if (tabParam && tabEntries.some((t) => t.tabId === tabParam)) {
+      setActiveTab(tabParam)
       setHasSetInitialTab(true)
-      // Clear the query param after setting tab
       searchParams.delete('tab')
       setSearchParams(searchParams, { replace: true })
     }
-  }, [searchParams, setSearchParams])
+  }, [searchParams, setSearchParams, tabEntries])
 
-  // Set default tab based on user's confirmation status and trip status (only on initial load)
+  // Stage-aware default tab, set once trip/participants have loaded.
   useEffect(() => {
     if (trip && participants.length > 0 && user && !hasSetInitialTab && !searchParams.get('tab')) {
-      let defaultTab: TripTab = 'overview'
-
-      // Find current user's participant record
-      const currentUserParticipant = participants.find(p => p.user_id === user.id)
-      const isConfirmed = currentUserParticipant?.confirmation_status === 'confirmed'
-
-      // If user hasn't confirmed, always show People tab so they can take action
-      if (!isConfirmed) {
-        defaultTab = 'overview'
-      } else {
-        // User is confirmed - use trip status to determine tab
-        switch (trip.status) {
-          case 'gathering_interest':
-          case 'confirming_participants':
-            defaultTab = 'overview' // People tab
-            break
-          case 'booking_details':
-            defaultTab = 'planning' // Planning tab
-            break
-          case 'booked_awaiting_departure':
-            defaultTab = 'timeline' // Timeline tab
-            break
-          case 'trip_ongoing':
-            defaultTab = 'timeline' // Timeline tab
-            break
-          case 'trip_completed':
-            defaultTab = 'expenses' // Expenses tab
-            break
-          default:
-            defaultTab = 'overview'
-        }
-      }
-
-      setActiveTab(defaultTab)
+      const isConfirmed = myParticipant?.confirmation_status === 'confirmed'
+      setActiveTab(defaultTabForStage(trip.status, isConfirmed))
       setHasSetInitialTab(true)
     }
-  }, [trip, participants, user, hasSetInitialTab, searchParams])
+  }, [trip, participants, user, hasSetInitialTab, searchParams, myParticipant])
 
-  const handleEditTrip = () => {
-    setEditModalOpen(true)
-  }
-
-  const handleAddParticipant = () => {
-    setAddParticipantModalOpen(true)
-  }
+  // Any empty-state "paste a booking" CTA across the app can ask for
+  // quick-capture without importing the expenses feature or the shell.
+  useEffect(() => {
+    const handler = () => setQuickCaptureOpen(true)
+    window.addEventListener(OPEN_QUICK_CAPTURE_EVENT, handler)
+    return () => window.removeEventListener(OPEN_QUICK_CAPTURE_EVENT, handler)
+  }, [])
 
   if (loading) {
     return (
@@ -148,74 +197,86 @@ export function TripDetail() {
     )
   }
 
-  // Smart date formatting: only repeat month/year when they differ
-  const formatDateRange = (startDate: string, endDate: string) => {
-    const start = new Date(startDate)
-    const end = new Date(endDate)
+  // Shell's 4 priority slots (Home/Plan/Timeline/Money), mapped to the same
+  // active-tab state as the full in-page tab strip below — tapping either
+  // one drives the same `activeTab`.
+  const toShellTab = (entry: TabEntry): AppShellTabItem => ({
+    key: entry.tabId,
+    label: entry.label,
+    icon: <span className="text-lg leading-none">{entry.icon}</span>,
+    isActive: activeTab === entry.tabId,
+    onClick: () => setActiveTab(entry.tabId),
+  })
 
-    const startMonth = start.toLocaleDateString('en-US', { month: 'short' })
-    const endMonth = end.toLocaleDateString('en-US', { month: 'short' })
-    const startDay = start.getDate()
-    const endDay = end.getDate()
-    const startYear = start.getFullYear()
-    const endYear = end.getFullYear()
+  const shellTabs: AppShellTabItem[] = SHELL_SLOT_IDS.filter((id) => tabEntries.some((t) => t.tabId === id)).map(
+    (id) => toShellTab(tabEntries.find((t) => t.tabId === id)!)
+  )
+  // Desktop sidebar shows every tab, not just the mobile bottom bar's 4 slots.
+  const sidebarTabs: AppShellTabItem[] = tabEntries.map(toShellTab)
 
-    // Same month and year: "Jan 20-27, 2025"
-    if (startMonth === endMonth && startYear === endYear) {
-      return `${startMonth} ${startDay}-${endDay}, ${startYear}`
-    }
-
-    // Same year, different months: "Jan 20 - Feb 5, 2025"
-    if (startYear === endYear) {
-      return `${startMonth} ${startDay} - ${endMonth} ${endDay}, ${startYear}`
-    }
-
-    // Different years: "Dec 28, 2024 - Jan 3, 2025"
-    return `${startMonth} ${startDay}, ${startYear} - ${endMonth} ${endDay}, ${endYear}`
+  const openQuickCapture = () => {
+    setQuickCaptureOpenCount((c) => c + 1)
+    setQuickCaptureOpen(true)
   }
 
-  // Countdown to trip
-  const getCountdown = (startDate: string) => {
-    const start = new Date(startDate)
-    const now = new Date()
-    const diffTime = start.getTime() - now.getTime()
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+  const chatContextForTab = (tabId: string): string => (tabId === 'timeline' ? 'itinerary' : tabId === 'money' ? moneySubTab : tabId)
 
-    if (diffDays < 0) {
-      return '🎿 Trip in progress!'
-    } else if (diffDays === 0) {
-      return '🎿 Trip starts today!'
-    } else if (diffDays === 1) {
-      return '🎿 Trip starts tomorrow!'
-    } else {
-      return `${diffDays} days until trip`
-    }
-  }
-
-  const tripTabs: { key: TripTab; label: string; icon: string }[] = [
-    { key: 'overview', label: 'People', icon: '👥' },
-    { key: 'planning', label: 'Planning', icon: '🗓️' },
-    { key: 'timeline', label: 'Timeline', icon: '📋' },
-    { key: 'expenses', label: 'Expenses', icon: '💰' },
-    { key: 'my-spending', label: 'My Spending', icon: '📊' },
-    { key: 'notes', label: 'Notes', icon: '📝' },
+  const quickActions: QuickAction[] = [
+    {
+      key: 'scan-receipt',
+      icon: <span>📷</span>,
+      label: 'Scan receipt',
+      description: 'Snap or upload a photo',
+      onClick: openQuickCapture,
+    },
+    {
+      key: 'add-expense',
+      icon: <span>💰</span>,
+      label: 'Add expense',
+      description: 'Enter it manually',
+      onClick: openQuickCapture,
+    },
+    {
+      key: 'add-event',
+      icon: <span>📅</span>,
+      label: 'Add event',
+      description: 'Add to the itinerary',
+      onClick: () => {
+        if (isOrganizer) {
+          setEventEditorOpen(true)
+        } else {
+          setActiveTab('timeline')
+        }
+      },
+    },
+    {
+      key: 'ask-ai',
+      icon: <span>✨</span>,
+      label: chatEntryConfig.label,
+      description: 'Ask the trip assistant',
+      onClick: () => setChatOpen(true),
+    },
+    ...(isOrganizer
+      ? [
+          {
+            key: 'new-poll',
+            icon: <span>🗳️</span>,
+            label: 'New poll/option',
+            description: 'Add something to decide',
+            onClick: () => setActiveTab('decisions'),
+          },
+        ]
+      : []),
   ]
-
-  const shellTabs: AppShellTabItem[] = tripTabs.map((t) => ({
-    key: t.key,
-    label: t.label,
-    icon: <span className="text-lg leading-none">{t.icon}</span>,
-    isActive: activeTab === t.key,
-    onClick: () => setActiveTab(t.key),
-  }))
 
   return (
     <div data-trip-accent style={getTripAccentStyle(trip.id)} className="min-h-screen bg-[var(--surface-page)]">
       <AppShell
         tabs={shellTabs}
-        onQuickAdd={() => setChatOpen(true)}
-        quickAddIcon={<span className="text-xl leading-none">🤖</span>}
-        quickAddLabel="Trip Assistant"
+        sidebarTabs={sidebarTabs}
+        onQuickAdd={() => setQuickActionsOpen(true)}
+        quickAddIcon={<span className="text-xl leading-none">+</span>}
+        quickAddLabel="Quick actions"
         sidebarHeader={
           <button
             onClick={() => navigate('/dashboard')}
@@ -245,17 +306,27 @@ export function TripDetail() {
                 </button>
                 <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-primary)] truncate">{trip.name}</h1>
               </div>
-              {isAdmin && (
-                <div className="flex gap-1 flex-shrink-0">
-                  <Button variant="secondary" size="sm" onClick={handleEditTrip} className="hidden sm:inline-flex">
-                    Edit
-                  </Button>
-                  {/* Mobile: Compact menu button */}
-                  <Button variant="secondary" size="sm" onClick={handleEditTrip} className="sm:hidden">
-                    •••
-                  </Button>
-                </div>
-              )}
+              <div className="flex gap-1 flex-shrink-0 items-center">
+                {/* Ask AI — header entry point, all screens (plan §13 "Accessible AI") */}
+                <button
+                  onClick={() => setChatOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-accent-700 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-950 rounded-[var(--radius-md)] transition-colors border border-accent-200 dark:border-accent-800"
+                  title="Ask the trip assistant"
+                >
+                  <span aria-hidden="true">{chatEntryConfig.icon}</span>
+                  <span className="hidden sm:inline">{chatEntryConfig.label}</span>
+                </button>
+                {isOrganizer && (
+                  <>
+                    <Button variant="secondary" size="sm" onClick={() => setEditModalOpen(true)} className="hidden sm:inline-flex">
+                      Edit
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={() => setEditModalOpen(true)} className="sm:hidden">
+                      •••
+                    </Button>
+                  </>
+                )}
+              </div>
             </div>
 
             {/* Trip Details Row */}
@@ -288,33 +359,22 @@ export function TripDetail() {
               </div>
             )}
 
-            {/* Tab Navigation (in-page sub-tabs; distinct from the app shell's
-                top-level nav — this trip has more sections than fit 4 shell slots) */}
-            <nav className="flex items-center border-b border-[var(--border-subtle)] -mb-px">
-              <div className="flex gap-1 flex-1 min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                {tripTabs.map((t) => (
-                  <button
-                    key={t.key}
-                    onClick={() => setActiveTab(t.key)}
-                    className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                      activeTab === t.key
-                        ? 'border-accent-600 text-accent-700 dark:text-accent-400'
-                        : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--border-default)]'
-                    }`}
-                  >
-                    {t.icon} {t.label}
-                  </button>
+            {/* In-page tab strip: EVERY tab (including the shell's 4 priority
+                slots), so nothing is unreachable on mobile — the desktop
+                sidebar also shows every tab in `tabEntries` via `shellTabs`'
+                filter only picking 4 of them for the shell's own slots. */}
+            <Tabs value={activeTab} onChange={setActiveTab}>
+              <Tabs.List scrollable>
+                {tabEntries.map((t) => (
+                  <Tabs.Tab key={t.tabId} value={t.tabId}>
+                    <span className="mr-1" aria-hidden="true">
+                      {t.icon}
+                    </span>
+                    {t.label}
+                  </Tabs.Tab>
                 ))}
-              </div>
-              {/* AI Chat button in tab bar (desktop only — mobile uses the shell FAB) */}
-              <button
-                onClick={() => setChatOpen(true)}
-                className="hidden md:flex flex-shrink-0 ml-2 px-3 py-1.5 text-sm font-medium text-accent-700 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-950 rounded-[var(--radius-md)] transition-colors items-center gap-1.5 border border-accent-200 dark:border-accent-800"
-                title="Open Trip Assistant"
-              >
-                🤖 AI Chat
-              </button>
-            </nav>
+              </Tabs.List>
+            </Tabs>
           </div>
         </div>
 
@@ -322,457 +382,172 @@ export function TripDetail() {
             UPGRADE_MASTER_PLAN §4/§16) so a bug in one tab can't take down
             navigation or the rest of the trip page. */}
         <div className="max-w-6xl mx-auto px-4 py-8">
-          {activeTab === 'overview' && (
-            <ErrorBoundary label="People">
-              <TripOverviewTab trip={trip} participants={participants} onAddParticipant={handleAddParticipant} />
+          {activeTab === 'brief' && (
+            <ErrorBoundary label="Home">
+              <briefTabConfig.Component tripId={trip.id} />
             </ErrorBoundary>
           )}
-          {activeTab === 'planning' && (
-            <ErrorBoundary label="Planning">
-              <PlanningTabV2 trip={trip} participants={participants} />
+          {activeTab === 'people' && (
+            <ErrorBoundary label="People">
+              <div className="space-y-3">
+                {isOrganizer && (
+                  <div className="max-w-2xl mx-auto flex justify-end">
+                    <Button variant="outline" size="sm" onClick={() => setAddParticipantModalOpen(true)}>
+                      + Add participant
+                    </Button>
+                  </div>
+                )}
+                <peopleTabConfig.Component tripId={trip.id} />
+              </div>
+            </ErrorBoundary>
+          )}
+          {activeTab === 'decisions' && (
+            <ErrorBoundary label="Plan">
+              <decisionsTabConfig.Component tripId={trip.id} />
             </ErrorBoundary>
           )}
           {activeTab === 'timeline' && (
             <ErrorBoundary label="Timeline">
-              <TimelineTab trip={trip} participants={participants} />
+              <timelineTabConfig.Component trip={trip} />
             </ErrorBoundary>
           )}
-          {activeTab === 'expenses' && (
-            <ErrorBoundary label="Expenses">
-              <ExpensesTab tripId={trip.id} participants={participants} />
+          {activeTab === 'money' && (
+            <ErrorBoundary label="Money">
+              <MoneyHub trip={trip} activeSubTab={moneySubTab} onSubTabChange={setMoneySubTab} />
             </ErrorBoundary>
           )}
-          {activeTab === 'my-spending' && (
-            <ErrorBoundary label="My Spending">
-              <MySpendingTab trip={trip} participants={participants} />
+          {activeTab === 'map' && (
+            <ErrorBoundary label="Map">
+              <tripMapTabConfig.Component tripId={trip.id} tripStartDate={trip.start_date} />
             </ErrorBoundary>
           )}
           {activeTab === 'notes' && (
             <ErrorBoundary label="Notes">
-              <NotesTab trip={trip} />
+              <notesTabConfig.Component trip={trip} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'checklist' && (
+            <ErrorBoundary label="Checklist">
+              <checklistTabConfig.Component tripId={trip.id} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'organizer' && isOrganizer && (
+            <ErrorBoundary label="Console">
+              <organizerTabConfig.Component tripId={trip.id} />
+            </ErrorBoundary>
+          )}
+          {activeTab === 'retro' && (
+            <ErrorBoundary label="Recap">
+              <retroConfig.Component tripId={trip.id} />
             </ErrorBoundary>
           )}
         </div>
       </AppShell>
 
-      {/* Chat Drawer */}
-      <ChatDrawer
-        trip={trip}
-        isOpen={chatOpen}
-        onClose={() => setChatOpen(false)}
-      />
+      {/* Ask AI sheet — FAB's "Ask AI" action + header button both open this. */}
+      <ChatSheet trip={trip} isOpen={chatOpen} onClose={() => setChatOpen(false)} context={chatContextForTab(activeTab)} />
+
+      {/* Quick actions sheet (FAB landing menu) */}
+      <QuickActionsSheet isOpen={quickActionsOpen} onClose={() => setQuickActionsOpen(false)} actions={quickActions} />
+
+      {/* Quick capture (scan receipt / add expense), remounted with a fresh
+          key on every open per the feature's contract. */}
+      {quickCaptureOpen && (
+        <QuickCaptureSheet
+          key={quickCaptureOpenCount}
+          isOpen={quickCaptureOpen}
+          onClose={() => setQuickCaptureOpen(false)}
+          trip={trip}
+          participants={participants}
+          allExpenses={expensesData?.expenses ?? []}
+        />
+      )}
+
+      {/* Add event (organizer-only quick action) */}
+      <EventEditorSheet isOpen={eventEditorOpen} onClose={() => setEventEditorOpen(false)} trip={trip} event={null} />
 
       {/* Admin Modals */}
-      {trip && (
-        <>
-          <CreateTripModal
-            isOpen={editModalOpen}
-            onClose={() => setEditModalOpen(false)}
-            onSuccess={refetchTripData}
-            editTrip={trip}
-          />
-          <AddParticipantModal
-            isOpen={addParticipantModalOpen}
-            onClose={() => setAddParticipantModalOpen(false)}
-            tripId={trip.id}
-            existingParticipantIds={participants.map((p) => p.user_id)}
-            onSuccess={refetchTripData}
-          />
-        </>
-      )}
+      <CreateTripModal isOpen={editModalOpen} onClose={() => setEditModalOpen(false)} onSuccess={refetchTripData} editTrip={trip} />
+      <AddParticipantModal
+        isOpen={addParticipantModalOpen}
+        onClose={() => setAddParticipantModalOpen(false)}
+        tripId={trip.id}
+        existingParticipantIds={participants.map((p) => p.user_id)}
+        onSuccess={refetchTripData}
+      />
     </div>
   )
 }
 
-// Overview Tab Component
-function TripOverviewTab({
+// ---------------------------------------------------------------------------
+// Money hub: one tab whose content renders inner Tabs for the three
+// EXPENSE_TAB_CONFIGS (Expenses / Settle up / My spending) — plan §5's
+// "Money is a hub" instruction.
+// ---------------------------------------------------------------------------
+function MoneyHub({
   trip,
-  participants,
-  onAddParticipant,
+  activeSubTab,
+  onSubTabChange,
 }: {
   trip: Trip
-  participants: ParticipantWithUser[]
-  onAddParticipant: () => void
+  activeSubTab: string
+  onSubTabChange: (tabId: string) => void
 }) {
-  const { user } = useAuth()
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [isOrganizer, setIsOrganizer] = useState(false)
-
-  useEffect(() => {
-    checkAdminStatus()
-    checkOrganizerStatus()
-  }, [user])
-
-  const checkAdminStatus = async () => {
-    if (!user) return
-    const { data } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    if (data) {
-      setIsAdmin(data.role === 'admin')
-    }
-  }
-
-  const checkOrganizerStatus = async () => {
-    if (!user) return
-
-    // Check if user is system admin, trip creator, or trip organizer
-    const { data: userData } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    const isSystemAdmin = userData?.role === 'admin'
-
-    const { data: participantData } = await supabase
-      .from('trip_participants')
-      .select('role')
-      .eq('trip_id', trip.id)
-      .eq('user_id', user.id)
-      .single()
-
-    const isTripOrganizer = participantData?.role === 'organizer'
-    const isTripCreator = trip.created_by === user.id
-
-    setIsOrganizer(isSystemAdmin || isTripCreator || isTripOrganizer)
-  }
-
-  const handleRemoveParticipant = async (participant: ParticipantWithUser) => {
-    // Check if participant has expenses
-    const { data: paidExpenses } = await supabase
-      .from('expenses')
-      .select('id')
-      .eq('trip_id', trip.id)
-      .eq('paid_by', participant.user_id)
-      .limit(1)
-
-    const { data: expenseSplits } = await supabase
-      .from('expense_splits')
-      .select('expense_id')
-      .eq('user_id', participant.user_id)
-      .limit(1)
-
-    const hasExpenses = (paidExpenses && paidExpenses.length > 0) || (expenseSplits && expenseSplits.length > 0)
-
-    let confirmMessage = `Remove ${participant.user.full_name || participant.user.email} from this trip?`
-    if (hasExpenses) {
-      confirmMessage += '\n\n⚠️ This user has expense records. They will be marked as inactive but their expenses will be preserved.'
-    } else {
-      confirmMessage += '\n\nThey will be marked as inactive and can be re-added later if needed.'
-    }
-
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    // Mark as inactive instead of deleting
-    // NOTE: Requires 'active' field on trip_participants (default true)
-    const { error } = await supabase
-      .from('trip_participants')
-      .update({
-        active: false,
-        updated_at: new Date().toISOString()
-      })
-      .eq('trip_id', trip.id)
-      .eq('user_id', participant.user_id)
-
-    if (error) {
-      alert(`Error removing participant: ${error.message}\n\nNote: If you see a column error, the 'active' field needs to be added to the database.`)
-      return
-    }
-
-    // Refresh the page to show updated participants
-    window.location.reload()
-  }
-
-  const handleChangeParticipantRole = async (participant: ParticipantWithUser, newRole: 'organizer' | 'participant') => {
-    const action = newRole === 'organizer' ? 'promote' : 'demote'
-    const confirmMessage = newRole === 'organizer'
-      ? `Promote ${participant.user.full_name || participant.user.email} to organizer? They will be able to edit this trip and manage participants.`
-      : `Demote ${participant.user.full_name || participant.user.email} to participant? They will lose edit rights for this trip.`
-
-    if (!window.confirm(confirmMessage)) {
-      return
-    }
-
-    const { error } = await supabase
-      .from('trip_participants')
-      .update({ role: newRole })
-      .eq('trip_id', trip.id)
-      .eq('user_id', participant.user_id)
-
-    if (error) {
-      alert(`Error ${action}ing user: ${error.message}`)
-      return
-    }
-
-    // Refresh the page to show updated role
-    window.location.reload()
-  }
-
-  const [isParticipantsExpanded, setIsParticipantsExpanded] = useState(false)
-  const [isConfirmationSettingsExpanded, setIsConfirmationSettingsExpanded] = useState(false)
-
-  // Check if current user needs to confirm
-  const currentUserParticipant = participants.find(p => p.user_id === user?.id)
-  const needsToConfirm = currentUserParticipant && currentUserParticipant.confirmation_status !== 'confirmed'
-  const confirmationStatus = currentUserParticipant?.confirmation_status
-
+  const active = EXPENSE_TAB_CONFIGS.find((c) => c.tabId === activeSubTab) ?? EXPENSE_TAB_CONFIGS[0]
   return (
     <div className="space-y-4">
-      {/* Action needed banner for unconfirmed users */}
-      {needsToConfirm && (
-        <Card className="!p-4 border-amber-300 bg-amber-50">
-          <div className="flex items-start gap-3">
-            <span className="text-2xl">⚠️</span>
-            <div className="flex-1">
-              <h3 className="font-semibold text-amber-800">Action needed</h3>
-              <p className="text-sm text-amber-700 mt-1">
-                {confirmationStatus === 'pending' && "You haven't confirmed if you're joining this trip yet. Please update your status below!"}
-                {confirmationStatus === 'interested' && "You've shown interest but haven't confirmed. Ready to commit? Update your status below!"}
-                {confirmationStatus === 'conditional' && "Your spot is conditional. Check the details below and confirm when ready!"}
-                {confirmationStatus === 'waitlist' && "You're on the waitlist. We'll let you know if a spot opens up!"}
-                {confirmationStatus === 'declined' && "You've declined this trip. Changed your mind? You can update your status below."}
-                {confirmationStatus === 'cancelled' && "Your spot was cancelled. Contact the organizer if you'd like to rejoin."}
-              </p>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* Participants Card (Organizers/Admins only) */}
-      {(isOrganizer || isAdmin) && (
-        <Card className="!p-4">
-        <Card.Header>
-          <div
-            className="cursor-pointer select-none"
-            onClick={() => setIsParticipantsExpanded(!isParticipantsExpanded)}
-          >
-            <div className="flex items-start gap-3">
-              {/* Chevron icon */}
-              <button
-                className="text-gray-400 hover:text-gray-600 transition-colors mt-0.5 flex-shrink-0"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setIsParticipantsExpanded(!isParticipantsExpanded)
-                }}
-              >
-                <svg
-                  className={`w-5 h-5 transition-transform duration-200 ${isParticipantsExpanded ? 'rotate-90' : ''}`}
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                </svg>
-              </button>
-
-              {/* Title and description */}
-              <div className="flex-1 min-w-0">
-                <Card.Title className="!mb-0">Participants</Card.Title>
-                <Card.Description className="mt-1 !mb-0">
-                  {participants.length} {participants.length === 1 ? 'person' : 'people'} on this trip
-                </Card.Description>
-              </div>
-
-              {/* Add button */}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onAddParticipant()
-                }}
-                className="flex-shrink-0"
-              >
-                + Add
-              </Button>
-            </div>
-          </div>
-        </Card.Header>
-
-        {/* Content - only visible when expanded */}
-        {isParticipantsExpanded && (
-          <Card.Content>
-            <div className="space-y-2">
-              {participants.map((participant) => (
-                <div
-                  key={participant.user_id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className="w-10 h-10 rounded-full flex flex-col items-center justify-center text-xl"
-                      style={{
-                        backgroundColor: (participant.user.avatar_data as any)?.bgColor || '#0ea5e9',
-                      }}
-                    >
-                      {(participant.user.avatar_data as any)?.accessory && (
-                        <span className="text-xs -mb-1">
-                          {(participant.user.avatar_data as any)?.accessory}
-                        </span>
-                      )}
-                      <span>
-                        {(participant.user.avatar_data as any)?.emoji || '😊'}
-                      </span>
-                    </div>
-                    <div>
-                      <div className="font-medium text-gray-900">
-                        {participant.user.full_name || 'Unknown'}
-                      </div>
-                      {(isAdmin || isOrganizer) && (
-                        <div className="text-sm text-gray-500">{participant.user.email}</div>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={participant.role === 'organizer' ? 'primary' : 'neutral'}>
-                      {participant.role}
-                    </Badge>
-                    {/* Only show role management for admin/organizer, not on yourself */}
-                    {(isAdmin || isOrganizer) && participant.user_id !== user?.id && (
-                      <>
-                        {participant.role === 'participant' ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleChangeParticipantRole(participant, 'organizer')}
-                            className="text-sky-600 hover:text-sky-700 hover:bg-sky-50"
-                          >
-                            Make Organizer
-                          </Button>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleChangeParticipantRole(participant, 'participant')}
-                            className="text-gray-600 hover:text-gray-700 hover:bg-gray-100"
-                          >
-                            Demote
-                          </Button>
-                        )}
-                      </>
-                    )}
-                    {isAdmin && participant.user_id !== user?.id && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRemoveParticipant(participant)}
-                        className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                      >
-                        Remove
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card.Content>
-        )}
-      </Card>
-      )}
-
-      {/* Confirmation Settings (Organizer Only) */}
-      {isOrganizer && (
-        <Card className="!p-4">
-          <Card.Header>
-            <div
-              className="cursor-pointer select-none"
-              onClick={() => setIsConfirmationSettingsExpanded(!isConfirmationSettingsExpanded)}
-            >
-              <div className="flex items-start gap-3">
-                {/* Chevron icon */}
-                <button
-                  className="text-gray-400 hover:text-gray-600 transition-colors mt-0.5 flex-shrink-0"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setIsConfirmationSettingsExpanded(!isConfirmationSettingsExpanded)
-                  }}
-                >
-                  <svg
-                    className={`w-5 h-5 transition-transform duration-200 ${isConfirmationSettingsExpanded ? 'rotate-90' : ''}`}
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                </button>
-
-                {/* Title and description */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <Card.Title className="!mb-0">Confirmation Settings</Card.Title>
-                    <Badge variant="secondary" size="sm">Organizer</Badge>
-                  </div>
-                  <Card.Description className="mt-1 !mb-0">
-                    Configure the confirmation system for participants
-                  </Card.Description>
-                </div>
-              </div>
-            </div>
-          </Card.Header>
-
-          {/* Content - only visible when expanded */}
-          {isConfirmationSettingsExpanded && (
-            <Card.Content className="pt-4">
-              <ConfirmationSettingsPanel
-                tripId={trip.id}
-                isOrganizer={isOrganizer}
-                onUpdate={() => window.location.reload()}
-              />
-            </Card.Content>
-          )}
-        </Card>
-      )}
-
-      {/* Confirmations */}
-      <ConfirmationDashboard tripId={trip.id} />
+      <Tabs value={active.tabId} onChange={onSubTabChange}>
+        <Tabs.List>
+          {EXPENSE_TAB_CONFIGS.map((c) => (
+            <Tabs.Tab key={c.tabId} value={c.tabId}>
+              <span className="mr-1" aria-hidden="true">
+                {c.icon}
+              </span>
+              {c.label}
+            </Tabs.Tab>
+          ))}
+        </Tabs.List>
+      </Tabs>
+      <active.Component trip={trip} />
     </div>
   )
 }
 
-// Notes Tab Component
-function NotesTab({ trip }: { trip: Trip }) {
-  const { user } = useAuth()
-  const [isOrganizer, setIsOrganizer] = useState(false)
+// Smart date formatting: only repeat month/year when they differ
+function formatDateRange(startDate: string, endDate: string) {
+  const start = new Date(startDate)
+  const end = new Date(endDate)
 
-  useEffect(() => {
-    checkOrganizerStatus()
-  }, [user])
+  const startMonth = start.toLocaleDateString('en-US', { month: 'short' })
+  const endMonth = end.toLocaleDateString('en-US', { month: 'short' })
+  const startDay = start.getDate()
+  const endDay = end.getDate()
+  const startYear = start.getFullYear()
+  const endYear = end.getFullYear()
 
-  const checkOrganizerStatus = async () => {
-    if (!user) return
-
-    // Check if user is system admin, trip creator, or trip organizer
-    const { data: userData } = await supabase
-      .from('users')
-      .select('role')
-      .eq('id', user.id)
-      .single()
-
-    const isSystemAdmin = userData?.role === 'admin'
-
-    const { data: participantData } = await supabase
-      .from('trip_participants')
-      .select('role')
-      .eq('trip_id', trip.id)
-      .eq('user_id', user.id)
-      .single()
-
-    const isTripOrganizer = participantData?.role === 'organizer'
-    const isTripCreator = trip.created_by === user.id
-
-    setIsOrganizer(isSystemAdmin || isTripCreator || isTripOrganizer)
+  if (startMonth === endMonth && startYear === endYear) {
+    return `${startMonth} ${startDay}-${endDay}, ${startYear}`
   }
+  if (startYear === endYear) {
+    return `${startMonth} ${startDay} - ${endMonth} ${endDay}, ${startYear}`
+  }
+  return `${startMonth} ${startDay}, ${startYear} - ${endMonth} ${endDay}, ${endYear}`
+}
 
-  return (
-    <div className="space-y-6">
-      <TripNotesSection tripId={trip.id} isOrganizer={isOrganizer} />
-    </div>
-  )
+// Countdown to trip
+function getCountdown(startDate: string) {
+  const start = new Date(startDate)
+  const now = new Date()
+  const diffTime = start.getTime() - now.getTime()
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+  if (diffDays < 0) {
+    return '🎿 Trip in progress!'
+  } else if (diffDays === 0) {
+    return '🎿 Trip starts today!'
+  } else if (diffDays === 1) {
+    return '🎿 Trip starts tomorrow!'
+  } else {
+    return `${diffDays} days until trip`
+  }
 }

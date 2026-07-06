@@ -11,6 +11,7 @@ import {
   useCreateSettlementCarryover,
 } from '../../../lib/queries/useSettlements'
 import { useLogActivity } from '../../../lib/queries/useActivityFeed'
+import { useTripActivityLog } from '../../organizer/lib/activity'
 import { formatMoney } from '../lib/formatMoney'
 import { computeSuggestedPayments, readLegacySnapshot, buildSnapshot } from './settleUpLogic'
 import { computeBalances } from '../lib/balances'
@@ -42,6 +43,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const finalizeSnapshot = useFinalizeSettlementSnapshot(trip.id)
   const createCarryover = useCreateSettlementCarryover(trip.id)
   const logActivity = useLogActivity(trip.id)
+  const logTypedActivity = useTripActivityLog(trip.id)
 
   const [simplify, setSimplify] = useState(true)
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false)
@@ -219,7 +221,17 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
                   </Button>
                 )}
                 {isMeReceiving && s.status === 'marked_paid' && (
-                  <Button variant="primary" size="sm" onClick={() => updateStatus.mutate({ settlementId: s.id, status: 'confirmed' })}>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      updateStatus.mutate({ settlementId: s.id, status: 'confirmed' })
+                      logTypedActivity({
+                        verb: 'settlement_confirmed',
+                        entity: { type: 'settlement', id: s.id, label: `${nameById[s.from_user_id] ?? 'Someone'} → ${nameById[s.to_user_id] ?? 'you'}` },
+                      })
+                    }}
+                  >
                     Confirm received
                   </Button>
                 )}

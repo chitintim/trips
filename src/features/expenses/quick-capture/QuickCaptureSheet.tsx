@@ -4,6 +4,7 @@ import { useAuth } from '../../../hooks/useAuth'
 import { uploadReceipt } from '../../../lib/receiptUpload'
 import { parseReceipt } from '../../../lib/receiptParsing'
 import { useCreateExpense } from '../../../lib/queries/useExpenses'
+import { useTripActivityLog } from '../../organizer/lib/activity'
 import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
 import { ALL_CATEGORIES, categoryIcon, categoryLabel } from '../lib/categoryStyle'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
@@ -35,6 +36,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
   const { user } = useAuth()
   const { showToast } = useToast()
   const createExpense = useCreateExpense(trip.id)
+  const logActivity = useTripActivityLog(trip.id)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const today = new Date().toISOString().slice(0, 10)
@@ -91,7 +93,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
       const totalMinor = toMinorUnits(totalMajor, state.currency)
       const shares = largestRemainderDistribute(totalMinor, participantIds.map(() => 1))
 
-      await createExpense.mutateAsync({
+      const created = await createExpense.mutateAsync({
         expense: {
           description: state.vendor || 'Receipt',
           amount: totalMajor,
@@ -110,6 +112,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
           split_type: 'equal' as const,
         })),
       })
+      logActivity({ verb: 'expense_added', entity: { type: 'expense', id: created.id, label: created.description } })
 
       showToast({ type: 'success', message: 'Expense saved' })
       resetAndClose()

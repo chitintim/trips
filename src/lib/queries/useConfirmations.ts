@@ -4,6 +4,7 @@ import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { ParticipantWithUser } from './useTrip'
 import { Enums } from '../../types/database.types'
+import { useTripActivityLog } from '../../features/organizer/lib/activity'
 
 export type ConfirmationStatus = Enums<'confirmation_status'>
 export type ConditionalType = Enums<'conditional_type'>
@@ -42,6 +43,7 @@ export interface UpdateConfirmationInput {
  * single most common "needs your attention" resolving action).
  */
 export function useUpdateConfirmationStatus(tripId: string) {
+  const logActivity = useTripActivityLog(tripId)
   return useOptimisticMutation<void, UpdateConfirmationInput, ParticipantWithUser[]>({
     mutationFn: async (input) => {
       const update: Record<string, unknown> = {
@@ -82,19 +84,26 @@ export function useUpdateConfirmationStatus(tripId: string) {
           : p
       )
     },
+    options: {
+      onSuccess: (_data, input) => {
+        logActivity({ verb: 'rsvp_changed', entity: { type: 'confirmation', id: input.userId, label: input.status } })
+      },
+    },
   })
 }
 
 export function useAddParticipant(tripId: string) {
   const queryClient = useQueryClient()
+  const logActivity = useTripActivityLog(tripId)
   return useMutation({
     mutationFn: async ({ userId, role = 'participant' }: { userId: string; role?: 'organizer' | 'participant' }) => {
       const { error } = await supabase.from('trip_participants').insert({ trip_id: tripId, user_id: userId, role })
       if (error) throw error
     },
-    onSuccess: () => {
+    onSuccess: (_data, input) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.confirmationSummary(tripId) })
+      logActivity({ verb: 'participant_joined', entity: { type: 'participant', id: input.userId, label: input.role ?? 'participant' } })
     },
   })
 }

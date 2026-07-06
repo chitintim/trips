@@ -26,8 +26,18 @@ import { useSettlements } from './useSettlements'
  *   themselves on it
  * - settlements involving the user with status 'suggested' or
  *   'marked_paid' (i.e. not yet 'confirmed')
+ *
+ * `onNavigateTab`, if provided, is called with the v2 tab registry id
+ * (e.g. 'people', 'decisions', 'money') instead of the default
+ * `navigate(/:tripId?tab=...)` behavior — TripDetail passes its
+ * `setActiveTab` here so a tap switches the in-page tab state directly
+ * rather than round-tripping through the URL/legacy tab ids. Callers that
+ * only read `.count` (e.g. dashboard TripCard) can omit it.
  */
-export function useNeedsAttention(tripId: string | undefined): NeedsAttentionItem[] {
+export function useNeedsAttention(
+  tripId: string | undefined,
+  onNavigateTab?: (tabId: string) => void
+): NeedsAttentionItem[] {
   const { user } = useAuth()
   const navigate = useNavigate()
 
@@ -56,7 +66,7 @@ export function useNeedsAttention(tripId: string | undefined): NeedsAttentionIte
           icon: '📝',
           label: isDueConditional ? 'Confirm your status' : "You haven't confirmed",
           count: 1,
-          onClick: () => navigate(`/${tripId}?tab=overview`),
+          onClick: () => (onNavigateTab ? onNavigateTab('people') : navigate(`/${tripId}?tab=people`)),
         })
       }
     }
@@ -75,7 +85,7 @@ export function useNeedsAttention(tripId: string | undefined): NeedsAttentionIte
         icon: '🗳️',
         label: 'Unvoted polls',
         count: openPollCount,
-        onClick: () => navigate(`/${tripId}?tab=planning`),
+        onClick: () => (onNavigateTab ? onNavigateTab('decisions') : navigate(`/${tripId}?tab=decisions`)),
       })
     }
 
@@ -99,7 +109,7 @@ export function useNeedsAttention(tripId: string | undefined): NeedsAttentionIte
         icon: '🧾',
         label: 'Unclaimed items',
         count: unclaimedCount,
-        onClick: () => navigate(`/${tripId}?tab=expenses`),
+        onClick: () => (onNavigateTab ? onNavigateTab('money') : navigate(`/${tripId}?tab=money`)),
       })
     }
 
@@ -114,10 +124,10 @@ export function useNeedsAttention(tripId: string | undefined): NeedsAttentionIte
         icon: '💸',
         label: 'Unpaid settlements',
         count: myOpenSettlements.length,
-        onClick: () => navigate(`/${tripId}?tab=expenses`),
+        onClick: () => (onNavigateTab ? onNavigateTab('money') : navigate(`/${tripId}?tab=money`)),
       })
     }
 
     return items
-  }, [tripId, user, participants, sections, votes, expensesData, settlements, navigate])
+  }, [tripId, user, participants, sections, votes, expensesData, settlements, navigate, onNavigateTab])
 }

@@ -18,9 +18,17 @@ export interface AppShellTabItem {
 export interface AppShellProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'> {
   /**
    * Up to 4 primary navigation tabs. Rendered as a bottom tab bar on
-   * mobile and a left sidebar on >=md screens.
+   * mobile and — when `sidebarTabs` is omitted — as the left sidebar on
+   * >=md screens too.
    */
   tabs: AppShellTabItem[]
+
+  /**
+   * Full tab list for the desktop sidebar, when it should show more entries
+   * than fit the mobile bottom bar's 4 slots (plan §5: "desktop sidebar
+   * shows all tabs"). Falls back to `tabs` when omitted.
+   */
+  sidebarTabs?: AppShellTabItem[]
 
   /**
    * Centered raised "+" quick-capture action shown between the tabs on
@@ -54,6 +62,7 @@ export interface AppShellProps extends Omit<HTMLAttributes<HTMLDivElement>, 'tit
  */
 export function AppShell({
   tabs,
+  sidebarTabs,
   onQuickAdd,
   quickAddIcon,
   quickAddLabel = 'Quick add',
@@ -64,6 +73,7 @@ export function AppShell({
 }: AppShellProps) {
   const firstHalf = tabs.slice(0, Math.ceil(tabs.length / 2))
   const secondHalf = tabs.slice(Math.ceil(tabs.length / 2))
+  const desktopTabs = sidebarTabs ?? tabs
 
   return (
     <div className={`min-h-screen bg-[var(--surface-page)] md:flex ${className}`.trim()} {...props}>
@@ -76,7 +86,7 @@ export function AppShell({
         )}
 
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          {tabs.map((tab) => (
+          {desktopTabs.map((tab) => (
             <SidebarLink key={tab.key} tab={tab} />
           ))}
         </nav>

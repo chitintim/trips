@@ -7,6 +7,7 @@ import { useTimeline } from '../../../lib/queries/useTimeline'
 import { uploadReceipt } from '../../../lib/receiptUpload'
 import { generateLinkCode } from '../../../lib/receiptParsing'
 import { useToast } from '../../../components/ui'
+import { useTripActivityLog } from '../../organizer/lib/activity'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { findDuplicateCandidates } from '../lib/duplicateDetection'
 import { DetailsStep } from './DetailsStep'
@@ -55,6 +56,7 @@ export function ExpenseEditorWizard({
   const createExpense = useCreateExpense(trip.id)
   const updateExpense = useUpdateExpense(trip.id)
   const createItemizedExpense = useCreateItemizedExpense(trip.id)
+  const logActivity = useTripActivityLog(trip.id)
 
   const isEditMode = !!editingExpense
   const draftKey = `expense-draft:${trip.id}:${editingExpense?.id ?? 'new'}`
@@ -239,7 +241,8 @@ export function ExpenseEditorWizard({
           removedUserIds,
         })
       } else {
-        await createExpense.mutateAsync({ expense: expensePayload, splits: splitRows })
+        const created = await createExpense.mutateAsync({ expense: expensePayload, splits: splitRows })
+        logActivity({ verb: 'expense_added', entity: { type: 'expense', id: created.id, label: created.description } })
       }
 
       showToast({ type: 'success', message: isEditMode ? 'Expense updated' : 'Expense added' })
@@ -260,7 +263,7 @@ export function ExpenseEditorWizard({
     setIsSaving(true)
     try {
       const code = generateLinkCode()
-      await createItemizedExpense.mutateAsync({
+      const created = await createItemizedExpense.mutateAsync({
         expense: {
           description: draft.description.trim() || draft.vendorName || 'Itemized receipt',
           amount: params.totalMajor,
@@ -289,6 +292,7 @@ export function ExpenseEditorWizard({
         allocationCode: code,
         createdBy: user.id,
       })
+      logActivity({ verb: 'expense_added', entity: { type: 'expense', id: created.id, label: created.description } })
       showToast({ type: 'success', message: 'Itemized expense created', description: `Share code: ${code}` })
       clearDraft()
       handleClosed()

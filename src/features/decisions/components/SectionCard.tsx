@@ -4,6 +4,7 @@ import { useAuth } from '../../../hooks/useAuth'
 import { useUpdateSection } from '../../../lib/queries/usePlanning'
 import type { SectionWithOptions, OptionVote, Reaction, Comment } from '../../../lib/queries/usePlanning'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
+import { useTripActivityLog } from '../../organizer/lib/activity'
 import { OptionCard } from './OptionCard'
 import { MatrixView } from './MatrixView'
 import { sectionHasMatrixLayout } from '../lib/optionMetadata'
@@ -39,6 +40,7 @@ export function SectionCard({
 }: SectionCardProps) {
   const { user } = useAuth()
   const updateSection = useUpdateSection(tripId)
+  const logActivity = useTripActivityLog(tripId)
   const [view, setView] = useState<'list' | 'matrix'>(sectionHasMatrixLayout(section.options) ? 'matrix' : 'list')
 
   const votingMethod = (section.voting_method as VotingMethod) || 'single'
@@ -101,7 +103,10 @@ export function SectionCard({
             {isOrganizer && (
               <Button
                 size="sm"
-                onClick={() => updateSection.mutate({ id: section.id, update: { status: 'completed' } })}
+                onClick={() => {
+                  updateSection.mutate({ id: section.id, update: { status: 'completed' } })
+                  logActivity({ verb: 'poll_closed', entity: { type: 'section', id: section.id, label: section.title } })
+                }}
                 isLoading={updateSection.isPending}
               >
                 Close & confirm winner

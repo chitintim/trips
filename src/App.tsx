@@ -4,13 +4,10 @@ import { AuthCallback } from './components/AuthCallback'
 import { InstallPrompt } from './components/InstallPrompt'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ToastProvider } from './components/ui'
-import { Login } from './pages/Login'
-import { Signup } from './pages/Signup'
-import { ForgotPassword } from './pages/ForgotPassword'
-import { ResetPassword } from './pages/ResetPassword'
+import { authRoutes } from './features/auth/routes'
+import { ClaimPage } from './features/expenses'
 import { Dashboard } from './pages/Dashboard'
 import { TripDetail } from './pages/TripDetail'
-import { ClaimItemsPage } from './pages/ClaimItemsPage'
 
 function App() {
   return (
@@ -20,11 +17,8 @@ function App() {
         <InstallPrompt />
         <ErrorBoundary label="the app">
           <Routes>
-            {/* Public Routes */}
-            <Route path="/login" element={<Login />} />
-            <Route path="/signup" element={<Signup />} />
-            <Route path="/forgot-password" element={<ForgotPassword />} />
-            <Route path="/reset-password" element={<ResetPassword />} />
+            {/* Public Routes (owned by the auth feature, see features/auth/routes.tsx) */}
+            {authRoutes}
 
             {/* Protected Routes */}
             <Route
@@ -37,12 +31,12 @@ function App() {
             />
             <Route path="/dashboard" element={<Navigate to="/" replace />} />
 
-            {/* Claim Items Route */}
+            {/* Claim Items Route (owned by the expenses feature) */}
             <Route
               path="/claim/:code"
               element={
                 <ProtectedRoute>
-                  <ClaimItemsPage />
+                  <ClaimPage />
                 </ProtectedRoute>
               }
             />

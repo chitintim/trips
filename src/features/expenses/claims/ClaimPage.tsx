@@ -135,7 +135,15 @@ export function ClaimPage() {
                   <Card key={li.id} noPadding className="p-3">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex-1 min-w-0">
-                        <p className="font-medium text-[var(--text-primary)] truncate">{li.name_english || li.name_original}</p>
+                        <p className="font-medium text-[var(--text-primary)] truncate">
+                          <span className="text-[var(--text-muted)] font-normal tabular-nums">{li.line_number}.</span>{' '}
+                          {li.name_english || li.name_original}
+                        </p>
+                        {li.name_english && li.name_original && li.name_original !== li.name_english && (
+                          // Original receipt text so people can match the app
+                          // against the paper bill (any language).
+                          <p className="text-xs text-[var(--text-secondary)] truncate">{li.name_original}</p>
+                        )}
                         <p className="text-xs text-[var(--text-muted)]">
                           {formatMoney(li.total_amount, expense.currency)} · Available: {summary.available.toFixed(2)} / {li.quantity}
                         </p>

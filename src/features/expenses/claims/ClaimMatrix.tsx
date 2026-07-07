@@ -75,7 +75,7 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
               {taggedParticipants.map((p) => (
                 <th key={p.user_id} className="px-2 py-2 font-medium text-[var(--text-secondary)]">
                   <div className="flex flex-col items-center gap-1">
-                    <UserAvatar avatarData={p.user.avatar_data} size="xs" alt={p.user.full_name ?? p.user.email} />
+                    <UserAvatar avatarData={p.user} size="xs" alt={p.user.full_name ?? p.user.email} />
                     <span className="text-[10px] max-w-14 truncate">{p.user.full_name?.split(' ')[0] || p.user.email}</span>
                   </div>
                 </th>
@@ -85,7 +85,18 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
           <tbody>
             {lineItems.map((li) => (
               <tr key={li.id} className="border-t border-[var(--border-subtle)]">
-                <td className="py-2 pr-3 sticky left-0 bg-[var(--surface-page)] max-w-32 truncate">{li.name_english || li.name_original}</td>
+                <td
+                  className="py-2 pr-3 sticky left-0 bg-[var(--surface-page)] max-w-32"
+                  title={li.name_original !== li.name_english ? `${li.name_original}` : undefined}
+                >
+                  <span className="block truncate">
+                    <span className="text-[var(--text-muted)] tabular-nums">{li.line_number}.</span>{' '}
+                    {li.name_english || li.name_original}
+                  </span>
+                  {li.name_english && li.name_original && li.name_original !== li.name_english && (
+                    <span className="block truncate text-xs text-[var(--text-secondary)]">{li.name_original}</span>
+                  )}
+                </td>
                 {taggedParticipants.map((p) => {
                   const claim = claimsByLineAndUser.get(li.id)?.get(p.user_id)
                   return (

@@ -114,7 +114,7 @@ export const ReceiptParseResultJsonSchema = {
           additionalProperties: false,
           required: ['line_number', 'name_original', 'quantity', 'unit_price', 'line_total', 'printed_field'],
           properties: {
-            line_number: { type: 'integer', minimum: 1 },
+            line_number: { type: 'integer' },
             name_original: { type: 'string' },
             name_english: { type: ['string', 'null'] },
             quantity: { type: 'number', exclusiveMinimum: 0 },
@@ -128,12 +128,12 @@ export const ReceiptParseResultJsonSchema = {
                 additionalProperties: false,
                 properties: {
                   amount: { type: ['number', 'null'] },
-                  percent: { type: ['number', 'null'], minimum: 0, maximum: 100 },
+                  percent: { type: ['number', 'null'] },
                   reason: { type: ['string', 'null'] },
                 },
               },
             },
-            confidence: { type: 'number', minimum: 0, maximum: 1 },
+            confidence: { type: 'number' },
           },
         },
       },
@@ -145,7 +145,7 @@ export const ReceiptParseResultJsonSchema = {
           required: ['amount', 'inclusive'],
           properties: {
             label: { type: 'string' },
-            rate: { type: ['number', 'null'], minimum: 0, maximum: 1 },
+            rate: { type: ['number', 'null'] },
             amount: { type: 'number' },
             inclusive: { type: 'boolean' },
           },
@@ -157,7 +157,7 @@ export const ReceiptParseResultJsonSchema = {
         required: ['auto'],
         properties: {
           amount: { type: ['number', 'null'] },
-          percent: { type: ['number', 'null'], minimum: 0, maximum: 100 },
+          percent: { type: ['number', 'null'] },
           auto: { type: 'boolean' },
         },
       },
@@ -170,7 +170,7 @@ export const ReceiptParseResultJsonSchema = {
           properties: {
             label: { type: 'string' },
             amount: { type: ['number', 'null'] },
-            percent: { type: ['number', 'null'], minimum: 0, maximum: 100 },
+            percent: { type: ['number', 'null'] },
           },
         },
       },
@@ -185,7 +185,7 @@ export const ReceiptParseResultJsonSchema = {
           required: ['field', 'confidence'],
           properties: {
             field: { type: 'string' },
-            confidence: { type: 'number', minimum: 0, maximum: 1 },
+            confidence: { type: 'number' },
             note: { type: 'string' },
           },
         },

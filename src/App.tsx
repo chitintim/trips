@@ -13,7 +13,7 @@ import { SharePage } from './pages/SharePage'
 function App() {
   return (
     <ToastProvider>
-      <Router basename="/trips">
+      <Router basename={import.meta.env.BASE_URL.replace(/\/$/, '') || '/'}>
         <AuthCallback />
         <InstallPrompt />
         <ErrorBoundary label="the app">

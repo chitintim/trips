@@ -206,7 +206,7 @@ async function callClaudeForReceipt(
     ],
     messages,
     output_config: {
-      format: { type: 'json_schema', schema: ReceiptParseResultJsonSchema.schema, name: ReceiptParseResultJsonSchema.name },
+      format: { type: 'json_schema', schema: ReceiptParseResultJsonSchema.schema},
     },
   })
 }

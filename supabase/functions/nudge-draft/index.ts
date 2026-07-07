@@ -142,7 +142,7 @@ Draft the nudge message now.`
       ],
       messages: [{ role: 'user', content: userPrompt }],
       output_config: {
-        format: { type: 'json_schema', schema: NudgeDraftResponseJsonSchema.schema as Record<string, unknown>, name: NudgeDraftResponseJsonSchema.name },
+        format: { type: 'json_schema', schema: NudgeDraftResponseJsonSchema.schema as Record<string, unknown>},
       },
     })
 

@@ -237,7 +237,7 @@ Deno.serve(async (req) => {
       ],
       messages: [{ role: 'user', content }],
       output_config: {
-        format: { type: 'json_schema', schema: IngestResultJsonSchema.schema as Record<string, unknown>, name: IngestResultJsonSchema.name },
+        format: { type: 'json_schema', schema: IngestResultJsonSchema.schema as Record<string, unknown>},
       },
     })
 

@@ -49,7 +49,7 @@ export interface AnthropicRequestOptions {
   tools?: AnthropicToolDef[]
   tool_choice?: { type: 'auto' | 'any' | 'none' } | { type: 'tool'; name: string }
   output_config?: {
-    format?: { type: 'json_schema'; schema: Record<string, unknown>; name?: string }
+    format?: { type: 'json_schema'; schema: Record<string, unknown> }
     effort?: 'low' | 'medium' | 'high' | 'max'
   }
   stream?: boolean

@@ -76,8 +76,11 @@ export function ConsolidatedOrdersSheet({ isOpen, onClose, section, participants
   const people = useMemo<PersonOrder[]>(() => {
     const byUser = new Map<string, OrderLine[]>()
     for (const option of section.options) {
-      const pricing = readOptionPricing(option.metadata)
-      if (!pricing) continue
+      // Legacy pre-v3 options (see 20260707160000_legacy_sections_to_personal)
+      // carry no catalog pricing at all — that must not drop the option's
+      // selections from the matrix entirely, just leave their line's total
+      // at 0 (buildOrderLine already handles a pricing-less spec that way).
+      const pricing = readOptionPricing(option.metadata) || {}
       for (const selection of option.selections) {
         const item = readOrderItemMetadata(selection.metadata)
         const line = buildOrderLine({ id: option.id, title: option.title, currency: option.currency }, pricing, item, fallbackCurrency)
@@ -99,8 +102,7 @@ export function ConsolidatedOrdersSheet({ isOpen, onClose, section, participants
   const itemTotals = useMemo(() => {
     return section.options
       .map((option) => {
-        const pricing = readOptionPricing(option.metadata)
-        if (!pricing) return null
+        const pricing = readOptionPricing(option.metadata) || {}
         const lines = option.selections.map((s) => buildOrderLine({ id: option.id, title: option.title, currency: option.currency }, pricing, readOrderItemMetadata(s.metadata), fallbackCurrency))
         if (lines.length === 0) return null
         const totals = sumOrderLinesByCurrency(lines)

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Badge, EmptyState, Modal, useToast, formatDeadlineLabel } from '../../../components/ui'
+import { Button, Badge, EmptyState, Modal, useToast, formatDeadlineLabel, SelectionAvatars } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useCreateSection, useVotes } from '../../../lib/queries/usePlanning'
@@ -11,7 +11,7 @@ import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
 import { MatrixView } from '../../decisions/components/MatrixView'
-import { getDecisionShape } from '../../decisions/lib/decisionShapes'
+import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
 import { computeQuestionState } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
@@ -108,6 +108,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const [matrixSectionId, setMatrixSectionId] = useState<string | null>(null)
   const [orderFormSectionId, setOrderFormSectionId] = useState<string | null>(null)
   const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
+  const [expandedPicksSectionIds, setExpandedPicksSectionIds] = useState<Set<string>>(() => new Set())
   const [materializingKey, setMaterializingKey] = useState<string | null>(null)
   const [collapsedWeeks, setCollapsedWeeks] = useState<Set<number>>(() => new Set())
   const [expandedDenseDays, setExpandedDenseDays] = useState<Set<string>>(() => loadExpandedDays(trip.id))
@@ -216,6 +217,20 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     }
   }
 
+  // "Who picked what" expansion (UX_REDESIGN.md Part 5 + the legacy-data
+  // migration): personal-order questions collapse to one summary line in
+  // the tray; this reveals a per-option avatar stack of who's committed —
+  // the same mechanism the new order-form questions use, auto-presented for
+  // pre-v3 sections too since they're now decision_shape 'personal'.
+  const togglePicksExpanded = (sectionId: string) => {
+    setExpandedPicksSectionIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(sectionId)) next.delete(sectionId)
+      else next.add(sectionId)
+      return next
+    })
+  }
+
   const toggleWeekCollapse = (index: number) => {
     setCollapsedWeeks((prev) => {
       const next = new Set(prev)
@@ -313,9 +328,17 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
             const section = sectionId ? (sections || []).find((s) => s.id === sectionId) : undefined
             const isMatrix = sectionItems.some((i) => i.isMatrixSection)
             const isPersonalOrder = section ? getDecisionShape(section.metadata) === 'personal' : false
+            // Catalog-priced sections ("order form" style, e.g. ski rental
+            // with per-day rates) read as "ordered"; pre-v3 legacy sections
+            // stamped decision_shape 'personal' by the migration carry no
+            // pricing at all and read as plain picks ("have picked") — same
+            // underlying mechanism (selections), different wording.
+            const hasCatalogPricing = section ? sectionHasCatalogPricing(section.options) : false
             const questionState = section
               ? computeQuestionState(section, votes || [], (participants || []).length, user?.id ?? null, trip.base_currency)
               : null
+            const optionsWithPicks = section ? section.options.filter((o) => o.selections.length > 0) : []
+            const picksExpanded = section ? expandedPicksSectionIds.has(section.id) : false
             // Questions, not sections (UX_REDESIGN.md Part 4 "Decisions:
             // questions, not sections"): the section's TITLE renders as the
             // question itself ("Where are we staying?"), with a plain
@@ -337,7 +360,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       </div>
                       <p className="text-xs text-[var(--text-muted)]">
                         {isPersonalOrder
-                          ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ordered`
+                          ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ${hasCatalogPricing ? 'ordered' : 'have picked'}`
                           : `${section.options.length} option${section.options.length === 1 ? '' : 's'}`}
                         {section.vote_deadline && <> · closes {formatDeadlineLabel(section.vote_deadline, 'vote')}</>}
                       </p>
@@ -353,15 +376,59 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                   // Personal-order (shape 2) questions collapse to one line —
                   // no per-catalog-item cards here (UX_REDESIGN.md Part 5's
                   // "Plan tray question rows collapse to one line each");
-                  // expansion happens in the order form itself.
-                  <div className="flex gap-2">
-                    <Button variant="secondary" size="sm" onClick={() => setOrderFormSectionId(section.id)}>
-                      {questionState?.state === 'done' ? 'Edit your order' : 'Fill in your order'}
-                    </Button>
-                    {isOrganizer && (
-                      <Button variant="outline" size="sm" onClick={() => setConsolidatedOrdersSectionId(section.id)}>
-                        View orders
+                  // full editing happens in the order form itself. "Who
+                  // picked what" is a lightweight read-only expansion right
+                  // here, reusing SelectionAvatars — this is what makes
+                  // legacy multi-select sections (ski rental etc.) read like
+                  // the new order-form questions with zero migration beyond
+                  // the decision_shape stamp.
+                  <div className="space-y-2">
+                    <div className="flex gap-2 flex-wrap">
+                      <Button variant="secondary" size="sm" onClick={() => setOrderFormSectionId(section.id)}>
+                        {questionState?.state === 'done' ? 'Edit your order' : 'Fill in your order'}
                       </Button>
+                      {isOrganizer && (
+                        <Button variant="outline" size="sm" onClick={() => setConsolidatedOrdersSectionId(section.id)}>
+                          View orders
+                        </Button>
+                      )}
+                      {optionsWithPicks.length > 0 && (
+                        <Button variant="ghost" size="sm" onClick={() => togglePicksExpanded(section.id)}>
+                          {picksExpanded ? 'Hide who picked ▲' : 'Who picked what ▾'}
+                        </Button>
+                      )}
+                    </div>
+                    {picksExpanded && (
+                      <div className="space-y-1.5 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-2.5">
+                        {optionsWithPicks.map((option) => (
+                          <div key={option.id} className="flex items-center justify-between gap-2">
+                            <span className="min-w-0 truncate text-xs text-[var(--text-secondary)]">
+                              {option.title}
+                              {option.status === 'booked' && (
+                                <Badge variant="success" size="sm" className="ml-1.5">
+                                  🧾 Booked
+                                </Badge>
+                              )}
+                            </span>
+                            <SelectionAvatars
+                              selections={option.selections.map((s) => ({
+                                id: s.id,
+                                selected_at: s.selected_at ?? undefined,
+                                user: s.user
+                                  ? {
+                                      full_name: s.user.full_name ?? undefined,
+                                      email: s.user.email ?? undefined,
+                                      avatar_url: s.user.avatar_url ?? undefined,
+                                      avatar_data: (s.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+                                    }
+                                  : undefined,
+                              }))}
+                              maxAvatars={4}
+                              size="sm"
+                            />
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 ) : (

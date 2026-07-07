@@ -8,7 +8,14 @@
  *     among the section's options.
  *   - personal-order sections: "done" once the viewer has at least one
  *     selection (any catalog item ticked) under the section, with the
- *     compact label showing their live order total.
+ *     compact label showing their live order total. This also covers
+ *     pre-v3 trips whose sections were stamped decision_shape:'personal' by
+ *     the legacy-data migration (20260707160000_legacy_sections_to_personal):
+ *     those selections rows carry no order-form metadata (no dates/variant/
+ *     quantity) and their options carry no catalog pricing, so "done" is
+ *     keyed off the presence of a selection at all, not off having priced
+ *     order lines — a legacy participant who picked a restaurant/ski
+ *     package is done even though there's nothing to total.
  *
  * Chaser alignment: supabase/functions/auto-chase's section-deadline scan
  * mirrors this shape split — group-vote sections still chase via the
@@ -82,11 +89,16 @@ export function computePersonalQuestionState(
 ): QuestionState {
   const respondedUserIds = new Set<string>()
   const myLines: OrderLine[] = []
+  // Tracked separately from myLines.length: a legacy selection with no
+  // catalog pricing on its option produces no order line at all, but it's
+  // still a real, committed pick and must count as "done".
+  let iHaveResponded = false
 
   for (const option of section.options) {
     for (const selection of option.selections) {
       respondedUserIds.add(selection.user_id)
       if (currentUserId && selection.user_id === currentUserId) {
+        iHaveResponded = true
         const pricing = readOptionPricing(option.metadata)
         if (pricing) {
           const item = readOrderItemMetadata(selection.metadata)
@@ -96,18 +108,17 @@ export function computePersonalQuestionState(
     }
   }
 
-  const hasOrder = myLines.length > 0
   let label = 'Fill in your order'
-  if (hasOrder) {
+  if (iHaveResponded) {
     const totals = sumOrderLinesByCurrency(myLines)
-    const [currency, amount] = Object.entries(totals)[0]
-    label = `Your order: ${formatMoney(amount, currency)} ✓`
+    const entries = Object.entries(totals)
+    label = entries.length > 0 ? `Your order: ${formatMoney(entries[0][1], entries[0][0])} ✓` : "You're done ✓"
   }
 
   return {
     sectionId: section.id,
     shape: 'personal',
-    state: hasOrder ? 'done' : 'needs_you',
+    state: iHaveResponded ? 'done' : 'needs_you',
     label,
     respondedCount: respondedUserIds.size,
     totalParticipants,

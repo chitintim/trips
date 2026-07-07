@@ -69,6 +69,17 @@ function section(overrides: Partial<SectionWithOptions> & { id: string; title: s
   }
 }
 
+function selection(overrides: { id: string; option_id: string; user_id: string; metadata?: unknown }) {
+  return {
+    id: overrides.id,
+    option_id: overrides.option_id,
+    user_id: overrides.user_id,
+    selected_at: '2026-01-01T00:00:00Z',
+    metadata: overrides.metadata ?? null,
+    user: { id: overrides.user_id, full_name: overrides.user_id, email: `${overrides.user_id}@example.com`, avatar_url: null, avatar_data: null } as never,
+  }
+}
+
 function vote(overrides: Partial<OptionVote> & { option_id: string; user_id: string }): OptionVote {
   return { id: `${overrides.option_id}-${overrides.user_id}`, rank: null, created_at: new Date().toISOString(), ...overrides }
 }
@@ -303,6 +314,182 @@ describe('composePlanItems', () => {
     expect(items[0].vote).toBeNull()
     expect(items[0].isPersonalOrder).toBe(true)
     expect(items[0].stage).toBe('proposal')
+  })
+
+  it('marks an option "booked" when its own status is booked, even with no bookings-table row', () => {
+    // Pre-v3 trips (20260707160000_legacy_sections_to_personal) never had a
+    // `bookings` table — "we booked this" was recorded directly on the
+    // option's own status column.
+    const { items } = composePlanItems({
+      ...BASE_INPUT,
+      sections: [
+        section({
+          id: 's1',
+          title: 'Accommodation',
+          options: [option({ id: 'o1', section_id: 's1', title: 'Chalet A', status: 'booked' })],
+        }),
+      ],
+    })
+    expect(items[0].stage).toBe('booked')
+    expect(items[0].bookingId).toBeNull()
+  })
+
+  it('carries the option\'s selections onto the PlanItem regardless of stage', () => {
+    const { items } = composePlanItems({
+      ...BASE_INPUT,
+      sections: [
+        section({
+          id: 's1',
+          title: 'Accommodation',
+          options: [
+            option({
+              id: 'o1',
+              section_id: 's1',
+              title: 'Chalet A',
+              selections: [selection({ id: 'sel-1', option_id: 'o1', user_id: 'user-2' })] as never,
+            }),
+          ],
+        }),
+      ],
+    })
+    expect(items[0].selections).toHaveLength(1)
+    expect(items[0].selections[0].user_id).toBe('user-2')
+  })
+
+  it('gives timeline events an empty selections array', () => {
+    const { items } = composePlanItems({
+      ...BASE_INPUT,
+      events: [event({ id: 'e1', event_date: '2026-08-01', title: 'Dinner' })],
+    })
+    expect(items[0].selections).toEqual([])
+  })
+
+  describe('legacy Méribel-shaped trip (migrated to decision_shape: personal)', () => {
+    // Real-data shapes from the user's Méribel trip, post
+    // 20260707160000_legacy_sections_to_personal: every pre-v3 section gets
+    // stamped decision_shape:'personal' (no heuristic in composePlanItems
+    // itself — getDecisionShape reads the stamped metadata natively). No
+    // vote_deadline anywhere, no option_votes anywhere, `selections` rows
+    // carry no metadata (no order-form dates/variant/quantity existed in
+    // the legacy app).
+    const legacyMeta = { decision_shape: 'personal' as const, legacy_migrated: true }
+
+    it('a single-select restaurant section with selections + one booked option: options stay "proposal" except the booked one, and every option keeps its selections for the avatar stack', () => {
+      const restaurants = section({
+        id: 'restaurants',
+        title: 'Restaurants',
+        status: 'completed',
+        vote_deadline: null,
+        allow_multiple_selections: false,
+        metadata: legacyMeta as never,
+        options: [
+          option({
+            id: 'r1',
+            section_id: 'restaurants',
+            title: 'Le Refuge',
+            status: 'booked',
+            selections: [
+              selection({ id: 'sel-1', option_id: 'r1', user_id: 'alex' }),
+              selection({ id: 'sel-2', option_id: 'r1', user_id: 'sarah' }),
+            ] as never,
+          }),
+          option({
+            id: 'r2',
+            section_id: 'restaurants',
+            title: 'La Fromagerie',
+            selections: [selection({ id: 'sel-3', option_id: 'r2', user_id: 'jo' })] as never,
+          }),
+          option({
+            id: 'r3',
+            section_id: 'restaurants',
+            title: 'Pizzeria (never picked)',
+            selections: [],
+          }),
+        ],
+      })
+      const { items } = composePlanItems({ ...BASE_INPUT, sections: [restaurants] })
+
+      const booked = items.find((i) => i.id === 'r1')!
+      const picked = items.find((i) => i.id === 'r2')!
+      const unpicked = items.find((i) => i.id === 'r3')!
+
+      expect(booked.stage).toBe('booked')
+      expect(booked.selections).toHaveLength(2)
+      expect(booked.vote).toBeNull()
+      expect(booked.isPersonalOrder).toBe(true)
+
+      expect(picked.stage).toBe('proposal')
+      expect(picked.selections).toHaveLength(1)
+      expect(picked.vote).toBeNull()
+
+      expect(unpicked.stage).toBe('proposal')
+      expect(unpicked.selections).toHaveLength(0)
+    })
+
+    it('a multi-select ski rental section (with an opt-out option) never produces vote UI, and carries per-option selections for the "who picked what" tray expansion', () => {
+      const skiRental = section({
+        id: 'ski',
+        title: 'Ski Equipment Rental',
+        status: 'in_progress',
+        vote_deadline: null,
+        allow_multiple_selections: true,
+        metadata: legacyMeta as never,
+        options: [
+          option({
+            id: 'ski-adult',
+            section_id: 'ski',
+            title: 'Adult skis + boots',
+            selections: [
+              selection({ id: 's1', option_id: 'ski-adult', user_id: 'alex' }),
+              selection({ id: 's2', option_id: 'ski-adult', user_id: 'sarah' }),
+              selection({ id: 's3', option_id: 'ski-adult', user_id: 'jo' }),
+            ] as never,
+          }),
+          option({
+            id: 'ski-kids',
+            section_id: 'ski',
+            title: 'Kids skis',
+            selections: [selection({ id: 's4', option_id: 'ski-kids', user_id: 'sam' })] as never,
+          }),
+          option({
+            id: 'ski-own',
+            section_id: 'ski',
+            title: 'I have my own skis',
+            selections: [selection({ id: 's5', option_id: 'ski-own', user_id: 'pat' })] as never,
+          }),
+        ],
+      })
+      const { items } = composePlanItems({ ...BASE_INPUT, sections: [skiRental] })
+
+      expect(items.every((i) => i.isPersonalOrder)).toBe(true)
+      expect(items.every((i) => i.vote === null)).toBe(true)
+      expect(items.find((i) => i.id === 'ski-adult')?.selections).toHaveLength(3)
+      expect(items.find((i) => i.id === 'ski-own')?.selections).toHaveLength(1)
+    })
+
+    it('zero open-questions: no legacy personal-shape option ever surfaces in getOpenVotables (no vote_deadline, no vote UI to chase)', () => {
+      const restaurants = section({
+        id: 'restaurants',
+        title: 'Restaurants',
+        vote_deadline: null,
+        metadata: legacyMeta as never,
+        options: [
+          option({ id: 'r1', section_id: 'restaurants', title: 'Le Refuge', selections: [selection({ id: 'sel-1', option_id: 'r1', user_id: 'alex' })] as never }),
+        ],
+      })
+      const skiRental = section({
+        id: 'ski',
+        title: 'Ski Equipment Rental',
+        vote_deadline: null,
+        allow_multiple_selections: true,
+        metadata: legacyMeta as never,
+        options: [
+          option({ id: 'ski-adult', section_id: 'ski', title: 'Adult skis', selections: [selection({ id: 's1', option_id: 'ski-adult', user_id: 'alex' })] as never }),
+        ],
+      })
+      const { items } = composePlanItems({ ...BASE_INPUT, sections: [restaurants, skiRental] })
+      expect(getOpenVotables(items)).toHaveLength(0)
+    })
   })
 
   it('marks options under an ordinary vote section as isPersonalOrder: false', () => {

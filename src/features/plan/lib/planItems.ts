@@ -36,8 +36,19 @@
  *     here as options in a section with status `not_started` and no
  *     votes cast yet. This is a light heuristic the UI can refine later;
  *     documented per call so it's easy to adjust.
+ *  6. `booked` stage also fires when the option ROW itself carries
+ *     status 'booked' — not only when a `bookings` table row references
+ *     it. Pre-v3 trips (see the 20260707160000_legacy_sections_to_personal
+ *     migration) recorded "we booked this" directly on the option, since
+ *     the `bookings` table didn't exist yet; new-era flows additionally
+ *     get a `bookings` row, but either signal alone is enough.
+ *  7. Every option carries its raw `selections` (the pre-v3 "who's
+ *     committed to this" mechanism, still used today for decision_shape
+ *     'personal' sections) so PlanItemCard/PlanItemSheet can render an
+ *     avatar stack ("chosen by ...") wherever an item has any, regardless
+ *     of stage.
  */
-import type { SectionWithOptions, OptionVote } from '../../../lib/queries/usePlanning'
+import type { SectionWithOptions, OptionVote, SelectionWithUser } from '../../../lib/queries/usePlanning'
 import type { Booking } from '../../../lib/queries/useBookings'
 import type { TimelineEvent } from '../../../types'
 import type { Json } from '../../../types/database.types'
@@ -110,6 +121,8 @@ export interface PlanItem {
   vote: PlanItemVoteSummary | null
   costImpact: PlanItemCostImpact | null
   booking: PlanItemBookingInfo | null
+  /** Committed picks (the `selections` table) for this item's option — empty for timeline events and for options nobody has picked. Populated regardless of stage/decision shape so any card can show "chosen by ..." (rule 7). */
+  selections: SelectionWithUser[]
 
   /** True once this option has a winner but hasn't been scheduled onto the timeline yet ("put it on the plan"). */
   isUnscheduledWinner: boolean
@@ -239,6 +252,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       vote: null,
       costImpact: null,
       booking: toBookingInfo(booking),
+      selections: [],
       isUnscheduledWinner: false,
     })
   }
@@ -278,7 +292,9 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       const isIdea = !isPersonalOrder && section.status === 'not_started' && !hasAnyVotes
 
       const isWinner = !!winner && winner.optionId === option.id && winner.score > 0
-      const stage: PlanItemStage = booking ? 'booked' : isIdea ? 'idea' : 'proposal'
+      // Rule 6: a `bookings` row OR the option's own status='booked' both
+      // mean "booked" — pre-v3 trips only ever set the latter.
+      const stage: PlanItemStage = booking || option.status === 'booked' ? 'booked' : isIdea ? 'idea' : 'proposal'
 
       const costImpactInput = {
         price: option.price,
@@ -330,6 +346,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
               }
             : null,
         booking: toBookingInfo(booking),
+        selections: option.selections,
         // A winner that hasn't yet produced a timeline event (no event has
         // source_option_id === this option) is ready for "put it on the
         // plan" one-tap scheduling (plan §2 "poll close -> put it on the

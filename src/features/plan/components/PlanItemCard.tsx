@@ -1,9 +1,31 @@
-import { Badge, Button, Deadline } from '../../../components/ui'
+import { Badge, Button, Deadline, SelectionAvatars } from '../../../components/ui'
 import { PlaceChip } from '../../places/components/PlaceChip'
 import { CATEGORY_CONFIG, formatTimeRange } from '../../timeline/lib/categoryConfig'
 import { formatMoney } from '../../decisions/lib/costImpact'
 import type { PlanItem } from '../lib/planItems'
 import type { Tables } from '../../../types/database.types'
+
+/** "Chosen by Alex & Sarah" / "Chosen by Alex, Sarah +3" — a compact summary of who committed to this option (planItems.ts rule 7's `selections`), used for both legacy pre-v3 picks and any new-era option that happens to carry selections. */
+function formatChosenBy(selections: PlanItem['selections']): string {
+  const names = selections.map((s) => s.user?.full_name || s.user?.email || 'Someone')
+  if (names.length <= 2) return `Chosen by ${names.join(' & ')}`
+  return `Chosen by ${names.slice(0, 2).join(', ')} +${names.length - 2}`
+}
+
+function toAvatarSelections(selections: PlanItem['selections']) {
+  return selections.map((s) => ({
+    id: s.id,
+    selected_at: s.selected_at ?? undefined,
+    user: s.user
+      ? {
+          full_name: s.user.full_name ?? undefined,
+          email: s.user.email ?? undefined,
+          avatar_url: s.user.avatar_url ?? undefined,
+          avatar_data: (s.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+        }
+      : undefined,
+  }))
+}
 
 export interface PlanItemCardProps {
   item: PlanItem
@@ -175,6 +197,16 @@ export function PlanItemCard({
           </div>
           {item.costImpact?.sensitivityLine && (
             <p className="mt-1 text-xs text-[var(--text-muted)]">{item.costImpact.sensitivityLine}</p>
+          )}
+
+          {/* Who's committed to this option (planItems.ts rule 7): pre-v3
+              legacy picks and any personal-order/decided option that
+              carries `selections`, shown regardless of stage. */}
+          {item.selections.length > 0 && (
+            <div className="mt-1.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+              <SelectionAvatars selections={toAvatarSelections(item.selections)} maxAvatars={4} size="sm" />
+              <span className="text-xs text-[var(--text-muted)]">{formatChosenBy(item.selections)}</span>
+            </div>
           )}
         </div>
 

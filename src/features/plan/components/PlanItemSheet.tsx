@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Modal, Badge, Button, Chip, UserAvatar, TextArea, Skeleton } from '../../../components/ui'
+import { Modal, Badge, Button, Chip, UserAvatar, TextArea, Skeleton, SelectionAvatars } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useParticipants } from '../../../lib/queries/useTrip'
@@ -176,6 +176,33 @@ export function PlanItemSheet({
 
           {item.description && <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">{item.description}</p>}
 
+          {/* Who's committed to this option (planItems.ts rule 7): covers
+              both pre-v3 legacy picks and any decided/personal-order option
+              carrying `selections`. */}
+          {item.selections.length > 0 && (
+            <div className="flex items-center gap-2">
+              <SelectionAvatars
+                selections={item.selections.map((s) => ({
+                  id: s.id,
+                  selected_at: s.selected_at ?? undefined,
+                  user: s.user
+                    ? {
+                        full_name: s.user.full_name ?? undefined,
+                        email: s.user.email ?? undefined,
+                        avatar_url: s.user.avatar_url ?? undefined,
+                        avatar_data: (s.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+                      }
+                    : undefined,
+                }))}
+                maxAvatars={6}
+                size="sm"
+              />
+              <span className="text-xs text-[var(--text-muted)]">
+                {item.selections.length} {item.selections.length === 1 ? 'person has' : 'people have'} picked this
+              </span>
+            </div>
+          )}
+
           {place && (
             <div className="space-y-2">
               <PlaceChip place={place} />
@@ -295,8 +322,10 @@ export function PlanItemSheet({
             </button>
           )}
 
-          {/* Schedule it — decided-but-undated items */}
-          {!item.date && (item.stage === 'decided' || item.isUnscheduledWinner) && onScheduleIt && (
+          {/* Schedule it — decided-but-undated items (also booked-but-undated: a
+              legacy option can be status='booked' directly, with no dated
+              timeline event yet, per planItems.ts rule 6). */}
+          {!item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && onScheduleIt && (
             <Button variant="secondary" fullWidth onClick={() => onScheduleIt(item)}>
               📅 Schedule it
             </Button>

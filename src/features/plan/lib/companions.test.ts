@@ -33,6 +33,7 @@ function item(overrides: Partial<PlanItem> & { id: string }): PlanItem {
     vote: null,
     costImpact: null,
     booking: null,
+    selections: [],
     isUnscheduledWinner: false,
     ...overrides,
   }

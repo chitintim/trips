@@ -6,6 +6,7 @@ import { useParticipants } from './useTrip'
 import { useSections, useVotes } from './usePlanning'
 import { useExpenses } from './useExpenses'
 import { useSettlements } from './useSettlements'
+import { getDecisionShape } from '../../features/decisions/lib/decisionShapes'
 
 /**
  * Computes the current user's open loops for a trip, purely by reading
@@ -72,13 +73,23 @@ export function useNeedsAttention(
     }
 
     // ---- Open polls not yet voted in ---------------------------------
+    // Shape-aware (UX_REDESIGN.md Part 5 + the legacy-data migration
+    // 20260707160000_legacy_sections_to_personal): a decision_shape:
+    // 'personal' section is never a poll — option_votes never gets a row
+    // for it — so "have I responded?" must check `selections` instead of
+    // `votes`, or every personal-order section with a deadline would chase
+    // forever even after the participant has picked their items.
     const myVotedOptionIds = new Set((votes || []).filter((v) => v.user_id === user.id).map((v) => v.option_id))
     let openPollCount = 0
     for (const section of sections || []) {
       if (!section.vote_deadline) continue
       if (new Date(section.vote_deadline).getTime() <= now) continue
-      const hasVoted = (section.options || []).some((o) => myVotedOptionIds.has(o.id))
-      if (!hasVoted && (section.options || []).length > 0) openPollCount++
+      if ((section.options || []).length === 0) continue
+      const hasResponded =
+        getDecisionShape(section.metadata) === 'personal'
+          ? (section.options || []).some((o) => o.selections.some((s) => s.user_id === user.id))
+          : (section.options || []).some((o) => myVotedOptionIds.has(o.id))
+      if (!hasResponded) openPollCount++
     }
     if (openPollCount > 0) {
       items.push({

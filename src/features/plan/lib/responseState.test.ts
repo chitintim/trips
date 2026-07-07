@@ -90,6 +90,57 @@ describe('computePersonalQuestionState', () => {
     expect(state.label).toBe('Your order: £50 ✓')
   })
 
+  it('done (own-state fix) when the viewer has a bare legacy selection with no metadata and the option has no catalog pricing at all', () => {
+    // Models a pre-v3 trip stamped decision_shape:'personal' by the
+    // 20260707160000_legacy_sections_to_personal migration: `selections`
+    // rows there carry no {start_date,end_date,variant,quantity} metadata
+    // and options carry no metadata.pricing, since neither concept existed
+    // in the legacy app. The viewer still committed a pick and must read
+    // as done, not "Fill in your order".
+    const section = {
+      id: 's1',
+      metadata: { decision_shape: 'personal' as const, legacy_migrated: true },
+      options: [
+        option({
+          id: 'o1',
+          title: 'Le Refuge (restaurant)',
+          metadata: null,
+          selections: [{ id: 'sel-1', option_id: 'o1', user_id: 'me', selected_at: '', metadata: null }] as never,
+        }),
+      ],
+    }
+    const state = computePersonalQuestionState(section, 5, 'me', 'GBP')
+    expect(state.state).toBe('done')
+    expect(state.label).toBe("You're done ✓")
+  })
+
+  it('counts consistent: respondedCount matches distinct pickers across a legacy multi-select section with no pricing anywhere (e.g. Meribel\'s "Ski Equipment Rental")', () => {
+    const section = {
+      id: 'ski',
+      metadata: { decision_shape: 'personal' as const, legacy_migrated: true },
+      options: [
+        option({
+          id: 'ski-adult',
+          title: 'Adult skis',
+          metadata: null,
+          selections: [
+            { id: 's1', option_id: 'ski-adult', user_id: 'alex', selected_at: '', metadata: null },
+            { id: 's2', option_id: 'ski-adult', user_id: 'sarah', selected_at: '', metadata: null },
+          ] as never,
+        }),
+        option({
+          id: 'ski-own',
+          title: 'I have my own skis',
+          metadata: null,
+          selections: [{ id: 's3', option_id: 'ski-own', user_id: 'pat', selected_at: '', metadata: null }] as never,
+        }),
+      ],
+    }
+    const state = computePersonalQuestionState(section, 10, 'alex', 'GBP')
+    expect(state.respondedCount).toBe(3)
+    expect(state.state).toBe('done')
+  })
+
   it('counts respondedCount across all participants, not just the viewer', () => {
     const section = {
       id: 's1',

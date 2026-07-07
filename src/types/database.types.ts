@@ -1919,6 +1919,20 @@ export type Database = {
         }[]
       }
       get_confirmed_count: { Args: { p_trip_id: string }; Returns: number }
+      get_invitation_preview: {
+        Args: { p_code: string }
+        Returns: {
+          accent_seed: string
+          confirmed_count: number
+          cost_currency: string
+          end_date: string
+          estimated_cost: number
+          location: string
+          organizer_first_name: string
+          start_date: string
+          trip_name: string
+        }[]
+      }
       get_recent_failed_attempts: {
         Args: { hours_back?: number }
         Returns: {

@@ -64,7 +64,7 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
 
   const filtered = useMemo(() => applyExpenseFilters(expenses, filters), [expenses, filters])
   const grouped = useMemo(() => groupExpensesByDay(filtered), [filtered])
-  const payerByUserId = useMemo(() => Object.fromEntries(participants.map((p) => [p.user_id, p])), [participants])
+  const participantsByUserId = useMemo(() => Object.fromEntries(participants.map((p) => [p.user_id, p])), [participants])
 
   const openAdd = () => {
     setEditingExpense(null)
@@ -127,9 +127,12 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
 
       <ExpenseFeed
         grouped={grouped}
-        payerByUserId={payerByUserId}
+        participantsByUserId={participantsByUserId}
         baseCurrency={trip.base_currency}
         currentUserId={user?.id}
+        tripId={trip.id}
+        tripStartDate={trip.start_date}
+        tripEndDate={trip.end_date}
         onEdit={openEdit}
         onOpenClaim={(code) => navigate(`/claim/${code}`)}
         editDisabled={isFrozen}

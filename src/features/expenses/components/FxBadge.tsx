@@ -1,4 +1,3 @@
-import { Badge } from '../../../components/ui'
 import { formatMoney } from '../lib/formatMoney'
 
 export interface FxBadgeProps {
@@ -8,30 +7,29 @@ export interface FxBadgeProps {
   baseCurrencyAmount: number | null
   fxRate: number | null
   rateSource?: string | null
+  className?: string
 }
 
 /**
- * Small badge shown on expense rows/cards when the expense currency differs
- * from the trip's base currency: shows the base-currency equivalent, and
- * flags manual-rate overrides ("rate_source='manual'", plan §11) plus
- * missing-rate expenses (v1 bug: silently contributed 0 to balances --
- * v2 surfaces it here instead).
+ * Small base-currency subline shown under an expense's amount when its
+ * currency differs from the trip's base currency (plan point 1: "small
+ * base-currency subline only when different" -- deliberately plain text,
+ * not a badge/chip, to keep the row's right-aligned amount column light).
+ * Still flags manual-rate overrides (rate_source='manual', plan §11) and
+ * missing-rate expenses (v1 bug: silently contributed 0 to balances -- v2
+ * surfaces it here instead, in the danger tint so it can't be missed).
  */
-export function FxBadge({ currency, baseCurrency, amount, baseCurrencyAmount, fxRate, rateSource }: FxBadgeProps) {
+export function FxBadge({ currency, baseCurrency, amount, baseCurrencyAmount, fxRate, rateSource, className = '' }: FxBadgeProps) {
   if (currency === baseCurrency) return null
 
   if (fxRate == null || baseCurrencyAmount == null) {
-    return (
-      <Badge variant="warning" size="sm">
-        ⚠️ Missing FX rate
-      </Badge>
-    )
+    return <span className={`text-[11px] font-medium text-danger-600 ${className}`.trim()}>⚠️ missing FX rate</span>
   }
 
   return (
-    <Badge variant="neutral" size="sm" title={`${amount} ${currency} @ ${fxRate}`}>
+    <span className={`text-[11px] text-[var(--text-muted)] tabular-nums ${className}`.trim()} title={`${amount} ${currency} @ ${fxRate}`}>
       ≈ {formatMoney(baseCurrencyAmount, baseCurrency)}
       {rateSource === 'manual' ? ' · manual rate' : ''}
-    </Badge>
+    </span>
   )
 }

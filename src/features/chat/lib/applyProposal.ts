@@ -59,7 +59,23 @@ export interface ActionDescription {
   isDelete: boolean
 }
 
-export function describeAction(action: ProposedAction): ActionDescription {
+/**
+ * Optional id -> title lookups so review cards can name the option/section
+ * an update_option/move_option/update_section action targets, instead of a
+ * bare UUID. `sectionTitles` should also carry an entry keyed by
+ * `ref:<idempotency_key>` for every create_section action in the SAME
+ * proposal batch, so a move_option/create_option that targets a
+ * not-yet-applied new section still shows its question wording (see
+ * ProposalReview.tsx, which builds both maps). Omitted entirely by callers
+ * that don't have trip data handy (e.g. the auto-apply toast) — falls back
+ * to whatever the action itself carries.
+ */
+export interface DescribeContext {
+  optionTitles?: Map<string, string>
+  sectionTitles?: Map<string, string>
+}
+
+export function describeAction(action: ProposedAction, ctx: DescribeContext = {}): ActionDescription {
   switch (action.type) {
     case 'create_event':
       return {
@@ -108,6 +124,62 @@ export function describeAction(action: ProposedAction): ActionDescription {
         target: 'Itinerary',
         isDelete: false,
       }
+    case 'update_option': {
+      const target = ctx.optionTitles?.get(action.option_id)
+      const fields = [
+        action.title ? `title → "${action.title}"` : null,
+        action.price !== undefined ? `price → ${action.price != null ? `${action.currency ?? ''} ${action.price}`.trim() : 'cleared'}` : null,
+        action.description !== undefined ? `description ${action.description ? 'updated' : 'cleared'}` : null,
+        action.metadata_patch ? 'details updated' : null,
+      ]
+        .filter(Boolean)
+        .join(', ') || 'no field changes'
+      return {
+        icon: '✏️',
+        title: 'Update option',
+        summary: `"${target ?? action.title ?? 'Option'}" — ${fields}`,
+        target: 'Decisions',
+        isDelete: false,
+      }
+    }
+    case 'create_section': {
+      return {
+        icon: '❔',
+        title: 'New question',
+        summary: `"${action.title}" (${action.decision_shape === 'personal' ? 'Personal picks' : 'Group vote'})`,
+        target: 'Decisions',
+        isDelete: false,
+      }
+    }
+    case 'update_section': {
+      const target = ctx.sectionTitles?.get(action.section_id)
+      const fields = [
+        action.title ? `title → "${action.title}"` : null,
+        action.description !== undefined ? `description ${action.description ? 'updated' : 'cleared'}` : null,
+        action.vote_deadline !== undefined ? `deadline → ${action.vote_deadline ?? 'cleared'}` : null,
+        action.metadata_patch ? 'details updated' : null,
+      ]
+        .filter(Boolean)
+        .join(', ') || 'no field changes'
+      return {
+        icon: '✏️',
+        title: 'Update question',
+        summary: `"${target ?? action.title ?? 'Question'}" — ${fields}`,
+        target: 'Decisions',
+        isDelete: false,
+      }
+    }
+    case 'move_option': {
+      const optionTitle = ctx.optionTitles?.get(action.option_id)
+      const sectionTitle = ctx.sectionTitles?.get(action.to_section_id)
+      return {
+        icon: '➡️',
+        title: 'Move option',
+        summary: `${optionTitle ? `"${optionTitle}"` : 'Option'} → ${sectionTitle ? `"${sectionTitle}"` : 'another question'}`,
+        target: 'Decisions',
+        isDelete: false,
+      }
+    }
     case 'delete_request':
       return {
         icon: '🗑️',
@@ -161,6 +233,37 @@ export interface ApplyContext {
   baseCurrency: string
 }
 
+/**
+ * idempotency_key -> real database id, accumulated by the caller as it
+ * applies create_section actions in a batch, so later actions in the same
+ * batch that referenced them via `ref:<idempotency_key>` (see aiProposal.ts's
+ * RefOrUuidSchema) can resolve to a real foreign key. Empty/omitted for
+ * every call site that only ever applies one action at a time (ingest,
+ * auto-apply) — those never carry refs in the first place.
+ */
+export type RefMap = Map<string, string>
+
+const REF_PREFIX = 'ref:'
+
+/** Resolves a `section_id`/`to_section_id` field that may be a real UUID or a `ref:<idempotency_key>` placeholder. Throws with a reviewer-facing message if the referenced action hasn't been applied yet (or was discarded). */
+function resolveRef(value: string, refs: RefMap): string {
+  if (!value.startsWith(REF_PREFIX)) return value
+  const key = value.slice(REF_PREFIX.length)
+  const resolved = refs.get(key)
+  if (!resolved) {
+    throw new Error('This depends on another proposed change above — approve that one first.')
+  }
+  return resolved
+}
+
+/** Reads a jsonb column value as a plain object for a shallow merge-patch; anything else (null, array, scalar) reads as empty so a patch still applies cleanly. */
+function asMergeableObject(value: Json | null | undefined): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  return {}
+}
+
 const DELETE_TABLES: Record<string, string> = {
   event: 'trip_timeline_events',
   option: 'options',
@@ -176,7 +279,7 @@ const DELETE_TABLES: Record<string, string> = {
  * that don't create a single deletable row (update_event, delete_request).
  */
 export interface CreatedEntityRef {
-  table: 'trip_timeline_events' | 'bookings' | 'options' | 'expenses'
+  table: 'trip_timeline_events' | 'bookings' | 'options' | 'expenses' | 'planning_sections'
   id: string
 }
 
@@ -185,9 +288,11 @@ export interface CreatedEntityRef {
  * failure (RLS denial, FK violation, network) — callers mark the card
  * errored and keep going with the rest of the batch. Returns a reference
  * to the created row (create_* actions only) so callers that need an
- * Undo affordance can delete exactly what was just created.
+ * Undo affordance can delete exactly what was just created, or need to
+ * register it in `refs` so a later action in the same batch can resolve a
+ * `ref:<idempotency_key>` placeholder pointing at it.
  */
-export async function applyAction(action: ProposedAction, ctx: ApplyContext): Promise<CreatedEntityRef | null> {
+export async function applyAction(action: ProposedAction, ctx: ApplyContext, refs: RefMap = new Map()): Promise<CreatedEntityRef | null> {
   switch (action.type) {
     case 'create_event': {
       const { data, error } = await supabase
@@ -213,7 +318,7 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext): Pr
       const { data, error } = await supabase
         .from('options')
         .insert({
-          section_id: action.section_id,
+          section_id: resolveRef(action.section_id, refs),
           title: action.title,
           description: action.description ?? null,
           price: action.price ?? null,
@@ -293,6 +398,74 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext): Pr
       if (Object.keys(update).length === 0) return null
       update.updated_at = new Date().toISOString()
       const { error } = await supabase.from('trip_timeline_events').update(update).eq('id', action.event_id)
+      if (error) throw new Error(error.message)
+      return null
+    }
+    case 'update_option': {
+      // jsonb metadata MERGE, not replace (UPGRADE_MASTER_PLAN.md §13 build
+      // brief): read the current value, spread the patch over it, write the
+      // merged object back — a patch that only sets e.g.
+      // metadata.pricing.variants must never clobber an existing
+      // grid_row/grid_column/price_tiers already on the row.
+      let metadata: Json | undefined
+      if (action.metadata_patch) {
+        const { data: current, error: readError } = await supabase.from('options').select('metadata').eq('id', action.option_id).single()
+        if (readError) throw new Error(readError.message)
+        metadata = { ...asMergeableObject(current?.metadata as Json | null), ...action.metadata_patch } as unknown as Json
+      }
+      const update: Record<string, unknown> = {}
+      if (action.title !== undefined) update.title = action.title
+      if (action.description !== undefined) update.description = action.description
+      if (action.price !== undefined) update.price = action.price
+      if (action.currency !== undefined) update.currency = action.currency
+      if (metadata !== undefined) update.metadata = metadata
+      if (Object.keys(update).length === 0) return null
+      const { error } = await supabase.from('options').update(update).eq('id', action.option_id)
+      if (error) throw new Error(error.message)
+      return null
+    }
+    case 'create_section': {
+      const { data, error } = await supabase
+        .from('planning_sections')
+        .insert({
+          trip_id: ctx.tripId,
+          title: action.title,
+          section_type: action.section_type,
+          status: 'in_progress',
+          allow_multiple_selections: false,
+          order_index: 0,
+          voting_method: action.voting_method ?? 'single',
+          hide_votes_until_close: true,
+          vote_deadline: action.vote_deadline ?? null,
+          metadata: { decision_shape: action.decision_shape } as unknown as Json,
+        })
+        .select('id')
+        .single()
+      if (error) throw new Error(error.message)
+      return { table: 'planning_sections', id: data.id }
+    }
+    case 'update_section': {
+      let metadata: Json | undefined
+      if (action.metadata_patch) {
+        const { data: current, error: readError } = await supabase.from('planning_sections').select('metadata').eq('id', action.section_id).single()
+        if (readError) throw new Error(readError.message)
+        metadata = { ...asMergeableObject(current?.metadata as Json | null), ...action.metadata_patch } as unknown as Json
+      }
+      const update: Record<string, unknown> = {}
+      if (action.title !== undefined) update.title = action.title
+      if (action.description !== undefined) update.description = action.description
+      if (action.vote_deadline !== undefined) update.vote_deadline = action.vote_deadline
+      if (metadata !== undefined) update.metadata = metadata
+      if (Object.keys(update).length === 0) return null
+      const { error } = await supabase.from('planning_sections').update(update).eq('id', action.section_id)
+      if (error) throw new Error(error.message)
+      return null
+    }
+    case 'move_option': {
+      const { error } = await supabase
+        .from('options')
+        .update({ section_id: resolveRef(action.to_section_id, refs) })
+        .eq('id', action.option_id)
       if (error) throw new Error(error.message)
       return null
     }

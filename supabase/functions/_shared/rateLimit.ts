@@ -49,4 +49,6 @@ export const RATE_LIMITS = {
   ingest: { feature: 'ingest', capacity: 10, refillPerDay: 10 },
   /** nudge-draft: 20/day (plan §14). */
   nudgeDraft: { feature: 'nudge_draft', capacity: 20, refillPerDay: 20 },
+  /** reorganize-plan: 5/day/user (UPGRADE_MASTER_PLAN.md §13 build brief) -- a much heavier call than ingest/chat (full-trip snapshot, up to 60 generated actions). */
+  reorganize: { feature: 'reorganize', capacity: 5, refillPerDay: 5 },
 } as const satisfies Record<string, RateLimitConfig>

@@ -15,6 +15,16 @@ export interface PlanItemCardProps {
   /** Compact rendering for dense contexts (Undecided tray, Decide lens list). */
   compact?: boolean
   /**
+   * One-line variant (UPGRADE_MASTER_PLAN.md §13 build brief, "display
+   * density"): time · title · chips, no description, no vote affordance —
+   * used automatically for decided/booked items on busy/past days (see
+   * density.ts's shouldDensifyDay). Only ever applied when the item is
+   * `decided`/`booked` (checked below) — proposals/ideas always keep the
+   * full card regardless of what a caller passes here, since they still
+   * need the reviewer's attention.
+   */
+  dense?: boolean
+  /**
    * Calendar edge case #1 (UX_REDESIGN.md Part 3): the trip's dates changed
    * after this item was scheduled and it now falls outside [start_date,
    * end_date]. Never auto-moved/deleted — just flagged, with the card tap
@@ -39,6 +49,7 @@ export function PlanItemCard({
   isVoting,
   myVoted,
   compact = false,
+  dense = false,
   outsideTripDates = false,
   timeClash = false,
 }: PlanItemCardProps) {
@@ -48,6 +59,46 @@ export function PlanItemCard({
   const isSolid = item.stage === 'decided' || item.stage === 'booked'
   const isProposal = item.stage === 'proposal'
   const isIdea = item.stage === 'idea'
+
+  if (dense && isSolid) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => onOpen(item)}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onOpen(item)}
+        className="w-full flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-1.5 text-sm cursor-pointer hover:border-accent-300 transition-colors"
+      >
+        {timeRange && <span className="shrink-0 text-xs font-medium text-[var(--text-secondary)]">{timeRange}</span>}
+        <span className="min-w-0 flex-1 truncate font-medium text-[var(--text-primary)]">{item.title}</span>
+        {category && (
+          <span className="shrink-0 text-xs" aria-hidden="true" title={category.label}>
+            {category.emoji}
+          </span>
+        )}
+        {item.stage === 'booked' && (
+          <span className="shrink-0 text-xs" aria-hidden="true" title="Booked">
+            🧾
+          </span>
+        )}
+        {item.costImpact?.perPerson != null && item.costImpact.currency && (
+          <span className="shrink-0 text-xs text-[var(--text-muted)]">
+            {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/pp
+          </span>
+        )}
+        {outsideTripDates && (
+          <span className="shrink-0 text-xs" aria-hidden="true" title="Outside trip dates">
+            ⚠️
+          </span>
+        )}
+        {timeClash && (
+          <span className="shrink-0 text-xs" aria-hidden="true" title="Time clash">
+            ⏰
+          </span>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div

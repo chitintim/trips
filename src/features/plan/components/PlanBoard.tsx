@@ -35,6 +35,7 @@ import {
   chunkIntoWeeks,
   type WeekChunk,
 } from '../lib/calendarEdgeCases'
+import { shouldDensifyDay, isDensifiableStage, summarizeDayItems, loadExpandedDays, saveExpandedDays } from '../lib/density'
 import {
   suggestTransfers,
   suggestAccommodationEvents,
@@ -109,6 +110,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
   const [materializingKey, setMaterializingKey] = useState<string | null>(null)
   const [collapsedWeeks, setCollapsedWeeks] = useState<Set<number>>(() => new Set())
+  const [expandedDenseDays, setExpandedDenseDays] = useState<Set<string>>(() => loadExpandedDays(trip.id))
   const [dismissedSuggestionKeys, setDismissedSuggestionKeys] = useState<Set<string>>(() => loadDismissedKeys(trip.id))
   const [acceptingSuggestion, setAcceptingSuggestion] = useState<CompanionSuggestion | null>(null)
 
@@ -219,6 +221,21 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
       const next = new Set(prev)
       if (next.has(index)) next.delete(index)
       else next.add(index)
+      return next
+    })
+  }
+
+  // Display density (UPGRADE_MASTER_PLAN.md §13 build brief, no AI): busy
+  // or past days collapse their decided/booked items behind a summary line
+  // by default. `today` is computed once per render rather than per day —
+  // cheap and keeps every day's density check consistent within one paint.
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const toggleExpandedDenseDay = (date: string) => {
+    setExpandedDenseDays((prev) => {
+      const next = new Set(prev)
+      if (next.has(date)) next.delete(date)
+      else next.add(date)
+      saveExpandedDays(trip.id, next)
       return next
     })
   }
@@ -407,32 +424,37 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
           "Day 1" header, sticky bar, or divider machinery. */}
       {skipDayChrome ? (
         <div className="space-y-2 stagger-list">
-          {dayDates.map((date) => (
-            <div key={date} className="space-y-2">
-              {(milestonesByDate.get(date) || []).map((m) => (
-                <DerivedMilestoneRow
-                  key={m.derivedKey}
-                  milestone={m}
-                  onMaterialize={handleMaterialize}
-                  isMaterializing={materializingKey === m.derivedKey}
-                />
-              ))}
-              {(byDate.get(date) || []).map((item) => (
-                <div key={item.id} className="stagger-item">
-                  <PlanItemCard
-                    item={item}
-                    place={item.placeId ? placesById.get(item.placeId) : undefined}
-                    onOpen={onOpenItem}
-                    onVote={item.vote ? handleVote : undefined}
-                    isVoting={votingId === item.id}
-                    myVoted={item.vote?.myVote.voted}
-                    outsideTripDates={isOutsideTripDates(item, trip.start_date, trip.end_date)}
-                    timeClash={clashedIds.has(item.id)}
+          {dayDates.map((date) => {
+            const dayItems = byDate.get(date) || []
+            const dense = shouldDensifyDay(dayItems.length, date, today)
+            return (
+              <div key={date} className="space-y-2">
+                {(milestonesByDate.get(date) || []).map((m) => (
+                  <DerivedMilestoneRow
+                    key={m.derivedKey}
+                    milestone={m}
+                    onMaterialize={handleMaterialize}
+                    isMaterializing={materializingKey === m.derivedKey}
                   />
-                </div>
-              ))}
-            </div>
-          ))}
+                ))}
+                {dayItems.map((item) => (
+                  <div key={item.id} className="stagger-item">
+                    <PlanItemCard
+                      item={item}
+                      place={item.placeId ? placesById.get(item.placeId) : undefined}
+                      onOpen={onOpenItem}
+                      onVote={item.vote ? handleVote : undefined}
+                      isVoting={votingId === item.id}
+                      myVoted={item.vote?.myVote.voted}
+                      outsideTripDates={isOutsideTripDates(item, trip.start_date, trip.end_date)}
+                      timeClash={clashedIds.has(item.id)}
+                      dense={dense && isDensifiableStage(item.stage)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )
+          })}
         </div>
       ) : longTrip ? (
         <div className="space-y-3">
@@ -467,6 +489,9 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       onMaterialize={handleMaterialize}
                       materializingKey={materializingKey}
                       clashedIds={clashedIds}
+                      today={today}
+                      expanded={expandedDenseDays.has(date)}
+                      onToggleExpand={() => toggleExpandedDenseDay(date)}
                     />
                   )
                 })}
@@ -495,6 +520,9 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
               onMaterialize={handleMaterialize}
               materializingKey={materializingKey}
               clashedIds={clashedIds}
+              today={today}
+              expanded={expandedDenseDays.has(date)}
+              onToggleExpand={() => toggleExpandedDenseDay(date)}
             />
           ))}
         </div>
@@ -609,6 +637,11 @@ interface PlanDaySectionProps {
   onMaterialize: (milestone: DerivedMilestone) => void
   materializingKey: string | null
   clashedIds: Set<string>
+  /** Today's date (YYYY-MM-DD), for density.ts's isPastDay/shouldDensifyDay. */
+  today: string
+  /** Whether this day's collapsed dense summary has been expanded (persisted in sessionStorage by the caller — see PlanBoard's expandedDenseDays state). */
+  expanded: boolean
+  onToggleExpand: () => void
 }
 
 /**
@@ -638,11 +671,24 @@ function PlanDaySection({
   onMaterialize,
   materializingKey,
   clashedIds,
+  today,
+  expanded,
+  onToggleExpand,
 }: PlanDaySectionProps) {
   const swipe = useDaySwipe(
     () => nextDate && scrollToDay(nextDate),
     () => prevDate && scrollToDay(prevDate)
   )
+
+  // Display density (UPGRADE_MASTER_PLAN.md §13 build brief, no AI):
+  // decided/booked items on a busy (>4 items) or already-past day collapse
+  // behind a one-line summary by default. Proposals/ideas always render as
+  // full cards — they still need the reviewer's attention — so they're
+  // pulled out first and never counted into the collapsed summary.
+  const dense = shouldDensifyDay(dayItems.length, date, today)
+  const attentionItems = dayItems.filter((i) => !isDensifiableStage(i.stage))
+  const settledItems = dayItems.filter((i) => isDensifiableStage(i.stage))
+  const collapsed = dense && !expanded && settledItems.length > 0
 
   return (
     <div id={dayAnchorId(date)} className="relative scroll-mt-16">
@@ -667,20 +713,60 @@ function PlanDaySection({
         {dayItems.length === 0 && milestones.length === 0 ? (
           <p className="text-xs text-[var(--text-muted)] pl-1">Nothing planned yet</p>
         ) : (
-          dayItems.map((item) => (
-            <div key={item.id} className="stagger-item">
-              <PlanItemCard
-                item={item}
-                place={item.placeId ? placesById.get(item.placeId) : undefined}
-                onOpen={onOpenItem}
-                onVote={item.vote ? onVote : undefined}
-                isVoting={votingId === item.id}
-                myVoted={item.vote?.myVote.voted}
-                outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
-                timeClash={clashedIds.has(item.id)}
-              />
-            </div>
-          ))
+          <>
+            {attentionItems.map((item) => (
+              <div key={item.id} className="stagger-item">
+                <PlanItemCard
+                  item={item}
+                  place={item.placeId ? placesById.get(item.placeId) : undefined}
+                  onOpen={onOpenItem}
+                  onVote={item.vote ? onVote : undefined}
+                  isVoting={votingId === item.id}
+                  myVoted={item.vote?.myVote.voted}
+                  outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
+                  timeClash={clashedIds.has(item.id)}
+                />
+              </div>
+            ))}
+
+            {collapsed ? (
+              <button
+                type="button"
+                onClick={onToggleExpand}
+                className="w-full flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-dashed border-[var(--border-subtle)] px-3 py-2 text-xs text-[var(--text-muted)] hover:border-[var(--border-default)]"
+              >
+                <span>{summarizeDayItems(settledItems)}</span>
+                <span aria-hidden="true">▾ Show</span>
+              </button>
+            ) : (
+              <>
+                {settledItems.map((item) => (
+                  <div key={item.id} className="stagger-item">
+                    <PlanItemCard
+                      item={item}
+                      place={item.placeId ? placesById.get(item.placeId) : undefined}
+                      onOpen={onOpenItem}
+                      onVote={item.vote ? onVote : undefined}
+                      isVoting={votingId === item.id}
+                      myVoted={item.vote?.myVote.voted}
+                      outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
+                      timeClash={clashedIds.has(item.id)}
+                      dense={dense}
+                    />
+                  </div>
+                ))}
+                {dense && settledItems.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={onToggleExpand}
+                    className="w-full text-left text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] px-1 py-1"
+                  >
+                    ▲ Show less
+                  </button>
+                )}
+              </>
+            )}
+          </>
         )}
       </div>
       {!isLast && <div className="mt-3 border-b border-[var(--border-subtle)]" />}

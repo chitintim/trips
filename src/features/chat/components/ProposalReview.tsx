@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Badge, Button, Card, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { queryKeys } from '../../../lib/queries/queryKeys'
+import { useSections } from '../../../lib/queries/usePlanning'
 import { useUpdateProposalStatus, type AiProposal } from '../../../lib/queries/useProposals'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import {
@@ -12,6 +13,7 @@ import {
   loadAppliedKeys,
   saveAppliedKey,
   type ParsedActionEntry,
+  type RefMap,
 } from '../lib/applyProposal'
 import { ProposalActionEditSheet } from './ProposalActionEditSheet'
 import type { ProposedAction } from '../../../shared/contracts/aiProposal'
@@ -38,8 +40,37 @@ export function ProposalReview({ proposal, trip }: ProposalReviewProps) {
   const queryClient = useQueryClient()
   const updateStatus = useUpdateProposalStatus(trip.id)
   const logActivity = useTripActivityLog(trip.id)
+  const { data: sections } = useSections(trip.id)
 
   const entries = useMemo(() => parseProposalActions(proposal.actions), [proposal.actions])
+
+  // id -> title lookups for review-card summaries (describeAction's ctx
+  // param): options/sections that already exist, PLUS every create_section
+  // action in THIS SAME proposal keyed as `ref:<idempotency_key>` so a
+  // move_option/create_option targeting a not-yet-applied new question
+  // still shows its wording instead of a bare ref token.
+  const optionTitles = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const section of sections || []) {
+      for (const option of section.options) map.set(option.id, option.title)
+    }
+    return map
+  }, [sections])
+  const sectionTitles = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const section of sections || []) map.set(section.id, section.title)
+    for (const entry of entries) {
+      if (entry.action?.type === 'create_section') map.set(`ref:${entry.action.idempotency_key}`, entry.action.title)
+    }
+    return map
+  }, [sections, entries])
+  const describeCtx = useMemo(() => ({ optionTitles, sectionTitles }), [optionTitles, sectionTitles])
+
+  // idempotency_key -> real id for create_section actions applied earlier
+  // in this same review session (see applyProposal.ts's RefMap/resolveRef) —
+  // a plain mutable ref (not state) since it's bookkeeping for the apply
+  // calls, not something that should trigger a re-render on its own.
+  const refsRef = useRef<RefMap>(new Map())
 
   const [statuses, setStatuses] = useState<Record<string, CardStatus>>(() => {
     const applied = loadAppliedKeys(proposal.id)
@@ -88,9 +119,10 @@ export function ProposalReview({ proposal, trip }: ProposalReviewProps) {
     if (!action || !user) return false
     setStatus(entry.key, 'applying')
     try {
-      await applyAction(action, { tripId: trip.id, userId: user.id, baseCurrency: trip.base_currency || 'GBP' })
+      const createdRef = await applyAction(action, { tripId: trip.id, userId: user.id, baseCurrency: trip.base_currency || 'GBP' }, refsRef.current)
+      if (createdRef) refsRef.current.set(action.idempotency_key, createdRef.id)
       saveAppliedKey(proposal.id, entry.key)
-      const desc = describeAction(action)
+      const desc = describeAction(action, describeCtx)
       showToast({ type: 'success', message: `${desc.title} — done`, description: desc.summary })
       queryClient.invalidateQueries({ queryKey: queryKeys.trip(trip.id) })
       return true
@@ -153,7 +185,7 @@ export function ProposalReview({ proposal, trip }: ProposalReviewProps) {
       {entries.map((entry) => {
         const action = effectiveAction(entry)
         const status = statuses[entry.key]
-        const desc = action ? describeAction(action) : null
+        const desc = action ? describeAction(action, describeCtx) : null
         const isArmed = armedDeleteKey === entry.key
 
         return (

@@ -9,6 +9,7 @@ import { PlanDecideLens } from './PlanDecideLens'
 import { PlanItemSheet } from './PlanItemSheet'
 import { AddToPlanSheet } from './AddToPlanSheet'
 import { ScheduleItSheet } from './ScheduleItSheet'
+import { OrganizeSheet } from './OrganizeSheet'
 import type { Trip } from '../../../types'
 
 type Lens = 'list' | 'map' | 'decide'
@@ -41,6 +42,7 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [addSheetDefaultIsVote, setAddSheetDefaultIsVote] = useState(false)
   const [scheduleItem, setScheduleItem] = useState<PlanItem | null>(null)
+  const [organizeOpen, setOrganizeOpen] = useState(false)
 
   const openAddSheet = (defaultIsVote = false) => {
     setAddSheetDefaultIsVote(defaultIsVote)
@@ -78,9 +80,16 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
             { value: 'decide', label: 'Decide', icon: '🗳️' },
           ]}
         />
-        <Button size="sm" onClick={() => openAddSheet(false)}>
-          + Add
-        </Button>
+        <div className="flex items-center gap-2">
+          {isOrganizer && (
+            <Button size="sm" variant="secondary" onClick={() => setOrganizeOpen(true)}>
+              ✨ Organize
+            </Button>
+          )}
+          <Button size="sm" onClick={() => openAddSheet(false)}>
+            + Add
+          </Button>
+        </div>
       </div>
 
       {lens === 'list' && (
@@ -122,6 +131,8 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
       />
 
       <ScheduleItSheet isOpen={!!scheduleItem} onClose={() => setScheduleItem(null)} trip={trip} item={scheduleItem} />
+
+      {isOrganizer && <OrganizeSheet isOpen={organizeOpen} onClose={() => setOrganizeOpen(false)} trip={trip} />}
     </div>
   )
 }

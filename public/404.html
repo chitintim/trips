@@ -9,7 +9,11 @@
       // This script takes the current url and converts the path and query
       // string into just a query string, and then redirects the browser
       // to the new url with only a query string and hash fragment
-      var pathSegmentsToKeep = 1;
+      // Must equal the depth of the app's base path: 0 now that the app is
+      // served from the domain root (trips.fontem.ai); it was 1 when served
+      // from /trips/ on github.io. Wrong value = redirect loop that mangles
+      // deep links with repeated ~and~ segments.
+      var pathSegmentsToKeep = 0;
 
       var l = window.location;
       l.replace(

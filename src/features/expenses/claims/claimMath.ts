@@ -4,6 +4,7 @@
  * (shared dishes -- e.g. claiming 0.5 of a shared appetizer), matching the
  * legacy ClaimItemsPage's `expense_item_claims.quantity_claimed` semantics.
  */
+import { toMinorUnits, fromMinorUnits, roundHalfAwayFromZero } from '../../../lib/money'
 import type { ExpenseLineItem, ExpenseItemClaim } from '../../../lib/queries/useExpenses'
 
 export interface LineClaimSummary {
@@ -39,10 +40,21 @@ export function maxClaimableQuantity(summary: LineClaimSummary): number {
   return summary.available + summary.myClaimed
 }
 
-/** A user's owed amount for a given claimed quantity on a line, pro-rated from unit price (no tax/service proration here -- that's applied afterwards via distributeAdjustmentsAcrossClaimants). */
-export function amountOwedForQuantity(lineItem: ExpenseLineItem, quantity: number): number {
-  const unitCost = lineItem.quantity > 0 ? lineItem.total_amount / lineItem.quantity : 0
-  return Math.round(unitCost * quantity * 100) / 100
+/**
+ * A user's owed amount for a given claimed quantity on a line, pro-rated
+ * from unit price (no tax/service proration here -- that's applied
+ * afterwards via distributeAdjustmentsAcrossClaimants). Routed through the
+ * money lib (integer minor units) rather than raw float division/
+ * multiplication + a hardcoded *100/100 round, which silently broke for
+ * zero-decimal currencies (JPY: 100 minor units, not 1) and 3-decimal ones
+ * (BHD/KWD/JOD/OMR: 1000 minor units) -- both real trip base currencies
+ * this app supports (see src/lib/money/currencyExponent.ts).
+ */
+export function amountOwedForQuantity(lineItem: ExpenseLineItem, quantity: number, currency: string): number {
+  if (lineItem.quantity <= 0) return 0
+  const totalMinor = toMinorUnits(lineItem.total_amount, currency)
+  const owedMinor = roundHalfAwayFromZero((totalMinor / lineItem.quantity) * quantity)
+  return fromMinorUnits(owedMinor, currency)
 }
 
 export interface OverallClaimProgress {

@@ -1,6 +1,7 @@
 import { Button, UserAvatar, useToast } from '../../../components/ui'
 import { useSaveItemClaims } from '../../../lib/queries/useExpenses'
 import { formatMoney } from '../lib/formatMoney'
+import { largestRemainderDistribute } from '../../../lib/money'
 import { summarizeLineClaims, amountOwedForQuantity } from './claimMath'
 import type { ExpenseLineItem, ExpenseItemClaim } from '../../../lib/queries/useExpenses'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
@@ -44,17 +45,33 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
     }
 
     try {
-      for (const userId of nonClaimantIds) {
-        const claimsForUser: Array<{ line_item_id: string; quantity_claimed: number; amount_owed: number }> = []
-        for (const li of lineItems) {
-          const claimsForLine = claims.filter((c) => c.line_item_id === li.id)
-          const summary = summarizeLineClaims(li, claimsForLine, userId)
-          if (summary.available <= 0) continue
-          const share = summary.available / nonClaimantIds.length
+      const claimsByUser = new Map<string, Array<{ line_item_id: string; quantity_claimed: number; amount_owed: number }>>()
+      for (const userId of nonClaimantIds) claimsByUser.set(userId, [])
+
+      for (const li of lineItems) {
+        const claimsForLine = claims.filter((c) => c.line_item_id === li.id)
+        const summary = summarizeLineClaims(li, claimsForLine, undefined)
+        if (summary.available <= 0) continue
+
+        // Distribute the remainder across non-claimants via
+        // largestRemainderDistribute (hundredths of a unit, since
+        // quantity_claimed is numeric(10,2)) so the shares sum EXACTLY to
+        // what's available -- plain `available / N` float division could
+        // leave a fractional unit unaccounted for once each independently-
+        // rounded share lands in the DB column.
+        const availableHundredths = Math.round(summary.available * 100)
+        const shareHundredths = largestRemainderDistribute(availableHundredths, nonClaimantIds.map(() => 1))
+
+        nonClaimantIds.forEach((userId, i) => {
+          const share = shareHundredths[i] / 100
           if (share > 0) {
-            claimsForUser.push({ line_item_id: li.id, quantity_claimed: share, amount_owed: amountOwedForQuantity(li, share) })
+            claimsByUser.get(userId)!.push({ line_item_id: li.id, quantity_claimed: share, amount_owed: amountOwedForQuantity(li, share, expense.currency) })
           }
-        }
+        })
+      }
+
+      for (const userId of nonClaimantIds) {
+        const claimsForUser = claimsByUser.get(userId) ?? []
         if (claimsForUser.length > 0) {
           await saveClaims.mutateAsync({ expenseId: expense.id, userId, claims: claimsForUser })
         }

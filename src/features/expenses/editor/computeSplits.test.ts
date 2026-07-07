@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeSplits, validateSplitSum, computeNightsWeightSplitEntries } from './computeSplits'
+import { computeSplits, validateSplitSum, computeNightsWeightSplitEntries, defaultEntriesForSplitMode } from './computeSplits'
 import { toMinorUnits } from '../../../lib/money'
 import type { SplitEntry } from './wizardState'
 
@@ -131,6 +131,45 @@ describe('validateSplitSum', () => {
     ]
     const result = validateSplitSum('percentage', entries, ['a', 'b'], 100, 'GBP')
     expect(result.isValid).toBe(false)
+  })
+})
+
+describe('defaultEntriesForSplitMode', () => {
+  it('defaults percentage to an equal split summing to exactly 100 (largest remainder)', () => {
+    const entries = defaultEntriesForSplitMode('percentage', ['a', 'b', 'c'])
+    const sum = entries.reduce((acc, e) => acc + parseFloat(e.value), 0)
+    expect(Math.round(sum * 100) / 100).toBe(100)
+    // 100/3 = 33.33 repeating -- largest remainder hands the odd cent to one entry.
+    const values = entries.map((e) => e.value).sort()
+    expect(values).toEqual(['33.33', '33.33', '33.34'])
+  })
+
+  it('never reuses a raw amount as a percentage (regression: ¥4200 bug)', () => {
+    // The bug: switching to Percentage on a single-participant ¥4200 expense
+    // showed "4200" in the percent field (a leftover raw amount). The fresh
+    // default for a single participant must be 100, never the item total.
+    const entries = defaultEntriesForSplitMode('percentage', ['solo'])
+    expect(entries).toEqual([{ userId: 'solo', value: '100.00' }])
+  })
+
+  it('defaults shares to 1 for every participant', () => {
+    const entries = defaultEntriesForSplitMode('shares', ['a', 'b'])
+    expect(entries).toEqual([
+      { userId: 'a', value: '1' },
+      { userId: 'b', value: '1' },
+    ])
+  })
+
+  it('defaults custom to blank (never inherits another mode\'s raw value)', () => {
+    const entries = defaultEntriesForSplitMode('custom', ['a', 'b'])
+    expect(entries).toEqual([
+      { userId: 'a', value: '' },
+      { userId: 'b', value: '' },
+    ])
+  })
+
+  it('returns an empty array with zero participants', () => {
+    expect(defaultEntriesForSplitMode('percentage', [])).toEqual([])
   })
 })
 

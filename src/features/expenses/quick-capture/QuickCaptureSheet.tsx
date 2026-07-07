@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal, Button, Input, Select, Spinner, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { uploadReceipt } from '../../../lib/receiptUpload'
@@ -7,11 +7,15 @@ import { useCreateExpense } from '../../../lib/queries/useExpenses'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
 import { ALL_CATEGORIES, categoryIcon, categoryLabel } from '../lib/categoryStyle'
+import { defaultTaggedParticipantIds } from '../lib/participantDefaults'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
 import { initialQuickCaptureState, applyParseResult } from './quickCaptureState'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Trip } from '../../../types'
+
+/** Staged progress copy for the parsing wait (5-20s) so the spinner isn't static -- the second label kicks in once a real parse would plausibly be past initial upload/OCR into the reconciliation pass. */
+const PARSING_LABEL_SWITCH_MS = 6000
 
 export interface QuickCaptureSheetProps {
   isOpen: boolean
@@ -42,6 +46,21 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
   const today = new Date().toISOString().slice(0, 10)
   const [state, setState] = useState(() => initialQuickCaptureState(today))
   const [showFullEditor, setShowFullEditor] = useState(false)
+  const [parsingElapsedMs, setParsingElapsedMs] = useState(0)
+
+  // Staged progress feedback (plan §10 #4): a static spinner for 5-20s reads
+  // as broken. Ticks a local timer while we wait on parse-receipt so the
+  // label can advance and elapsed seconds can show once it's been a while --
+  // client-side only (no real per-step signal from the edge function today).
+  useEffect(() => {
+    if (state.stage !== 'parsing') {
+      setParsingElapsedMs(0)
+      return
+    }
+    const startedAt = Date.now()
+    const interval = setInterval(() => setParsingElapsedMs(Date.now() - startedAt), 500)
+    return () => clearInterval(interval)
+  }, [state.stage])
 
   const resetAndClose = () => {
     setState(initialQuickCaptureState(today))
@@ -86,10 +105,12 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
 
     setState((s) => ({ ...s, stage: 'saving' }))
     try {
-      // Smart defaults (plan): payer = me, split = all tagged participants
-      // equally. "Tagged participants" defaults to every active trip
-      // participant for quick capture (refine later lets you narrow it).
-      const participantIds = participants.map((p) => p.user_id)
+      // Smart defaults (plan): payer = me, split = tagged participants
+      // equally. "Tagged participants" defaults to confirmed participants
+      // (falling back to everyone if nobody's confirmed yet) -- declined/
+      // pending people shouldn't be pre-tagged into expenses or auto-chased
+      // (refine later lets you narrow/widen it either way).
+      const participantIds = defaultTaggedParticipantIds(participants)
       const totalMinor = toMinorUnits(totalMajor, state.currency)
       const shares = largestRemainderDistribute(totalMinor, participantIds.map(() => 1))
 
@@ -132,6 +153,11 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
         participants={participants}
         allExpenses={allExpenses}
         initialReceiptPath={state.receiptPath}
+        // Carries the v2 parse result (with real line items) into the full
+        // editor so "Refine later" -> Itemized isn't a blank draft -- this
+        // was the itemization regression: the parse result was read into
+        // local state but never handed off past this screen.
+        initialParsedReceipt={state.parsed?.v2?.receipt ?? null}
       />
     )
   }
@@ -162,11 +188,18 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
       )}
 
       {(state.stage === 'uploading' || state.stage === 'parsing') && (
-        <div className="flex flex-col items-center justify-center py-10 gap-3">
+        <div className="flex flex-col items-center justify-center py-10 gap-2">
           <Spinner size="lg" />
           <p className="text-sm text-[var(--text-secondary)]">
-            {state.stage === 'uploading' ? 'Uploading receipt...' : 'Reading receipt...'}
+            {state.stage === 'uploading'
+              ? 'Uploading photo…'
+              : parsingElapsedMs < PARSING_LABEL_SWITCH_MS
+                ? 'Reading the receipt…'
+                : 'Checking the totals…'}
           </p>
+          {state.stage === 'parsing' && parsingElapsedMs > 5000 && (
+            <p className="text-xs text-[var(--text-muted)] tabular-nums">{Math.floor(parsingElapsedMs / 1000)}s</p>
+          )}
         </div>
       )}
 
@@ -195,7 +228,8 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
           />
 
           <p className="text-xs text-[var(--text-muted)]">
-            Split equally among all {participants.length} trip participants. Paid by you. Refine later to change either.
+            Split equally among {defaultTaggedParticipantIds(participants).length} confirmed trip participant
+            {defaultTaggedParticipantIds(participants).length === 1 ? '' : 's'}. Paid by you. Refine later to change either.
           </p>
 
           <div className="flex items-center gap-3 pt-1">

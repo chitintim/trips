@@ -6,6 +6,7 @@ import { CategoryIcon } from '../components/CategoryIcon'
 import { FxBadge } from '../components/FxBadge'
 import { ClaimStatusRing } from '../components/ClaimStatusRing'
 import { LiableAvatarStack } from '../components/LiableAvatarStack'
+import { ReceiptLightbox } from '../components/ReceiptLightbox'
 import { isItemizedExpense } from '../types'
 import { summarizeOverallProgress } from '../claims/claimMath'
 import { computeLiableUserIds, buildExpenseMetaSentence, computeExpenseStake } from '../lib/expenseRowInsights'
@@ -40,6 +41,7 @@ export interface ExpenseCardProps {
  */
 export function ExpenseCard({ expense, participantsByUserId, baseCurrency, currentUserId, onEdit, onOpenClaim, editDisabled }: ExpenseCardProps) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
+  const [showReceiptLightbox, setShowReceiptLightbox] = useState(false)
   const itemized = isItemizedExpense(expense)
   const progress = itemized ? summarizeOverallProgress(expense.line_items, expense.claims) : null
 
@@ -140,14 +142,34 @@ export function ExpenseCard({ expense, participantsByUserId, baseCurrency, curre
                 claim yours →
               </button>
             ) : (
-              <span className="shrink-0 text-xs font-semibold text-accent-700 dark:text-accent-400">claim yours</span>
+              // No allocation link exists yet (itemized expense tagged for
+              // this viewer, but nobody's generated a claim link) -- this
+              // used to render as styled button-colored text with no
+              // onClick, a dead-looking-interactive element. Route to Edit
+              // instead so the organizer can open the itemized editor and
+              // create one, rather than tapping something that does nothing.
+              <button
+                type="button"
+                onClick={onEdit}
+                disabled={editDisabled}
+                className="shrink-0 text-xs font-semibold text-accent-700 dark:text-accent-400 press-scale disabled:opacity-50"
+              >
+                claim yours (set up link)
+              </button>
             ))}
         </div>
 
         {/* Line 3: receipt thumbnail, claim progress, primary action */}
         <div className="flex items-center gap-3 mt-2">
           {thumbUrl && (
-            <img src={thumbUrl} alt="Receipt thumbnail" className="w-8 h-8 rounded-[var(--radius-sm)] object-cover border border-[var(--border-subtle)]" />
+            <button
+              type="button"
+              onClick={() => setShowReceiptLightbox(true)}
+              className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden border border-[var(--border-subtle)] press-scale"
+              aria-label="View receipt"
+            >
+              <img src={thumbUrl} alt="Receipt thumbnail" className="w-8 h-8 object-cover" />
+            </button>
           )}
 
           {itemized && progress && (
@@ -172,6 +194,10 @@ export function ExpenseCard({ expense, participantsByUserId, baseCurrency, curre
           )}
         </div>
       </div>
+
+      {showReceiptLightbox && expense.receipt_url && (
+        <ReceiptLightbox path={expense.receipt_url} title={expense.description} onClose={() => setShowReceiptLightbox(false)} />
+      )}
     </Card>
   )
 }

@@ -223,19 +223,34 @@ export async function deleteReceipt(path: string): Promise<void> {
   }
 }
 
+const SIGNED_URL_TTL_SECONDS = 3600 // 1 hour expiry
+// Cache slightly shorter than the actual expiry so a signed URL is never
+// handed out from cache moments before Supabase itself would reject it.
+const SIGNED_URL_CACHE_TTL_MS = 55 * 60 * 1000
+const signedUrlCache = new Map<string, { url: string; expiresAt: number }>()
+
 /**
  * Get receipt URL from path
- * Since the bucket is private, we use signed URLs that expire after 1 hour
+ * Since the bucket is private, we use signed URLs that expire after 1 hour.
+ * Cached per path for ~55 minutes so the same receipt shown in two places
+ * at once (e.g. a card thumbnail + its lightbox, or a thumbnail re-rendered
+ * across list re-renders) doesn't fire a duplicate signed-URL request.
  */
 export async function getReceiptUrl(path: string): Promise<string> {
+  const cached = signedUrlCache.get(path)
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url
+  }
+
   const { data, error } = await supabase.storage
     .from('receipts')
-    .createSignedUrl(path, 3600) // 1 hour expiry
+    .createSignedUrl(path, SIGNED_URL_TTL_SECONDS)
 
   if (error) {
     console.error('Error creating signed URL:', error)
     throw new Error('Failed to get receipt URL')
   }
 
+  signedUrlCache.set(path, { url: data.signedUrl, expiresAt: Date.now() + SIGNED_URL_CACHE_TTL_MS })
   return data.signedUrl
 }

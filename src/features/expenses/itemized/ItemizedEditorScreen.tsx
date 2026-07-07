@@ -24,6 +24,8 @@ export interface ItemizedEditorScreenProps {
     totalMajor: number
   }) => void | Promise<void>
   isSaving?: boolean
+  /** True when a receipt WAS parsed but came back with zero line items -- the UI must say so rather than silently showing one blank row as if nothing had been attempted (Form & Flow Standard: no dead-empty states). */
+  noItemsParsedNotice?: boolean
 }
 
 /**
@@ -32,7 +34,7 @@ export interface ItemizedEditorScreenProps {
  * (subtotal + this line's proportional share of tax/service, matching
  * the money module's exact-sum guarantee) on save.
  */
-export function ItemizedEditorScreen({ initialDraft, onBack, onSave, isSaving }: ItemizedEditorScreenProps) {
+export function ItemizedEditorScreen({ initialDraft, onBack, onSave, isSaving, noItemsParsedNotice }: ItemizedEditorScreenProps) {
   const [draft, setDraft] = useState<ItemizedDraft>(initialDraft)
   const [tab, setTab] = useState<'items' | 'adjustments'>('items')
 
@@ -58,6 +60,11 @@ export function ItemizedEditorScreen({ initialDraft, onBack, onSave, isSaving }:
 
   return (
     <div className="space-y-4">
+      {noItemsParsedNotice && (
+        <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300">
+          No line items were read from this receipt — add them manually below, or go back and re-scan.
+        </div>
+      )}
       <Tabs value={tab} onChange={(v) => setTab(v as 'items' | 'adjustments')}>
         <Tabs.List>
           <Tabs.Tab value="items">Line items</Tabs.Tab>

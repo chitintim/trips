@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Modal } from '../../../components/ui'
 import { getReceiptUrl } from '../../../lib/receiptUpload'
+import { ReceiptLightbox } from '../components/ReceiptLightbox'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 
 export interface ReceiptGalleryProps {
@@ -24,7 +24,13 @@ export function ReceiptGallery({ expenses }: ReceiptGalleryProps) {
         ))}
       </div>
 
-      {lightboxExpense && <ReceiptLightbox expense={lightboxExpense} onClose={() => setLightboxExpense(null)} />}
+      {lightboxExpense && (
+        <ReceiptLightbox
+          path={lightboxExpense.receipt_url!}
+          title={lightboxExpense.description}
+          onClose={() => setLightboxExpense(null)}
+        />
+      )}
     </>
   )
 }
@@ -58,21 +64,3 @@ function ReceiptThumbnail({ expense, onClick }: { expense: ExpenseWithDetails; o
   )
 }
 
-function ReceiptLightbox({ expense, onClose }: { expense: ExpenseWithDetails; onClose: () => void }) {
-  const [url, setUrl] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!expense.receipt_url) return
-    getReceiptUrl(expense.receipt_url).then(setUrl).catch(() => {})
-  }, [expense.receipt_url])
-
-  return (
-    <Modal isOpen onClose={onClose} title={expense.description} size="lg">
-      {url ? (
-        <img src={url} alt={expense.description} className="w-full h-auto rounded-[var(--radius-md)]" />
-      ) : (
-        <div className="aspect-square animate-pulse bg-[var(--surface-sunken)] rounded-[var(--radius-md)]" />
-      )}
-    </Modal>
-  )
-}

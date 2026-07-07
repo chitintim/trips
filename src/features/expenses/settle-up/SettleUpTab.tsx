@@ -10,6 +10,7 @@ import {
   useUpdateSettlementStatus,
   useFinalizeSettlementSnapshot,
   useCreateSettlementCarryover,
+  useDeleteSettlement,
 } from '../../../lib/queries/useSettlements'
 import { useLogActivity } from '../../../lib/queries/useActivityFeed'
 import { useTripActivityLog } from '../../organizer/lib/activity'
@@ -43,11 +44,13 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const updateStatus = useUpdateSettlementStatus(trip.id)
   const finalizeSnapshot = useFinalizeSettlementSnapshot(trip.id)
   const createCarryover = useCreateSettlementCarryover(trip.id)
+  const deleteSettlement = useDeleteSettlement(trip.id)
   const logActivity = useLogActivity(trip.id)
   const logTypedActivity = useTripActivityLog(trip.id)
 
   const [simplify, setSimplify] = useState(true)
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false)
+  const [isFreezing, setIsFreezing] = useState(false)
   const { data: carryoverCandidates = [] } = useCarryoverCandidates(trip.id, user?.id)
 
   const expenses = expensesData?.expenses ?? []
@@ -66,25 +69,43 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
 
   const handleFreeze = async () => {
     if (!user) return
-    const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), trip.base_currency)
-    const balancesMinor = new Map(balances.map((b) => [b.userId, b.netBalanceMinor]))
-    const snapshot = buildSnapshot(suggested, people, balancesMinor, trip.base_currency)
+    setIsFreezing(true)
+    try {
+      const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), trip.base_currency)
+      const balancesMinor = new Map(balances.map((b) => [b.userId, b.netBalanceMinor]))
+      const snapshot = buildSnapshot(suggested, people, balancesMinor, trip.base_currency)
 
-    await finalizeSnapshot.mutateAsync({ snapshotData: snapshot, snapshotBy: user.id })
-    await logActivity.mutateAsync({ actor: user.id, verb: 'froze_settlement', entity: { trip_id: trip.id }, metadata: { transaction_count: snapshot.transactions.length } })
+      await finalizeSnapshot.mutateAsync({ snapshotData: snapshot, snapshotBy: user.id })
+      await logActivity.mutateAsync({ actor: user.id, verb: 'froze_settlement', entity: { trip_id: trip.id }, metadata: { transaction_count: snapshot.transactions.length } })
 
-    for (const t of suggested) {
-      await recordSettlement.mutateAsync({
-        from_user_id: t.from,
-        to_user_id: t.to,
-        amount: t.amount,
-        currency: trip.base_currency,
-        status: 'suggested',
-        created_by: user.id,
-        settled_at: new Date().toISOString(),
-      })
+      // Clear any previously suggested (never acted on) settlements first --
+      // an unfreeze -> edit expenses -> freeze-again cycle used to insert a
+      // second batch of 'suggested' rows alongside the stale first batch,
+      // both rendered in the list below with no way to tell them apart.
+      // marked_paid/confirmed rows are real payment history and are never
+      // touched here.
+      const staleSuggested = settlements.filter((s) => s.status === 'suggested')
+      for (const s of staleSuggested) {
+        await deleteSettlement.mutateAsync(s.id)
+      }
+
+      for (const t of suggested) {
+        await recordSettlement.mutateAsync({
+          from_user_id: t.from,
+          to_user_id: t.to,
+          amount: t.amount,
+          currency: trip.base_currency,
+          status: 'suggested',
+          created_by: user.id,
+          settled_at: new Date().toISOString(),
+        })
+      }
+      showToast({ type: 'success', message: 'Balances frozen — suggested payments created' })
+    } catch (err) {
+      showToast({ type: 'error', message: 'Failed to freeze balances', description: err instanceof Error ? err.message : undefined })
+    } finally {
+      setIsFreezing(false)
     }
-    showToast({ type: 'success', message: 'Balances frozen — suggested payments created' })
   }
 
   const handleUnfreeze = async () => {
@@ -167,7 +188,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
               ]}
             />
           </div>
-          <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0}>
+          <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing} isLoading={isFreezing}>
             Freeze balances & suggest payments
           </Button>
         </Card>

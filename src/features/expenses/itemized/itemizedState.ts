@@ -5,6 +5,7 @@
  */
 import type { LineItem, ReceiptParseResult } from '../../../shared/contracts/receiptParseResult'
 import type { AdjustmentsConfig, AdjustmentMode } from '../lib/adjustmentDistribution'
+import { toMinorUnits } from '../../../lib/money'
 
 export interface ItemizedLineItemDraft {
   lineNumber: number
@@ -84,6 +85,59 @@ export function fromReceiptParseResult(receipt: ReceiptParseResult): ItemizedDra
       discountMinor: 0,
     },
     printedTotal: String(receipt.total),
+  }
+}
+
+export interface StoredLineItem {
+  line_number: number
+  name_original: string
+  name_english: string | null
+  quantity: number
+  unit_price: number
+  subtotal: number
+  tax_amount: number | null
+  service_amount: number | null
+}
+
+/**
+ * Re-seeds an ItemizedDraft from ALREADY-SAVED expense_line_items rows (edit
+ * mode on an existing itemized expense) -- the counterpart to
+ * fromReceiptParseResult for expenses that didn't come from (or are past)
+ * the initial parse. The per-line printed_field/inclusive-vs-exclusive
+ * provenance isn't persisted at the DB row level, so tax/service mode is
+ * approximated from the ratio of stored tax_amount/service_amount to
+ * subtotal (close enough for the adjustments panel to show something
+ * sensible rather than silently resetting to "none" on every re-edit).
+ */
+export function fromExpenseLineItems(lineItems: StoredLineItem[], currency: string): ItemizedDraft {
+  if (lineItems.length === 0) return emptyItemizedDraft(currency)
+
+  const subtotalMinor = lineItems.reduce((sum, l) => sum + toMinorUnits(l.subtotal, currency), 0)
+  const taxMinor = lineItems.reduce((sum, l) => sum + toMinorUnits(l.tax_amount ?? 0, currency), 0)
+  const serviceMinor = lineItems.reduce((sum, l) => sum + toMinorUnits(l.service_amount ?? 0, currency), 0)
+  const percentOf = (partMinor: number) => (subtotalMinor > 0 ? Math.round((partMinor / subtotalMinor) * 10000) / 100 : 0)
+
+  return {
+    vendorName: '',
+    currency,
+    lineItems: [...lineItems]
+      .sort((a, b) => a.line_number - b.line_number)
+      .map((li) => ({
+        lineNumber: li.line_number,
+        nameOriginal: li.name_original,
+        nameEnglish: li.name_english ?? '',
+        quantity: String(li.quantity),
+        unitPrice: String(li.unit_price),
+        lineTotal: String(li.subtotal),
+        printedField: 'both' as const,
+      })),
+    adjustments: {
+      tax: { mode: taxMinor > 0 ? 'added_on_top' : 'none', percent: percentOf(taxMinor) },
+      service: { mode: serviceMinor > 0 ? 'added_on_top' : 'none', percent: percentOf(serviceMinor) },
+      tipMinor: 0,
+      discountMinor: 0,
+    },
+    printedTotal: '',
   }
 }
 

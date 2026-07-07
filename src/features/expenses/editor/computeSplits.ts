@@ -138,6 +138,38 @@ export function validateSplitSum(
 }
 
 /**
+ * Fresh, mode-appropriate default entries for a JUST-selected split mode
+ * (Form & Flow Standard: switching methods must reset/derive that method's
+ * inputs sensibly, never carry raw values across semantics). Fixes the bug
+ * where switching to Percentage showed each participant's percentage
+ * defaulted to the raw item-total amount (e.g. 4200 for a ¥4200 expense) --
+ * a leftover from a previous mode's (or the seeded record's) raw value
+ * being reused verbatim because nothing reset `splitEntries` on mode
+ * change. Called by the split step's mode-change handler; NOT called on
+ * initial mount so a user's own in-progress entries for the mode they're
+ * already on are never clobbered.
+ */
+export function defaultEntriesForSplitMode(mode: SplitMode, participantIds: string[]): SplitEntry[] {
+  if (participantIds.length === 0) return []
+
+  if (mode === 'percentage') {
+    // Equal 100% split, largest-remainder so it sums to EXACTLY 100.00
+    // regardless of participant count (33.33/33.33/33.34, never 99.99).
+    const hundredthsOfPercent = largestRemainderDistribute(10000, participantIds.map(() => 1))
+    return participantIds.map((userId, i) => ({ userId, value: (hundredthsOfPercent[i] / 100).toFixed(2) }))
+  }
+
+  if (mode === 'shares') {
+    return participantIds.map((userId) => ({ userId, value: '1' }))
+  }
+
+  // custom / equal / itemized: no raw value carries a sensible cross-mode
+  // meaning, so start blank (equal/itemized don't read entries at all;
+  // custom wants the user's own exact numbers, not something inherited).
+  return participantIds.map((userId) => ({ userId, value: '' }))
+}
+
+/**
  * One-tap "weight by nights present" (plan §10, accommodation only):
  * computes nights-based share entries for the given participants, ready to
  * drop straight into split mode 'shares'.

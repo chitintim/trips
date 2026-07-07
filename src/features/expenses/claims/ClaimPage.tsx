@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { Card, Button, Badge, Spinner, EmptyState } from '../../../components/ui'
+import { Card, Button, Badge, Spinner, EmptyState, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useSaveItemClaims } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
@@ -8,6 +8,7 @@ import { formatMoney } from '../lib/formatMoney'
 import { useClaimLink, useClaimRealtime } from './useClaimData'
 import { summarizeLineClaims, summarizeOverallProgress, maxClaimableQuantity, amountOwedForQuantity } from './claimMath'
 import { ClaimMatrix } from './ClaimMatrix'
+import { ReceiptLightbox } from '../components/ReceiptLightbox'
 
 /**
  * Claims v2 (plan §10 #4): tap items you had, quantity steppers (decimal --
@@ -22,6 +23,7 @@ export function ClaimPage() {
   const { data: resolution, isLoading, error } = useClaimLink(code)
   const { data: participants = [] } = useParticipants(resolution?.tripId)
   const saveClaims = useSaveItemClaims()
+  const { showToast } = useToast()
 
   const currentUserName = participants.find((p) => p.user_id === user?.id)?.user.full_name || user?.email || 'Someone'
   const { broadcastSelection } = useClaimRealtime(resolution?.expense.id, user?.id, currentUserName)
@@ -29,6 +31,7 @@ export function ClaimPage() {
   const [localSelections, setLocalSelections] = useState<Record<string, number>>({})
   const [initialized, setInitialized] = useState(false)
   const [organizerView, setOrganizerView] = useState(false)
+  const [showReceiptLightbox, setShowReceiptLightbox] = useState(false)
 
   useEffect(() => {
     if (!resolution || !user || initialized) return
@@ -81,7 +84,7 @@ export function ClaimPage() {
     const payload: Record<string, { lineItemId: string; quantity: number; amount: number }> = {}
     for (const [id, qty] of Object.entries(next)) {
       const li = lineItems.find((l) => l.id === id)
-      if (li && qty > 0) payload[id] = { lineItemId: id, quantity: qty, amount: amountOwedForQuantity(li, qty) }
+      if (li && qty > 0) payload[id] = { lineItemId: id, quantity: qty, amount: amountOwedForQuantity(li, qty, expense.currency) }
     }
     broadcastSelection(payload)
   }
@@ -92,22 +95,34 @@ export function ClaimPage() {
       .filter(([, qty]) => qty > 0)
       .map(([lineItemId, qty]) => {
         const li = lineItems.find((l) => l.id === lineItemId)!
-        return { line_item_id: lineItemId, quantity_claimed: qty, amount_owed: amountOwedForQuantity(li, qty) }
+        return { line_item_id: lineItemId, quantity_claimed: qty, amount_owed: amountOwedForQuantity(li, qty, expense.currency) }
       })
-    await saveClaims.mutateAsync({ expenseId: expense.id, userId: user.id, claims })
+    try {
+      await saveClaims.mutateAsync({ expenseId: expense.id, userId: user.id, claims })
+      showToast({ type: 'success', message: 'Your claims are saved' })
+    } catch (err) {
+      showToast({ type: 'error', message: 'Failed to save your claims', description: err instanceof Error ? err.message : undefined })
+    }
   }
 
   const myTotal = Object.entries(localSelections).reduce((sum, [lineItemId, qty]) => {
     const li = lineItems.find((l) => l.id === lineItemId)
-    return li ? sum + amountOwedForQuantity(li, qty) : sum
+    return li ? sum + amountOwedForQuantity(li, qty, expense.currency) : sum
   }, 0)
 
   return (
     <div className="min-h-screen bg-[var(--surface-page)] pb-24">
       <div className="max-w-lg mx-auto px-4 py-6 space-y-4">
-        <div>
-          <h1 className="text-xl font-bold text-[var(--text-primary)]">{expense.vendor_name || expense.description}</h1>
-          <p className="text-sm text-[var(--text-secondary)]">{expense.payment_date} · Total {formatMoney(expense.amount, expense.currency)}</p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-bold text-[var(--text-primary)]">{expense.vendor_name || expense.description}</h1>
+            <p className="text-sm text-[var(--text-secondary)]">{expense.payment_date} · Total {formatMoney(expense.amount, expense.currency)}</p>
+          </div>
+          {expense.receipt_url && (
+            <Button variant="ghost" size="sm" onClick={() => setShowReceiptLightbox(true)} className="shrink-0">
+              📄 View receipt
+            </Button>
+          )}
         </div>
 
         {overallProgress.isFullyAllocated && (
@@ -173,7 +188,7 @@ export function ClaimPage() {
                     </div>
                     {myQty > 0 && (
                       <p className="text-xs text-accent-700 dark:text-accent-400 font-medium mt-1.5">
-                        You: {myQty}/{li.quantity} — {formatMoney(amountOwedForQuantity(li, myQty), expense.currency)}
+                        You: {myQty}/{li.quantity} — {formatMoney(amountOwedForQuantity(li, myQty, expense.currency), expense.currency)}
                       </p>
                     )}
                   </Card>
@@ -197,6 +212,10 @@ export function ClaimPage() {
           </>
         )}
       </div>
+
+      {showReceiptLightbox && expense.receipt_url && (
+        <ReceiptLightbox path={expense.receipt_url} title={expense.vendor_name || expense.description} onClose={() => setShowReceiptLightbox(false)} />
+      )}
     </div>
   )
 }

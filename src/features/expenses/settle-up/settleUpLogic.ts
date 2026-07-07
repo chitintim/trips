@@ -8,6 +8,11 @@
  */
 import { minimizeTransactions, getUserTransactions, type Person, type Transaction } from '../../../lib/debtMinimization'
 import { fromMinorUnits } from '../../../lib/money'
+
+/** Matches computeBalances' BALANCE_EPSILON_MINOR=1 threshold, currency-aware (0.01 for GBP/USD/EUR, 1 for JPY, 0.001 for BHD/KWD/JOD/OMR) -- see the doc comment on minimizeTransactions' `epsilon` param for why a hardcoded 0.01 was wrong. */
+function balanceEpsilonMajor(currency: string): number {
+  return fromMinorUnits(1, currency)
+}
 import { computeBalances } from '../lib/balances'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementSnapshot } from '../../../lib/queries/useSettlements'
@@ -47,6 +52,8 @@ export function computeSuggestedPayments(
     }
   })
 
+  const epsilon = balanceEpsilonMajor(baseCurrency)
+
   if (!simplify) {
     // Direct (non-minimized) pairing: still uses the same greedy algorithm
     // since without simplification "direct" settlement in a group context
@@ -56,10 +63,10 @@ export function computeSuggestedPayments(
     // baseline either way, with `simplify` primarily gating whether the UI
     // presents it as "the" plan or an optional suggestion. This keeps the
     // n-1 payments guarantee (plan §12) regardless of the toggle.
-    return minimizeTransactions(personInputs)
+    return minimizeTransactions(personInputs, epsilon)
   }
 
-  return minimizeTransactions(personInputs)
+  return minimizeTransactions(personInputs, epsilon)
 }
 
 export function getMyTransactions(allTransactions: Transaction[], userId: string) {

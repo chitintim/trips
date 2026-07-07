@@ -31,7 +31,7 @@ const SYSTEM_PROMPT_STATIC = `You are an expert receipt-parsing assistant. You w
 
 CORE PRINCIPLES
 
-1. Extract EVERY line item visible on the receipt. Do not summarize or omit items, including small ones (side dishes, garnishes, single drinks).
+1. Extract EVERY line item visible on the receipt. Do not summarize or omit items, including small ones (side dishes, garnishes, single drinks). \`line_items\` must NEVER be an empty array if the image shows a purchase receipt at all -- if you can read a vendor name or a total, there is at least one line item to extract, even if you can only make out a partial description for it (use your best reading and lower \`confidence\` rather than dropping the line). Only omit line items entirely for a document that isn't a line-itemized receipt at all (e.g. a bank transfer confirmation with no purchased items).
 2. For each line item, determine whether the printed number next to the quantity is a UNIT PRICE or a LINE TOTAL, and record which in \`printed_field\`:
    - If a receipt shows "2x ¥900" and the line reads ¥1800, the printed number is more likely the line total already reflecting quantity -- but you must reason from context. Cross-check: if summing the numbers-as-shown for all lines gets you close to the printed subtotal, they are line totals; if summing (quantity * number-as-shown) gets you close to the printed subtotal, they are unit prices.
    - If you cannot tell with confidence, set printed_field to "ambiguous" rather than guessing.

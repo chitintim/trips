@@ -109,6 +109,11 @@ export const ReceiptParseResultJsonSchema = {
       currency: { type: 'string', pattern: '^[A-Z]{3}$' },
       line_items: {
         type: 'array',
+        // NOTE: do NOT add minItems here — Claude structured outputs reject
+        // array constraints (same 400 family as minimum/exclusiveMinimum).
+        // Non-empty itemization is driven by the system prompt
+        // (supabase/functions/parse-receipt/index.ts) and the client shows an
+        // honest empty-state banner when a receipt yields zero items.
         items: {
           type: 'object',
           additionalProperties: false,

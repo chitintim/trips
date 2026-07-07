@@ -1,4 +1,17 @@
 import { supabase } from './supabase'
+import type { ReceiptParseResult } from '../shared/contracts/receiptParseResult'
+
+/**
+ * Minimal client-side mirror of supabase/functions/_shared/receiptReconciliation.ts's
+ * ReconciliationResult -- only the fields the UI reads. Not imported
+ * directly: that module lives in the Deno edge-function runtime (different
+ * module resolution) and is out of bounds for the Vite/browser build (same
+ * pattern as src/features/chat/lib/autoApply.ts's AutoApplyReconciliation).
+ */
+export interface ClientReconciliationResult {
+  reconciled: boolean
+  explanation: string
+}
 
 export interface ParsedReceiptData {
   vendor_name: string
@@ -30,6 +43,19 @@ export interface ParsedReceiptData {
   }>
   total_matches: boolean
   calculation_notes?: string
+  /**
+   * v2 addition (parse-receipt rewrite, see supabase/functions/parse-receipt/index.ts
+   * `toLegacyShape`): the edge function ALWAYS includes this alongside the
+   * legacy flat fields above -- it's the source of truth for itemization
+   * (per-line printed_field, discounts, tax/service provenance) that the
+   * legacy `line_items` shape above lossily flattens away. Consumers that
+   * itemize (quick-capture "refine" -> itemized editor) should prefer this
+   * over the legacy `line_items` field.
+   */
+  v2?: {
+    receipt: ReceiptParseResult
+    reconciliation: ClientReconciliationResult
+  }
 }
 
 /**

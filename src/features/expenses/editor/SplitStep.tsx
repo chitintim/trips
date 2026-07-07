@@ -1,5 +1,5 @@
 import { SegmentedControl, Input, Button, Badge, UserAvatar } from '../../../components/ui'
-import { computeSplits, validateSplitSum, computeNightsWeightSplitEntries } from './computeSplits'
+import { computeSplits, validateSplitSum, computeNightsWeightSplitEntries, defaultEntriesForSplitMode } from './computeSplits'
 import { formatMoney } from '../lib/formatMoney'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { TimelineEvent } from '../../../types'
@@ -14,6 +14,10 @@ export interface SplitStepProps {
   tripStartDate: string
   tripEndDate: string
   onGoToItemized: () => void
+  /** Edit mode only: signals that the CURRENT record already has itemized data, so switching away needs the claims guard below. */
+  existingItemizedInfo?: { lineItemCount: number; claimCount: number }
+  /** Called instead of switching when the user tries to leave itemized mode but items have already been claimed. */
+  onItemizedSwitchBlocked?: () => void
 }
 
 const SPLIT_MODE_OPTIONS: Array<{ value: SplitMode; label: string }> = [
@@ -38,6 +42,8 @@ export function SplitStep({
   tripStartDate,
   tripEndDate,
   onGoToItemized,
+  existingItemizedInfo,
+  onItemizedSwitchBlocked,
 }: SplitStepProps) {
   const activeParticipants = participants.filter((p) => draft.participantIds.includes(p.user_id))
   const amountMajor = parseFloat(draft.amount) || 0
@@ -49,14 +55,41 @@ export function SplitStep({
     onChange({ splitEntries: next })
   }
 
-  const entryValue = (userId: string): string => draft.splitEntries.find((e) => e.userId === userId)?.value ?? ''
+  // Sensible per-mode display defaults for participants with no entry yet
+  // (e.g. just tagged in after a mode switch) -- mirrors computeSplits'
+  // own fallback (shares defaults an unset weight to 1) so what's shown
+  // always matches what would actually be charged.
+  const entryValue = (userId: string): string => {
+    const existing = draft.splitEntries.find((e) => e.userId === userId)?.value
+    if (existing !== undefined) return existing
+    if (draft.splitMode === 'percentage') return '0'
+    if (draft.splitMode === 'shares') return '1'
+    return ''
+  }
 
   const handleModeChange = (mode: SplitMode) => {
+    // Itemized always navigates (even if already the active mode -- e.g.
+    // the user hit "Back" from the itemized screen and wants to return to
+    // it); every OTHER mode is a no-op when it's already selected, so it
+    // never re-derives (and thereby clobbers) the user's own in-progress
+    // entries for the mode they're already on.
     if (mode === 'itemized') {
       onGoToItemized()
       return
     }
-    onChange({ splitMode: mode })
+    if (mode === draft.splitMode) return
+    // Leaving itemized in edit mode: refuse if items have already been
+    // claimed (claims reference line items that are about to be deleted --
+    // silently discarding people's claims would be a correctness bug, not
+    // just an inconvenience).
+    if (draft.splitMode === 'itemized' && existingItemizedInfo && existingItemizedInfo.claimCount > 0) {
+      onItemizedSwitchBlocked?.()
+      return
+    }
+    // Fresh, mode-appropriate defaults -- never carry a previous mode's (or
+    // the seeded record's) raw values across semantics (e.g. percentage
+    // must never inherit a leftover dollar amount).
+    onChange({ splitMode: mode, splitEntries: defaultEntriesForSplitMode(mode, draft.participantIds), nightsWeightingApplied: false })
   }
 
   const applyNightsWeighting = () => {

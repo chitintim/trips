@@ -357,6 +357,132 @@ export function useCreateItemizedExpense(tripId: string) {
 }
 
 /**
+ * Convert an EXISTING expense to (or re-edit an already-itemized expense's)
+ * itemized split: UPDATEs the expense row in place -- never inserts a new
+ * one (that was the bug: the itemized save path always called
+ * useCreateItemizedExpense's INSERT regardless of edit mode, so editing an
+ * expense and switching it to itemized silently created a duplicate
+ * expense instead of converting the one being edited). Also used to
+ * re-save an already-itemized expense's line items (e.g. editing a
+ * previously-parsed receipt again) -- in that case any existing claims are
+ * deleted first, since they reference line_item_id rows that are about to
+ * be replaced (the caller is expected to have warned the user via the
+ * split-step's claims guard before reaching this point; this is the
+ * defensive backstop, not the primary UX).
+ */
+export function useConvertToItemizedExpense(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      expenseId,
+      expense,
+      lineItems,
+      allocationCode,
+      createdBy,
+    }: {
+      expenseId: string
+      expense: ExpenseUpdate
+      lineItems: Omit<TablesInsert<'expense_line_items'>, 'expense_id'>[]
+      allocationCode: string
+      createdBy: string
+    }) => {
+      const { error: updateError } = await supabase.from('expenses').update(expense).eq('id', expenseId)
+      if (updateError) throw updateError
+
+      // Itemized expenses own their split via line items + claims, not
+      // expense_splits -- clear any rows left from a prior equal/custom/
+      // percentage/shares split (no-op if there were none).
+      const { error: delSplitsError } = await supabase.from('expense_splits').delete().eq('expense_id', expenseId)
+      if (delSplitsError) throw delSplitsError
+
+      const { error: delClaimsError } = await supabase.from('expense_item_claims').delete().eq('expense_id', expenseId)
+      if (delClaimsError) throw delClaimsError
+
+      const { error: delLineItemsError } = await supabase.from('expense_line_items').delete().eq('expense_id', expenseId)
+      if (delLineItemsError) throw delLineItemsError
+
+      if (lineItems.length > 0) {
+        const rows: TablesInsert<'expense_line_items'>[] = lineItems.map((item) => ({ expense_id: expenseId, ...item }))
+        const { error: lineItemsError } = await supabase.from('expense_line_items').insert(rows)
+        if (lineItemsError) throw lineItemsError
+      }
+
+      // Reuse the existing allocation link/share-code if one's already
+      // out there (re-edit case) rather than minting a second one.
+      const { data: existingLink, error: linkFetchError } = await supabase
+        .from('expense_allocation_links')
+        .select('*')
+        .eq('expense_id', expenseId)
+        .maybeSingle()
+      if (linkFetchError) throw linkFetchError
+
+      if (!existingLink) {
+        const { error: linkError } = await supabase.from('expense_allocation_links').insert({
+          expense_id: expenseId,
+          trip_id: tripId,
+          code: allocationCode,
+          expires_at: null,
+          created_by: createdBy,
+        })
+        if (linkError) throw linkError
+      }
+
+      return { id: expenseId, code: existingLink?.code ?? allocationCode }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+  })
+}
+
+/**
+ * Reverse of the above: convert an itemized expense BACK to a regular
+ * equal/custom/percentage/shares split. Refuses (throws, so the caller's
+ * toast surfaces it) if any items have already been claimed -- silently
+ * discarding people's claims would be a correctness bug. The UI is
+ * expected to gate this earlier (SplitStep's mode-change guard) so this is
+ * the defensive last line, e.g. against a claim landing via the public
+ * claim-link page in the moment between the guard check and save.
+ */
+export function useConvertFromItemizedExpense(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      expenseId,
+      expense,
+      splits,
+    }: {
+      expenseId: string
+      expense: ExpenseUpdate
+      splits: SplitRow[]
+    }) => {
+      const { data: existingClaims, error: claimsCheckError } = await supabase
+        .from('expense_item_claims')
+        .select('id')
+        .eq('expense_id', expenseId)
+        .limit(1)
+      if (claimsCheckError) throw claimsCheckError
+      if (existingClaims && existingClaims.length > 0) {
+        throw new Error('Items on this expense have already been claimed — remove those claims before switching off itemized split.')
+      }
+
+      const { error: updateError } = await supabase.from('expenses').update(expense).eq('id', expenseId)
+      if (updateError) throw updateError
+
+      const { error: linkDelError } = await supabase.from('expense_allocation_links').delete().eq('expense_id', expenseId)
+      if (linkDelError) throw linkDelError
+      const { error: lineItemsDelError } = await supabase.from('expense_line_items').delete().eq('expense_id', expenseId)
+      if (lineItemsDelError) throw lineItemsDelError
+
+      if (splits.length > 0) {
+        const rows: TablesInsert<'expense_splits'>[] = splits.map((s) => ({ expense_id: expenseId, ...s }))
+        const { error: splitsError } = await supabase.from('expense_splits').upsert(rows, { onConflict: 'expense_id,user_id' })
+        if (splitsError) throw splitsError
+      }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+  })
+}
+
+/**
  * Save a claimer's item claims on the public claim-link page: replace
  * their existing claims for this expense, then recompute + persist the
  * expense's allocation status ('allocated' when every item is fully
@@ -408,6 +534,14 @@ export function useSaveItemClaims() {
     onSuccess: (_data, vars) => {
       queryClient.invalidateQueries({ queryKey: ['expenseClaims', vars.expenseId] })
       queryClient.invalidateQueries({ queryKey: ['expense', vars.expenseId] })
+      // ClaimPage/ClaimMatrix actually read from useClaimLink's
+      // ['claimLink', code] cache, not ['expense', ...] -- without this,
+      // a user's OWN successful save only refreshed their own screen's
+      // available/maxQty numbers via the realtime postgres_changes
+      // side-channel (useClaimData.ts), which is fragile if realtime lags
+      // or is briefly disconnected. Partial key match invalidates every
+      // ['claimLink', *] entry (we don't have the share code here).
+      queryClient.invalidateQueries({ queryKey: ['claimLink'] })
     },
   })
 }

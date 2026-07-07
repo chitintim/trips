@@ -104,6 +104,21 @@ test.describe('unauthenticated smoke', () => {
     }
   })
 
+  test('join teaser with an invalid code shows a friendly error, no crash', async ({ page }) => {
+    // /join/:code is PUBLIC (pre-signup teaser). An invalid/unknown code must
+    // land on the friendly dead-end — never a blank screen or an uncaught
+    // error. (Console noise from the failed preview lookup is acceptable;
+    // pageerror — an actual crash — is not.)
+    const crashes: string[] = []
+    page.on('pageerror', (err) => crashes.push(err.message))
+
+    await page.goto('/trips/join/NOT-A-REAL-CODE')
+    await expect(page.getByRole('heading', { name: /invitation link isn't valid/i })).toBeVisible()
+    // Escape hatches are offered.
+    await expect(page.getByRole('link', { name: /sign in/i })).toBeVisible()
+    expect(crashes, `uncaught page errors: ${crashes.join('\n')}`).toEqual([])
+  })
+
   test('forgot-password and signup pages render without console errors', async ({ page }) => {
     for (const path of ['/trips/forgot-password', '/trips/signup']) {
       const errors = trackConsoleErrors(page)

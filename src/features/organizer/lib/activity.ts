@@ -35,6 +35,7 @@ export type ActivityVerb =
   | 'checklist_completed'
   | 'nudge_drafted'
   | 'chase_settings_updated'
+  | 'status_changed'
   | 'participant_joined'
 
 export interface ActivityEntity {
@@ -103,6 +104,7 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   checklist_completed: { icon: '✅', phrase: (e) => `ticked off${e ? ` "${e}"` : ' a checklist item'}` },
   nudge_drafted: { icon: '👋', phrase: (e) => `nudged${e ? ` ${e}` : ' someone'}` },
   chase_settings_updated: { icon: '⚙️', phrase: () => 'updated auto-chase settings' },
+  status_changed: { icon: '🚦', phrase: (e) => `moved the trip${e ? ` to "${e}"` : ' forward'}` },
   participant_joined: { icon: '🎉', phrase: (e) => `joined the trip${e ? ` as ${e}` : ''}` },
 }
 

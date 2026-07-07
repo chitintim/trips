@@ -1,11 +1,11 @@
-import { Suspense, useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
-import { Button, Card, Spinner, EmptyState, Tabs, Skeleton } from '../components/ui'
+import { Button, Card, Spinner, EmptyState, Tabs, Skeleton, Modal } from '../components/ui'
 import { CreateTripModal, AddParticipantModal } from '../components'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { AppShell, StageRail, NeedsAttentionStrip, QuickActionsSheet } from '../components/layout'
-import type { AppShellTabItem, QuickAction } from '../components/layout'
+import { AppShell, StageRail, NeedsAttentionStrip } from '../components/layout'
+import type { AppShellTabItem } from '../components/layout'
 import { getTripAccentStyle } from '../components/layout/tripAccent'
 import { useTrip, useParticipants, useCurrentUserRow } from '../lib/queries/useTrip'
 import { useTripRealtime } from '../lib/queries/useTripRealtime'
@@ -14,78 +14,52 @@ import { useExpenses } from '../lib/queries/useExpenses'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queries/queryKeys'
 import { getTripStatusLabel } from '../lib/tripStatus'
-import type { Trip, TripStatus } from '../types'
+import { effectiveTripStage } from '../lib/tripStage'
+import type { Trip } from '../types'
 
-import { briefTabConfig } from '../features/brief'
-import { peopleTabConfig } from '../features/people'
-import { decisionsTabConfig } from '../features/decisions'
-import { timelineTabConfig, OPEN_QUICK_CAPTURE_EVENT, EventEditorSheet } from '../features/timeline'
-import { tripMapTabConfig } from '../features/places'
-import { notesTabConfig } from '../features/notes'
-import { checklistTabConfig } from '../features/checklists'
-import { organizerTabConfig } from '../features/organizer'
+import { todayTabConfig } from '../features/today'
+import { planTabConfig, AddToPlanSheet } from '../features/plan'
+import { peopleTabConfig, StatusModal, TravelDetailsSheet } from '../features/people'
+import { OPEN_QUICK_CAPTURE_EVENT } from '../features/timeline'
+import { OrganizerConsole } from '../features/organizer'
 import { retroConfig } from '../features/retrospective'
 import { chatEntryConfig, LazyChatSheet } from '../features/chat'
 import { EXPENSE_TAB_CONFIGS, QuickCaptureSheet } from '../features/expenses'
 
 /**
- * Trip tab registry: one source of truth, assembled from each feature's
- * exported tab config (per UPGRADE_MASTER_PLAN §5/§6). "Money" is a hub
- * entry — its content renders the three EXPENSE_TAB_CONFIGS as inner tabs
- * rather than being one of them directly. Stage/role filtering happens in
- * `useTripTabs` below, not here.
+ * v2.1 navigation (UX_REDESIGN.md): four spaces only — Today · Plan ·
+ * Money · People — plus a context-aware FAB. The in-page tab strip is GONE;
+ * the mobile bottom bar holds exactly the four spaces, the desktop sidebar
+ * adds Console (organizers). Console, Recap and Chat are launched surfaces
+ * (sheets), not tabs.
  */
-interface TabEntry {
-  tabId: string
-  label: string
-  icon: string
-  organizerOnly?: boolean
-  /** Only present for stage-gated tabs (currently just Recap). */
-  showWhen?: (trip: Pick<Trip, 'status'>) => boolean
+type SpaceId = 'today' | 'plan' | 'money' | 'people'
+
+const SPACE_IDS: SpaceId[] = ['today', 'plan', 'money', 'people']
+
+const SPACE_META: Record<SpaceId, { label: string; icon: string }> = {
+  today: { label: todayTabConfig.label, icon: todayTabConfig.icon },
+  plan: { label: planTabConfig.label, icon: planTabConfig.icon },
+  money: { label: 'Money', icon: '💰' },
+  people: { label: peopleTabConfig.label, icon: peopleTabConfig.icon },
 }
 
-const MONEY_TAB: TabEntry = { tabId: 'money', label: 'Money', icon: '💰' }
-
-const BASE_TAB_ENTRIES: TabEntry[] = [
-  { tabId: briefTabConfig.tabId, label: 'Home', icon: briefTabConfig.icon },
-  { tabId: peopleTabConfig.tabId, label: peopleTabConfig.label, icon: peopleTabConfig.icon },
-  { tabId: decisionsTabConfig.tabId, label: 'Plan', icon: decisionsTabConfig.icon },
-  { tabId: timelineTabConfig.tabId, label: timelineTabConfig.label, icon: timelineTabConfig.icon },
-  MONEY_TAB,
-  { tabId: tripMapTabConfig.tabId, label: tripMapTabConfig.label, icon: tripMapTabConfig.icon },
-  { tabId: notesTabConfig.tabId, label: notesTabConfig.label, icon: notesTabConfig.icon },
-  { tabId: checklistTabConfig.tabId, label: checklistTabConfig.label, icon: checklistTabConfig.icon },
-  { tabId: organizerTabConfig.tabId, label: organizerTabConfig.label, icon: organizerTabConfig.icon, organizerOnly: true },
-  { tabId: retroConfig.tabId, label: retroConfig.label, icon: retroConfig.icon, showWhen: retroConfig.showWhen },
-]
-
-/** The 4 shell bottom-bar / sidebar-priority slots (plan §5: 4 tabs + FAB). */
-const SHELL_SLOT_IDS = ['brief', 'decisions', 'timeline', 'money']
-
-/**
- * Stage-aware default tab (ports the legacy auto-select intent from the v1
- * TripDetail). TripBrief is a pre-confirmation "gather interest" surface —
- * it does not adapt into a Today/live-balance screen during trip_ongoing,
- * so trip_ongoing defaults to Timeline instead of Home (see coordinator
- * task notes).
- */
-function defaultTabForStage(status: TripStatus, isConfirmed: boolean): string {
-  if (!isConfirmed) return 'people'
-  switch (status) {
-    case 'gathering_interest':
-    case 'confirming_participants':
-      return 'brief'
-    case 'booking_details':
-      return 'decisions'
-    case 'booked_awaiting_departure':
-      return 'timeline'
-    case 'trip_ongoing':
-      return 'timeline'
-    case 'trip_completed':
-      return 'money'
-    default:
-      return 'brief'
-  }
+/** Legacy ?tab= ids (v2.0 links, claim links, old bookmarks) → v2.1 spaces. */
+const LEGACY_TAB_TO_SPACE: Record<string, SpaceId> = {
+  brief: 'today',
+  home: 'today',
+  today: 'today',
+  notes: 'today',
+  decisions: 'plan',
+  timeline: 'plan',
+  map: 'plan',
+  plan: 'plan',
+  money: 'money',
+  expenses: 'money',
+  'my-spending': 'money',
+  'settle-up': 'money',
+  people: 'people',
+  checklist: 'people',
 }
 
 export function TripDetail() {
@@ -101,13 +75,14 @@ export function TripDetail() {
   const { data: expensesData } = useExpenses(tripId)
   const loading = tripLoading || participantsLoading
 
-  // One realtime subscription per trip, debounced, invalidating the
-  // matching query-key branch on any relevant postgres_changes event.
+  // One realtime subscription per trip — mounted exactly once, here.
   useTripRealtime(tripId)
 
-  const [activeTab, setActiveTab] = useState<string>('brief')
+  const [activeSpace, setActiveSpace] = useState<SpaceId>('today')
   const [moneySubTab, setMoneySubTab] = useState<string>(EXPENSE_TAB_CONFIGS[0].tabId)
-  const needsAttentionItems = useNeedsAttention(tripId, setActiveTab)
+  const needsAttentionItems = useNeedsAttention(tripId, (spaceId) => {
+    setActiveSpace(LEGACY_TAB_TO_SPACE[spaceId] ?? 'today')
+  })
 
   const myParticipant = participants.find((p) => p.user_id === user?.id) || null
   const isSystemAdmin = currentUserRow?.role === 'admin'
@@ -117,11 +92,15 @@ export function TripDetail() {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
-  const [quickActionsOpen, setQuickActionsOpen] = useState(false)
+  const [consoleOpen, setConsoleOpen] = useState(false)
+  const [recapOpen, setRecapOpen] = useState(false)
+  const [overflowOpen, setOverflowOpen] = useState(false)
+  const [rsvpOpen, setRsvpOpen] = useState(false)
+  const [travelDetailsOpen, setTravelDetailsOpen] = useState(false)
+  const [addToPlanOpen, setAddToPlanOpen] = useState(false)
   const [quickCaptureOpenCount, setQuickCaptureOpenCount] = useState(0)
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false)
-  const [eventEditorOpen, setEventEditorOpen] = useState(false)
-  const [hasSetInitialTab, setHasSetInitialTab] = useState(false)
+  const overflowRef = useRef<HTMLDivElement>(null)
 
   const refetchTripData = () => {
     if (!tripId) return
@@ -129,36 +108,17 @@ export function TripDetail() {
     queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) })
   }
 
-  // Tab registry: stage- and role-filtered (plan §5/§6). Recap only once
-  // the trip is completed; Console only for organizers.
-  const tabEntries = useMemo(() => {
-    if (!trip) return []
-    return BASE_TAB_ENTRIES.filter((t) => {
-      if (t.organizerOnly && !isOrganizer) return false
-      if (t.showWhen && !t.showWhen(trip)) return false
-      return true
-    })
-  }, [trip, isOrganizer])
-
-  // Handle ?tab= query param (e.g. from a shared link or a "back to X" button).
+  // ?tab= deep links (legacy ids included) land on the right space; the
+  // console/recap sheets are directly linkable too.
   useEffect(() => {
     const tabParam = searchParams.get('tab')
-    if (tabParam && tabEntries.some((t) => t.tabId === tabParam)) {
-      setActiveTab(tabParam)
-      setHasSetInitialTab(true)
-      searchParams.delete('tab')
-      setSearchParams(searchParams, { replace: true })
-    }
-  }, [searchParams, setSearchParams, tabEntries])
-
-  // Stage-aware default tab, set once trip/participants have loaded.
-  useEffect(() => {
-    if (trip && participants.length > 0 && user && !hasSetInitialTab && !searchParams.get('tab')) {
-      const isConfirmed = myParticipant?.confirmation_status === 'confirmed'
-      setActiveTab(defaultTabForStage(trip.status, isConfirmed))
-      setHasSetInitialTab(true)
-    }
-  }, [trip, participants, user, hasSetInitialTab, searchParams, myParticipant])
+    if (!tabParam) return
+    if (tabParam === 'organizer' || tabParam === 'console') setConsoleOpen(true)
+    else if (tabParam === 'retro') setRecapOpen(true)
+    else if (LEGACY_TAB_TO_SPACE[tabParam]) setActiveSpace(LEGACY_TAB_TO_SPACE[tabParam])
+    searchParams.delete('tab')
+    setSearchParams(searchParams, { replace: true })
+  }, [searchParams, setSearchParams])
 
   // Any empty-state "paste a booking" CTA across the app can ask for
   // quick-capture without importing the expenses feature or the shell.
@@ -167,6 +127,18 @@ export function TripDetail() {
     window.addEventListener(OPEN_QUICK_CAPTURE_EVENT, handler)
     return () => window.removeEventListener(OPEN_QUICK_CAPTURE_EVENT, handler)
   }, [])
+
+  // Close the header overflow menu on outside click.
+  useEffect(() => {
+    if (!overflowOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) setOverflowOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [overflowOpen])
+
+  const effectiveStage = useMemo(() => (trip ? effectiveTripStage(trip) : 'gathering_interest'), [trip])
 
   if (loading) {
     return (
@@ -197,86 +169,78 @@ export function TripDetail() {
     )
   }
 
-  // Shell's 4 priority slots (Home/Plan/Timeline/Money), mapped to the same
-  // active-tab state as the full in-page tab strip below — tapping either
-  // one drives the same `activeTab`.
-  const toShellTab = (entry: TabEntry): AppShellTabItem => ({
-    key: entry.tabId,
-    label: entry.label,
-    icon: <span className="text-lg leading-none">{entry.icon}</span>,
-    isActive: activeTab === entry.tabId,
-    onClick: () => setActiveTab(entry.tabId),
-  })
-
-  const shellTabs: AppShellTabItem[] = SHELL_SLOT_IDS.filter((id) => tabEntries.some((t) => t.tabId === id)).map(
-    (id) => toShellTab(tabEntries.find((t) => t.tabId === id)!)
-  )
-  // Desktop sidebar shows every tab, not just the mobile bottom bar's 4 slots.
-  const sidebarTabs: AppShellTabItem[] = tabEntries.map(toShellTab)
-
   const openQuickCapture = () => {
     setQuickCaptureOpenCount((c) => c + 1)
     setQuickCaptureOpen(true)
   }
 
-  const chatContextForTab = (tabId: string): string => (tabId === 'timeline' ? 'itinerary' : tabId === 'money' ? moneySubTab : tabId)
+  // -------------------------------------------------------------------------
+  // Context-aware FAB (UX_REDESIGN "Navigation (final)"): each space gets ONE
+  // primary action. Today's is stage-smart.
+  // -------------------------------------------------------------------------
+  const isPreCommit =
+    (effectiveStage === 'gathering_interest' || effectiveStage === 'confirming_participants') &&
+    myParticipant?.confirmation_status !== 'confirmed'
 
-  const quickActions: QuickAction[] = [
-    {
-      key: 'scan-receipt',
-      icon: <span>📷</span>,
-      label: 'Scan receipt',
-      description: 'Snap or upload a photo',
-      onClick: openQuickCapture,
-    },
-    {
-      key: 'add-expense',
-      icon: <span>💰</span>,
-      label: 'Add expense',
-      description: 'Enter it manually',
-      onClick: openQuickCapture,
-    },
-    {
-      key: 'add-event',
-      icon: <span>📅</span>,
-      label: 'Add event',
-      description: 'Add to the itinerary',
-      onClick: () => {
-        if (isOrganizer) {
-          setEventEditorOpen(true)
-        } else {
-          setActiveTab('timeline')
+  const fabForSpace = (): { icon: string; label: string; onClick: () => void } => {
+    switch (activeSpace) {
+      case 'plan':
+        return { icon: '➕', label: 'Add to plan', onClick: () => setAddToPlanOpen(true) }
+      case 'money':
+        return { icon: '📷', label: 'Scan receipt', onClick: openQuickCapture }
+      case 'people':
+        return isOrganizer
+          ? { icon: '✉️', label: 'Add people', onClick: () => setAddParticipantModalOpen(true) }
+          : { icon: '✈️', label: 'My travel details', onClick: () => setTravelDetailsOpen(true) }
+      case 'today':
+      default:
+        if (isPreCommit && myParticipant && trip.confirmation_enabled) {
+          return { icon: '📝', label: 'RSVP', onClick: () => setRsvpOpen(true) }
         }
-      },
-    },
-    {
-      key: 'ask-ai',
-      icon: <span>✨</span>,
-      label: chatEntryConfig.label,
-      description: 'Ask the trip assistant',
-      onClick: () => setChatOpen(true),
-    },
+        if (effectiveStage === 'trip_ongoing' || effectiveStage === 'trip_completed') {
+          return { icon: '📷', label: 'Scan receipt', onClick: openQuickCapture }
+        }
+        return { icon: '➕', label: 'Add to plan', onClick: () => setAddToPlanOpen(true) }
+    }
+  }
+  const fab = fabForSpace()
+
+  const toShellTab = (id: SpaceId): AppShellTabItem => ({
+    key: id,
+    label: SPACE_META[id].label,
+    icon: <span className="text-lg leading-none">{SPACE_META[id].icon}</span>,
+    isActive: activeSpace === id,
+    onClick: () => setActiveSpace(id),
+  })
+
+  const shellTabs: AppShellTabItem[] = SPACE_IDS.map(toShellTab)
+  // Desktop sidebar: the four spaces + Console for organizers (a launched
+  // sheet, not a space — isActive is never true for it).
+  const sidebarTabs: AppShellTabItem[] = [
+    ...shellTabs,
     ...(isOrganizer
       ? [
           {
-            key: 'new-poll',
-            icon: <span>🗳️</span>,
-            label: 'New poll/option',
-            description: 'Add something to decide',
-            onClick: () => setActiveTab('decisions'),
-          },
+            key: 'console',
+            label: 'Console',
+            icon: <span className="text-lg leading-none">🎛️</span>,
+            isActive: false,
+            onClick: () => setConsoleOpen(true),
+          } satisfies AppShellTabItem,
         ]
       : []),
   ]
+
+  const chatContext = activeSpace === 'money' ? moneySubTab : activeSpace
 
   return (
     <div data-trip-accent style={getTripAccentStyle(trip.id)} className="min-h-screen bg-[var(--surface-page)]">
       <AppShell
         tabs={shellTabs}
         sidebarTabs={sidebarTabs}
-        onQuickAdd={() => setQuickActionsOpen(true)}
-        quickAddIcon={<span className="text-xl leading-none">+</span>}
-        quickAddLabel="Quick actions"
+        onQuickAdd={fab.onClick}
+        quickAddIcon={<span className="text-xl leading-none">{fab.icon}</span>}
+        quickAddLabel={fab.label}
         sidebarHeader={
           <button
             onClick={() => navigate('/dashboard')}
@@ -307,7 +271,7 @@ export function TripDetail() {
                 <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-primary)] truncate">{trip.name}</h1>
               </div>
               <div className="flex gap-1 flex-shrink-0 items-center">
-                {/* Ask AI — header entry point, all screens (plan §13 "Accessible AI") */}
+                {/* Ask AI — header entry point, all screens */}
                 <button
                   onClick={() => setChatOpen(true)}
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-accent-700 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-950 rounded-[var(--radius-md)] transition-colors border border-accent-200 dark:border-accent-800"
@@ -317,14 +281,57 @@ export function TripDetail() {
                   <span className="hidden sm:inline">{chatEntryConfig.label}</span>
                 </button>
                 {isOrganizer && (
-                  <>
-                    <Button variant="secondary" size="sm" onClick={() => setEditModalOpen(true)} className="hidden sm:inline-flex">
-                      Edit
-                    </Button>
-                    <Button variant="secondary" size="sm" onClick={() => setEditModalOpen(true)} className="sm:hidden">
+                  <div className="relative" ref={overflowRef}>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setOverflowOpen((v) => !v)}
+                      aria-haspopup="menu"
+                      aria-expanded={overflowOpen}
+                      aria-label="Trip actions"
+                    >
                       •••
                     </Button>
-                  </>
+                    {overflowOpen && (
+                      <div
+                        role="menu"
+                        className="absolute right-0 mt-1 w-44 rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--surface-raised)] shadow-lg py-1"
+                      >
+                        <button
+                          role="menuitem"
+                          className="w-full text-left px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-sunken)]"
+                          onClick={() => {
+                            setOverflowOpen(false)
+                            setConsoleOpen(true)
+                          }}
+                        >
+                          🎛️ Open console
+                        </button>
+                        <button
+                          role="menuitem"
+                          className="w-full text-left px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-sunken)]"
+                          onClick={() => {
+                            setOverflowOpen(false)
+                            setEditModalOpen(true)
+                          }}
+                        >
+                          ✏️ Edit trip
+                        </button>
+                        {trip.status === 'trip_completed' && (
+                          <button
+                            role="menuitem"
+                            className="w-full text-left px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-sunken)]"
+                            onClick={() => {
+                              setOverflowOpen(false)
+                              setRecapOpen(true)
+                            }}
+                          >
+                            🎉 Recap
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
             </div>
@@ -340,129 +347,108 @@ export function TripDetail() {
                 {formatDateRange(trip.start_date, trip.end_date)}
               </span>
               <span className="flex items-center gap-1 text-accent-700 dark:text-accent-400 font-medium">
-                {getCountdown(trip.start_date)}
+                {getCountdown(trip.start_date, trip.end_date)}
               </span>
             </div>
 
-            {/* Stage rail */}
-            <div className="flex items-center gap-3 mb-3">
-              <StageRail status={trip.status} compact />
+            {/* Stage rail — driven by the EFFECTIVE stage (date-upgraded). */}
+            <div className="flex items-center gap-3">
+              <StageRail status={effectiveStage} compact />
               <span className="text-xs font-medium text-[var(--text-muted)] whitespace-nowrap">
-                {getTripStatusLabel(trip.status)}
+                {getTripStatusLabel(effectiveStage)}
               </span>
             </div>
 
-            {/* Needs your attention — the organizer-never-chases-manually strip */}
+            {/* Needs your attention — visible on every space ("your turn" principle) */}
             {needsAttentionItems.length > 0 && (
-              <div className="mb-3">
+              <div className="mt-3">
                 <NeedsAttentionStrip items={needsAttentionItems} />
               </div>
             )}
-
-            {/* In-page tab strip: EVERY tab (including the shell's 4 priority
-                slots), so nothing is unreachable on mobile — the desktop
-                sidebar also shows every tab in `tabEntries` via `shellTabs`'
-                filter only picking 4 of them for the shell's own slots. */}
-            <Tabs value={activeTab} onChange={setActiveTab}>
-              <Tabs.List scrollable>
-                {tabEntries.map((t) => (
-                  <Tabs.Tab key={t.tabId} value={t.tabId}>
-                    <span className="mr-1" aria-hidden="true">
-                      {t.icon}
-                    </span>
-                    {t.label}
-                  </Tabs.Tab>
-                ))}
-              </Tabs.List>
-            </Tabs>
           </div>
         </div>
 
-        {/* Tab Content — each tab gets its own error boundary (per
-            UPGRADE_MASTER_PLAN §4/§16) so a bug in one tab can't take down
-            navigation or the rest of the trip page. */}
-        <div className="max-w-6xl mx-auto px-4 py-8">
-          {activeTab === 'brief' && (
-            <ErrorBoundary label="Home">
-              <briefTabConfig.Component tripId={trip.id} />
+        {/* Space content — one error boundary per space. `position:relative`
+            makes this the bounded content scroll container (UX_REDESIGN
+            "Systemic layering" §2): in-content sticky elements cap at z-30,
+            always under the z-sticky chrome above. */}
+        <div className="relative max-w-6xl mx-auto px-4 py-6">
+          {activeSpace === 'today' && (
+            <ErrorBoundary label="Today">
+              <todayTabConfig.Component
+                trip={trip}
+                effectiveStage={effectiveStage}
+                isOrganizer={isOrganizer}
+                onNavigate={(spaceId) => setActiveSpace(LEGACY_TAB_TO_SPACE[spaceId] ?? 'today')}
+                onOpenConsole={() => setConsoleOpen(true)}
+                onOpenRecap={() => setRecapOpen(true)}
+                onQuickCapture={openQuickCapture}
+                onInvite={() => setAddParticipantModalOpen(true)}
+              />
             </ErrorBoundary>
           )}
-          {activeTab === 'people' && (
-            <ErrorBoundary label="People">
-              <div className="space-y-3">
-                {isOrganizer && (
-                  <div className="max-w-2xl mx-auto flex justify-end">
-                    <Button variant="outline" size="sm" onClick={() => setAddParticipantModalOpen(true)}>
-                      + Add participant
-                    </Button>
-                  </div>
-                )}
-                <peopleTabConfig.Component tripId={trip.id} />
-              </div>
-            </ErrorBoundary>
-          )}
-          {activeTab === 'decisions' && (
+          {activeSpace === 'plan' && (
             <ErrorBoundary label="Plan">
-              <decisionsTabConfig.Component tripId={trip.id} />
+              <planTabConfig.Component trip={trip} onNavigate={(tabId) => setActiveSpace(LEGACY_TAB_TO_SPACE[tabId] ?? 'plan')} />
             </ErrorBoundary>
           )}
-          {activeTab === 'timeline' && (
-            <ErrorBoundary label="Timeline">
-              <timelineTabConfig.Component trip={trip} />
-            </ErrorBoundary>
-          )}
-          {activeTab === 'money' && (
+          {activeSpace === 'money' && (
             <ErrorBoundary label="Money">
               <MoneyHub trip={trip} activeSubTab={moneySubTab} onSubTabChange={setMoneySubTab} />
             </ErrorBoundary>
           )}
-          {activeTab === 'map' && (
-            <ErrorBoundary label="Map">
-              <Suspense fallback={<Skeleton variant="card" height={420} />}>
-                <tripMapTabConfig.Component tripId={trip.id} tripStartDate={trip.start_date} />
-              </Suspense>
-            </ErrorBoundary>
-          )}
-          {activeTab === 'notes' && (
-            <ErrorBoundary label="Notes">
-              <notesTabConfig.Component trip={trip} />
-            </ErrorBoundary>
-          )}
-          {activeTab === 'checklist' && (
-            <ErrorBoundary label="Checklist">
-              <checklistTabConfig.Component tripId={trip.id} />
-            </ErrorBoundary>
-          )}
-          {activeTab === 'organizer' && isOrganizer && (
-            <ErrorBoundary label="Console">
-              <organizerTabConfig.Component tripId={trip.id} />
-            </ErrorBoundary>
-          )}
-          {activeTab === 'retro' && (
-            <ErrorBoundary label="Recap">
-              <Suspense fallback={<Skeleton variant="card" height={420} />}>
-                <retroConfig.Component tripId={trip.id} />
-              </Suspense>
+          {activeSpace === 'people' && (
+            <ErrorBoundary label="People">
+              <peopleTabConfig.Component tripId={trip.id} />
             </ErrorBoundary>
           )}
         </div>
       </AppShell>
 
-      {/* Ask AI sheet — FAB's "Ask AI" action + header button both open this.
-          Lazy-loaded (WSH perf pass): only mounted once the user opens chat
-          at least once, keeping streaming/markdown/proposal-review JS out of
-          the main chunk. `chatOpen` already gates its internal queries, so
-          mounting on first-open (and keeping it mounted after, so state like
-          the message list persists across close/reopen) matches prior
-          behavior for anyone who has already opened chat. */}
+      {/* Ask AI sheet — header button opens this; lazy-mounted on first open. */}
       {chatOpen && (
         <Suspense fallback={null}>
-          <LazyChatSheet trip={trip} isOpen={chatOpen} onClose={() => setChatOpen(false)} context={chatContextForTab(activeTab)} />
+          <LazyChatSheet trip={trip} isOpen={chatOpen} onClose={() => setChatOpen(false)} context={chatContext} />
         </Suspense>
       )}
 
-      {/* Quick actions sheet (FAB landing menu) */}
-      <QuickActionsSheet isOpen={quickActionsOpen} onClose={() => setQuickActionsOpen(false)} actions={quickActions} />
+      {/* Organizer Console — a full-screen sheet now, launched from Today's
+          blockers strip, the header overflow and the desktop sidebar. */}
+      {isOrganizer && consoleOpen && (
+        <Modal isOpen={consoleOpen} onClose={() => setConsoleOpen(false)} size="xl" title="Organizer console">
+          <ErrorBoundary label="Console">
+            <OrganizerConsole tripId={trip.id} />
+          </ErrorBoundary>
+        </Modal>
+      )}
+
+      {/* Recap — entry card lives on Today (completed); component stays reachable here. */}
+      {recapOpen && (
+        <Modal isOpen={recapOpen} onClose={() => setRecapOpen(false)} size="xl" title="Trip recap">
+          <ErrorBoundary label="Recap">
+            <Suspense fallback={<Skeleton variant="card" height={420} />}>
+              <retroConfig.Component tripId={trip.id} />
+            </Suspense>
+          </ErrorBoundary>
+        </Modal>
+      )}
+
+      {/* FAB targets */}
+      <AddToPlanSheet isOpen={addToPlanOpen} onClose={() => setAddToPlanOpen(false)} trip={trip} />
+
+      {myParticipant && (
+        <StatusModal
+          isOpen={rsvpOpen}
+          onClose={() => setRsvpOpen(false)}
+          tripId={trip.id}
+          participant={myParticipant}
+          participants={participants}
+          capacityLimit={trip.capacity_limit}
+          confirmedCount={participants.filter((p) => p.confirmation_status === 'confirmed').length}
+        />
+      )}
+
+      <TravelDetailsSheet isOpen={travelDetailsOpen} onClose={() => setTravelDetailsOpen(false)} tripId={trip.id} />
 
       {/* Quick capture (scan receipt / add expense), remounted with a fresh
           key on every open per the feature's contract. */}
@@ -477,10 +463,7 @@ export function TripDetail() {
         />
       )}
 
-      {/* Add event (organizer-only quick action) */}
-      <EventEditorSheet isOpen={eventEditorOpen} onClose={() => setEventEditorOpen(false)} trip={trip} event={null} />
-
-      {/* Admin Modals */}
+      {/* Admin/organizer modals */}
       <CreateTripModal isOpen={editModalOpen} onClose={() => setEditModalOpen(false)} onSuccess={refetchTripData} editTrip={trip} />
       <AddParticipantModal
         isOpen={addParticipantModalOpen}
@@ -494,9 +477,9 @@ export function TripDetail() {
 }
 
 // ---------------------------------------------------------------------------
-// Money hub: one tab whose content renders inner Tabs for the three
-// EXPENSE_TAB_CONFIGS (Expenses / Settle up / My spending) — plan §5's
-// "Money is a hub" instruction.
+// Money hub: one space whose content renders inner Tabs for the three
+// EXPENSE_TAB_CONFIGS (Expenses / Settle up / My spending) — Money internals
+// unchanged from v2.0 (UX_REDESIGN §3).
 // ---------------------------------------------------------------------------
 function MoneyHub({
   trip,
@@ -548,14 +531,16 @@ function formatDateRange(startDate: string, endDate: string) {
   return `${startMonth} ${startDay}, ${startYear} - ${endMonth} ${endDay}, ${endYear}`
 }
 
-// Countdown to trip
-function getCountdown(startDate: string) {
+// Countdown to trip (date-aware: quiet once the trip is over)
+function getCountdown(startDate: string, endDate: string) {
   const start = new Date(startDate)
   const now = new Date()
   const diffTime = start.getTime() - now.getTime()
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
 
-  if (diffDays < 0) {
+  if (new Date(endDate).getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
+    return '🏁 Trip finished'
+  } else if (diffDays < 0) {
     return '🎿 Trip in progress!'
   } else if (diffDays === 0) {
     return '🎿 Trip starts today!'

@@ -10,9 +10,11 @@ import { streamChatMessage, ChatQuotaError } from '../lib/streamChat'
 import { ProposalReview } from './ProposalReview'
 import type { Trip } from '../../../types'
 
-/** Suggestion chips, keyed by the tab the user opened chat from. */
+/** Suggestion chips, keyed by the space/tab the user opened chat from (v2.1 IA: today/plan/money-subtab/people; legacy keys kept for older callers). */
 const SUGGESTIONS: Record<string, string[]> = {
   default: ['What do I owe?', "What's the plan?", "What's still undecided?"],
+  today: ["What's happening today?", 'What needs my attention?', 'What do I owe?'],
+  plan: ["What's winning the polls?", "What's next on the itinerary?", "What's still undecided?"],
   overview: ["What's the plan today?", 'Who still needs to confirm?', 'What do I owe?'],
   decisions: ["What's winning the polls?", "Who hasn't voted yet?", 'Summarize the open decisions'],
   expenses: ['How much do I owe?', "What's unclaimed?", 'Who has paid the most?'],
@@ -60,11 +62,12 @@ export function ChatSheet({ isOpen, onClose, trip, context }: ChatSheetProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
 
   const usersById = useMemo(() => {
-    const map = new Map<string, { name: string; avatarData: unknown }>()
+    const map = new Map<string, { name: string; avatar_url: unknown; avatar_data: unknown }>()
     for (const p of participants ?? []) {
       map.set(p.user_id, {
         name: (p.user?.full_name || p.user?.email || 'Someone').split(' ')[0],
-        avatarData: p.user?.avatar_data ?? null,
+        avatar_url: p.user?.avatar_url ?? null,
+        avatar_data: p.user?.avatar_data ?? null,
       })
     }
     return map
@@ -161,7 +164,7 @@ export function ChatSheet({ isOpen, onClose, trip, context }: ChatSheetProps) {
                   <div key={msg.id}>
                     <div className={`flex items-end gap-2 ${isUser && mine ? 'flex-row-reverse' : ''}`}>
                       {isUser ? (
-                        <UserAvatar avatarData={sender?.avatarData ?? null} size="xs" />
+                        <UserAvatar avatarData={sender ?? null} size="xs" />
                       ) : (
                         <span className="text-lg" aria-hidden="true">
                           ✨
@@ -200,7 +203,7 @@ export function ChatSheet({ isOpen, onClose, trip, context }: ChatSheetProps) {
 
               {echo.map((msg) => (
                 <div key={msg.id} className="flex flex-row-reverse items-end gap-2">
-                  <UserAvatar avatarData={usersById.get(user?.id ?? '')?.avatarData ?? null} size="xs" />
+                  <UserAvatar avatarData={usersById.get(user?.id ?? '') ?? null} size="xs" />
                   <div className="max-w-[85%] rounded-[var(--radius-lg)] bg-accent-600 px-3 py-2 text-sm text-white whitespace-pre-wrap break-words">
                     {msg.content}
                   </div>

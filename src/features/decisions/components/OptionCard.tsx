@@ -164,6 +164,7 @@ export function OptionCard({
                   ? {
                       full_name: byUserId.get(v.user_id)!.user!.full_name ?? undefined,
                       email: byUserId.get(v.user_id)!.user!.email ?? undefined,
+                      avatar_url: byUserId.get(v.user_id)!.user!.avatar_url ?? undefined,
                       avatar_data: (byUserId.get(v.user_id)!.user!.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
                     }
                   : undefined,
@@ -205,7 +206,7 @@ export function OptionCard({
             const author = byUserId.get(c.user_id)
             return (
               <div key={c.id} className="flex items-start gap-2">
-                <UserAvatar avatarData={author?.user?.avatar_data} size="xs" />
+                <UserAvatar avatarData={author?.user} size="xs" />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium text-[var(--text-secondary)]">{userLabel(author)}</p>
                   <p className="text-sm text-[var(--text-primary)]">{c.content}</p>

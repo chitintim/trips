@@ -3,6 +3,7 @@ import { useNavigate, useLocation, Link } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { Button, Input, Card, SegmentedControl } from '../../components/ui'
 import { AuthLayout } from './AuthLayout'
+import { resolvePostLoginDestination } from './lib/postLoginRedirect'
 
 type Mode = 'password' | 'otp'
 type OtpStep = 'request' | 'verify'
@@ -27,9 +28,10 @@ export function Login() {
   const [otpError, setOtpError] = useState<string | null>(null)
   const [otpLoading, setOtpLoading] = useState(false)
 
+  // Shared by BOTH auth paths (password submit + OTP verify): return to the
+  // exact pre-auth URL — path, query AND hash (claim/join deep links).
   const goToIntendedDestination = () => {
-    const from = (location.state as { from?: { pathname?: string } } | undefined)?.from?.pathname || '/'
-    navigate(from, { replace: true })
+    navigate(resolvePostLoginDestination(location.state), { replace: true })
   }
 
   const handlePasswordSubmit = async (e: FormEvent) => {

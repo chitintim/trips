@@ -118,7 +118,7 @@ export function TimelineEventCard({
           <div className="mt-1.5 flex items-center gap-1.5">
             <div className="flex -space-x-1.5">
               {eventParticipants.slice(0, 5).map((p) => (
-                <UserAvatar key={p.user_id} avatarData={p.user?.avatar_data} size="xs" />
+                <UserAvatar key={p.user_id} avatarData={p.user} size="xs" />
               ))}
             </div>
             {eventParticipants.length > 5 && (

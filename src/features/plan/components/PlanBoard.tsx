@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Button, EmptyState, Modal } from '../../../components/ui'
 import { usePlaces } from '../../../lib/queries/usePlaces'
-import { useSections } from '../../../lib/queries/usePlanning'
+import { useSections, useCreateSection } from '../../../lib/queries/usePlanning'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
@@ -14,9 +14,21 @@ import type { Trip } from '../../../types'
 export interface PlanBoardProps {
   trip: Trip
   items: PlanItem[]
+  isOrganizer?: boolean
   onOpenItem: (item: PlanItem) => void
   onScheduleIt: (item: PlanItem) => void
 }
+
+/**
+ * Starter questions offered to organizers on a completely empty plan
+ * (UX_REDESIGN.md Part 2 "guided setup" + Part 4 "questions, not sections":
+ * section machinery stays hidden — users see the questions).
+ */
+const STARTER_QUESTIONS: Array<{ title: string; section_type: 'accommodation' | 'transport' | 'activities' }> = [
+  { title: 'Where are we staying?', section_type: 'accommodation' },
+  { title: 'How are we getting there?', section_type: 'transport' },
+  { title: 'What do we want to do?', section_type: 'activities' },
+]
 
 /**
  * The List lens (default view, plan §2): a day-by-day board from trip
@@ -28,13 +40,32 @@ export interface PlanBoardProps {
  * and live inside this component's own scroll container, never escaping
  * into the app chrome's stacking context.
  */
-export function PlanBoard({ trip, items, onOpenItem, onScheduleIt }: PlanBoardProps) {
+export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onScheduleIt }: PlanBoardProps) {
   const { user } = useAuth()
   const { data: places } = usePlaces(trip.id)
   const { data: sections } = useSections(trip.id)
   const toggleVote = useToggleVote(trip.id)
+  const createSection = useCreateSection(trip.id)
   const [votingId, setVotingId] = useState<string | null>(null)
+  const [creatingStarters, setCreatingStarters] = useState(false)
   const [matrixSectionId, setMatrixSectionId] = useState<string | null>(null)
+
+  const handleCreateStarterQuestions = async () => {
+    setCreatingStarters(true)
+    try {
+      for (const [i, q] of STARTER_QUESTIONS.entries()) {
+        await createSection.mutateAsync({
+          title: q.title,
+          section_type: q.section_type,
+          status: 'in_progress',
+          allow_multiple_selections: q.section_type === 'activities',
+          order_index: i,
+        })
+      }
+    } finally {
+      setCreatingStarters(false)
+    }
+  }
 
   const placesById = useMemo(() => new Map((places || []).map((p) => [p.id, p])), [places])
 
@@ -72,6 +103,28 @@ export function PlanBoard({ trip, items, onOpenItem, onScheduleIt }: PlanBoardPr
   }
 
   if (items.length === 0) {
+    const planCompletelyEmpty = sections !== undefined && (sections || []).length === 0
+    if (isOrganizer && planCompletelyEmpty) {
+      return (
+        <EmptyState
+          icon="🧭"
+          title="Start with the big questions"
+          description="Most trips begin by answering three things — set them up as group votes in one tap, or add your own with the + button."
+          action={
+            <div className="space-y-2 text-left">
+              <ul className="text-sm text-[var(--text-secondary)] space-y-1">
+                {STARTER_QUESTIONS.map((q) => (
+                  <li key={q.section_type}>• {q.title}</li>
+                ))}
+              </ul>
+              <Button onClick={handleCreateStarterQuestions} isLoading={creatingStarters} fullWidth>
+                Set up these questions
+              </Button>
+            </div>
+          }
+        />
+      )
+    }
     return (
       <EmptyState
         icon="🧭"

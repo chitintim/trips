@@ -50,7 +50,7 @@ export function RetrospectivePanel({ tripId }: RetrospectivePanelProps) {
   }, [participants])
   const avatarsById = useMemo(() => {
     const map = new Map<string, unknown>()
-    for (const p of participants ?? []) map.set(p.user_id, p.user?.avatar_data ?? null)
+    for (const p of participants ?? []) map.set(p.user_id, p.user ?? null)
     return map
   }, [participants])
 

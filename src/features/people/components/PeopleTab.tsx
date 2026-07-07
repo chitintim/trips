@@ -2,12 +2,17 @@ import { useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { Card, Button, CapacityProgressBar, Deadline, Tabs, Skeleton } from '../../../components/ui'
 import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
+import { useTimeline } from '../../../lib/queries/useTimeline'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
+import { ChecklistTab } from '../../checklists'
 import { ParticipantList } from './ParticipantList'
 import { DependencyGraph } from './DependencyGraph'
 import { WaitlistPanel } from './WaitlistPanel'
 import { StatusModal } from './StatusModal'
 import { ConfirmationSettingsSheet } from './ConfirmationSettingsSheet'
+import { TravelDetailsSheet } from './TravelDetailsSheet'
+import { getMyTravelEvents, travelEventFlightRef } from '../lib/travelDetails'
+import { formatTime } from '../../timeline'
 
 interface PeopleTabProps {
   tripId: string
@@ -25,9 +30,14 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
   const { data: trip, isLoading: tripLoading } = useTrip(tripId)
   const { data: participants, isLoading: participantsLoading } = useParticipants(tripId)
 
+  const { data: timelineEvents = [] } = useTimeline(tripId)
+
   const [statusModalParticipant, setStatusModalParticipant] = useState<ParticipantWithUser | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [view, setView] = useState<'list' | 'graph' | 'waitlist'>('list')
+  const [travelOpen, setTravelOpen] = useState(false)
+  const [view, setView] = useState<'list' | 'graph' | 'waitlist' | 'checklist'>('list')
+
+  const myTravel = useMemo(() => getMyTravelEvents(timelineEvents, user?.id), [timelineEvents, user?.id])
 
   const myParticipant = useMemo(
     () => participants?.find((p) => p.user_id === user?.id) ?? null,
@@ -97,11 +107,51 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
         </Card.Content>
       </Card>
 
+      {/* Travel details (UX_REDESIGN Part 2 "People additions"): self-service
+          arrival/departure — the events land on the Plan board automatically. */}
+      {myParticipant && (
+        <Card>
+          <Card.Content className="space-y-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-[var(--text-primary)]">Your travel details</h3>
+                {myTravel.arrival || myTravel.departure ? (
+                  <div className="text-sm text-[var(--text-secondary)] mt-1 space-y-0.5">
+                    {myTravel.arrival && (
+                      <p>
+                        ✈️ Arrive {new Date(myTravel.arrival.event_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                        {myTravel.arrival.start_time ? ` · ${formatTime(myTravel.arrival.start_time)} local` : ''}
+                        {travelEventFlightRef(myTravel.arrival) ? ` · ${travelEventFlightRef(myTravel.arrival)}` : ''}
+                      </p>
+                    )}
+                    {myTravel.departure && (
+                      <p>
+                        🧳 Depart {new Date(myTravel.departure.event_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                        {myTravel.departure.start_time ? ` · ${formatTime(myTravel.departure.start_time)} local` : ''}
+                        {travelEventFlightRef(myTravel.departure) ? ` · ${travelEventFlightRef(myTravel.departure)}` : ''}
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-sm text-[var(--text-muted)] mt-1">
+                    When do you arrive and leave? It helps with pickups and fair cost splits.
+                  </p>
+                )}
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setTravelOpen(true)}>
+                {myTravel.arrival || myTravel.departure ? 'Edit' : 'Add'}
+              </Button>
+            </div>
+          </Card.Content>
+        </Card>
+      )}
+
       <Tabs value={view} onChange={(v) => setView(v as typeof view)}>
         <Tabs.List>
           <Tabs.Tab value="list">List</Tabs.Tab>
           <Tabs.Tab value="graph">Dependencies</Tabs.Tab>
           <Tabs.Tab value="waitlist">Waitlist{counts.waitlist > 0 ? ` (${counts.waitlist})` : ''}</Tabs.Tab>
+          <Tabs.Tab value="checklist">Checklist</Tabs.Tab>
         </Tabs.List>
 
         <div className="mt-4">
@@ -124,6 +174,11 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
           <Tabs.Panel value="waitlist">
             <WaitlistPanel tripId={tripId} participants={participants || []} isOrganizer={isOrganizer} />
           </Tabs.Panel>
+          <Tabs.Panel value="checklist">
+            {/* "Who's bringing what" is a people thing (UX_REDESIGN §4) — the
+                standalone Checklist tab died with the v2.1 nav rework. */}
+            <ChecklistTab tripId={tripId} />
+          </Tabs.Panel>
         </div>
       </Tabs>
 
@@ -143,6 +198,8 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
         tripId={tripId}
         isOrganizer={isOrganizer}
       />
+
+      <TravelDetailsSheet isOpen={travelOpen} onClose={() => setTravelOpen(false)} tripId={tripId} />
     </div>
   )
 }

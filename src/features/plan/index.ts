@@ -19,7 +19,10 @@ export type { PlanTabProps } from './components/PlanTab'
 export { PlanBoard } from './components/PlanBoard'
 export type { PlanBoardProps } from './components/PlanBoard'
 
-export { PlanMapLens } from './components/PlanMapLens'
+// NOTE: `PlanMapLens` is deliberately NOT re-exported (type only): it pulls
+// in react-leaflet/leaflet and is lazy-loaded inside PlanTab — a static
+// re-export here would drag leaflet back into the main chunk (same
+// exception the places barrel makes for PlaceMapThumb).
 export type { PlanMapLensProps } from './components/PlanMapLens'
 
 export { PlanDecideLens } from './components/PlanDecideLens'

@@ -45,6 +45,7 @@ export interface Blocker {
 export interface PersonBlockers {
   userId: string
   name: string
+  avatarUrl: unknown
   avatarData: unknown
   blockers: Blocker[]
 }
@@ -261,7 +262,7 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
   for (const p of active) {
     const blockers = byUser.get(p.user_id)
     if (!blockers || blockers.length === 0) continue
-    people.push({ userId: p.user_id, name: displayName(p), avatarData: p.user?.avatar_data ?? null, blockers })
+    people.push({ userId: p.user_id, name: displayName(p), avatarUrl: p.user?.avatar_url ?? null, avatarData: p.user?.avatar_data ?? null, blockers })
   }
   people.sort((a, b) => b.blockers.length - a.blockers.length || a.name.localeCompare(b.name))
 

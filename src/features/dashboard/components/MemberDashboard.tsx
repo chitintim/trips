@@ -1,56 +1,63 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../../hooks/useAuth'
 import { Button, Card, EmptyState, Skeleton } from '../../../components/ui'
 import { useTrips } from '../../../lib/queries/useTrip'
 import { TripCard } from './TripCard'
-import { CreateTripSheet } from './CreateTripSheet'
+import { CreateTripWizard } from './CreateTripWizard'
+import { isMyTrip, orderDashboardTrips, resolveSingleActiveTripRedirect } from '../lib/landing'
 
 /**
- * Non-admin "my trips" dashboard, rebuilt from the legacy Dashboard.tsx's
- * MemberView onto the new query hooks + ui kit. Exported as the Component
- * in src/features/dashboard/index.ts — the coordinator wires this into
- * Dashboard.tsx in place of MemberView (admin tabs remain untouched, owned
- * by another workstream).
+ * Non-admin "my trips" dashboard with the v2.1 landing rules
+ * (UX_REDESIGN.md Part 2):
+ * - Fresh app entry with exactly ONE active (non-completed) trip → redirect
+ *   straight into it. In-app navigation back to the dashboard never
+ *   redirects (only the initial history entry does).
+ * - Cards ordered active-with-your-actions → active → upcoming; past trips
+ *   collapse behind a toggle.
  */
 export function MemberDashboard() {
   const { user } = useAuth()
   const { data: trips, isLoading } = useTrips()
+  const navigate = useNavigate()
   const [createOpen, setCreateOpen] = useState(false)
+  const [showPast, setShowPast] = useState(false)
+  const [attentionCounts, setAttentionCounts] = useState<Record<string, number>>({})
 
   const { myTrips, publicTrips } = useMemo(() => {
     if (!trips || !user) return { myTrips: [], publicTrips: [] }
-
     const now = new Date()
     now.setHours(0, 0, 0, 0)
-
-    // Note: useTrips() doesn't tell us participation directly; the
-    // dashboard historically inferred "my trips" from trip_participants.
-    // Since RLS already scopes `trips` to what the user can see (own +
-    // public), and confirmed_count alone doesn't disambiguate membership,
-    // we treat every trip returned as "mine" unless it's public and the
-    // organizer/creator isn't the current user and the trip is upcoming —
-    // matching the legacy behavior of only splitting out *other* public
-    // trips as a separate discovery section.
-    const mine = trips.filter((t) => !t.is_public || t.created_by === user.id)
-    const others = trips.filter(
-      (t) => t.is_public && t.created_by !== user.id && new Date(t.start_date) >= now
-    )
-
-    const ongoing = mine
-      .filter((t) => new Date(t.start_date) <= now && new Date(t.end_date) >= now)
-      .sort((a, b) => new Date(a.end_date).getTime() - new Date(b.end_date).getTime())
-    const upcoming = mine
-      .filter((t) => new Date(t.start_date) > now)
-      .sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime())
-    const past = mine
-      .filter((t) => new Date(t.end_date) < now)
-      .sort((a, b) => new Date(b.start_date).getTime() - new Date(a.start_date).getTime())
-
     return {
-      myTrips: [...ongoing, ...upcoming, ...past],
-      publicTrips: others.sort((a, b) => new Date(a.start_date).getTime() - new Date(b.start_date).getTime()),
+      myTrips: trips.filter((t) => isMyTrip(t, user.id)),
+      publicTrips: trips
+        .filter((t) => !isMyTrip(t, user.id) && new Date(t.start_date) >= now)
+        .sort((a, b) => a.start_date.localeCompare(b.start_date)),
     }
   }, [trips, user])
+
+  // Landing rule (UX_REDESIGN Part 2): the FIRST dashboard landing of a
+  // session (app open or right after login) with exactly one active trip
+  // jumps straight into it. The sessionStorage guard means a deliberate
+  // "Back to Dashboard" later in the session never bounces the user again.
+  useEffect(() => {
+    if (isLoading || !trips || !user) return
+    const LANDING_KEY = 'trips.landing.handled'
+    try {
+      if (sessionStorage.getItem(LANDING_KEY)) return
+      sessionStorage.setItem(LANDING_KEY, '1')
+    } catch {
+      return // storage unavailable → never auto-redirect rather than loop
+    }
+    const target = resolveSingleActiveTripRedirect(trips, user.id)
+    if (target) navigate(`/${target}`, { replace: true })
+  }, [isLoading, trips, user, navigate])
+
+  const ordered = useMemo(() => orderDashboardTrips(myTrips, attentionCounts), [myTrips, attentionCounts])
+
+  const reportAttention = useCallback((tripId: string, count: number) => {
+    setAttentionCounts((prev) => (prev[tripId] === count ? prev : { ...prev, [tripId]: count }))
+  }, [])
 
   if (isLoading) {
     return (
@@ -88,10 +95,34 @@ export function MemberDashboard() {
             </Card.Content>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {myTrips.map((trip) => (
-              <TripCard key={trip.id} trip={trip} />
-            ))}
+          <div className="space-y-6">
+            {ordered.active.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {ordered.active.map((trip) => (
+                  <TripCard key={trip.id} trip={trip} onAttentionCount={reportAttention} />
+                ))}
+              </div>
+            )}
+
+            {ordered.past.length > 0 && (
+              <div>
+                <button
+                  onClick={() => setShowPast((v) => !v)}
+                  className="flex items-center gap-2 text-sm font-semibold text-[var(--text-muted)] uppercase tracking-wide mb-3"
+                  aria-expanded={showPast}
+                >
+                  <span aria-hidden="true">{showPast ? '▾' : '▸'}</span>
+                  Past trips ({ordered.past.length})
+                </button>
+                {showPast && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {ordered.past.map((trip) => (
+                      <TripCard key={trip.id} trip={trip} />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -107,7 +138,7 @@ export function MemberDashboard() {
         </div>
       )}
 
-      <CreateTripSheet isOpen={createOpen} onClose={() => setCreateOpen(false)} />
+      <CreateTripWizard isOpen={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   )
 }

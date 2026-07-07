@@ -73,7 +73,7 @@ export function DependencyGraph({ participants }: DependencyGraphProps) {
     <div className="space-y-4">
       {keystoneParticipant && keystone && (
         <div className="flex items-start gap-3 bg-accent-50 border border-accent-200 rounded-[var(--radius-md)] p-3">
-          <UserAvatar avatarData={keystoneParticipant.user?.avatar_data} size="sm" />
+          <UserAvatar avatarData={keystoneParticipant.user} size="sm" />
           <div className="text-sm">
             <p className="text-accent-900">
               <strong>{displayName(keystoneParticipant)}</strong> is the keystone — if they confirm,{' '}

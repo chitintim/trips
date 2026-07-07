@@ -104,7 +104,7 @@ export function BlockersBoard({ trip }: BlockersBoardProps) {
             <Card.Content>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3 min-w-0">
-                  <UserAvatar avatarData={person.avatarData} size="md" />
+                  <UserAvatar avatarData={{ avatar_url: person.avatarUrl, avatar_data: person.avatarData }} size="md" />
                   <div className="min-w-0">
                     <p className="truncate font-medium text-[var(--text-primary)]">{person.name}</p>
                     <p className="text-xs text-[var(--text-muted)]">

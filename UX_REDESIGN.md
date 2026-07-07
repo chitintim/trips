@@ -1,4 +1,4 @@
-# Trips v2.1 — Ground-Up UX Redesign
+# Trips v3 — Ground-Up Experience Redesign
 
 **Status:** approved direction (Tim, 2026-07-07). Supersedes the tab layout shipped in v2.0; all other v2 systems (data layer, money, AI, security) unchanged.
 
@@ -10,7 +10,7 @@ A group trip is **one stream of plan items moving through stages of certainty**:
 idea → proposal (votable) → decided → booked → happening → happened
 ```
 
-A restaurant being voted on, the Saturday-dinner slot it would fill, its pin on the map, its booking confirmation, and the expense it becomes are ONE thing at different stages — not five features. v2.0 kept them in separate tabs (Plan / Timeline / Map / bookings-in-Console); v2.1 unifies them into a single **Plan** surface with lenses. The schema already supports this (`trip_timeline_events.source_option_id`, `bookings.option_id/timeline_event_id/expense_id`) — this is a frontend recomposition, **no destructive migration**.
+A restaurant being voted on, the Saturday-dinner slot it would fill, its pin on the map, its booking confirmation, and the expense it becomes are ONE thing at different stages — not five features. v2.0 kept them in separate tabs (Plan / Timeline / Map / bookings-in-Console); v3 unifies them into a single **Plan** surface with lenses. The schema already supports this (`trip_timeline_events.source_option_id`, `bookings.option_id/timeline_event_id/expense_id`) — this is a frontend recomposition, **no destructive migration**.
 
 ## Information architecture (4 spaces + FAB)
 
@@ -139,3 +139,20 @@ Stored `trips.status` stays (chaser/queries read it) but the UI runs on `effecti
 - All stage-driven UX (Today variant, default space, StageRail, FAB defaults) uses effective stage.
 - Stage-advance SUGGESTION cards on Today (organizer, one-tap apply → updates stored status, activity-logged; dismissible): confirmations enabled → confirming_participants; first booking recorded → booked_awaiting_departure (from booking_details); all non-declined participants confirmed → booking_details (from confirming). Date-driven stages need no suggestion (effective handles behavior) but a low-key "mark as ongoing/completed" sync card keeps stored status honest for the chaser.
 - Manual override remains in trip settings; the edit-trip status dropdown disappears from the primary flow.
+
+---
+
+# Part 4 — V3 experience completion (shapes we stop inheriting)
+
+## Money: balance-first, no inner tabs
+One screen: (1) position header — "You're owed £84" / "You owe £42 → Settle" / "All square ✓" with per-person breakdown expander; (2) filter chips (All · Mine · Unclaimed · by category); (3) day-grouped expense feed; (4) Settle-up renders as a STATE — a prominent flow card when balances are frozen/being settled or trip completed, not a tab; (5) "My spending" analytics = a screen pushed from the position header ("see my breakdown"), not a tab. EXPENSE_TAB_CONFIGS collapses to one MoneySpace component.
+
+## Decisions: questions, not sections
+Everywhere users see decision UX, the language and shape is "open questions": "Where are we staying? · 4 options · closes Thu". Sections remain the storage grouping but never appear as UI chrome; creating a question = AddToPlan with vote toggle (exists) or a "New question" affordance in the tray. Section templates become suggested QUESTIONS ("Where are we staying?", "How are we getting there?"). Matrix stays as an option-display mode within a question.
+
+## RSVP: three human answers over seven statuses
+Participant-facing status picker: I'm in (→confirmed, terms/capacity as now) · Can't say yet (→ follow-up: "waiting on a date?" date→conditional-date / "waiting on someone?" people→conditional-users / "just thinking"→interested) · I'm out (→declined; cancelled when previously confirmed). Waitlist/pending surface as system states, never choices. Organizer views keep full 7-status fidelity (groups, graph, waitlist queue). Same table, same enum — presentation layer only.
+
+## Motion & identity system
+- Motion tokens in index.css: --ease-spring, durations; sheet enter/exit springs; day-swipe (horizontal pan) between Plan days on mobile; press-scale feedback on cards/buttons (transform 0.98, fast); list item enter stagger (subtle, ≤150ms total); reduced-motion media query respected throughout.
+- Illustration identity: extend the 28-icon flat style into ~8 empty-state/hero illustrations (empty plan, no expenses yet, all settled, retrospective header, join teaser cover fallback, nothing-to-decide, offline, error) as in-repo SVG components — consistent stroke/palette with the avatar icons.

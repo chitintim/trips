@@ -1,12 +1,16 @@
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Badge, Card, Deadline } from '../../../components/ui'
 import { StageRail, getTripAccentStyle } from '../../../components/layout'
 import { useNeedsAttention } from '../../../lib/queries/useNeedsAttention'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
+import { effectiveTripStage } from '../../../lib/tripStage'
 import type { TripWithCount } from '../../../lib/queries/useTrip'
 
 interface TripCardProps {
   trip: TripWithCount
+  /** Reports this card's needs-attention badge count up (dashboard ordering). */
+  onAttentionCount?: (tripId: string, count: number) => void
 }
 
 function formatDateRange(startDate: string, endDate: string): string {
@@ -25,14 +29,23 @@ function formatDateRange(startDate: string, endDate: string): string {
  * countdown, and needs-attention badge count for the current user on this
  * trip.
  */
-export function TripCard({ trip }: TripCardProps) {
+export function TripCard({ trip, onAttentionCount }: TripCardProps) {
   const navigate = useNavigate()
   const needsAttention = useNeedsAttention(trip.id)
   const totalAttentionCount = needsAttention.reduce((sum, item) => sum + (item.count ?? 1), 0)
 
+  useEffect(() => {
+    onAttentionCount?.(trip.id, totalAttentionCount)
+  }, [onAttentionCount, trip.id, totalAttentionCount])
+
+  // Stage-driven UI runs on the EFFECTIVE stage (date-upgraded, never
+  // downgraded) — a trip whose dates have started reads as ongoing even if
+  // the organizer hasn't bumped the stored status yet.
+  const stage = effectiveTripStage(trip)
+
   const now = Date.now()
   const isUpcoming = new Date(trip.start_date).getTime() > now
-  const isOngoing = new Date(trip.start_date).getTime() <= now && new Date(trip.end_date).getTime() >= now
+  const isOngoing = stage === 'trip_ongoing'
 
   return (
     <div data-trip-accent style={getTripAccentStyle(trip.id)}>
@@ -53,11 +66,11 @@ export function TripCard({ trip }: TripCardProps) {
 
           <p className="text-sm text-[var(--text-secondary)]">{formatDateRange(trip.start_date, trip.end_date)}</p>
 
-          <StageRail status={trip.status} compact />
+          <StageRail status={stage} compact />
 
           <div className="flex items-center gap-2 flex-wrap">
             <Badge variant="neutral" size="sm">
-              {getTripStatusLabel(trip.status)}
+              {getTripStatusLabel(stage)}
             </Badge>
             {isOngoing && (
               <Badge variant="info" size="sm">

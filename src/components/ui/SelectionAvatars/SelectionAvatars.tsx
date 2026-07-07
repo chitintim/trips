@@ -1,5 +1,6 @@
 import { HTMLAttributes, useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
+import { UserAvatar } from '../Avatar'
 
 // ============================================================================
 // TYPES
@@ -15,6 +16,7 @@ export interface SelectionAvatarsProps extends HTMLAttributes<HTMLDivElement> {
     user?: {
       full_name?: string
       email?: string
+      avatar_url?: string | null
       avatar_data?: {
         emoji: string
         bgColor: string
@@ -200,27 +202,16 @@ export function SelectionAvatars({
       >
         {visibleSelections.map((selection) => {
           const user = selection.user
-          const emoji = (user?.avatar_data as any)?.emoji || '😊'
-          const accessory = (user?.avatar_data as any)?.accessory
-          const bgColor = (user?.avatar_data as any)?.bgColor || '#1f9d90'
           const displayName = user?.full_name || user?.email || 'Unknown'
 
           return (
-            <div
+            <UserAvatar
               key={selection.id}
-              className={`${classes.avatar} rounded-full flex flex-col items-center justify-center ring-2 ring-white`}
-              style={{ backgroundColor: bgColor }}
+              avatarData={user}
+              alt={displayName}
+              className={`${classes.avatar} ring-2 ring-white`}
               title={displayName}
-            >
-              {accessory && (
-                <span className="text-xs -mb-1">
-                  {accessory}
-                </span>
-              )}
-              <span>
-                {emoji}
-              </span>
-            </div>
+            />
           )
         })}
 
@@ -275,9 +266,6 @@ export function SelectionAvatars({
           <div className="py-2">
             {sortedSelections.map((selection) => {
               const user = selection.user
-              const emoji = (user?.avatar_data as any)?.emoji || '😊'
-              const accessory = (user?.avatar_data as any)?.accessory
-              const bgColor = (user?.avatar_data as any)?.bgColor || '#1f9d90'
               const displayName = user?.full_name || user?.email || 'Unknown'
 
               return (
@@ -286,19 +274,7 @@ export function SelectionAvatars({
                   className="px-4 py-3 hover:bg-[var(--surface-sunken)] transition-colors"
                 >
                   <div className="flex items-center gap-3">
-                    <div
-                      className="w-10 h-10 rounded-full flex flex-col items-center justify-center flex-shrink-0"
-                      style={{ backgroundColor: bgColor }}
-                    >
-                      {accessory && (
-                        <span className="text-xs -mb-1">
-                          {accessory}
-                        </span>
-                      )}
-                      <span className="text-base">
-                        {emoji}
-                      </span>
-                    </div>
+                    <UserAvatar avatarData={user} alt={displayName} size="md" className="flex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-[var(--text-primary)] truncate">
                         {displayName}

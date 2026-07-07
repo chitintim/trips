@@ -1,19 +1,20 @@
-import { TripBrief } from './components/TripBrief'
-
-export { TripBrief } from './components/TripBrief'
+/**
+ * Public surface of the brief feature. v2.1: the Brief TAB is gone — its
+ * content is absorbed into Today's stage layouts (UX_REDESIGN.md Part 2), so
+ * this barrel now exports the decomposed brief SECTIONS plus the data hook,
+ * and no tab config.
+ */
+export {
+  BriefCover,
+  OrganizerMessageCard,
+  CostBandCard,
+  RsvpCard,
+  WhosInRow,
+  FaqCard,
+} from './components/BriefSections'
+export type { RsvpCardProps } from './components/BriefSections'
 export { FaqAccordion } from './components/FaqAccordion'
+export { useBriefData } from './lib/useBriefData'
+export type { BriefData } from './lib/useBriefData'
 export * from './lib/costBand'
 export * from './lib/autoFaq'
-
-/**
- * Tab config for the coordinator to wire as the stage-aware trip home
- * during gathering_interest/confirming_participants (per plan §5/§6 — the
- * "Today"/"Settle up" variants for other stages are other workstreams'
- * concern; this is specifically the brief for pre-confirmation stages).
- */
-export const briefTabConfig = {
-  tabId: 'brief',
-  label: 'Brief',
-  icon: '📋',
-  Component: TripBrief,
-}

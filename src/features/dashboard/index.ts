@@ -1,3 +1,5 @@
 export { MemberDashboard } from './components/MemberDashboard'
 export { TripCard } from './components/TripCard'
-export { CreateTripSheet } from './components/CreateTripSheet'
+export { CreateTripWizard } from './components/CreateTripWizard'
+export type { CreateTripWizardProps } from './components/CreateTripWizard'
+export { resolveSingleActiveTripRedirect, orderDashboardTrips, isMyTrip } from './lib/landing'

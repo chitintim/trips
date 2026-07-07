@@ -109,6 +109,7 @@ export function MatrixView({ tripId, options, currency = 'GBP' }: MatrixViewProp
                                 ? {
                                     full_name: s.user.full_name ?? undefined,
                                     email: s.user.email ?? undefined,
+                                    avatar_url: s.user.avatar_url ?? undefined,
                                     avatar_data: (s.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
                                   }
                                 : undefined,

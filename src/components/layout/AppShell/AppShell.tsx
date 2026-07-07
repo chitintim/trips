@@ -77,8 +77,9 @@ export function AppShell({
 
   return (
     <div className={`min-h-screen bg-[var(--surface-page)] md:flex ${className}`.trim()} {...props}>
-      {/* Desktop sidebar */}
-      <aside className="hidden md:flex md:flex-col md:w-60 lg:w-64 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--surface-raised)] sticky top-0 h-screen">
+      {/* Desktop sidebar — app chrome (UX_REDESIGN.md "Systemic layering" §1):
+          explicit z-sticky so nothing in tab content can ever stack above it. */}
+      <aside className="hidden md:flex md:flex-col md:w-60 lg:w-64 shrink-0 border-r border-[var(--border-subtle)] bg-[var(--surface-raised)] sticky top-0 z-sticky h-screen">
         {sidebarHeader && (
           <div className="px-5 py-5 border-b border-[var(--border-subtle)]">
             {sidebarHeader}

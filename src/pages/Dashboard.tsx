@@ -104,7 +104,7 @@ export function Dashboard() {
                   onClick={() => setProfileModalOpen(true)}
                   className="flex items-center gap-2 text-sm text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)]"
                 >
-                  <UserAvatar avatarData={currentUser.avatar_data} size="sm" />
+                  <UserAvatar avatarData={currentUser} size="sm" />
                   <span className="hidden sm:inline">{currentUser.full_name || user?.email}</span>
                 </button>
               )}
@@ -393,7 +393,7 @@ function AdminUsersTab() {
                   <tr key={u.id} className="transition-colors hover:bg-[var(--surface-sunken)]">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
-                        <UserAvatar avatarData={u.avatar_data} size="sm" />
+                        <UserAvatar avatarData={u} size="sm" />
                         <div className="min-w-0">
                           <p className="truncate font-medium text-[var(--text-primary)]">{u.full_name || 'Unnamed user'}</p>
                           <p className="truncate text-xs text-[var(--text-muted)]">{u.email}</p>
@@ -448,7 +448,9 @@ const INVITATION_BADGE: Record<string, { label: string; variant: 'success' | 'wa
 }
 
 function invitationLink(code: string): string {
-  return `${window.location.origin}/trips/signup?code=${code}`
+  // Invitation links open the PUBLIC trip teaser first (UX_REDESIGN Part 2
+  // "Invite → join funnel"); the teaser hands off to /signup?code=….
+  return `${window.location.origin}/trips/join/${code}`
 }
 
 function AdminInvitationsTab() {

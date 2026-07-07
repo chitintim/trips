@@ -1,5 +1,7 @@
 import { HTMLAttributes, ImgHTMLAttributes, forwardRef, useState } from 'react'
 import type { AvatarData } from '../../../types'
+import { resolveAvatar } from './resolveAvatar'
+import { ICON_REGISTRY } from './icons/travelIcons'
 
 // ============================================================================
 // TYPES
@@ -9,7 +11,9 @@ export type { AvatarData }
 
 export interface AvatarProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   /**
-   * Image source URL
+   * Image source URL. Takes priority over `avatarUrl` when both are given
+   * (this is the generic "any image" prop; `avatarUrl` is the avatar-system
+   * specific one -- see `resolveAvatar`'s resolution order).
    */
   src?: string
 
@@ -19,11 +23,20 @@ export interface AvatarProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, '
   fallback?: string
 
   /**
-   * Emoji avatar_data contract (preferred for this app's users).
-   * When provided, renders the emoji + accessory + bgColor combo used
-   * throughout the app instead of an image/initials.
+   * users.avatar_url (avatar system v2 "upload" type) -- highest-priority
+   * resolved avatar source after `src`. Prefer this over `src` for
+   * user-avatar call sites; `src` remains for non-user images.
    */
-  avatarData?: AvatarData | Partial<AvatarData> | null
+  avatarUrl?: string | null
+
+  /**
+   * Resolvable avatar_data: either the v2 icon shape
+   * (`{type:'icon', icon, bgColor}`) or the legacy emoji shape
+   * (`{emoji, accessory, bgColor}`). Also accepts the raw user row shape
+   * (`{avatar_url, avatar_data}`) for callers that have the whole user
+   * object handy -- see `resolveAvatar`.
+   */
+  avatarData?: AvatarData | Partial<AvatarData> | unknown | null
 
   /**
    * Alt text for the image
@@ -64,6 +77,7 @@ export const Avatar = forwardRef<HTMLImageElement, AvatarProps>(
     {
       src,
       fallback,
+      avatarUrl,
       avatarData,
       alt = 'Avatar',
       size = 'md',
@@ -93,21 +107,58 @@ export const Avatar = forwardRef<HTMLImageElement, AvatarProps>(
       ${className}
     `.trim().replace(/\s+/g, ' ')
 
-    // Emoji avatar_data contract takes priority (this app's primary avatar style)
-    if (avatarData) {
+    // Resolver order (UX_REDESIGN.md "Avatar system v2"): avatar_url ->
+    // icon -> legacy emoji -> initials. `src` (generic image prop) wins
+    // over the resolved avatar_url only when both are explicitly given.
+    const resolved = resolveAvatar({ avatarUrl: src ? undefined : avatarUrl, avatarData })
+
+    if (!src && resolved.kind === 'photo') {
+      return (
+        <div className={`${combinedClasses} bg-gradient-to-br from-accent-400 to-accent-600`}>
+          {imageError ? (
+            <span className="uppercase">{fallback || alt.charAt(0) || '?'}</span>
+          ) : (
+            <img
+              ref={ref}
+              src={resolved.url}
+              alt={alt}
+              className="w-full h-full object-cover"
+              onError={() => setImageError(true)}
+              {...props}
+            />
+          )}
+        </div>
+      )
+    }
+
+    if (!src && resolved.kind === 'icon') {
+      const Icon = ICON_REGISTRY[resolved.icon]
       return (
         <div
-          className={`${combinedClasses} flex-col bg-accent-500`}
-          style={{ backgroundColor: avatarData.bgColor || undefined }}
+          className={`${combinedClasses} bg-accent-500`}
+          style={{ backgroundColor: resolved.bgColor }}
           role="img"
           aria-label={alt}
         >
-          {avatarData.accessory && (
+          <Icon className="w-[60%] h-[60%] text-white" />
+        </div>
+      )
+    }
+
+    if (!src && resolved.kind === 'emoji') {
+      return (
+        <div
+          className={`${combinedClasses} flex-col bg-accent-500`}
+          style={{ backgroundColor: resolved.bgColor }}
+          role="img"
+          aria-label={alt}
+        >
+          {resolved.accessory && (
             <span className="text-[0.6em] leading-none -mb-1" aria-hidden="true">
-              {avatarData.accessory}
+              {resolved.accessory}
             </span>
           )}
-          <span>{avatarData.emoji || '🙂'}</span>
+          <span>{resolved.emoji}</span>
         </div>
       )
     }
@@ -140,7 +191,10 @@ Avatar.displayName = 'Avatar'
 // ============================================================================
 // Convenience wrapper matching the raw inline markup used pre-v2
 // (e.g. `(user.avatar_data as any)?.emoji`). Accepts the loosely-typed
-// avatar_data straight from Supabase without callers needing to cast.
+// avatar_data straight from Supabase without callers needing to cast --
+// AND (avatar system v2) the raw user row shape `{avatar_url, avatar_data}`
+// so callers can pass the whole user object and get upload/icon/emoji/
+// initials resolution for free. See `resolveAvatar` for the precise rules.
 // ============================================================================
 
 export interface UserAvatarProps extends HTMLAttributes<HTMLDivElement> {
@@ -150,21 +204,50 @@ export interface UserAvatarProps extends HTMLAttributes<HTMLDivElement> {
 }
 
 export function UserAvatar({ avatarData, size = 'md', alt = 'Avatar', className = '', ...props }: UserAvatarProps) {
-  const data = (avatarData || {}) as AvatarData
+  const resolved = resolveAvatar({ avatarData })
+  const sizeAndShape = `${sizeStyles[size ?? 'md']} rounded-full flex shrink-0 ${className}`
+
+  if (resolved.kind === 'photo') {
+    return (
+      <div className={`${sizeAndShape} items-center justify-center overflow-hidden bg-gradient-to-br from-accent-400 to-accent-600`} {...props}>
+        <img src={resolved.url} alt={alt} className="w-full h-full object-cover" />
+      </div>
+    )
+  }
+
+  if (resolved.kind === 'icon') {
+    const Icon = ICON_REGISTRY[resolved.icon]
+    return (
+      <div
+        className={`${sizeAndShape} items-center justify-center`}
+        style={{ backgroundColor: resolved.bgColor }}
+        role="img"
+        aria-label={alt}
+        {...props}
+      >
+        <Icon className="w-[60%] h-[60%] text-white" />
+      </div>
+    )
+  }
+
+  const bgColor = resolved.kind === 'emoji' ? resolved.bgColor : '#1f9d90'
+  const emoji = resolved.kind === 'emoji' ? resolved.emoji : '🙂'
+  const accessory = resolved.kind === 'emoji' ? resolved.accessory : null
+
   return (
     <div
-      className={`${sizeStyles[size ?? 'md']} rounded-full flex flex-col items-center justify-center shrink-0 ${className}`}
-      style={{ backgroundColor: data.bgColor || '#1f9d90' }}
+      className={`${sizeAndShape} flex-col items-center justify-center`}
+      style={{ backgroundColor: bgColor }}
       role="img"
       aria-label={alt}
       {...props}
     >
-      {data.accessory && (
+      {accessory && (
         <span className="text-[0.6em] leading-none -mb-1" aria-hidden="true">
-          {data.accessory}
+          {accessory}
         </span>
       )}
-      <span>{data.emoji || '🙂'}</span>
+      <span>{emoji}</span>
     </div>
   )
 }

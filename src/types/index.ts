@@ -190,10 +190,38 @@ export interface CreateTripNoteForm {
 }
 
 // Avatar types
+//
+// Avatar system v2 (UX_REDESIGN.md "Avatar system v2"): three avatar types,
+// stored backward-compatibly in the existing `users.avatar_url` /
+// `users.avatar_data` columns -- nothing is migrated destructively, old
+// data keeps rendering exactly as before.
+//   1. `upload`  -> users.avatar_url (a public URL into the `avatars`
+//                   storage bucket); avatar_data may still hold a fallback.
+//   2. `icon`    -> avatar_data: {type:'icon', icon, bgColor}
+//   3. (legacy, untyped) `{emoji, accessory, bgColor}` -- pre-v2 shape,
+//      kept rendering forever, never written by new code.
 export interface AvatarData {
   emoji: string
   accessory?: string | null
   bgColor: string
+}
+
+export interface AvatarIconData {
+  type: 'icon'
+  icon: string
+  bgColor: string
+}
+
+/** Whatever may legitimately live in `users.avatar_data` across all eras. */
+export type AnyAvatarData = AvatarIconData | AvatarData
+
+export function isAvatarIconData(data: unknown): data is AvatarIconData {
+  return (
+    !!data &&
+    typeof data === 'object' &&
+    (data as { type?: unknown }).type === 'icon' &&
+    typeof (data as { icon?: unknown }).icon === 'string'
+  )
 }
 
 export interface SignupForm {

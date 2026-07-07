@@ -24,7 +24,7 @@ export function ParticipantChipRow({ participants, selectedUserIds, onToggle, di
             selected={selected}
             onClick={() => onToggle(p.user_id)}
             disabled={disabled}
-            icon={<UserAvatar avatarData={p.user.avatar_data} size="xs" alt={p.user.full_name ?? p.user.email} />}
+            icon={<UserAvatar avatarData={p.user} size="xs" alt={p.user.full_name ?? p.user.email} />}
           >
             {p.user.full_name || p.user.email}
           </Chip>

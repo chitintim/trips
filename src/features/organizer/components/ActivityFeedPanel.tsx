@@ -18,11 +18,12 @@ export function ActivityFeedPanel({ tripId }: ActivityFeedPanelProps) {
   const { data: participants } = useParticipants(tripId)
 
   const usersById = useMemo(() => {
-    const map = new Map<string, { name: string; avatarData: unknown }>()
+    const map = new Map<string, { name: string; avatar_url: unknown; avatar_data: unknown }>()
     for (const p of participants ?? []) {
       map.set(p.user_id, {
         name: p.user?.full_name || p.user?.email || 'Someone',
-        avatarData: p.user?.avatar_data ?? null,
+        avatar_url: p.user?.avatar_url ?? null,
+        avatar_data: p.user?.avatar_data ?? null,
       })
     }
     return map
@@ -50,7 +51,7 @@ export function ActivityFeedPanel({ tripId }: ActivityFeedPanelProps) {
         return (
           <li key={entry.id} className="flex items-start gap-3 py-2.5">
             {actor ? (
-              <UserAvatar avatarData={actor.avatarData} size="sm" />
+              <UserAvatar avatarData={actor} size="sm" />
             ) : (
               <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--surface-sunken)] text-sm" aria-hidden="true">
                 {rendered.icon}

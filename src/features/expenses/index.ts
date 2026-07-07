@@ -32,6 +32,12 @@ export type { ExpenseEditorWizardProps } from './editor/ExpenseEditorWizard'
 
 export { ClaimPage } from './claims/ClaimPage'
 
+// Balance math, exposed for Today's "you owe / are owed" chip and settle
+// status card (UX_REDESIGN Part 2) — same functions the Money tabs use, so
+// the figures always agree.
+export { computeBalances, splitOwedAmounts } from './lib/balances'
+export type { ParticipantBalance, BalanceComputationResult } from './lib/balances'
+
 export interface ExpenseTabComponentProps {
   trip: Trip
 }

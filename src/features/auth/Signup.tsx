@@ -221,7 +221,10 @@ export function Signup() {
         firstName={firstName}
         avatarData={avatarData}
         tripId={invitation?.trip_id}
-        onContinue={() => navigate('/')}
+        // Invitation tied to a trip → land INSIDE that trip (its Today
+        // space shows the RSVP card), not on the dashboard (UX_REDESIGN
+        // Part 2 "Invite → join funnel").
+        onContinue={() => navigate(invitation?.trip_id ? `/${invitation.trip_id}` : '/')}
       />
     )
   }

@@ -85,7 +85,16 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
       max_reminders: maxReminders,
     }
     try {
-      await updateTrip.mutateAsync({ chase_settings: settings as unknown as Json })
+      // Merge over the raw jsonb rather than replacing it: chase_settings
+      // also carries keys owned by other flows (e.g. the creation wizard's
+      // dates_pending/dates_section_id) which must survive a save here.
+      const existing =
+        trip.chase_settings && typeof trip.chase_settings === 'object' && !Array.isArray(trip.chase_settings)
+          ? (trip.chase_settings as Record<string, Json>)
+          : {}
+      await updateTrip.mutateAsync({
+        chase_settings: { ...existing, ...(settings as unknown as Record<string, Json>) } as Json,
+      })
       logActivity({ verb: 'chase_settings_updated', metadata: { enabled: settings.enabled } })
       showToast({
         type: 'success',

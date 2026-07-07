@@ -28,11 +28,12 @@ export function ChecklistTab({ tripId }: ChecklistTabProps) {
   const [assignee, setAssignee] = useState('')
 
   const usersById = useMemo(() => {
-    const map = new Map<string, { name: string; avatarData: unknown }>()
+    const map = new Map<string, { name: string; avatar_url: unknown; avatar_data: unknown }>()
     for (const p of participants ?? []) {
       map.set(p.user_id, {
         name: (p.user?.full_name || p.user?.email || 'Someone').split(' ')[0],
-        avatarData: p.user?.avatar_data ?? null,
+        avatar_url: p.user?.avatar_url ?? null,
+        avatar_data: p.user?.avatar_data ?? null,
       })
     }
     return map
@@ -147,7 +148,7 @@ export function ChecklistTab({ tripId }: ChecklistTabProps) {
                   </span>
                   {assigneeInfo && (
                     <span className="flex shrink-0 items-center gap-1.5" title={`${assigneeInfo.name} is bringing this`}>
-                      <UserAvatar avatarData={assigneeInfo.avatarData} size="xs" />
+                      <UserAvatar avatarData={assigneeInfo} size="xs" />
                       <span className="hidden text-xs text-[var(--text-muted)] sm:inline">{assigneeInfo.name}</span>
                     </span>
                   )}

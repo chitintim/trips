@@ -1,11 +1,10 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { Button, SegmentedControl, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { usePlanItems } from '../lib/usePlanItems'
 import type { PlanItem } from '../lib/planItems'
 import { PlanBoard } from './PlanBoard'
-import { PlanMapLens } from './PlanMapLens'
 import { PlanDecideLens } from './PlanDecideLens'
 import { PlanItemSheet } from './PlanItemSheet'
 import { AddToPlanSheet } from './AddToPlanSheet'
@@ -13,6 +12,12 @@ import { ScheduleItSheet } from './ScheduleItSheet'
 import type { Trip } from '../../../types'
 
 type Lens = 'list' | 'map' | 'decide'
+
+// The Map lens pulls in react-leaflet/leaflet (~2.7MB). Now that the Plan
+// space is wired eagerly into TripDetail (v2.1 four-space nav), the lens is
+// lazy-loaded so leaflet stays out of the main chunk until a user actually
+// switches to Map — same treatment TripMapTab always had.
+const LazyPlanMapLens = lazy(() => import('./PlanMapLens').then((m) => ({ default: m.PlanMapLens })))
 
 export interface PlanTabProps {
   trip: Trip
@@ -73,9 +78,13 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
       </div>
 
       {lens === 'list' && (
-        <PlanBoard trip={trip} items={items} onOpenItem={setSelectedItem} onScheduleIt={setScheduleItem} />
+        <PlanBoard trip={trip} items={items} isOrganizer={isOrganizer} onOpenItem={setSelectedItem} onScheduleIt={setScheduleItem} />
       )}
-      {lens === 'map' && <PlanMapLens trip={trip} items={items} onOpenItem={setSelectedItem} />}
+      {lens === 'map' && (
+        <Suspense fallback={<Skeleton variant="card" height={420} />}>
+          <LazyPlanMapLens trip={trip} items={items} onOpenItem={setSelectedItem} />
+        </Suspense>
+      )}
       {lens === 'decide' && <PlanDecideLens trip={trip} items={items} onOpenItem={setSelectedItem} />}
 
       <PlanItemSheet

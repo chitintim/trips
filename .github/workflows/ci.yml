@@ -20,6 +20,8 @@ jobs:
         run: npx tsc -b
       - name: Lint
         run: npx eslint src --max-warnings 200
+      - name: z-index layering check
+        run: node scripts/check-zindex.mjs
       - name: Unit tests
         run: npm run test -- --run
       - name: Contract drift check

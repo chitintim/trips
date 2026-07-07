@@ -59,7 +59,7 @@ export function ExpenseCard({ expense, payer, baseCurrency, currentUserId, onEdi
         <div className="flex items-center gap-2 mt-1.5 flex-wrap">
           {payer && (
             <span className="inline-flex items-center gap-1 text-xs text-[var(--text-secondary)]">
-              <UserAvatar avatarData={payer.user.avatar_data} size="xs" alt={payer.user.full_name ?? payer.user.email} />
+              <UserAvatar avatarData={payer.user} size="xs" alt={payer.user.full_name ?? payer.user.email} />
               {payer.user.full_name || payer.user.email}
             </span>
           )}

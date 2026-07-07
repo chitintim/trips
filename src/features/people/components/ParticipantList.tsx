@@ -62,7 +62,7 @@ export function ParticipantList({ participants, currentUserId, onSelect }: Parti
                   onClick={() => onSelect(p)}
                   className="w-full flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border-subtle)] hover:border-accent-300 transition-colors text-left"
                 >
-                  <UserAvatar avatarData={p.user?.avatar_data} size="md" />
+                  <UserAvatar avatarData={p.user} size="md" />
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-[var(--text-primary)] truncate">

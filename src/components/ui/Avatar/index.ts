@@ -1,2 +1,6 @@
 export { Avatar, UserAvatar } from './Avatar'
 export type { AvatarProps, UserAvatarProps, AvatarData } from './Avatar'
+export { resolveAvatar } from './resolveAvatar'
+export type { ResolvedAvatar, ResolvableAvatarSource } from './resolveAvatar'
+export { ICON_REGISTRY, AVATAR_ICON_NAMES, isAvatarIconName } from './icons/travelIcons'
+export type { AvatarIconName } from './icons/travelIcons'

@@ -26,7 +26,7 @@ export function PayerStep({ draft, onChange, participants }: PayerStepProps) {
               isSelected ? 'ring-2 ring-accent-500 border-accent-500' : ''
             }`}
           >
-            <UserAvatar avatarData={p.user.avatar_data} size="sm" alt={p.user.full_name ?? p.user.email} />
+            <UserAvatar avatarData={p.user} size="sm" alt={p.user.full_name ?? p.user.email} />
             <span className="flex-1 font-medium text-[var(--text-primary)]">
               {p.user.full_name || p.user.email}
             </span>

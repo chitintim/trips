@@ -40,7 +40,7 @@ export function WaitlistPanel({ tripId, participants, isOrganizer }: WaitlistPan
           <Badge variant="neutral" size="sm">
             #{entry.position}
           </Badge>
-          <UserAvatar avatarData={entry.participant.user?.avatar_data} size="sm" />
+          <UserAvatar avatarData={entry.participant.user} size="sm" />
           <div className="flex-1 min-w-0">
             <p className="font-medium text-[var(--text-primary)] truncate">{displayName(entry.participant)}</p>
             {entry.hasActiveOffer && entry.participant.waitlist_offer_expires_at && (

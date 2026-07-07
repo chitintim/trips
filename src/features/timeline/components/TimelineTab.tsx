@@ -154,7 +154,7 @@ export function TimelineTab({ trip }: TimelineTabProps) {
                 <button
                   type="button"
                   onClick={() => toggleDay(dateStr)}
-                  className={`sticky top-0 z-[var(--z-dropdown)] flex w-full items-center justify-between rounded-t-[var(--radius-lg)] px-4 py-2.5 transition-colors ${
+                  className={`sticky top-0 z-30 flex w-full items-center justify-between rounded-t-[var(--radius-lg)] px-4 py-2.5 transition-colors ${
                     isToday
                       ? 'bg-accent-50 hover:bg-accent-100 dark:bg-accent-950/60'
                       : 'border border-[var(--border-subtle)] bg-[var(--surface-raised)] hover:bg-[var(--surface-sunken)]'

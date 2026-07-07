@@ -110,7 +110,7 @@ export function SplitStep({
           const computed = preview.find((s) => s.userId === p.user_id)
           return (
             <div key={p.user_id} className="flex items-center gap-3">
-              <UserAvatar avatarData={p.user.avatar_data} size="xs" alt={p.user.full_name ?? p.user.email} />
+              <UserAvatar avatarData={p.user} size="xs" alt={p.user.full_name ?? p.user.email} />
               <span className="flex-1 text-sm font-medium text-[var(--text-primary)] truncate">
                 {p.user.full_name || p.user.email}
               </span>

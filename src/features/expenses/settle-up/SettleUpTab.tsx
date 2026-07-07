@@ -203,7 +203,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
           return (
             <Card key={s.id} noPadding className="p-3.5 space-y-2">
               <div className="flex items-center gap-3">
-                <UserAvatar avatarData={recipient?.user.avatar_data} size="xs" alt={nameById[s.to_user_id] ?? ''} />
+                <UserAvatar avatarData={recipient?.user} size="xs" alt={nameById[s.to_user_id] ?? ''} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-[var(--text-primary)]">
                     {nameById[s.from_user_id] ?? 'Someone'} → {nameById[s.to_user_id] ?? 'someone'}

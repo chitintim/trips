@@ -29,7 +29,7 @@ export function NoteCard({ note, canDelete, onDelete }: NoteCardProps) {
               {config.icon} {config.label}
             </span>
             <span className="flex items-center gap-1.5">
-              <UserAvatar avatarData={note.user?.avatar_data} size="xs" />
+              <UserAvatar avatarData={note.user} size="xs" />
               <span className="text-sm font-medium text-[var(--text-primary)]">{note.user?.full_name || note.user?.email || 'Unknown'}</span>
             </span>
             <span className="text-xs text-[var(--text-muted)]">{formatRelativeTime(note.created_at)}</span>

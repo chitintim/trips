@@ -15,6 +15,7 @@ const KIND_BADGE: Record<Blocker['kind'], { icon: string; variant: 'warning' | '
   pending_rsvp: { icon: '📝', variant: 'warning' },
   due_conditional: { icon: '⏰', variant: 'error' },
   unvoted_poll: { icon: '🗳️', variant: 'info' },
+  unfilled_order: { icon: '🎿', variant: 'info' },
   unclaimed_items: { icon: '🧾', variant: 'warning' },
   unconfirmed_settlement: { icon: '💸', variant: 'warning' },
   expiring_waitlist_offer: { icon: '⏳', variant: 'error' },

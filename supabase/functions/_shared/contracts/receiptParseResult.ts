@@ -117,7 +117,7 @@ export const ReceiptParseResultJsonSchema = {
             line_number: { type: 'integer' },
             name_original: { type: 'string' },
             name_english: { type: ['string', 'null'] },
-            quantity: { type: 'number', exclusiveMinimum: 0 },
+            quantity: { type: 'number' },
             unit_price: { type: 'number' },
             line_total: { type: 'number' },
             printed_field: { type: 'string', enum: ['unit_price', 'line_total', 'both', 'ambiguous'] },

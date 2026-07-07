@@ -1073,6 +1073,7 @@ export type Database = {
           description: string | null
           hide_votes_until_close: boolean
           id: string
+          metadata: Json | null
           order_index: number
           quorum: number | null
           section_type: Database["public"]["Enums"]["section_type"]
@@ -1089,6 +1090,7 @@ export type Database = {
           description?: string | null
           hide_votes_until_close?: boolean
           id?: string
+          metadata?: Json | null
           order_index?: number
           quorum?: number | null
           section_type: Database["public"]["Enums"]["section_type"]
@@ -1105,6 +1107,7 @@ export type Database = {
           description?: string | null
           hide_votes_until_close?: boolean
           id?: string
+          metadata?: Json | null
           order_index?: number
           quorum?: number | null
           section_type?: Database["public"]["Enums"]["section_type"]

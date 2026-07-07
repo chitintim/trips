@@ -10,6 +10,7 @@ export { PasteALinkSheet } from './components/PasteALinkSheet'
 export * from './lib/costImpact'
 export * from './lib/voting'
 export * from './lib/optionMetadata'
+export * from './lib/decisionShapes'
 
 /**
  * Tab config for the coordinator to wire into TripDetail's tab list

@@ -3,6 +3,7 @@ import { useAuth } from '../../../hooks/useAuth'
 import { Button, EmptyState, Skeleton } from '../../../components/ui'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useSections, useVotes, useReactions, useComments } from '../../../lib/queries/usePlanning'
+import { getDecisionShape } from '../lib/decisionShapes'
 import type { Option } from '../../../types'
 import type { OptionDraft } from '../../../shared/contracts'
 import { SectionCard } from './SectionCard'
@@ -113,6 +114,7 @@ export function DecisionsTab({ tripId }: DecisionsTabProps) {
           sectionId={optionSheet.sectionId}
           option={optionSheet.option}
           prefillDraft={optionSheet.prefillDraft}
+          decisionShape={getDecisionShape((sections || []).find((s) => s.id === optionSheet.sectionId)?.metadata)}
         />
       )}
 

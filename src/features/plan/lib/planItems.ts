@@ -43,7 +43,8 @@ import type { TimelineEvent } from '../../../types'
 import type { Json } from '../../../types/database.types'
 import { readOptionMetadata } from '../../decisions/lib/optionMetadata'
 import { tallyVotes, getWinner, type VotingMethod } from '../../decisions/lib/voting'
-import { getPerPersonCostImpact } from '../../decisions/lib/costImpact'
+import { getPerPersonCostImpact, getTierSensitivityLine, isTieredCostImpact } from '../../decisions/lib/costImpact'
+import { isPersonalOrderSection } from '../../decisions/lib/decisionShapes'
 
 export type PlanItemStage = 'idea' | 'proposal' | 'decided' | 'booked'
 
@@ -59,6 +60,10 @@ export interface PlanItemVoteSummary {
 export interface PlanItemCostImpact {
   perPerson: number | null
   currency: string | null
+  /** True when this figure comes from tiered group pricing (option.metadata.price_tiers, UX_REDESIGN.md Part 5 shape 3) rather than flat price_type math. */
+  isTiered: boolean
+  /** "£75/pp if 6 · £38/pp if 12" — null when not tiered. */
+  sensitivityLine: string | null
 }
 
 export interface PlanItemBookingInfo {
@@ -99,6 +104,8 @@ export interface PlanItem {
   sectionTitle: string | null
   sectionType: string | null
   isMatrixSection: boolean
+  /** True when this option belongs to a shape-2 "personal order" section (UX_REDESIGN.md Part 5) — never a vote, handled via the order form instead. */
+  isPersonalOrder: boolean
 
   vote: PlanItemVoteSummary | null
   costImpact: PlanItemCostImpact | null
@@ -228,6 +235,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       sectionTitle: null,
       sectionType: null,
       isMatrixSection: false,
+      isPersonalOrder: false,
       vote: null,
       costImpact: null,
       booking: toBookingInfo(booking),
@@ -247,6 +255,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       const meta = readOptionMetadata(o.metadata)
       return !!meta.grid_row && !!meta.grid_column
     })
+    const isPersonalOrder = isPersonalOrderSection(section.metadata)
 
     for (const option of section.options) {
       if (absorbedOptionIds.has(option.id)) continue
@@ -263,17 +272,22 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       // any of its options, reads as a parked "idea" rather than an
       // actively-votable "proposal". Once voting starts (any vote cast) or
       // the section is in_progress/completed, it graduates to `proposal`.
-      const isIdea = section.status === 'not_started' && !hasAnyVotes
+      // Personal-order (shape 2) catalog items are never votes, so the
+      // "no votes yet" signal is meaningless for them — they're always a
+      // live catalog entry, never a parked idea.
+      const isIdea = !isPersonalOrder && section.status === 'not_started' && !hasAnyVotes
 
       const isWinner = !!winner && winner.optionId === option.id && winner.score > 0
       const stage: PlanItemStage = booking ? 'booked' : isIdea ? 'idea' : 'proposal'
 
-      const perPerson = getPerPersonCostImpact({
+      const costImpactInput = {
         price: option.price,
         currency: option.currency,
         priceType: option.price_type,
         confirmedCount,
-      })
+        metadata: option.metadata,
+      }
+      const perPerson = getPerPersonCostImpact(costImpactInput)
 
       items.push({
         id: option.id,
@@ -295,7 +309,8 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
         sectionTitle: section.title,
         sectionType: section.section_type,
         isMatrixSection: isMatrixSection,
-        vote: isIdea
+        isPersonalOrder,
+        vote: isIdea || isPersonalOrder
           ? null
           : {
               votingMethod,
@@ -305,7 +320,15 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
               hideVotesUntilClose: section.hide_votes_until_close,
               quorum: section.quorum,
             },
-        costImpact: perPerson != null ? { perPerson, currency: option.currency } : null,
+        costImpact:
+          perPerson != null
+            ? {
+                perPerson,
+                currency: option.currency,
+                isTiered: isTieredCostImpact(option.metadata),
+                sensitivityLine: getTierSensitivityLine(costImpactInput),
+              }
+            : null,
         booking: toBookingInfo(booking),
         // A winner that hasn't yet produced a timeline event (no event has
         // source_option_id === this option) is ready for "put it on the

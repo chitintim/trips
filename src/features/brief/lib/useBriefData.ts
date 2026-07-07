@@ -42,8 +42,8 @@ export function useBriefData(tripId: string): BriefData {
 
   const costBand = useMemo(() => {
     if (!trip || !sections) return null
-    return computeCostBand(trip, sections, votes || [], confirmedCount)
-  }, [trip, sections, votes, confirmedCount])
+    return computeCostBand(trip, sections, votes || [], confirmedCount, user?.id ?? null)
+  }, [trip, sections, votes, confirmedCount, user?.id])
 
   const hasUnpaidBalance = (settlements || []).some(
     (s) => (s.from_user_id === user?.id || s.to_user_id === user?.id) && s.status !== 'confirmed'

@@ -1,18 +1,23 @@
 import { useMemo, useState } from 'react'
-import { Button, EmptyState, Modal, useToast, formatDeadlineLabel } from '../../../components/ui'
+import { Button, Badge, EmptyState, Modal, useToast, formatDeadlineLabel } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
-import { useSections, useCreateSection } from '../../../lib/queries/usePlanning'
+import { useSections, useCreateSection, useVotes } from '../../../lib/queries/usePlanning'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useTimeline, useCreateTimelineEvent } from '../../../lib/queries/useTimeline'
+import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
 import { MatrixView } from '../../decisions/components/MatrixView'
+import { getDecisionShape } from '../../decisions/lib/decisionShapes'
+import { computeQuestionState } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
 import { CompanionSuggestionCard } from './CompanionSuggestionCard'
+import { OrderFormSheet } from './OrderFormSheet'
+import { ConsolidatedOrdersSheet } from './ConsolidatedOrdersSheet'
 import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
 import { groupPlanItemsByDate, groupUndatedBySection } from '../lib/planItems'
 import { useDaySwipe } from '../lib/useDaySwipe'
@@ -91,6 +96,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const { data: sections } = useSections(trip.id)
   const { data: bookings } = useBookings(trip.id)
   const { data: events } = useTimeline(trip.id)
+  const { data: votes } = useVotes(trip.id)
+  const { data: participants } = useParticipants(trip.id)
   const toggleVote = useToggleVote(trip.id)
   const createSection = useCreateSection(trip.id)
   const createEvent = useCreateTimelineEvent(trip.id)
@@ -98,6 +105,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const [votingId, setVotingId] = useState<string | null>(null)
   const [creatingStarters, setCreatingStarters] = useState(false)
   const [matrixSectionId, setMatrixSectionId] = useState<string | null>(null)
+  const [orderFormSectionId, setOrderFormSectionId] = useState<string | null>(null)
+  const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
   const [materializingKey, setMaterializingKey] = useState<string | null>(null)
   const [collapsedWeeks, setCollapsedWeeks] = useState<Set<number>>(() => new Set())
   const [dismissedSuggestionKeys, setDismissedSuggestionKeys] = useState<Set<string>>(() => loadDismissedKeys(trip.id))
@@ -286,6 +295,10 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
           {Array.from(undatedBySection.entries()).map(([sectionId, sectionItems]) => {
             const section = sectionId ? (sections || []).find((s) => s.id === sectionId) : undefined
             const isMatrix = sectionItems.some((i) => i.isMatrixSection)
+            const isPersonalOrder = section ? getDecisionShape(section.metadata) === 'personal' : false
+            const questionState = section
+              ? computeQuestionState(section, votes || [], (participants || []).length, user?.id ?? null, trip.base_currency)
+              : null
             // Questions, not sections (UX_REDESIGN.md Part 4 "Decisions:
             // questions, not sections"): the section's TITLE renders as the
             // question itself ("Where are we staying?"), with a plain
@@ -297,9 +310,18 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                 {section && (
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <h4 className="text-sm font-medium text-[var(--text-primary)]">{section.title}</h4>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h4 className="text-sm font-medium text-[var(--text-primary)]">{section.title}</h4>
+                        {questionState && (
+                          <Badge variant={questionState.state === 'done' ? 'success' : 'warning'} size="sm">
+                            {questionState.label}
+                          </Badge>
+                        )}
+                      </div>
                       <p className="text-xs text-[var(--text-muted)]">
-                        {section.options.length} option{section.options.length === 1 ? '' : 's'}
+                        {isPersonalOrder
+                          ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ordered`
+                          : `${section.options.length} option${section.options.length === 1 ? '' : 's'}`}
                         {section.vote_deadline && <> · closes {formatDeadlineLabel(section.vote_deadline, 'vote')}</>}
                       </p>
                     </div>
@@ -310,20 +332,37 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                     )}
                   </div>
                 )}
-                <div className="space-y-2">
-                  {sectionItems.map((item) => (
-                    <PlanItemCard
-                      key={item.id}
-                      item={item}
-                      place={item.placeId ? placesById.get(item.placeId) : undefined}
-                      onOpen={onOpenItem}
-                      onVote={item.vote ? handleVote : undefined}
-                      isVoting={votingId === item.id}
-                      myVoted={item.vote?.myVote.voted}
-                      compact
-                    />
-                  ))}
-                </div>
+                {isPersonalOrder && section ? (
+                  // Personal-order (shape 2) questions collapse to one line —
+                  // no per-catalog-item cards here (UX_REDESIGN.md Part 5's
+                  // "Plan tray question rows collapse to one line each");
+                  // expansion happens in the order form itself.
+                  <div className="flex gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => setOrderFormSectionId(section.id)}>
+                      {questionState?.state === 'done' ? 'Edit your order' : 'Fill in your order'}
+                    </Button>
+                    {isOrganizer && (
+                      <Button variant="outline" size="sm" onClick={() => setConsolidatedOrdersSectionId(section.id)}>
+                        View orders
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {sectionItems.map((item) => (
+                      <PlanItemCard
+                        key={item.id}
+                        item={item}
+                        place={item.placeId ? placesById.get(item.placeId) : undefined}
+                        onOpen={onOpenItem}
+                        onVote={item.vote ? handleVote : undefined}
+                        isVoting={votingId === item.id}
+                        myVoted={item.vote?.myVote.voted}
+                        compact
+                      />
+                    ))}
+                  </div>
+                )}
                 <ScheduleWinnerAffordance items={sectionItems} onScheduleIt={onScheduleIt} />
               </div>
             )
@@ -473,6 +512,40 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
           />
         )}
       </Modal>
+
+      {/* Personal order form (UX_REDESIGN.md Part 5, shape 2): the "Fill in
+          your order"/"Edit your order" affordance above opens this instead
+          of a vote UI — catalog items, dates, quantities, live total. */}
+      {orderFormSectionId &&
+        (() => {
+          const orderSection = (sections || []).find((s) => s.id === orderFormSectionId)
+          if (!orderSection) return null
+          return (
+            <OrderFormSheet
+              isOpen
+              onClose={() => setOrderFormSectionId(null)}
+              trip={trip}
+              section={orderSection}
+              participants={participants || []}
+            />
+          )
+        })()}
+
+      {/* Organizer's consolidated orders matrix + "Copy order sheet". */}
+      {consolidatedOrdersSectionId &&
+        (() => {
+          const orderSection = (sections || []).find((s) => s.id === consolidatedOrdersSectionId)
+          if (!orderSection) return null
+          return (
+            <ConsolidatedOrdersSheet
+              isOpen
+              onClose={() => setConsolidatedOrdersSectionId(null)}
+              section={orderSection}
+              participants={participants || []}
+              fallbackCurrency={trip.base_currency}
+            />
+          )
+        })()}
 
       {/* Companion suggestion "accept" (UX_REDESIGN.md Part 3 "Ambient AI"
           #3): opens the same create-event sheet everything else uses,

@@ -10,7 +10,7 @@ import {
   Selection,
   User,
 } from '../../types'
-import { Tables, TablesInsert } from '../../types/database.types'
+import { Tables, TablesInsert, Json } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { useTripActivityLog } from '../../features/organizer/lib/activity'
@@ -361,6 +361,49 @@ export function useToggleReaction(tripId: string) {
         },
       ]
     },
+  })
+}
+
+/**
+ * One item's desired end-state in a participant's personal order (shape 2,
+ * UX_REDESIGN.md Part 5): `metadata: null` deletes the row (item unchecked),
+ * otherwise inserts (no `selectionId`) or updates (existing `selectionId`)
+ * the selection's metadata `{start_date, end_date, variant, quantity}`.
+ */
+export interface OrderItemChange {
+  optionId: string
+  selectionId: string | null
+  metadata: Json | null
+}
+
+/**
+ * Saves a participant's whole order form in one submit (OrderFormSheet):
+ * the caller diffs the catalog against the user's existing selections and
+ * passes the resulting insert/update/delete list. Not optimistic — this is
+ * an explicit "Save" action, not a live-typing toggle like useToggleSelection.
+ */
+export function useSaveOrderItems(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ userId, changes }: { userId: string; changes: OrderItemChange[] }) => {
+      for (const change of changes) {
+        if (change.metadata === null) {
+          if (change.selectionId) {
+            const { error } = await supabase.from('selections').delete().eq('id', change.selectionId)
+            if (error) throw error
+          }
+          continue
+        }
+        if (change.selectionId) {
+          const { error } = await supabase.from('selections').update({ metadata: change.metadata }).eq('id', change.selectionId)
+          if (error) throw error
+        } else {
+          const { error } = await supabase.from('selections').insert({ option_id: change.optionId, user_id: userId, metadata: change.metadata })
+          if (error) throw error
+        }
+      }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) }),
   })
 }
 

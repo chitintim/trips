@@ -107,6 +107,9 @@ Organizer Console = full-screen sheet launched from Today's blockers strip and h
 ## Navigation (final)
 Mobile bottom bar: Today · Plan · Money · People + FAB (context-aware: Today=stage-smart default action, Plan=Add to plan, Money=Scan receipt, People=Invite). Desktop sidebar: same four + Console (organizer). In-page tab strip REMOVED. Map/Decide live inside Plan as lenses; retro/console/chat are launched surfaces, not tabs.
 
+## Cutover note (base path)
+The app's base path is driven by the `VITE_BASE` build-time env var (`vite.config.ts`), defaulting to today's `/trips/`. To cut over to serving from `/` at trips.fontem.ai: set the `VITE_BASE` repository variable to `/` and redeploy. This one flip propagates to Vite's `base`, the router `basename` (`src/App.tsx`), the share-target SW's registration path/scope (`src/lib/registerShareTargetSw.ts`), index.html's icon/manifest links (via `%BASE_URL%`), and — via a build-time file rewrite in `vite.config.ts` — the paths baked into `manifest.webmanifest` and `sw.js`. Separately, `supabase/functions/auto-chase` and `nudge-draft` each read their own `APP_BASE_URL` env var (defaulting to the GitHub Pages URL) for links in outbound messages — that must also be updated in the Supabase function environment when cutting over; it is not touched by `VITE_BASE`.
+
 ---
 
 # Part 3 — Date intelligence, edge cases, ambient AI

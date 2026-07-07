@@ -9,6 +9,7 @@ import { OptionCard } from './OptionCard'
 import { MatrixView } from './MatrixView'
 import { sectionHasMatrixLayout } from '../lib/optionMetadata'
 import { getSectionRunningTotal } from '../lib/costImpact'
+import { getDecisionShape } from '../lib/decisionShapes'
 import { tallyVotes, getWinner, checkAutoClose, type VotingMethod } from '../lib/voting'
 
 interface SectionCardProps {
@@ -43,6 +44,8 @@ export function SectionCard({
   const logActivity = useTripActivityLog(tripId)
   const [view, setView] = useState<'list' | 'matrix'>(sectionHasMatrixLayout(section.options) ? 'matrix' : 'list')
 
+  const decisionShape = getDecisionShape(section.metadata)
+  const isPersonalOrder = decisionShape === 'personal'
   const votingMethod = (section.voting_method as VotingMethod) || 'single'
   const optionIds = section.options.map((o) => o.id)
   const sectionVotes = votes.filter((v) => optionIds.includes(v.option_id))
@@ -55,7 +58,7 @@ export function SectionCard({
   const autoClose = checkAutoClose({ vote_deadline: section.vote_deadline, quorum: section.quorum }, distinctVoters)
 
   const runningTotals = getSectionRunningTotal(
-    section.options.map((o) => ({ price: o.price, currency: o.currency, price_type: o.price_type, status: o.status })),
+    section.options.map((o) => ({ price: o.price, currency: o.currency, price_type: o.price_type, status: o.status, metadata: o.metadata })),
     confirmedCount,
     null,
     optionIds
@@ -78,23 +81,35 @@ export function SectionCard({
           <Badge variant={section.status === 'completed' ? 'success' : section.status === 'in_progress' ? 'warning' : 'neutral'} size="sm">
             {section.status.replace('_', ' ')}
           </Badge>
+          {isPersonalOrder && (
+            <Badge variant="neutral" size="sm">
+              🧾 Personal picks
+            </Badge>
+          )}
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
           {section.vote_deadline && <Deadline date={section.vote_deadline} kind="vote" size="sm" />}
-          {section.quorum != null && (
+          {!isPersonalOrder && section.quorum != null && (
             <Badge variant="neutral" size="sm">
               Quorum {distinctVoters}/{section.quorum}
             </Badge>
           )}
-          {Object.entries(runningTotals).map(([currency, total]) => (
-            <Badge key={currency} variant="info" size="sm">
-              ~{currency} {total.toFixed(0)}/person running total
-            </Badge>
-          ))}
+          {!isPersonalOrder &&
+            Object.entries(runningTotals).map(([currency, total]) => (
+              <Badge key={currency} variant="info" size="sm">
+                ~{currency} {total.toFixed(0)}/person running total
+              </Badge>
+            ))}
         </div>
 
-        {autoClose.shouldClose && section.status !== 'completed' && (
+        {isPersonalOrder && (
+          <p className="text-xs text-[var(--text-muted)]">
+            Everyone fills in their own order from the Plan tab — this catalog isn't a vote. Manage items below.
+          </p>
+        )}
+
+        {!isPersonalOrder && autoClose.shouldClose && section.status !== 'completed' && (
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 flex items-center justify-between gap-3 flex-wrap">
             <p className="text-sm text-warn-800">
               {autoClose.reason === 'deadline_passed' ? 'Voting deadline has passed' : 'Quorum has been met'}
@@ -160,6 +175,7 @@ export function SectionCard({
                 myRank={myRankByOption.get(option.id) ?? null}
                 canEdit={isOrganizer}
                 onEdit={() => onEditOption(option.id)}
+                isPersonalOrder={isPersonalOrder}
               />
             ))}
           </div>

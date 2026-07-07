@@ -111,7 +111,8 @@ export function PlanItemCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             {item.costImpact?.perPerson != null && item.costImpact.currency && (
               <Badge variant="info" size="sm">
-                +{formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/person
+                {item.costImpact.isTiered ? '≈' : '+'}
+                {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/person
               </Badge>
             )}
             {item.expenseId && (
@@ -121,6 +122,9 @@ export function PlanItemCard({
             )}
             {isProposal && item.vote?.voteDeadline && <Deadline date={item.vote.voteDeadline} kind="vote" compact size="sm" />}
           </div>
+          {item.costImpact?.sensitivityLine && (
+            <p className="mt-1 text-xs text-[var(--text-muted)]">{item.costImpact.sensitivityLine}</p>
+          )}
         </div>
 
         {isProposal && onVote && (

@@ -58,6 +58,7 @@ function section(overrides: Partial<SectionWithOptions> & { id: string; title: s
     allow_multiple_selections: false,
     description: null,
     hide_votes_until_close: true,
+    metadata: null,
     order_index: 0,
     quorum: null,
     section_type: 'activities',
@@ -253,7 +254,65 @@ describe('composePlanItems', () => {
       ],
       votes: [vote({ option_id: 'o1', user_id: 'user-2' })],
     })
-    expect(items[0].costImpact).toEqual({ perPerson: 100, currency: 'GBP' })
+    expect(items[0].costImpact).toEqual({ perPerson: 100, currency: 'GBP', isTiered: false, sensitivityLine: null })
+  })
+
+  it('is tier-aware when an option carries price_tiers metadata (UX_REDESIGN.md Part 5 shape 3)', () => {
+    const { items } = composePlanItems({
+      ...BASE_INPUT,
+      confirmedCount: 9,
+      sections: [
+        section({
+          id: 's1',
+          title: 'Chalet',
+          options: [
+            option({
+              id: 'o1',
+              section_id: 's1',
+              title: 'Chalet A',
+              currency: 'GBP',
+              price_type: 'total_split',
+              metadata: { price_tiers: [{ max_people: 6, total: 300 }, { max_people: 12, total: 450 }] } as never,
+            }),
+          ],
+        }),
+      ],
+      votes: [vote({ option_id: 'o1', user_id: 'user-2' })],
+    })
+    expect(items[0].costImpact).toEqual({
+      perPerson: 50,
+      currency: 'GBP',
+      isTiered: true,
+      sensitivityLine: '£50/pp if 6 · £37.50/pp if 12',
+    })
+  })
+
+  it('never sets vote on options under a personal-order (shape 2) section, even with in_progress status', () => {
+    const { items } = composePlanItems({
+      ...BASE_INPUT,
+      sections: [
+        section({
+          id: 's1',
+          title: 'Ski rental',
+          status: 'in_progress',
+          metadata: { decision_shape: 'personal' } as never,
+          options: [option({ id: 'o1', section_id: 's1', title: 'Skis' })],
+        }),
+      ],
+    })
+    expect(items[0].vote).toBeNull()
+    expect(items[0].isPersonalOrder).toBe(true)
+    expect(items[0].stage).toBe('proposal')
+  })
+
+  it('marks options under an ordinary vote section as isPersonalOrder: false', () => {
+    const { items } = composePlanItems({
+      ...BASE_INPUT,
+      sections: [section({ id: 's1', title: 'Accommodation', options: [option({ id: 'o1', section_id: 's1', title: 'Chalet A' })] })],
+      votes: [vote({ option_id: 'o1', user_id: 'user-2' })],
+    })
+    expect(items[0].isPersonalOrder).toBe(false)
+    expect(items[0].vote).not.toBeNull()
   })
 
   it('flags the winning option as an unscheduled winner when no event has claimed it yet', () => {

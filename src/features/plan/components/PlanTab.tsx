@@ -98,7 +98,7 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
           <LazyPlanMapLens trip={trip} items={items} onOpenItem={setSelectedItem} />
         </Suspense>
       )}
-      {lens === 'decide' && <PlanDecideLens trip={trip} items={items} onOpenItem={setSelectedItem} />}
+      {lens === 'decide' && <PlanDecideLens trip={trip} />}
 
       <PlanItemSheet
         isOpen={!!selectedItem}

@@ -54,6 +54,12 @@ export function CostBandCard({ costBand, fullCostLink }: { costBand: CostBand | 
             ? formatMoney(costBand.low, costBand.currency)
             : `${formatMoney(costBand.low, costBand.currency)} – ${formatMoney(costBand.high, costBand.currency)}`}
         </p>
+        {/* Honest range label (UX_REDESIGN.md Part 5 "Estimator
+            integration"): a spread means real uncertainty from open votes,
+            not organizer sloppiness -- say so rather than hiding it. */}
+        {costBand.low !== costBand.high && (
+          <p className="text-xs text-[var(--text-muted)] mt-0.5">depending on open votes</p>
+        )}
         {fullCostLink && (
           <a href={fullCostLink} target="_blank" rel="noreferrer" className="text-sm text-accent-700 hover:underline">
             See full cost breakdown →

@@ -2,10 +2,33 @@
  * `options.metadata` is an untyped `Json` column (no dedicated DB type) —
  * this module defines the runtime convention this feature relies on for
  * matrix/grid tiered options (ski-rental-matrix style, per
- * PLANING_IMPROVEMENTS.md and the legacy MatrixSelector component), and
- * for the paste-a-link ingestion's provenance tagging.
+ * PLANING_IMPROVEMENTS.md and the legacy MatrixSelector component), the
+ * paste-a-link ingestion's provenance tagging, and the two decision-shape
+ * pricing conventions from UX_REDESIGN.md Part 5 (personal-order catalog
+ * pricing + tiered group pricing) — see decisionShapes.ts for the
+ * accessors/resolution logic built on top of these fields.
  */
 import type { Json } from '../../../types/database.types'
+
+/** A named variant of a personal-order catalog item (e.g. "Adult" vs "Kids" skis), each with its own per-day/flat price. */
+export interface PricingVariant {
+  label: string
+  per_day?: number
+  flat?: number
+}
+
+/** Shape 2 (personal pick / order form) pricing for a catalog item option. */
+export interface OptionPricing {
+  per_day?: number
+  flat?: number
+  variants?: PricingVariant[]
+}
+
+/** Shape 3 (tiered group pricing) — a headcount breakpoint and the total price at/under it. */
+export interface PriceTier {
+  max_people: number
+  total: number
+}
 
 export interface OptionMetadata {
   /** Row label for matrix/grid display (e.g. "Level A"). */
@@ -16,6 +39,10 @@ export interface OptionMetadata {
   source?: 'manual' | 'link_parse'
   /** Original pasted URL, when source is link_parse. */
   source_url?: string
+  /** Personal-order catalog pricing (decision_shape 'personal' sections). */
+  pricing?: OptionPricing
+  /** Headcount-tiered total pricing (decision_shape 'vote' sections, price_type 'total_split'). */
+  price_tiers?: PriceTier[]
 }
 
 export function readOptionMetadata(metadata: Json | null | undefined): OptionMetadata {

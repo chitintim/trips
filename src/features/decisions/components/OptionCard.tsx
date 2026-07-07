@@ -4,8 +4,9 @@ import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote, useToggleReaction, useCreateComment } from '../../../lib/queries/usePlanning'
 import type { OptionWithSelections, OptionVote, Reaction, Comment } from '../../../lib/queries/usePlanning'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
-import { formatCostImpact } from '../lib/costImpact'
+import { formatCostImpact, getTierSensitivityLine, formatMoney } from '../lib/costImpact'
 import { areVotesVisible, type VotingMethod } from '../lib/voting'
+import { readOptionPricing } from '../lib/decisionShapes'
 
 const QUICK_REACTIONS = ['🙌', '😬', '💸', '❤️', '👀']
 
@@ -24,6 +25,8 @@ interface OptionCardProps {
   myRank?: number | null
   onEdit?: () => void
   canEdit: boolean
+  /** True for options under a shape-2 "personal order" section (UX_REDESIGN.md Part 5) — hides vote UI, shows catalog pricing instead. Participants fill their order via the Plan tab, not here. */
+  isPersonalOrder?: boolean
 }
 
 function userLabel(p: ParticipantWithUser | undefined): string {
@@ -44,6 +47,7 @@ export function OptionCard({
   myRank,
   onEdit,
   canEdit,
+  isPersonalOrder = false,
 }: OptionCardProps) {
   const { user } = useAuth()
   const toggleVote = useToggleVote(tripId)
@@ -66,12 +70,17 @@ export function OptionCard({
 
   const optionComments = comments.filter((c) => c.option_id === option.id)
 
-  const costImpact = formatCostImpact({
+  const costImpactInput = {
     price: option.price,
     currency: option.currency,
     priceType: option.price_type,
     confirmedCount,
-  })
+    metadata: option.metadata,
+  }
+  const costImpact = formatCostImpact(costImpactInput)
+  const tierSensitivityLine = getTierSensitivityLine(costImpactInput)
+  const catalogPricing = isPersonalOrder ? readOptionPricing(option.metadata) : null
+  const respondedCount = new Set(option.selections.map((s) => s.user_id)).size
 
   const handleVote = () => {
     if (!user) return
@@ -111,18 +120,44 @@ export function OptionCard({
             )}
           </div>
           {option.description && <p className="text-sm text-[var(--text-secondary)] mt-0.5">{option.description}</p>}
-          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-            {option.price != null && (
-              <span className="text-sm font-medium text-[var(--text-primary)]">
-                {option.currency} {option.price.toFixed(2)}
-              </span>
-            )}
-            {costImpact && (
-              <Badge variant="info" size="sm">
-                {costImpact}
-              </Badge>
-            )}
-          </div>
+          {isPersonalOrder ? (
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              {catalogPricing?.per_day != null && (
+                <Badge variant="info" size="sm">
+                  {formatMoney(catalogPricing.per_day, option.currency || 'GBP')}/day
+                </Badge>
+              )}
+              {catalogPricing?.flat != null && (
+                <Badge variant="info" size="sm">
+                  {formatMoney(catalogPricing.flat, option.currency || 'GBP')} flat
+                </Badge>
+              )}
+              {(catalogPricing?.variants?.length ?? 0) > 0 && (
+                <Badge variant="neutral" size="sm">
+                  {catalogPricing!.variants!.length} variant{catalogPricing!.variants!.length === 1 ? '' : 's'}
+                </Badge>
+              )}
+              {respondedCount > 0 && (
+                <span className="text-xs text-[var(--text-muted)]">
+                  {respondedCount} order{respondedCount === 1 ? '' : 's'} so far
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+              {option.price != null && (
+                <span className="text-sm font-medium text-[var(--text-primary)]">
+                  {option.currency} {option.price.toFixed(2)}
+                </span>
+              )}
+              {costImpact && (
+                <Badge variant="info" size="sm">
+                  {costImpact}
+                </Badge>
+              )}
+            </div>
+          )}
+          {!isPersonalOrder && tierSensitivityLine && <p className="mt-1 text-xs text-[var(--text-muted)]">{tierSensitivityLine}</p>}
         </div>
         {canEdit && onEdit && (
           <Button variant="ghost" size="sm" onClick={onEdit}>
@@ -131,7 +166,11 @@ export function OptionCard({
         )}
       </div>
 
-      {/* Voting */}
+      {/* Voting — personal-order (shape 2) catalog items are never votes;
+          each participant fills their own order via the Plan tab's answer
+          flow instead (OrderFormSheet), so no vote button/tally renders
+          here at all. */}
+      {!isPersonalOrder && (
       <div className="flex items-center gap-3 flex-wrap">
         {votingMethod === 'ranked' ? (
           <Button
@@ -179,6 +218,7 @@ export function OptionCard({
           </span>
         )}
       </div>
+      )}
 
       {/* Reactions */}
       <div className="flex items-center gap-1.5 flex-wrap">

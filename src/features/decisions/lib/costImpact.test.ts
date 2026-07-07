@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { getPerPersonCostImpact, getSectionRunningTotal } from './costImpact'
+import {
+  getPerPersonCostImpact,
+  getSectionRunningTotal,
+  formatCostImpact,
+  getTierSensitivityLine,
+  isTieredCostImpact,
+} from './costImpact'
 
 describe('getPerPersonCostImpact', () => {
   it('returns null when there is no price', () => {
@@ -61,5 +67,70 @@ describe('getSectionRunningTotal', () => {
     ]
     const totals = getSectionRunningTotal(options, 5, new Set(['a']), ['a', 'b'])
     expect(totals.GBP).toBe(100)
+  })
+
+  it('is tier-aware when an option carries price_tiers metadata', () => {
+    const options = [
+      { price: null, currency: 'GBP', price_type: 'total_split' as const, status: 'available', metadata: { price_tiers: [{ max_people: 6, total: 300 }] } },
+    ]
+    const totals = getSectionRunningTotal(options, 6, null, ['a'])
+    expect(totals.GBP).toBe(50)
+  })
+})
+
+describe('tier-aware cost impact (UX_REDESIGN.md Part 5, shape 3)', () => {
+  const tieredMetadata = { price_tiers: [{ max_people: 6, total: 300 }, { max_people: 12, total: 450 }] }
+
+  it('isTieredCostImpact is true when price_tiers are present', () => {
+    expect(isTieredCostImpact(tieredMetadata)).toBe(true)
+    expect(isTieredCostImpact(null)).toBe(false)
+    expect(isTieredCostImpact({ grid_row: 'x' })).toBe(false)
+  })
+
+  it('getPerPersonCostImpact prefers price_tiers over price_type when both are present', () => {
+    const result = getPerPersonCostImpact({
+      price: 999, // should be ignored — tiers take precedence
+      currency: 'GBP',
+      priceType: 'total_split',
+      confirmedCount: 9,
+      metadata: tieredMetadata,
+    })
+    expect(result).toBe(50) // 450 / 9
+  })
+
+  it('falls back to price/price_type when metadata has no tiers', () => {
+    const result = getPerPersonCostImpact({
+      price: 100,
+      currency: 'GBP',
+      priceType: 'per_person_fixed',
+      confirmedCount: 9,
+      metadata: null,
+    })
+    expect(result).toBe(100)
+  })
+
+  it('formatCostImpact renders the tiered headline with headcount', () => {
+    const formatted = formatCostImpact({ price: null, currency: 'GBP', priceType: 'total_split', confirmedCount: 9, metadata: tieredMetadata })
+    expect(formatted).toBe('≈£50/person at 9 people')
+  })
+
+  it('formatCostImpact renders the non-tiered headline unchanged', () => {
+    const formatted = formatCostImpact({ price: 54, currency: 'GBP', priceType: 'per_person_fixed', confirmedCount: 5 })
+    expect(formatted).toBe('+£54/person')
+  })
+
+  it('getTierSensitivityLine renders both tier boundaries', () => {
+    const line = getTierSensitivityLine({ price: null, currency: 'GBP', priceType: 'total_split', confirmedCount: 9, metadata: tieredMetadata })
+    expect(line).toBe('£50/pp if 6 · £37.50/pp if 12')
+  })
+
+  it('getTierSensitivityLine is null for a non-tiered option', () => {
+    const line = getTierSensitivityLine({ price: 54, currency: 'GBP', priceType: 'per_person_fixed', confirmedCount: 5 })
+    expect(line).toBeNull()
+  })
+
+  it('flags aboveTop-derived headline still resolves a per-person figure beyond the top tier', () => {
+    const formatted = formatCostImpact({ price: null, currency: 'GBP', priceType: 'total_split', confirmedCount: 30, metadata: tieredMetadata })
+    expect(formatted).toBe('≈£15/person at 30 people') // 450 / 30
   })
 })

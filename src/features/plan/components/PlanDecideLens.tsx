@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { EmptyState } from '../../../components/ui'
+import { NothingToDecide } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useToggleVote } from '../../../lib/queries/usePlanning'
@@ -44,7 +45,13 @@ export function PlanDecideLens({ trip, items, onOpenItem }: PlanDecideLensProps)
   }
 
   if (votables.length === 0) {
-    return <EmptyState icon="🎉" title="Nothing needs deciding" description="Every open poll has been voted on or closed. Nice work." />
+    return (
+      <EmptyState
+        icon={<NothingToDecide className="w-32 h-24 text-[var(--text-muted)]" />}
+        title="Nothing needs deciding"
+        description="Every open poll has been voted on or closed. Nice work."
+      />
+    )
   }
 
   return (

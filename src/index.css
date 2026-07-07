@@ -170,6 +170,14 @@
   --z-popover: 1300;
   --z-tooltip: 1400;
   --z-toast: 1500;
+
+  /* ------------------------------------------------------------------ */
+  /* Motion tokens (UX_REDESIGN.md Part 4 "Motion & identity system")   */
+  /* ------------------------------------------------------------------ */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --duration-fast: 150ms;
+  --duration-base: 250ms;
+  --duration-slow: 400ms;
 }
 
 /* ====================================================================== */
@@ -326,8 +334,15 @@ body {
 }
 
 /* ====================================================================== */
-/* Motion                                                                  */
-/* ====================================================================== */
+/* Motion (UX_REDESIGN.md Part 4 "Motion & identity system")               */
+/* ------------------------------------------------------------------------
+ * Tokens: --ease-spring / --duration-fast/-base/-slow (declared in @theme
+ * above so they're also reachable as design tokens). Sheet/modal
+ * enter-exit, press feedback and the list-enter stagger utility all key
+ * off these three durations + the spring easing, so tuning the feel of
+ * the whole app later is a one-line change here instead of a grep-and-
+ * replace across every component.
+ * ====================================================================== */
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -339,7 +354,8 @@ body {
 }
 
 /* ====================================================================== */
-/* Shared keyframes (Sheet/Modal, Toast)                                  */
+/* Shared keyframes (Sheet/Modal, Toast) — spring-eased per the motion    */
+/* system so overlays feel consistent everywhere they mount.               */
 /* ====================================================================== */
 
 @keyframes fable-fade-in {
@@ -357,6 +373,16 @@ body {
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
+@keyframes fable-sheet-down {
+  from { transform: translateY(0); }
+  to { transform: translateY(100%); }
+}
+
+@keyframes fable-scale-out {
+  from { opacity: 1; transform: scale(1) translateY(0); }
+  to { opacity: 0; transform: scale(0.96) translateY(4px); }
+}
+
 @keyframes fable-toast-in {
   from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -366,3 +392,42 @@ body {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
+
+@keyframes fable-list-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ====================================================================== */
+/* Press feedback (UX_REDESIGN.md Part 4): a subtle scale-down on active   */
+/* press for clickable Cards and Buttons — applied as a utility class      */
+/* (`.press-scale`) rather than baked into every variant, so any future    */
+/* clickable surface can opt in the same way.                              */
+/* ====================================================================== */
+.press-scale {
+  transition: transform var(--duration-fast) var(--ease-spring);
+}
+.press-scale:active {
+  transform: scale(0.98);
+}
+
+/* ====================================================================== */
+/* List-enter stagger (UX_REDESIGN.md Part 4): CSS-only, ≤150ms total.     */
+/* Apply `.stagger-list` to the list container and `.stagger-item` to each */
+/* child — each item's `animation-delay` is set inline (or via the nth-    */
+/* child fallback below, capped at 10 items so total stagger never        */
+/* exceeds --duration-fast, i.e. 150ms).                                   */
+/* ====================================================================== */
+.stagger-item {
+  animation: fable-list-enter var(--duration-base) var(--ease-spring) both;
+}
+.stagger-list .stagger-item:nth-child(1) { animation-delay: 0ms; }
+.stagger-list .stagger-item:nth-child(2) { animation-delay: 16ms; }
+.stagger-list .stagger-item:nth-child(3) { animation-delay: 32ms; }
+.stagger-list .stagger-item:nth-child(4) { animation-delay: 48ms; }
+.stagger-list .stagger-item:nth-child(5) { animation-delay: 64ms; }
+.stagger-list .stagger-item:nth-child(6) { animation-delay: 80ms; }
+.stagger-list .stagger-item:nth-child(7) { animation-delay: 96ms; }
+.stagger-list .stagger-item:nth-child(8) { animation-delay: 112ms; }
+.stagger-list .stagger-item:nth-child(9) { animation-delay: 128ms; }
+.stagger-list .stagger-item:nth-child(n+10) { animation-delay: 150ms; }

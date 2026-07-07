@@ -15,44 +15,56 @@ import { useUpdateConfirmationStatus, ConfirmationStatus, ConditionalType } from
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useUnsavedChangesGuard } from '../../../lib/forms/useUnsavedChangesGuard'
+import {
+  resolveImIn,
+  resolveCantSayYet,
+  resolveImOut,
+  answerFromStatus,
+  waitingOnFromStatus,
+  type RsvpAnswer,
+  type WaitingOnAnswer,
+} from '../lib/rsvpAnswers'
 
 // ============================================================================
 // CONFIG
 // ============================================================================
 
-const STATUS_OPTIONS: Array<{ value: ConfirmationStatus; label: string; description: string }> = [
+/**
+ * RSVP: three human answers over seven statuses (UX_REDESIGN.md Part 4).
+ * The participant-facing choice is ALWAYS one of these three big answers —
+ * waitlist/pending are system states and never appear as choices here (see
+ * ../lib/rsvpAnswers.ts for the full status mapping + rationale). Organizer
+ * views (ParticipantList/DependencyGraph/WaitlistPanel) are untouched and
+ * keep full 7-status fidelity — this is presentation-layer only, same
+ * table, same enum.
+ */
+const RSVP_ANSWER_OPTIONS: Array<{ value: RsvpAnswer; emoji: string; label: string; description: string }> = [
   {
-    value: 'interested',
-    label: 'Interested',
-    description: "I'm keen but not ready to commit yet.",
-  },
-  {
-    value: 'confirmed',
-    label: 'Confirmed',
+    value: 'in',
+    emoji: '✅',
+    label: "I'm in",
     description:
       "I'm 100% committed and ready to book. I understand others are counting on me. (Once confirmed, you cannot change your status yourself — contact the organizer.)",
   },
   {
-    value: 'conditional',
-    label: 'Conditional',
-    description: "I'll confirm under certain conditions (e.g. a friend confirms, or by a specific date).",
+    value: 'cant-say-yet',
+    emoji: '🤔',
+    label: "Can't say yet",
+    description: "I need a bit more time — waiting on a date, someone else, or just thinking it over.",
   },
   {
-    value: 'waitlist',
-    label: 'Waitlist',
-    description: "I can't confirm yet, but I'll take any spot that opens up.",
-  },
-  {
-    value: 'declined',
-    label: "Can't make it",
+    value: 'out',
+    emoji: '❌',
+    label: "I'm out",
     description: "I can't join this trip. Thanks for the invite!",
   },
 ]
 
-const CONDITIONAL_TYPE_OPTIONS: Array<{ value: ConditionalType; label: string; description: string }> = [
-  { value: 'date', label: 'By a specific date', description: "I'll confirm by a certain date" },
-  { value: 'users', label: 'When others confirm', description: "I'll confirm when specific people confirm" },
-  { value: 'both', label: 'Either condition', description: 'Whichever happens first' },
+const WAITING_ON_OPTIONS: Array<{ value: WaitingOnAnswer; label: string; description: string }> = [
+  { value: 'date', label: 'A specific date', description: "I'll know by a certain date" },
+  { value: 'someone', label: 'Someone else', description: "I'll confirm once specific people confirm" },
+  { value: 'both', label: 'Both', description: 'A date AND specific people' },
+  { value: 'just-thinking', label: 'Just thinking it over', description: "No specific blocker — I'm just not ready to commit" },
 ]
 
 const COMMITMENT_TERMS = [
@@ -79,9 +91,16 @@ interface StatusModalProps {
 }
 
 /**
- * 2-step RSVP status modal: status choice -> (conditional detail if
- * applicable) -> note & review. Ported from the legacy
- * UpdateConfirmationModal's flow onto the new ui kit.
+ * RSVP status picker (UX_REDESIGN.md Part 4 "RSVP: three human answers over
+ * seven statuses"): step 1 is three big human choices — "I'm in" / "Can't
+ * say yet" / "I'm out" — rather than the raw 7-status list. "Can't say yet"
+ * branches into a follow-up ("What are you waiting on?") that resolves to
+ * the existing conditional/interested machinery; "I'm out" resolves to
+ * declined (or a self-service cancellation, replacing the old
+ * organizer-contact dead-end, when the participant was previously
+ * confirmed — same warning copy as before). Same enum/table throughout —
+ * presentation only. Keeps the Form & Flow Standard (draft handling here is
+ * deliberately disabled, see below) and the note/review step.
  *
  * IMPORTANT server-authoritative behavior: a BEFORE UPDATE trigger
  * (enforce_capacity_limit) on trip_participants can silently rewrite a
@@ -94,8 +113,10 @@ interface StatusModalProps {
  * closing on the optimistic value.
  */
 interface StatusFormValues {
-  status: ConfirmationStatus
-  conditionalType: ConditionalType
+  /** The step-1 human answer. Null until the participant picks one (or one is inferred from an existing record on open). */
+  answer: RsvpAnswer | null
+  /** The "Can't say yet" follow-up choice. */
+  waitingOn: WaitingOnAnswer | null
   conditionalDate: string
   conditionalUserIds: string[]
   note: string
@@ -103,15 +124,27 @@ interface StatusFormValues {
 }
 
 function seedFromParticipant(participant: ParticipantWithUser | null): StatusFormValues {
+  const status = (participant?.confirmation_status as ConfirmationStatus) || 'pending'
+  const conditionalType = (participant?.conditional_type as ConditionalType) || 'none'
   return {
-    status: (participant?.confirmation_status as ConfirmationStatus) || 'pending',
-    conditionalType: (participant?.conditional_type as ConditionalType) || 'none',
+    answer: answerFromStatus(status),
+    waitingOn: waitingOnFromStatus(status, conditionalType),
     conditionalDate: participant?.conditional_date || '',
     conditionalUserIds: participant?.conditional_user_ids || [],
     note: participant?.confirmation_note || '',
     agreedToTerms: false,
   }
 }
+
+/** Resolves the form's current answer/waitingOn selection into the actual status + conditionalType to write. */
+function resolveStatus(values: StatusFormValues, wasConfirmed: boolean): { status: ConfirmationStatus; conditionalType: ConditionalType } {
+  if (values.answer === 'in') return resolveImIn()
+  if (values.answer === 'out') return resolveImOut(wasConfirmed)
+  if (values.answer === 'cant-say-yet' && values.waitingOn) return resolveCantSayYet(values.waitingOn)
+  return { status: 'pending', conditionalType: 'none' }
+}
+
+type Step = 'answer' | 'waiting-on' | 'condition-detail' | 'review'
 
 export function StatusModal({
   isOpen,
@@ -126,7 +159,7 @@ export function StatusModal({
   const updateStatus = useUpdateConfirmationStatus(tripId)
   const { showToast } = useToast()
 
-  const [step, setStep] = useState<1 | 2 | 3>(1)
+  const [step, setStep] = useState<Step>('answer')
   const [validationError, setValidationError] = useState<string | null>(null)
 
   // This modal always edits the current user's own participant record (no
@@ -141,15 +174,18 @@ export function StatusModal({
     seedFromParticipant(participant),
     { enabled: false }
   )
-  const { status, conditionalType, conditionalDate, conditionalUserIds, note, agreedToTerms } = values
+  const { answer, waitingOn, conditionalDate, conditionalUserIds, note, agreedToTerms } = values
 
-  const setStatus = (v: ConfirmationStatus) => updateField('status', v)
-  const setConditionalType = (v: ConditionalType) => updateField('conditionalType', v)
+  const setAnswer = (v: RsvpAnswer) => updateField('answer', v)
+  const setWaitingOn = (v: WaitingOnAnswer) => updateField('waitingOn', v)
   const setConditionalDate = (v: string) => updateField('conditionalDate', v)
   const setConditionalUserIds = (updater: (prev: string[]) => string[]) =>
     setValues((prev) => ({ ...prev, conditionalUserIds: updater(prev.conditionalUserIds) }))
   const setNote = (v: string) => updateField('note', v)
   const setAgreedToTerms = (v: boolean) => updateField('agreedToTerms', v)
+
+  const wasConfirmed = participant?.confirmation_status === 'confirmed'
+  const { status, conditionalType } = resolveStatus(values, wasConfirmed)
 
   // Fresh-state guarantee: every time the modal is (re)opened for a given
   // participant, re-seed from the current record — an edit-modal always
@@ -158,7 +194,7 @@ export function StatusModal({
   // line of defense for the "same session, app-switched" case).
   useEffect(() => {
     if (isOpen && participant) {
-      setStep(1)
+      setStep('answer')
       setValidationError(null)
       setValues(seedFromParticipant(participant))
     }
@@ -172,13 +208,28 @@ export function StatusModal({
 
   const handleClose = () => confirmClose(onClose)
 
+  // "Confirmed user chose to enter the cancellation flow from the read-only
+  // recap" -- reset on every open/participant change so a stale flag from a
+  // previous session can never skip the recap. Declared unconditionally
+  // (before the `if (!participant) return null` below) per the rules of
+  // hooks -- every hook in this component must run on every render.
+  const [showCancelFlow, setShowCancelFlow] = useState(false)
+  useEffect(() => {
+    if (isOpen) setShowCancelFlow(false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, participant?.user_id])
+
   if (!participant) return null
 
-  const capacityWillWaitlist = status === 'confirmed' && !!capacityLimit && confirmedCount >= capacityLimit
+  const capacityWillWaitlist = answer === 'in' && !!capacityLimit && confirmedCount >= capacityLimit
 
-  // Already-confirmed users get a read-only recap (commitment lock) —
-  // matches legacy behavior: confirmed status cannot be self-changed.
-  if (participant.confirmation_status === 'confirmed') {
+  // Already-confirmed users get a read-only recap EXCEPT for the "I'm out"
+  // path -- self-service cancellation now replaces the old dead-end (plan
+  // §4 #3: "I'm out ... or cancelled if previously confirmed, with the
+  // existing warning"). Reopening while confirmed still defaults to this
+  // recap; picking "I'm out" from here drops straight to the cancellation
+  // confirmation with the same warning copy the recap used to show.
+  if (wasConfirmed && !showCancelFlow) {
     return (
       <Modal isOpen={isOpen} onClose={onClose} size="lg" title="You're confirmed" data-status-modal-readonly>
         <div className="space-y-5">
@@ -197,10 +248,13 @@ export function StatusModal({
           )}
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-4">
             <p className="text-sm font-semibold text-warn-900 mb-2">Need to back out?</p>
-            <p className="text-sm text-warn-800">
-              Contact the organizer directly — confirmed status can't be changed from here to avoid accidental
-              cancellations others are counting on.
+            <p className="text-sm text-warn-800 mb-3">
+              You can cancel your spot yourself below — others are counting on you, so please only do this if you're
+              sure. The organizer is notified either way.
             </p>
+            <Button variant="danger" size="sm" onClick={() => setShowCancelFlow(true)}>
+              I'm out — cancel my spot
+            </Button>
           </div>
           <div className="flex justify-end pt-2">
             <Button variant="outline" onClick={onClose}>
@@ -227,33 +281,53 @@ export function StatusModal({
     setConditionalUserIds((prev) => (prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]))
   }
 
+  const needsConditionDetail = answer === 'cant-say-yet' && (waitingOn === 'date' || waitingOn === 'someone' || waitingOn === 'both')
+
   const handleNext = () => {
     setValidationError(null)
-    if (step === 1) {
-      setStep(status === 'conditional' ? 2 : 3)
-      return
-    }
-    if (step === 2) {
-      if (conditionalType === 'none') {
-        setValidationError('Please select a condition type')
+    if (step === 'answer') {
+      if (!answer) {
+        setValidationError('Please choose one of the three options')
         return
       }
-      if ((conditionalType === 'date' || conditionalType === 'both') && !conditionalDate) {
+      if (answer === 'cant-say-yet') {
+        setStep('waiting-on')
+        return
+      }
+      setStep('review')
+      return
+    }
+    if (step === 'waiting-on') {
+      if (!waitingOn) {
+        setValidationError('Please choose what you need to wait on')
+        return
+      }
+      setStep(needsConditionDetail ? 'condition-detail' : 'review')
+      return
+    }
+    if (step === 'condition-detail') {
+      if ((waitingOn === 'date' || waitingOn === 'both') && !conditionalDate) {
         setValidationError('Please select a date')
         return
       }
-      if ((conditionalType === 'users' || conditionalType === 'both') && conditionalUserIds.length === 0) {
+      if ((waitingOn === 'someone' || waitingOn === 'both') && conditionalUserIds.length === 0) {
         setValidationError('Please select at least one person')
         return
       }
-      setStep(3)
+      setStep('review')
     }
   }
 
   const handleBack = () => {
     setValidationError(null)
-    if (step === 3) setStep(status === 'conditional' ? 2 : 1)
-    else if (step === 2) setStep(1)
+    if (step === 'review') {
+      if (answer === 'cant-say-yet') setStep(needsConditionDetail ? 'condition-detail' : 'waiting-on')
+      else setStep('answer')
+    } else if (step === 'condition-detail') {
+      setStep('waiting-on')
+    } else if (step === 'waiting-on') {
+      setStep('answer')
+    }
   }
 
   const handleSubmit = async () => {
@@ -289,29 +363,43 @@ export function StatusModal({
         showToast({ type: 'success', message: 'Status updated' })
       }
       clearDraft()
+      setShowCancelFlow(false)
       onClose()
     } catch (err) {
       showToast({ type: 'error', message: 'Could not update your status', description: (err as Error).message })
     }
   }
 
-  const stepTitle = step === 1 ? 'Update your status' : step === 2 ? 'Set your conditions' : 'Review & confirm'
+  const stepTitles: Record<Step, string> = {
+    answer: 'Are you in?',
+    'waiting-on': "What are you waiting on?",
+    'condition-detail': 'A few more details',
+    review: 'Review & confirm',
+  }
+
   const stepperSteps =
-    status === 'conditional'
-      ? [
-          { key: '1', label: 'Status' },
-          { key: '2', label: 'Conditions' },
-          { key: '3', label: 'Review' },
-        ]
+    answer === 'cant-say-yet'
+      ? needsConditionDetail
+        ? [
+            { key: 'answer', label: 'Answer' },
+            { key: 'waiting-on', label: 'Waiting on' },
+            { key: 'condition-detail', label: 'Details' },
+            { key: 'review', label: 'Review' },
+          ]
+        : [
+            { key: 'answer', label: 'Answer' },
+            { key: 'waiting-on', label: 'Waiting on' },
+            { key: 'review', label: 'Review' },
+          ]
       : [
-          { key: '1', label: 'Status' },
-          { key: '3', label: 'Review' },
+          { key: 'answer', label: 'Answer' },
+          { key: 'review', label: 'Review' },
         ]
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} size="lg" title={stepTitle}>
+    <Modal isOpen={isOpen} onClose={handleClose} size="lg" title={stepTitles[step]}>
       <div className="space-y-5">
-        <Stepper steps={stepperSteps} current={String(step)} size="sm" />
+        <Stepper steps={stepperSteps} current={step} size="sm" />
 
         {validationError && (
           <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
@@ -319,30 +407,39 @@ export function StatusModal({
           </div>
         )}
 
-        {capacityWillWaitlist && step >= 1 && (
+        {wasConfirmed && step !== 'review' && (
+          <div className="bg-warn-50 border-2 border-warn-300 rounded-[var(--radius-md)] p-3 text-sm text-warn-900">
+            You're currently confirmed — continuing will cancel your spot. Others are counting on you, so please only
+            do this if you're sure.
+          </div>
+        )}
+
+        {capacityWillWaitlist && (
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
             This trip is at capacity ({confirmedCount}/{capacityLimit}). If you confirm, you'll automatically be
             moved to the waitlist.
           </div>
         )}
 
-        {/* Step 1 */}
-        {step === 1 && (
+        {/* Step: the three big answers */}
+        {step === 'answer' && (
           <div className="space-y-2.5">
-            {STATUS_OPTIONS.map((option) => {
-              const isSelected = status === option.value
+            {RSVP_ANSWER_OPTIONS.map((option) => {
+              const isSelected = answer === option.value
               return (
                 <button
                   key={option.value}
                   type="button"
-                  onClick={() => setStatus(option.value)}
-                  className={`w-full text-left p-4 rounded-[var(--radius-md)] border-2 transition-all ${
+                  onClick={() => setAnswer(option.value)}
+                  className={`w-full text-left p-4 rounded-[var(--radius-md)] border-2 transition-all press-scale ${
                     isSelected ? 'border-accent-500 bg-accent-50' : 'border-[var(--border-default)] hover:border-[var(--border-subtle)] bg-[var(--surface-raised)]'
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xl" aria-hidden="true">
+                      {option.emoji}
+                    </span>
                     <h4 className="font-semibold text-[var(--text-primary)]">{option.label}</h4>
-                    <ConfirmationStatusBadge status={option.value} size="sm" />
                   </div>
                   <p className="text-sm text-[var(--text-secondary)]">{option.description}</p>
                 </button>
@@ -351,32 +448,33 @@ export function StatusModal({
           </div>
         )}
 
-        {/* Step 2 */}
-        {step === 2 && status === 'conditional' && (
-          <div className="space-y-5">
-            <div className="space-y-2.5">
-              <label className="block text-sm font-medium text-[var(--text-primary)]">
-                When will you be ready to confirm?
-              </label>
-              {CONDITIONAL_TYPE_OPTIONS.map((option) => {
-                const isSelected = conditionalType === option.value
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => setConditionalType(option.value)}
-                    className={`w-full text-left p-3 rounded-[var(--radius-md)] border-2 transition-all ${
-                      isSelected ? 'border-accent-500 bg-accent-50' : 'border-[var(--border-default)] hover:border-[var(--border-subtle)] bg-[var(--surface-raised)]'
-                    }`}
-                  >
-                    <h4 className="font-medium text-[var(--text-primary)] mb-0.5">{option.label}</h4>
-                    <p className="text-sm text-[var(--text-secondary)]">{option.description}</p>
-                  </button>
-                )
-              })}
-            </div>
+        {/* Step: "Can't say yet" follow-up */}
+        {step === 'waiting-on' && (
+          <div className="space-y-2.5">
+            <p className="text-sm text-[var(--text-secondary)]">No pressure — just tell us what's holding things up.</p>
+            {WAITING_ON_OPTIONS.map((option) => {
+              const isSelected = waitingOn === option.value
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setWaitingOn(option.value)}
+                  className={`w-full text-left p-3 rounded-[var(--radius-md)] border-2 transition-all press-scale ${
+                    isSelected ? 'border-accent-500 bg-accent-50' : 'border-[var(--border-default)] hover:border-[var(--border-subtle)] bg-[var(--surface-raised)]'
+                  }`}
+                >
+                  <h4 className="font-medium text-[var(--text-primary)] mb-0.5">{option.label}</h4>
+                  <p className="text-sm text-[var(--text-secondary)]">{option.description}</p>
+                </button>
+              )
+            })}
+          </div>
+        )}
 
-            {(conditionalType === 'date' || conditionalType === 'both') && (
+        {/* Step: condition detail (date / people pickers) */}
+        {step === 'condition-detail' && (
+          <div className="space-y-5">
+            {(waitingOn === 'date' || waitingOn === 'both') && (
               <div>
                 <label htmlFor="conditional-date" className="block text-sm font-medium text-[var(--text-primary)] mb-2">
                   I'll confirm by this date
@@ -392,7 +490,7 @@ export function StatusModal({
               </div>
             )}
 
-            {(conditionalType === 'users' || conditionalType === 'both') && (
+            {(waitingOn === 'someone' || waitingOn === 'both') && (
               <div>
                 <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
                   I'll confirm when these people confirm
@@ -452,8 +550,8 @@ export function StatusModal({
           </div>
         )}
 
-        {/* Step 3 */}
-        {step === 3 && (
+        {/* Step: review */}
+        {step === 'review' && (
           <div className="space-y-5">
             {status === 'confirmed' && (
               <div className="bg-warn-50 border-2 border-warn-300 rounded-[var(--radius-md)] p-4">
@@ -483,6 +581,16 @@ export function StatusModal({
                     I have read and agree to these commitment terms.
                   </span>
                 </label>
+              </div>
+            )}
+
+            {status === 'cancelled' && (
+              <div className="bg-danger-50 border-2 border-danger-200 rounded-[var(--radius-md)] p-4">
+                <h3 className="text-sm font-semibold text-danger-800 mb-1">You're cancelling your confirmed spot</h3>
+                <p className="text-sm text-danger-800">
+                  Cancellation Liability: you may still be liable to pay your share of the accommodation cost,
+                  depending on the group's arrangement — check with the organizer. This cannot be undone from here.
+                </p>
               </div>
             )}
 
@@ -521,21 +629,28 @@ export function StatusModal({
         {/* Footer */}
         <div className="flex gap-3 justify-between w-full pt-4 border-t border-[var(--border-subtle)]">
           <div>
-            {step > 1 && (
+            {step !== 'answer' && (
               <Button variant="outline" onClick={handleBack} disabled={updateStatus.isPending}>
                 Back
               </Button>
             )}
           </div>
           <div className="flex gap-3">
-            <Button variant="outline" onClick={handleClose} disabled={updateStatus.isPending}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowCancelFlow(false)
+                handleClose()
+              }}
+              disabled={updateStatus.isPending}
+            >
               Cancel
             </Button>
-            {step < 3 ? (
+            {step !== 'review' ? (
               <Button onClick={handleNext}>Next</Button>
             ) : (
-              <Button onClick={handleSubmit} isLoading={updateStatus.isPending}>
-                {status === 'confirmed' ? 'Confirm my spot' : 'Update status'}
+              <Button onClick={handleSubmit} isLoading={updateStatus.isPending} variant={status === 'cancelled' ? 'danger' : 'primary'}>
+                {status === 'confirmed' ? 'Confirm my spot' : status === 'cancelled' ? 'Cancel my spot' : 'Update status'}
               </Button>
             )}
           </div>

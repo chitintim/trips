@@ -1,7 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
-import { Button, Card, Spinner, EmptyState, Tabs, Skeleton, Modal } from '../components/ui'
+import { Button, Card, Spinner, EmptyState, Skeleton, Modal } from '../components/ui'
 import { CreateTripModal, AddParticipantModal } from '../components'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { AppShell, StageRail, NeedsAttentionStrip } from '../components/layout'
@@ -15,7 +15,6 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queries/queryKeys'
 import { getTripStatusLabel } from '../lib/tripStatus'
 import { effectiveTripStage } from '../lib/tripStage'
-import type { Trip } from '../types'
 
 import { todayTabConfig } from '../features/today'
 import { planTabConfig, AddToPlanSheet } from '../features/plan'
@@ -24,7 +23,7 @@ import { OPEN_QUICK_CAPTURE_EVENT } from '../features/timeline'
 import { OrganizerConsole } from '../features/organizer'
 import { retroConfig } from '../features/retrospective'
 import { chatEntryConfig, LazyChatSheet } from '../features/chat'
-import { EXPENSE_TAB_CONFIGS, QuickCaptureSheet } from '../features/expenses'
+import { MoneySpace, QuickCaptureSheet } from '../features/expenses'
 
 /**
  * v2.1 navigation (UX_REDESIGN.md): four spaces only — Today · Plan ·
@@ -79,7 +78,16 @@ export function TripDetail() {
   useTripRealtime(tripId)
 
   const [activeSpace, setActiveSpace] = useState<SpaceId>('today')
-  const [moneySubTab, setMoneySubTab] = useState<string>(EXPENSE_TAB_CONFIGS[0].tabId)
+  // Legacy ?tab=my-spending / ?tab=settle-up deep links (and needs-attention
+  // strip taps) still need to land on the right PUSHED SCREEN inside
+  // MoneySpace, not just the Money space itself (UX_REDESIGN.md Part 4 #1
+  // "Legacy ?tab= mappings for money sub-tabs should still land sensibly").
+  // A counter (not just the screen id) forces MoneySpace to remount its
+  // effect even when the same legacy link is opened twice in a row.
+  const [moneyInitialScreen, setMoneyInitialScreen] = useState<{ screen: 'settle-up' | 'my-spending' | null; nonce: number }>({
+    screen: null,
+    nonce: 0,
+  })
   const needsAttentionItems = useNeedsAttention(tripId, (spaceId) => {
     setActiveSpace(LEGACY_TAB_TO_SPACE[spaceId] ?? 'today')
   })
@@ -109,13 +117,20 @@ export function TripDetail() {
   }
 
   // ?tab= deep links (legacy ids included) land on the right space; the
-  // console/recap sheets are directly linkable too.
+  // console/recap sheets are directly linkable too. Money's old sub-tab ids
+  // ('my-spending', 'settle-up') additionally open the matching pushed
+  // screen inside MoneySpace instead of just landing on the feed.
   useEffect(() => {
     const tabParam = searchParams.get('tab')
     if (!tabParam) return
     if (tabParam === 'organizer' || tabParam === 'console') setConsoleOpen(true)
     else if (tabParam === 'retro') setRecapOpen(true)
-    else if (LEGACY_TAB_TO_SPACE[tabParam]) setActiveSpace(LEGACY_TAB_TO_SPACE[tabParam])
+    else if (LEGACY_TAB_TO_SPACE[tabParam]) {
+      setActiveSpace(LEGACY_TAB_TO_SPACE[tabParam])
+      if (tabParam === 'my-spending' || tabParam === 'settle-up') {
+        setMoneyInitialScreen((prev) => ({ screen: tabParam, nonce: prev.nonce + 1 }))
+      }
+    }
     searchParams.delete('tab')
     setSearchParams(searchParams, { replace: true })
   }, [searchParams, setSearchParams])
@@ -231,7 +246,7 @@ export function TripDetail() {
       : []),
   ]
 
-  const chatContext = activeSpace === 'money' ? moneySubTab : activeSpace
+  const chatContext = activeSpace === 'money' ? (moneyInitialScreen.screen ?? 'expenses') : activeSpace
 
   return (
     <div data-trip-accent style={getTripAccentStyle(trip.id)} className="min-h-screen bg-[var(--surface-page)]">
@@ -394,7 +409,7 @@ export function TripDetail() {
           )}
           {activeSpace === 'money' && (
             <ErrorBoundary label="Money">
-              <MoneyHub trip={trip} activeSubTab={moneySubTab} onSubTabChange={setMoneySubTab} />
+              <MoneySpace key={moneyInitialScreen.nonce} trip={trip} initialScreen={moneyInitialScreen.screen} />
             </ErrorBoundary>
           )}
           {activeSpace === 'people' && (
@@ -472,40 +487,6 @@ export function TripDetail() {
         existingParticipantIds={participants.map((p) => p.user_id)}
         onSuccess={refetchTripData}
       />
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Money hub: one space whose content renders inner Tabs for the three
-// EXPENSE_TAB_CONFIGS (Expenses / Settle up / My spending) — Money internals
-// unchanged from v2.0 (UX_REDESIGN §3).
-// ---------------------------------------------------------------------------
-function MoneyHub({
-  trip,
-  activeSubTab,
-  onSubTabChange,
-}: {
-  trip: Trip
-  activeSubTab: string
-  onSubTabChange: (tabId: string) => void
-}) {
-  const active = EXPENSE_TAB_CONFIGS.find((c) => c.tabId === activeSubTab) ?? EXPENSE_TAB_CONFIGS[0]
-  return (
-    <div className="space-y-4">
-      <Tabs value={active.tabId} onChange={onSubTabChange}>
-        <Tabs.List>
-          {EXPENSE_TAB_CONFIGS.map((c) => (
-            <Tabs.Tab key={c.tabId} value={c.tabId}>
-              <span className="mr-1" aria-hidden="true">
-                {c.icon}
-              </span>
-              {c.label}
-            </Tabs.Tab>
-          ))}
-        </Tabs.List>
-      </Tabs>
-      <active.Component trip={trip} />
     </div>
   )
 }

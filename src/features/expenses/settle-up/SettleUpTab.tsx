@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Card, Button, Badge, EmptyState, Skeleton, UserAvatar, useToast, SegmentedControl } from '../../../components/ui'
+import { AllSettled } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
@@ -173,7 +174,11 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
       )}
 
       {suggested.length === 0 && !isFrozen && (
-        <EmptyState icon="✅" title="All settled up" description="Nobody owes anybody anything right now." />
+        <EmptyState
+          icon={<AllSettled className="w-32 h-24 text-success-500" />}
+          title="All settled up"
+          description="Nobody owes anybody anything right now."
+        />
       )}
 
       {!isFrozen && suggested.length > 0 && (

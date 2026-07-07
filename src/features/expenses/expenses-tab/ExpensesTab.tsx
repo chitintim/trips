@@ -1,11 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Chip, Button, EmptyState, Skeleton } from '../../../components/ui'
+import { Chip, Button, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { BalanceHeader } from './BalanceHeader'
-import { ExpenseCard } from './ExpenseCard'
+import { ExpenseFeed } from './ExpenseFeed'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
 import { EMPTY_FILTERS, applyExpenseFilters, groupExpensesByDay } from './ExpenseFilters'
 import { ALL_CATEGORIES, categoryIcon, categoryLabel } from '../lib/categoryStyle'
@@ -119,38 +119,16 @@ export function ExpensesTab({ trip }: ExpensesTabProps) {
         </Button>
       </div>
 
-      {grouped.length === 0 ? (
-        <EmptyState
-          icon="💸"
-          title="No expenses yet"
-          description="Add the first expense for this trip to start tracking who owes what."
-          action={<Button variant="primary" onClick={openAdd} disabled={isFrozen}>Add expense</Button>}
-        />
-      ) : (
-        <div className="space-y-6">
-          {grouped.map(({ date, expenses: dayExpenses }) => (
-            <div key={date}>
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] mb-2">
-                {new Date(date + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
-              </h3>
-              <div className="space-y-2">
-                {dayExpenses.map((expense) => (
-                  <ExpenseCard
-                    key={expense.id}
-                    expense={expense}
-                    payer={payerByUserId[expense.paid_by]}
-                    baseCurrency={trip.base_currency}
-                    currentUserId={user?.id}
-                    onEdit={() => openEdit(expense)}
-                    onOpenClaim={(code) => navigate(`/claim/${code}`)}
-                    editDisabled={isFrozen}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <ExpenseFeed
+        grouped={grouped}
+        payerByUserId={payerByUserId}
+        baseCurrency={trip.base_currency}
+        currentUserId={user?.id}
+        onEdit={openEdit}
+        onOpenClaim={(code) => navigate(`/claim/${code}`)}
+        editDisabled={isFrozen}
+        onAddExpense={openAdd}
+      />
 
       <ExpenseEditorWizard
         key={editorKey}

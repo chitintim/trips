@@ -44,3 +44,17 @@ export { Stepper } from './Stepper'
 export type { StepperProps, StepperStep } from './Stepper'
 export { ConfirmDiscardSheet } from './ConfirmDiscardSheet'
 export type { ConfirmDiscardSheetProps } from './ConfirmDiscardSheet'
+
+// Illustration identity (UX_REDESIGN.md Part 4 "Illustrations")
+export {
+  ILLUSTRATION_REGISTRY,
+  EmptyPlan,
+  NoExpenses,
+  AllSettled,
+  RetroHeader,
+  JoinCover,
+  NothingToDecide,
+  Offline,
+  ErrorState,
+} from './illustrations'
+export type { IllustrationName } from './illustrations'

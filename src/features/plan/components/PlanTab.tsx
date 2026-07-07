@@ -39,7 +39,13 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
   const [lens, setLens] = useState<Lens>('list')
   const [selectedItem, setSelectedItem] = useState<PlanItem | null>(null)
   const [addSheetOpen, setAddSheetOpen] = useState(false)
+  const [addSheetDefaultIsVote, setAddSheetDefaultIsVote] = useState(false)
   const [scheduleItem, setScheduleItem] = useState<PlanItem | null>(null)
+
+  const openAddSheet = (defaultIsVote = false) => {
+    setAddSheetDefaultIsVote(defaultIsVote)
+    setAddSheetOpen(true)
+  }
 
   const myParticipant = participants?.find((p) => p.user_id === user?.id)
   const isOrganizer = myParticipant?.role === 'organizer'
@@ -72,13 +78,20 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
             { value: 'decide', label: 'Decide', icon: '🗳️' },
           ]}
         />
-        <Button size="sm" onClick={() => setAddSheetOpen(true)}>
+        <Button size="sm" onClick={() => openAddSheet(false)}>
           + Add
         </Button>
       </div>
 
       {lens === 'list' && (
-        <PlanBoard trip={trip} items={items} isOrganizer={isOrganizer} onOpenItem={setSelectedItem} onScheduleIt={setScheduleItem} />
+        <PlanBoard
+          trip={trip}
+          items={items}
+          isOrganizer={isOrganizer}
+          onOpenItem={setSelectedItem}
+          onScheduleIt={setScheduleItem}
+          onNewQuestion={() => openAddSheet(true)}
+        />
       )}
       {lens === 'map' && (
         <Suspense fallback={<Skeleton variant="card" height={420} />}>
@@ -101,7 +114,12 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
         }}
       />
 
-      <AddToPlanSheet isOpen={addSheetOpen} onClose={() => setAddSheetOpen(false)} trip={trip} />
+      <AddToPlanSheet
+        isOpen={addSheetOpen}
+        onClose={() => setAddSheetOpen(false)}
+        trip={trip}
+        defaultIsVote={addSheetDefaultIsVote}
+      />
 
       <ScheduleItSheet isOpen={!!scheduleItem} onClose={() => setScheduleItem(null)} trip={trip} item={scheduleItem} />
     </div>

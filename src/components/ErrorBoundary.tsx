@@ -1,5 +1,6 @@
 import { Component, ErrorInfo, ReactNode } from 'react'
 import { Button, Card, EmptyState } from './ui'
+import { ErrorState } from './ui/illustrations'
 
 export interface ErrorBoundaryProps {
   /**
@@ -56,7 +57,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <Card className="max-w-lg mx-auto">
           <Card.Content className="py-10">
             <EmptyState
-              icon="⚠️"
+              icon={<ErrorState className="w-24 h-24 text-danger-500" />}
               title={`Something went wrong loading ${label}`}
               description={
                 this.state.error.message || 'An unexpected error occurred. You can try again, or refresh the page.'

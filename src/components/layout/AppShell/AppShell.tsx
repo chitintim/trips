@@ -1,5 +1,6 @@
 import { HTMLAttributes, ReactNode } from 'react'
 import { BottomNav } from '../BottomNav'
+import { OfflineBanner } from '../OfflineBanner'
 
 // ============================================================================
 // TYPES
@@ -112,6 +113,7 @@ export function AppShell({
 
       {/* Main content */}
       <div className="flex-1 min-w-0 pb-tabbar-safe md:pb-0">
+        <OfflineBanner />
         {children}
       </div>
 

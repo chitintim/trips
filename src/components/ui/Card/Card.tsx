@@ -66,7 +66,7 @@ const CardRoot = forwardRef<HTMLDivElement, CardProps>(
 
     const interactionStyles = `
       ${hoverable ? 'hover:shadow-md hover:-translate-y-0.5' : ''}
-      ${clickable ? 'cursor-pointer' : ''}
+      ${clickable ? 'cursor-pointer press-scale' : ''}
     `
 
     const paddingStyles = noPadding ? '' : 'p-5 sm:p-6'

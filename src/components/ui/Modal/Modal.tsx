@@ -182,7 +182,7 @@ export const Modal = forwardRef<HTMLDivElement, ModalProps>(
               flex flex-col
               pb-safe
               ${sizeMaxWidthClass[size]}
-              animate-[fable-sheet-up_0.2s_ease-out] md:animate-[fable-scale-in_0.15s_ease-out]
+              animate-[fable-sheet-up_var(--duration-base)_var(--ease-spring)] md:animate-[fable-scale-in_var(--duration-fast)_var(--ease-spring)]
               ${className}
             `.trim().replace(/\s+/g, ' ')}
             tabIndex={-1}

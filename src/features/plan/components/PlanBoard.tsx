@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Button, EmptyState, Modal } from '../../../components/ui'
+import { Button, EmptyState, Modal, formatDeadlineLabel } from '../../../components/ui'
+import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useCreateSection } from '../../../lib/queries/usePlanning'
 import { useAuth } from '../../../hooks/useAuth'
@@ -8,8 +9,20 @@ import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGroupi
 import { MatrixView } from '../../decisions/components/MatrixView'
 import { PlanItemCard } from './PlanItemCard'
 import { groupPlanItemsByDate, groupUndatedBySection } from '../lib/planItems'
+import { useDaySwipe } from '../lib/useDaySwipe'
 import type { PlanItem } from '../lib/planItems'
 import type { Trip } from '../../../types'
+import type { Tables } from '../../../types/database.types'
+
+const dayAnchorId = (date: string) => `plan-day-${date}`
+
+/** Smooth-scrolls to a day's sticky header, honoring reduced-motion. */
+function scrollToDay(date: string) {
+  const el = document.getElementById(dayAnchorId(date))
+  if (!el) return
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  el.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block: 'start' })
+}
 
 export interface PlanBoardProps {
   trip: Trip
@@ -17,6 +30,8 @@ export interface PlanBoardProps {
   isOrganizer?: boolean
   onOpenItem: (item: PlanItem) => void
   onScheduleIt: (item: PlanItem) => void
+  /** "New question" affordance in the Open questions tray (organizer only, UX_REDESIGN.md Part 4). */
+  onNewQuestion?: () => void
 }
 
 /**
@@ -40,7 +55,7 @@ const STARTER_QUESTIONS: Array<{ title: string; section_type: 'accommodation' | 
  * and live inside this component's own scroll container, never escaping
  * into the app chrome's stacking context.
  */
-export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onScheduleIt }: PlanBoardProps) {
+export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onScheduleIt, onNewQuestion }: PlanBoardProps) {
   const { user } = useAuth()
   const { data: places } = usePlaces(trip.id)
   const { data: sections } = useSections(trip.id)
@@ -107,7 +122,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     if (isOrganizer && planCompletelyEmpty) {
       return (
         <EmptyState
-          icon="🧭"
+          icon={<EmptyPlan className="w-32 h-24 text-accent-500" />}
           title="Start with the big questions"
           description="Most trips begin by answering three things — set them up as group votes in one tap, or add your own with the + button."
           action={
@@ -127,7 +142,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     }
     return (
       <EmptyState
-        icon="🧭"
+        icon={<EmptyPlan className="w-32 h-24 text-[var(--text-muted)]" />}
         title="Nothing on the plan yet"
         description="Add an idea, a vote, or a dated event with the + button to get started."
       />
@@ -138,17 +153,36 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     <div className="relative space-y-4">
       {hasUndated && (
         <div className="rounded-[var(--radius-lg)] border border-accent-200 bg-accent-50/60 dark:bg-accent-950/20 p-3 space-y-3">
-          <h3 className="text-sm font-semibold text-[var(--text-primary)]">📥 Undecided</h3>
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">❔ Open questions</h3>
+            {isOrganizer && onNewQuestion && (
+              <Button variant="ghost" size="sm" onClick={onNewQuestion}>
+                + New question
+              </Button>
+            )}
+          </div>
           {Array.from(undatedBySection.entries()).map(([sectionId, sectionItems]) => {
             const section = sectionId ? (sections || []).find((s) => s.id === sectionId) : undefined
             const isMatrix = sectionItems.some((i) => i.isMatrixSection)
+            // Questions, not sections (UX_REDESIGN.md Part 4 "Decisions:
+            // questions, not sections"): the section's TITLE renders as the
+            // question itself ("Where are we staying?"), with a plain
+            // "N options · closes <date>" meta line -- no section_type
+            // badge/chrome, no uppercase label treatment. Sections remain
+            // the storage grouping only.
             return (
               <div key={sectionId ?? 'none'} className="space-y-2">
                 {section && (
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">{section.title}</h4>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <h4 className="text-sm font-medium text-[var(--text-primary)]">{section.title}</h4>
+                      <p className="text-xs text-[var(--text-muted)]">
+                        {section.options.length} option{section.options.length === 1 ? '' : 's'}
+                        {section.vote_deadline && <> · closes {formatDeadlineLabel(section.vote_deadline, 'vote')}</>}
+                      </p>
+                    </div>
                     {isMatrix && (
-                      <Button variant="ghost" size="sm" onClick={() => setMatrixSectionId(section.id)}>
+                      <Button variant="ghost" size="sm" onClick={() => setMatrixSectionId(section.id)} className="shrink-0">
                         Grid view
                       </Button>
                     )}
@@ -176,40 +210,21 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
       )}
 
       <div className="space-y-3">
-        {dayDates.map((date, i) => {
-          const dayItems = byDate.get(date) || []
-          const header = formatDayHeader(date, trip.start_date, trip.end_date)
-          return (
-            <div key={date} className="relative">
-              <div className="sticky top-0 z-20 -mx-4 px-4 py-1.5 bg-[var(--surface-page)]/95 backdrop-blur-sm">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-semibold text-[var(--text-primary)]">
-                    {header.dayNumber ? `Day ${header.dayNumber}` : header.dayLabel}
-                  </span>
-                  <span className="text-xs text-[var(--text-muted)]">{header.label}</span>
-                </div>
-              </div>
-              <div className="mt-2 space-y-2">
-                {dayItems.length === 0 ? (
-                  <p className="text-xs text-[var(--text-muted)] pl-1">Nothing planned yet</p>
-                ) : (
-                  dayItems.map((item) => (
-                    <PlanItemCard
-                      key={item.id}
-                      item={item}
-                      place={item.placeId ? placesById.get(item.placeId) : undefined}
-                      onOpen={onOpenItem}
-                      onVote={item.vote ? handleVote : undefined}
-                      isVoting={votingId === item.id}
-                      myVoted={item.vote?.myVote.voted}
-                    />
-                  ))
-                )}
-              </div>
-              {i < dayDates.length - 1 && <div className="mt-3 border-b border-[var(--border-subtle)]" />}
-            </div>
-          )
-        })}
+        {dayDates.map((date, i) => (
+          <PlanDaySection
+            key={date}
+            date={date}
+            dayItems={byDate.get(date) || []}
+            header={formatDayHeader(date, trip.start_date, trip.end_date)}
+            prevDate={dayDates[i - 1]}
+            nextDate={dayDates[i + 1]}
+            placesById={placesById}
+            onOpenItem={onOpenItem}
+            onVote={handleVote}
+            votingId={votingId}
+            isLast={i === dayDates.length - 1}
+          />
+        ))}
       </div>
 
       {/* Matrix/grid view, portal-rendered via the shared Modal (layering
@@ -236,5 +251,73 @@ function ScheduleWinnerAffordance({ items, onScheduleIt }: { items: PlanItem[]; 
     <Button variant="secondary" size="sm" onClick={() => onScheduleIt(schedulable)}>
       📅 Schedule "{schedulable.title}"
     </Button>
+  )
+}
+
+interface PlanDaySectionProps {
+  date: string
+  dayItems: PlanItem[]
+  header: { dayNumber: number | null; dayLabel: string; label: string }
+  prevDate?: string
+  nextDate?: string
+  placesById: Map<string, Tables<'places'>>
+  onOpenItem: (item: PlanItem) => void
+  onVote: (item: PlanItem) => void
+  votingId: string | null
+  isLast: boolean
+}
+
+/**
+ * One day's section of the board, with the swipe-between-days gesture
+ * (UX_REDESIGN.md Part 4) applied to its item list: a horizontal pan
+ * previews with a translateX rubber-band, and a swipe past the threshold
+ * scrolls to the next/previous day's sticky header. Vertical scrolling is
+ * never intercepted (see useDaySwipe's axis lock) — see PlanBoard.tsx's
+ * dayAnchorId/scrollToDay helpers for the anchor-jump mechanics and the
+ * useDaySwipe module doc for the "why not a full paged carousel" judgment
+ * call.
+ */
+function PlanDaySection({ date, dayItems, header, prevDate, nextDate, placesById, onOpenItem, onVote, votingId, isLast }: PlanDaySectionProps) {
+  const swipe = useDaySwipe(
+    () => nextDate && scrollToDay(nextDate),
+    () => prevDate && scrollToDay(prevDate)
+  )
+
+  return (
+    <div id={dayAnchorId(date)} className="relative scroll-mt-16">
+      <div className="sticky top-0 z-20 -mx-4 px-4 py-1.5 bg-[var(--surface-page)]/95 backdrop-blur-sm">
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-semibold text-[var(--text-primary)]">
+            {header.dayNumber ? `Day ${header.dayNumber}` : header.dayLabel}
+          </span>
+          <span className="text-xs text-[var(--text-muted)]">{header.label}</span>
+        </div>
+      </div>
+      <div
+        className="mt-2 space-y-2 stagger-list touch-pan-y"
+        onTouchStart={swipe.onTouchStart}
+        onTouchMove={swipe.onTouchMove}
+        onTouchEnd={swipe.onTouchEnd}
+        style={swipe.style}
+      >
+        {dayItems.length === 0 ? (
+          <p className="text-xs text-[var(--text-muted)] pl-1">Nothing planned yet</p>
+        ) : (
+          dayItems.map((item) => (
+            <div key={item.id} className="stagger-item">
+              <PlanItemCard
+                item={item}
+                place={item.placeId ? placesById.get(item.placeId) : undefined}
+                onOpen={onOpenItem}
+                onVote={item.vote ? onVote : undefined}
+                isVoting={votingId === item.id}
+                myVoted={item.vote?.myVote.voted}
+              />
+            </div>
+          ))
+        )}
+      </div>
+      {!isLast && <div className="mt-3 border-b border-[var(--border-subtle)]" />}
+    </div>
   )
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button, Card, EmptyState, ProgressBar, Skeleton, StatCard, UserAvatar, useToast } from '../../../components/ui'
+import { RetroHeader } from '../../../components/ui/illustrations'
 import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { usePlaces } from '../../../lib/queries/usePlaces'
@@ -153,11 +154,14 @@ export function RetrospectivePanel({ tripId }: RetrospectivePanelProps) {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h2 className="text-xl font-semibold text-[var(--text-primary)]">🎉 {trip.name} — the recap</h2>
-          <p className="text-sm text-[var(--text-secondary)]">
-            {trip.start_date} → {trip.end_date} · {trip.location}
-          </p>
+        <div className="flex items-center gap-3 min-w-0">
+          <RetroHeader className="w-16 h-12 shrink-0 text-accent-500" />
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold text-[var(--text-primary)] truncate">{trip.name} — the recap</h2>
+            <p className="text-sm text-[var(--text-secondary)]">
+              {trip.start_date} → {trip.end_date} · {trip.location}
+            </p>
+          </div>
         </div>
         <Button variant="secondary" size="sm" onClick={handleCopySummary}>
           📋 Copy summary text

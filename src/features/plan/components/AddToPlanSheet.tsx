@@ -47,12 +47,16 @@ interface AddToPlanFormValues {
   optionRows: DraftOptionRow[]
 }
 
-function emptyValues(baseCurrency: string, defaultDate: string): AddToPlanFormValues {
+function emptyValues(baseCurrency: string, defaultDate: string, defaultIsVote: boolean): AddToPlanFormValues {
   return {
     title: '',
     description: '',
     category: 'other',
-    hasDate: true,
+    // "New question" (UX_REDESIGN.md Part 4 "Decisions: questions, not
+    // sections") opens straight into vote mode with no date pinned yet --
+    // most open questions ("Where are we staying?") don't have a day until
+    // they're decided, so they land in the Undecided tray by default.
+    hasDate: !defaultIsVote,
     date: defaultDate,
     hasTime: false,
     startTime: '',
@@ -60,7 +64,7 @@ function emptyValues(baseCurrency: string, defaultDate: string): AddToPlanFormVa
     price: '',
     currency: baseCurrency,
     placeId: null,
-    isVote: false,
+    isVote: defaultIsVote,
     voteTarget: 'new',
     existingSectionId: '',
     votingMethod: 'single',
@@ -78,6 +82,13 @@ export interface AddToPlanSheetProps {
   trip: Trip
   /** Pre-fill the date (e.g. tapping "+" on a specific day header). */
   defaultDate?: string
+  /**
+   * Open straight into "make it a vote" mode with no date pinned — the
+   * Undecided tray's "New question" affordance (UX_REDESIGN.md Part 4) uses
+   * this so organizers land directly on the question-authoring UI instead
+   * of needing to find and tick the vote toggle themselves.
+   */
+  defaultIsVote?: boolean
 }
 
 /**
@@ -91,7 +102,7 @@ export interface AddToPlanSheetProps {
  * PasteALinkSheet, landing the extracted draft back into the option
  * builder for review.
  */
-export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate }: AddToPlanSheetProps) {
+export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVote = false }: AddToPlanSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const tripId = trip.id
@@ -104,7 +115,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate }: AddToPlan
   const logActivity = useTripActivityLog(tripId)
 
   const draftKey = `add-to-plan:new:${tripId}`
-  const seed = emptyValues(baseCurrency, defaultDate || trip.start_date)
+  const seed = emptyValues(baseCurrency, defaultDate || trip.start_date, defaultIsVote)
   const { values, setValues, updateField, clearDraft } = useFormDraft<AddToPlanFormValues>(draftKey, seed)
 
   const [placePickerOpen, setPlacePickerOpen] = useState(false)
@@ -314,7 +325,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate }: AddToPlan
           <label className="flex items-start gap-3 cursor-pointer rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3">
             <input type="checkbox" checked={values.isVote} onChange={(e) => updateField('isVote', e.target.checked)} className="mt-0.5 w-5 h-5 accent-accent-600" />
             <span className="text-sm text-[var(--text-primary)]">
-              Make it a vote
+              Ask the group
               <span className="block text-xs text-[var(--text-muted)]">Not sure yet? Let the group decide between options.</span>
             </span>
           </label>

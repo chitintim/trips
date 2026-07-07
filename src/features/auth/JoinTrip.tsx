@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { Button, Card, Spinner } from '../../components/ui'
+import { JoinCover } from '../../components/ui/illustrations'
 import { getTripAccentStyle } from '../../components/layout/tripAccent'
 import { formatMoney } from '../decisions/lib/costImpact'
 
@@ -74,9 +75,7 @@ export function JoinTrip() {
       <div className="min-h-screen bg-[var(--surface-page)] flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <Card.Content className="py-10 text-center space-y-3">
-            <p className="text-4xl" aria-hidden="true">
-              🤔
-            </p>
+            <JoinCover className="w-32 h-24 mx-auto text-[var(--text-muted)]" />
             <h1 className="text-lg font-semibold text-[var(--text-primary)]">This invitation link isn't valid</h1>
             <p className="text-sm text-[var(--text-secondary)]">
               The code may have expired or already been used. Ask your organizer for a fresh link.

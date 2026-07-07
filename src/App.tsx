@@ -8,6 +8,7 @@ import { authRoutes } from './features/auth/routes'
 import { ClaimPage } from './features/expenses'
 import { Dashboard } from './pages/Dashboard'
 import { TripDetail } from './pages/TripDetail'
+import { SharePage } from './pages/SharePage'
 
 function App() {
   return (
@@ -37,6 +38,16 @@ function App() {
               element={
                 <ProtectedRoute>
                   <ClaimPage />
+                </ProtectedRoute>
+              }
+            />
+
+            {/* Share target landing (UX_REDESIGN.md Part 3 "Ambient AI" #1) */}
+            <Route
+              path="/share"
+              element={
+                <ProtectedRoute>
+                  <SharePage />
                 </ProtectedRoute>
               }
             />

@@ -47,6 +47,13 @@ export function TripCard({ trip, onAttentionCount }: TripCardProps) {
   const isUpcoming = new Date(trip.start_date).getTime() > now
   const isOngoing = stage === 'trip_ongoing'
 
+  // Countdown chip (UX_REDESIGN.md Part 3 "Countdown: ... dashboard
+  // TripCard chip"): days-to-go for upcoming trips, computed off local
+  // midnight so it doesn't flicker between values within the same day.
+  const daysToGo = isUpcoming
+    ? Math.max(0, Math.round((new Date(trip.start_date + 'T00:00:00').getTime() - new Date().setHours(0, 0, 0, 0)) / 86_400_000))
+    : null
+
   return (
     <div data-trip-accent style={getTripAccentStyle(trip.id)}>
       <Card hoverable clickable onClick={() => navigate(`/${trip.id}`)} className="overflow-hidden">
@@ -75,6 +82,11 @@ export function TripCard({ trip, onAttentionCount }: TripCardProps) {
             {isOngoing && (
               <Badge variant="info" size="sm">
                 Happening now
+              </Badge>
+            )}
+            {daysToGo != null && (
+              <Badge variant="neutral" size="sm">
+                ⏳ {daysToGo === 0 ? 'Today' : `${daysToGo} day${daysToGo === 1 ? '' : 's'} to go`}
               </Badge>
             )}
             {isUpcoming && trip.confirmation_deadline && <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />}

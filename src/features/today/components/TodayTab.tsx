@@ -17,6 +17,7 @@ import { AnnouncementsSection } from './AnnouncementsSection'
 import { DecidedSoFarCard } from './DecidedSoFarCard'
 import { BlockersStrip } from './BlockersStrip'
 import { CountdownHero } from './CountdownHero'
+import { TripProgressStrip } from './TripProgressStrip'
 import { NowNextCard } from './NowNextCard'
 import { SettleStatusCard } from './SettleStatusCard'
 import { RecentActivitySection } from './RecentActivitySection'
@@ -149,6 +150,7 @@ export function TodayTab({
     case 'trip_ongoing':
       layout = (
         <>
+          <TripProgressStrip trip={trip} />
           <NowNextCard trip={trip} />
           <TodayItemsList trip={trip} />
           <div className="flex gap-2">

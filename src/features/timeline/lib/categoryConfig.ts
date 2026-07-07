@@ -86,9 +86,18 @@ export function formatTime(time: string | null): string {
   return `${displayHour}:${m} ${ampm}`
 }
 
-/** Human time-range display for an event: "All day", "2:30 PM", or "2:30 PM - 4:00 PM". */
+/**
+ * Human time-range display for an event: "All day", "2:30 PM", or
+ * "2:30 PM - 4:00 PM". Overnight events (end_time < start_time, calendar
+ * edge case #4, UX_REDESIGN.md Part 3) are assumed to continue into the
+ * next day rather than treated as a data error, and labeled accordingly —
+ * see calendarEdgeCases.ts's `isOvernightEvent` for the pure predicate this
+ * mirrors.
+ */
 export function formatTimeRange(allDay: boolean | null, startTime: string | null, endTime: string | null): string {
   if (allDay) return 'All day'
   if (!startTime) return ''
-  return endTime ? `${formatTime(startTime)} - ${formatTime(endTime)}` : formatTime(startTime)
+  if (!endTime) return formatTime(startTime)
+  const overnight = endTime < startTime
+  return `${formatTime(startTime)} - ${formatTime(endTime)}${overnight ? ' → next day' : ''}`
 }

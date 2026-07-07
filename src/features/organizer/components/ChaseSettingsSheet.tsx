@@ -4,6 +4,7 @@ import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { useUpdateTrip } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../lib/activity'
 import { parseChaseSettings, type ChaseSettings } from '../lib/chaseSettings'
+import { parseAiAutonomy, type AiAutonomy } from '../lib/aiAutonomy'
 import type { Trip } from '../../../types'
 import type { Json } from '../../../types/database.types'
 
@@ -14,9 +15,10 @@ interface ChaseFormValues {
   quietStart: string
   quietEnd: string
   maxReminders: string
+  aiAutonomy: AiAutonomy
 }
 
-function fromSettings(s: ChaseSettings): ChaseFormValues {
+function fromSettings(s: ChaseSettings, aiAutonomy: AiAutonomy): ChaseFormValues {
   return {
     enabled: s.enabled,
     delayHours: String(s.delay_hours),
@@ -24,6 +26,7 @@ function fromSettings(s: ChaseSettings): ChaseFormValues {
     quietStart: String(s.quiet_hours?.start ?? 22),
     quietEnd: String(s.quiet_hours?.end ?? 8),
     maxReminders: String(s.max_reminders),
+    aiAutonomy,
   }
 }
 
@@ -45,7 +48,7 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
   const updateTrip = useUpdateTrip(trip.id)
   const logActivity = useTripActivityLog(trip.id)
 
-  const seed = fromSettings(parseChaseSettings(trip.chase_settings))
+  const seed = fromSettings(parseChaseSettings(trip.chase_settings), parseAiAutonomy(trip.chase_settings))
   // This sheet only ever edits the trip's existing chase settings (no
   // create mode) -- draft persistence is disabled so a stale autosave from
   // a previous open can never override the live trip record (Form & Flow
@@ -57,7 +60,7 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
   )
 
   useEffect(() => {
-    if (isOpen) setValues(fromSettings(parseChaseSettings(trip.chase_settings)))
+    if (isOpen) setValues(fromSettings(parseChaseSettings(trip.chase_settings), parseAiAutonomy(trip.chase_settings)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, trip.id])
 
@@ -93,9 +96,13 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
           ? (trip.chase_settings as Record<string, Json>)
           : {}
       await updateTrip.mutateAsync({
-        chase_settings: { ...existing, ...(settings as unknown as Record<string, Json>) } as Json,
+        chase_settings: {
+          ...existing,
+          ...(settings as unknown as Record<string, Json>),
+          ai_autonomy: values.aiAutonomy,
+        } as Json,
       })
-      logActivity({ verb: 'chase_settings_updated', metadata: { enabled: settings.enabled } })
+      logActivity({ verb: 'chase_settings_updated', metadata: { enabled: settings.enabled, ai_autonomy: values.aiAutonomy } })
       showToast({
         type: 'success',
         message: settings.enabled ? 'Auto-chase enabled' : 'Auto-chase settings saved',
@@ -180,6 +187,44 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
           still runs and queues WhatsApp-ready drafts on this board instead — and people who opted out of emails are
           never contacted.
         </p>
+
+        <div className="space-y-2 border-t border-[var(--border-subtle)] pt-4">
+          <span className="block text-sm font-medium text-[var(--text-primary)]">AI autonomy</span>
+          <div className="space-y-2">
+            <label className="flex items-start gap-3 cursor-pointer rounded-[var(--radius-md)] border border-[var(--border-default)] p-3">
+              <input
+                type="radio"
+                name="ai-autonomy"
+                checked={values.aiAutonomy === 'suggest'}
+                onChange={() => updateField('aiAutonomy', 'suggest')}
+                className="mt-1 w-4 h-4 accent-accent-600"
+              />
+              <span>
+                <span className="block text-sm font-medium text-[var(--text-primary)]">Always ask first (default)</span>
+                <span className="block text-xs text-[var(--text-muted)] mt-0.5">
+                  Every AI suggestion — from paste/photo, chat, or a shared link — waits for someone to review and approve it.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 cursor-pointer rounded-[var(--radius-md)] border border-[var(--border-default)] p-3">
+              <input
+                type="radio"
+                name="ai-autonomy"
+                checked={values.aiAutonomy === 'auto_own_uploads'}
+                onChange={() => updateField('aiAutonomy', 'auto_own_uploads')}
+                className="mt-1 w-4 h-4 accent-accent-600"
+              />
+              <span>
+                <span className="block text-sm font-medium text-[var(--text-primary)]">Auto-add my own uploads</span>
+                <span className="block text-xs text-[var(--text-muted)] mt-0.5">
+                  When YOU paste/photograph something and it parses cleanly with high confidence, it's added
+                  immediately — with an "Undo" for a few seconds after. Anything ambiguous, or shared by someone
+                  else, still waits for review. Edits and deletes never happen automatically, for anyone.
+                </span>
+              </span>
+            </label>
+          </div>
+        </div>
 
         <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
           <Button variant="ghost" onClick={handleClose} disabled={updateTrip.isPending}>

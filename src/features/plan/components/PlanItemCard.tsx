@@ -14,6 +14,15 @@ export interface PlanItemCardProps {
   myVoted?: boolean
   /** Compact rendering for dense contexts (Undecided tray, Decide lens list). */
   compact?: boolean
+  /**
+   * Calendar edge case #1 (UX_REDESIGN.md Part 3): the trip's dates changed
+   * after this item was scheduled and it now falls outside [start_date,
+   * end_date]. Never auto-moved/deleted — just flagged, with the card tap
+   * (onOpen -> the item sheet's Edit affordance) as the re-anchor path.
+   */
+  outsideTripDates?: boolean
+  /** Companion-suggestions rule 3 (UX_REDESIGN.md Part 3 "Ambient AI" #3): this item's time overlaps another item on the same day. */
+  timeClash?: boolean
 }
 
 /**
@@ -22,7 +31,17 @@ export interface PlanItemCardProps {
  * PlanBoard's day rows/tray and the Decide lens so stage styling stays
  * consistent everywhere the item appears.
  */
-export function PlanItemCard({ item, place, onOpen, onVote, isVoting, myVoted, compact = false }: PlanItemCardProps) {
+export function PlanItemCard({
+  item,
+  place,
+  onOpen,
+  onVote,
+  isVoting,
+  myVoted,
+  compact = false,
+  outsideTripDates = false,
+  timeClash = false,
+}: PlanItemCardProps) {
   const category = item.category ? CATEGORY_CONFIG[item.category as keyof typeof CATEGORY_CONFIG] ?? CATEGORY_CONFIG.other : null
   const timeRange = !item.allDay && item.startTime ? formatTimeRange(item.allDay, item.startTime, item.endTime) : item.allDay ? 'All day' : null
 
@@ -65,6 +84,16 @@ export function PlanItemCard({ item, place, onOpen, onVote, isVoting, myVoted, c
             {isIdea && (
               <Badge variant="neutral" size="sm">
                 💡 Idea
+              </Badge>
+            )}
+            {outsideTripDates && (
+              <Badge variant="warning" size="sm">
+                ⚠️ Outside trip dates
+              </Badge>
+            )}
+            {timeClash && (
+              <Badge variant="error" size="sm">
+                ⏰ Time clash
               </Badge>
             )}
           </div>

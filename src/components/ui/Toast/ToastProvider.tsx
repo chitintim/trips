@@ -7,6 +7,7 @@ export interface ToastOptions {
   message: string
   description?: string
   duration?: number
+  action?: ToastProps['action']
 }
 
 interface ToastContextValue {
@@ -53,6 +54,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 message={t.message}
                 description={t.description}
                 duration={t.duration}
+                action={t.action}
                 onClose={() => dismiss(t.id)}
               />
             </div>

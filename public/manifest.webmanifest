@@ -9,6 +9,22 @@
   "orientation": "portrait-primary",
   "background_color": "#faf9f7",
   "theme_color": "#1f9d90",
+  "share_target": {
+    "action": "/trips/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "images",
+          "accept": ["image/*"]
+        }
+      ]
+    }
+  },
   "icons": [
     {
       "src": "icons/icon-192.png",

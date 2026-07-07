@@ -34,6 +34,14 @@ export interface ToastProps extends HTMLAttributes<HTMLDivElement> {
    * Auto-dismiss after duration (milliseconds)
    */
   duration?: number
+
+  /**
+   * Optional inline action button (e.g. "Undo" — UX_REDESIGN.md Part 3
+   * "Ambient AI" #2, the AI-autonomy auto-apply toast). Clicking it does
+   * NOT auto-dismiss the toast; callers that want that call onClose
+   * themselves from within their handler.
+   */
+  action?: { label: string; onClick: () => void }
 }
 
 // ============================================================================
@@ -49,6 +57,7 @@ export const Toast = forwardRef<HTMLDivElement, ToastProps>(
       showCloseButton = true,
       onClose,
       duration,
+      action,
       className = '',
       ...props
     },
@@ -126,6 +135,15 @@ export const Toast = forwardRef<HTMLDivElement, ToastProps>(
           <p className="font-semibold">{message}</p>
           {description && (
             <p className="mt-1 text-sm opacity-90">{description}</p>
+          )}
+          {action && (
+            <button
+              type="button"
+              onClick={action.onClick}
+              className="mt-1.5 text-sm font-semibold underline underline-offset-2 hover:opacity-80"
+            >
+              {action.label}
+            </button>
           )}
         </div>
 

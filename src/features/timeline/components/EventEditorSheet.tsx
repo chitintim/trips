@@ -24,13 +24,20 @@ interface EventFormValues {
   participantIds: string[] | null
 }
 
-function emptyValues(defaultDate: string): EventFormValues {
+/** Optional prefill for a brand-new event — the companion-suggestions "accept" flow (UX_REDESIGN.md Part 3 "Ambient AI" #3) uses this to seed title/category/time from the suggestion instead of an entirely blank form. */
+export interface EventEditorDefaults {
+  title?: string
+  category?: TimelineEventCategory
+  startTime?: string | null
+}
+
+function emptyValues(defaultDate: string, defaults?: EventEditorDefaults): EventFormValues {
   return {
-    title: '',
-    category: 'other',
+    title: defaults?.title ?? '',
+    category: defaults?.category ?? 'other',
     eventDate: defaultDate,
     allDay: false,
-    startTime: '',
+    startTime: defaults?.startTime ?? '',
     endTime: '',
     location: '',
     placeId: null,
@@ -39,8 +46,8 @@ function emptyValues(defaultDate: string): EventFormValues {
   }
 }
 
-function fromEvent(event: TimelineEvent | null, defaultDate: string): EventFormValues {
-  if (!event) return emptyValues(defaultDate)
+function fromEvent(event: TimelineEvent | null, defaultDate: string, defaults?: EventEditorDefaults): EventFormValues {
+  if (!event) return emptyValues(defaultDate, defaults)
   return {
     title: event.title,
     category: event.category as TimelineEventCategory,
@@ -63,6 +70,8 @@ export interface EventEditorSheetProps {
   event: TimelineEvent | null
   /** When creating, pre-fill the date (e.g. the day header's "+" tap). */
   defaultDate?: string
+  /** When creating, pre-fill title/category/time (the companion-suggestions "accept" flow). Ignored when editing. */
+  defaults?: EventEditorDefaults
 }
 
 /**
@@ -71,7 +80,7 @@ export interface EventEditorSheetProps {
  * (disabled for edit, which always seeds from the record), dirty-close
  * guard, fresh state on every open.
  */
-export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate }: EventEditorSheetProps) {
+export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, defaults }: EventEditorSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const tripId = trip.id
@@ -83,8 +92,13 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate }: 
   const { data: participants } = useParticipants(tripId)
   const logActivity = useTripActivityLog(tripId)
 
-  const draftKey = isEditing ? `timeline-event-editor:${event!.id}` : `timeline-event-editor:new:${tripId}`
-  const seed = fromEvent(event, defaultDate || trip.start_date)
+  // Prefilled creates (companion suggestions) get their own draft key per
+  // suggestion title so accepting suggestion A never leaks a draft into
+  // suggestion B's form.
+  const draftKey = isEditing
+    ? `timeline-event-editor:${event!.id}`
+    : `timeline-event-editor:new:${tripId}${defaults?.title ? `:${defaults.title}` : ''}`
+  const seed = fromEvent(event, defaultDate || trip.start_date, defaults)
   const { values, setValues, updateField, clearDraft } = useFormDraft<EventFormValues>(draftKey, seed, {
     // Edit forms must always seed from the record, never restore a stale
     // autosaved draft (Form & Flow Standard §5.2).
@@ -98,12 +112,12 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate }: 
   // Fresh-state guarantee: reset to a clean seed every time the sheet opens.
   useEffect(() => {
     if (isOpen) {
-      setValues(fromEvent(event, defaultDate || trip.start_date))
+      setValues(fromEvent(event, defaultDate || trip.start_date, defaults))
       setPickedPlace(null)
       setConfirmingDelete(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, event?.id])
+  }, [isOpen, event?.id, defaults?.title])
 
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)

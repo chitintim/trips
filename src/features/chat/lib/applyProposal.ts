@@ -170,56 +170,81 @@ const DELETE_TABLES: Record<string, string> = {
 }
 
 /**
+ * Reference to the row a create_* action produced, so a caller can offer
+ * "Undo" (delete this exact row) — used by the AI-autonomy auto-apply
+ * toast (UX_REDESIGN.md Part 3 "Ambient AI" #2). Null for action types
+ * that don't create a single deletable row (update_event, delete_request).
+ */
+export interface CreatedEntityRef {
+  table: 'trip_timeline_events' | 'bookings' | 'options' | 'expenses'
+  id: string
+}
+
+/**
  * Apply ONE approved action under the current user's JWT. Throws on
  * failure (RLS denial, FK violation, network) — callers mark the card
- * errored and keep going with the rest of the batch.
+ * errored and keep going with the rest of the batch. Returns a reference
+ * to the created row (create_* actions only) so callers that need an
+ * Undo affordance can delete exactly what was just created.
  */
-export async function applyAction(action: ProposedAction, ctx: ApplyContext): Promise<void> {
+export async function applyAction(action: ProposedAction, ctx: ApplyContext): Promise<CreatedEntityRef | null> {
   switch (action.type) {
     case 'create_event': {
-      const { error } = await supabase.from('trip_timeline_events').insert({
-        trip_id: ctx.tripId,
-        created_by: ctx.userId,
-        title: action.title,
-        event_date: action.event_date,
-        start_time: action.start_time ?? null,
-        end_time: action.end_time ?? null,
-        all_day: action.all_day ?? null,
-        category: action.category ?? 'other',
-        location: action.location ?? null,
-        description: action.description ?? null,
-      })
+      const { data, error } = await supabase
+        .from('trip_timeline_events')
+        .insert({
+          trip_id: ctx.tripId,
+          created_by: ctx.userId,
+          title: action.title,
+          event_date: action.event_date,
+          start_time: action.start_time ?? null,
+          end_time: action.end_time ?? null,
+          all_day: action.all_day ?? null,
+          category: action.category ?? 'other',
+          location: action.location ?? null,
+          description: action.description ?? null,
+        })
+        .select('id')
+        .single()
       if (error) throw new Error(error.message)
-      return
+      return { table: 'trip_timeline_events', id: data.id }
     }
     case 'create_option': {
-      const { error } = await supabase.from('options').insert({
-        section_id: action.section_id,
-        title: action.title,
-        description: action.description ?? null,
-        price: action.price ?? null,
-        currency: action.currency ?? null,
-        price_type: action.price_type ?? undefined,
-      })
+      const { data, error } = await supabase
+        .from('options')
+        .insert({
+          section_id: action.section_id,
+          title: action.title,
+          description: action.description ?? null,
+          price: action.price ?? null,
+          currency: action.currency ?? null,
+          price_type: action.price_type ?? undefined,
+        })
+        .select('id')
+        .single()
       if (error) throw new Error(error.message)
-      return
+      return { table: 'options', id: data.id }
     }
     case 'create_booking_draft': {
-      const { error } = await supabase.from('bookings').insert({
-        trip_id: ctx.tripId,
-        booked_by: ctx.userId,
-        option_id: action.option_id ?? null,
-        title: action.title,
-        vendor: action.vendor ?? null,
-        confirmation_ref: action.confirmation_ref ?? null,
-        amount: action.amount ?? null,
-        currency: action.currency ?? ctx.baseCurrency,
-        booking_date: action.booking_date ?? null,
-        cancellation_deadline: action.cancellation_deadline ?? null,
-        status: 'reserved',
-      })
+      const { data, error } = await supabase
+        .from('bookings')
+        .insert({
+          trip_id: ctx.tripId,
+          booked_by: ctx.userId,
+          option_id: action.option_id ?? null,
+          title: action.title,
+          vendor: action.vendor ?? null,
+          confirmation_ref: action.confirmation_ref ?? null,
+          amount: action.amount ?? null,
+          currency: action.currency ?? ctx.baseCurrency,
+          booking_date: action.booking_date ?? null,
+          cancellation_deadline: action.cancellation_deadline ?? null,
+          status: 'reserved',
+        })
+        .select('id')
+        .single()
       if (error) throw new Error(error.message)
-      return
+      return { table: 'bookings', id: data.id }
     }
     case 'create_expense_draft': {
       const paidBy = action.paid_by ?? ctx.userId
@@ -255,7 +280,7 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext): Pr
         await supabase.from('expenses').delete().eq('id', expense.id)
         throw new Error(splitsError.message)
       }
-      return
+      return { table: 'expenses', id: expense.id }
     }
     case 'update_event': {
       const update: Record<string, unknown> = {}
@@ -265,11 +290,11 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext): Pr
       if (action.end_time !== undefined) update.end_time = action.end_time
       if (action.location !== undefined) update.location = action.location
       if (action.description !== undefined) update.description = action.description
-      if (Object.keys(update).length === 0) return
+      if (Object.keys(update).length === 0) return null
       update.updated_at = new Date().toISOString()
       const { error } = await supabase.from('trip_timeline_events').update(update).eq('id', action.event_id)
       if (error) throw new Error(error.message)
-      return
+      return null
     }
     case 'delete_request': {
       // Only ever reached from the per-card individual confirm (never bulk).
@@ -280,7 +305,13 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext): Pr
         .delete()
         .eq('id', action.entity_id)
       if (error) throw new Error(error.message)
-      return
+      return null
     }
   }
+}
+
+/** Deletes exactly the row `applyAction` reported creating — the Undo affordance for an auto-applied change. */
+export async function undoCreatedEntity(ref: CreatedEntityRef): Promise<void> {
+  const { error } = await supabase.from(ref.table).delete().eq('id', ref.id)
+  if (error) throw new Error(error.message)
 }

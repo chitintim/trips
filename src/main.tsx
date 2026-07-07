@@ -2,8 +2,11 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/queries/queryClient'
+import { registerShareTargetSw } from './lib/registerShareTargetSw'
 import './index.css'
 import App from './App.tsx'
+
+registerShareTargetSw()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -15,6 +15,21 @@
 //     expires_at doesn't exist yet, it ships in a later feature migration);
 //   - settlements 'suggested'/'marked_paid' older than N days.
 //
+// T-minus date-intelligence kinds (UX_REDESIGN.md Part 3 "T-minus nudges
+// feed the existing chaser"), all respecting the same chase_settings
+// opt-in/quiet-hours/cap machinery as every other kind above:
+//   - t30_no_transport: T-30 (start_date within 30 days, still >0 days
+//     out), no booking/plan item categorized as flight/transport exists
+//     yet -> ORGANIZER-only nudge (once; this is a trip-wide gap, not a
+//     per-person one);
+//   - t14_missing_arrival: T-14, per PARTICIPANT who has no "travel
+//     details" timeline event (category flight/transfer) tagged to them
+//     (participant_ids null = everyone, so an untargeted arrival event
+//     covers everyone);
+//   - t1_checkin: T-1, flight bookings that have a confirmation_ref (i.e.
+//     something to check in for) -> nudge the person who made the booking
+//     (booked_by) to check in.
+//
 // Anti-chaos caps (plan §14): max 1 chase email per person per day (items
 // bundle into one digest), max 3 reminders per item then escalate to the
 // blockers board ("needs a personal nudge"), per-user opt-out
@@ -85,6 +100,9 @@ interface ChaseItem {
     | 'waitlist_offer'
     | 'unpaid_settlement'
     | 'unconfirmed_settlement'
+    | 't30_no_transport'
+    | 't14_missing_arrival'
+    | 't1_checkin'
   entityType: string
   entityId: string
   description: string
@@ -134,7 +152,7 @@ Deno.serve(async (req) => {
     // ---- 1. Load chase-enabled trips (opt-in via trips.chase_settings.enabled) ----
     const { data: trips, error: tripsError } = await admin
       .from('trips')
-      .select('id, name, status, capacity_limit, confirmation_deadline, chase_settings')
+      .select('id, name, status, capacity_limit, confirmation_deadline, chase_settings, start_date, end_date')
       .not('chase_settings', 'is', null)
     if (tripsError) throw tripsError
 
@@ -350,6 +368,105 @@ Deno.serve(async (req) => {
               deepLink: tripLink,
             })
           }
+        }
+      }
+
+      // ---- Date-intelligence T-minus kinds (UX_REDESIGN.md Part 3) ----
+      // Shared "days until start" for the trip, used by both t30 and t14.
+      const daysUntilStart = trip.start_date
+        ? Math.floor((new Date(trip.start_date + 'T00:00:00Z').getTime() - now.getTime()) / 86_400_000)
+        : null
+
+      // ---- g. t30_no_transport: T-30, no flight/transport booking or plan
+      // item exists yet -> organizer-only nudge (a trip-wide gap, not a
+      // per-person one; a single flight/transport item covers everyone). ----
+      if (daysUntilStart != null && daysUntilStart <= 30 && daysUntilStart >= 0) {
+        const { data: transportEvents } = await admin
+          .from('trip_timeline_events')
+          .select('id')
+          .eq('trip_id', trip.id)
+          .in('category', ['flight', 'transport'])
+          .limit(1)
+        let hasTransport = (transportEvents ?? []).length > 0
+        if (!hasTransport) {
+          // Bookings carry no category of their own -- check via their
+          // linked option's section_type (accommodation/flights/transport/...).
+          const { data: transportBookings } = await admin
+            .from('bookings')
+            .select('id, option_id, options(section_type)')
+            .eq('trip_id', trip.id)
+          // deno-lint-ignore no-explicit-any
+          hasTransport = (transportBookings ?? []).some((b: any) => b.options?.section_type === 'flights' || b.options?.section_type === 'transport')
+        }
+        if (!hasTransport) {
+          const organizers = activeParticipants.filter((p) => p.role === 'organizer')
+          for (const organizer of organizers) {
+            items.push({
+              tripId: trip.id,
+              tripName: trip.name,
+              userId: organizer.user_id,
+              kind: 't30_no_transport',
+              entityType: 'trip',
+              entityId: trip.id,
+              description: `"${trip.name}" starts in ${daysUntilStart} days and nobody's booked flights or transport yet -- worth chasing?`,
+              deepLink: tripLink,
+            })
+          }
+        }
+      }
+
+      // ---- h. t14_missing_arrival: T-14, per participant with no travel-
+      // details event (category flight/transfer) tagged to them. An event
+      // with participant_ids = null covers everyone. ----
+      if (daysUntilStart != null && daysUntilStart <= 14 && daysUntilStart >= 0) {
+        const { data: travelEvents } = await admin
+          .from('trip_timeline_events')
+          .select('participant_ids')
+          .eq('trip_id', trip.id)
+          .in('category', ['flight', 'transfer'])
+        const events = travelEvents ?? []
+        const everyoneCovered = events.some((e) => e.participant_ids === null)
+        if (!everyoneCovered) {
+          const coveredIds = new Set(events.flatMap((e) => e.participant_ids ?? []))
+          for (const p of activeParticipants) {
+            if (coveredIds.has(p.user_id)) continue
+            items.push({
+              tripId: trip.id,
+              tripName: trip.name,
+              userId: p.user_id,
+              kind: 't14_missing_arrival',
+              entityType: 'trip_participant',
+              entityId: trip.id,
+              description: `"${trip.name}" is 2 weeks away -- add your arrival/departure details so the group knows when you're around.`,
+              deepLink: tripLink,
+            })
+          }
+        }
+      }
+
+      // ---- i. t1_checkin: T-1, flight bookings with a confirmation_ref
+      // (something to actually check in for) -> nudge whoever booked it. ----
+      if (daysUntilStart === 1) {
+        const { data: flightBookings } = await admin
+          .from('bookings')
+          .select('id, title, booked_by, confirmation_ref, option_id, options(section_type)')
+          .eq('trip_id', trip.id)
+          .not('confirmation_ref', 'is', null)
+          .neq('status', 'cancelled')
+        // deno-lint-ignore no-explicit-any
+        for (const b of (flightBookings ?? []) as any[]) {
+          const looksLikeFlight = b.options?.section_type === 'flights' || /flight|airline|airways/i.test(b.title ?? '')
+          if (!looksLikeFlight) continue
+          items.push({
+            tripId: trip.id,
+            tripName: trip.name,
+            userId: b.booked_by,
+            kind: 't1_checkin',
+            entityType: 'booking',
+            entityId: b.id,
+            description: `Check in for "${b.title}" (ref ${b.confirmation_ref}) -- it's tomorrow!`,
+            deepLink: tripLink,
+          })
         }
       }
     }

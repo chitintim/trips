@@ -37,6 +37,8 @@ export type ActivityVerb =
   | 'chase_settings_updated'
   | 'status_changed'
   | 'participant_joined'
+  | 'milestone_materialized'
+  | 'proposal_auto_applied'
 
 export interface ActivityEntity {
   type: string
@@ -106,6 +108,8 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   chase_settings_updated: { icon: '⚙️', phrase: () => 'updated auto-chase settings' },
   status_changed: { icon: '🚦', phrase: (e) => `moved the trip${e ? ` to "${e}"` : ' forward'}` },
   participant_joined: { icon: '🎉', phrase: (e) => `joined the trip${e ? ` as ${e}` : ''}` },
+  milestone_materialized: { icon: '📌', phrase: (e) => `made${e ? ` "${e}"` : ' a date-derived milestone'} a real event` },
+  proposal_auto_applied: { icon: '⚡', phrase: (e) => `auto-applied${e ? ` "${e}"` : ' an AI suggestion'} from their own upload` },
 }
 
 export interface RenderedActivity {

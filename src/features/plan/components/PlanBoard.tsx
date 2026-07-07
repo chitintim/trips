@@ -1,15 +1,44 @@
 import { useMemo, useState } from 'react'
-import { Button, EmptyState, Modal, formatDeadlineLabel } from '../../../components/ui'
+import { Button, EmptyState, Modal, useToast, formatDeadlineLabel } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useCreateSection } from '../../../lib/queries/usePlanning'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
+import { useBookings } from '../../../lib/queries/useBookings'
+import { useTimeline, useCreateTimelineEvent } from '../../../lib/queries/useTimeline'
+import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
 import { MatrixView } from '../../decisions/components/MatrixView'
 import { PlanItemCard } from './PlanItemCard'
+import { DerivedMilestoneRow } from './DerivedMilestoneRow'
+import { CompanionSuggestionCard } from './CompanionSuggestionCard'
+import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
 import { groupPlanItemsByDate, groupUndatedBySection } from '../lib/planItems'
 import { useDaySwipe } from '../lib/useDaySwipe'
+import {
+  deriveMilestones,
+  groupDerivedMilestones,
+  materializedDerivedKeys,
+  MATERIALIZE_METADATA_FIELD,
+  type DerivedMilestone,
+} from '../lib/derivedMilestones'
+import {
+  isOutsideTripDates,
+  shouldSkipDayGroupingChrome,
+  isLongTrip,
+  chunkIntoWeeks,
+  type WeekChunk,
+} from '../lib/calendarEdgeCases'
+import {
+  suggestTransfers,
+  suggestAccommodationEvents,
+  detectTimeClashes,
+  clashedItemIds,
+  loadDismissedKeys,
+  dismissSuggestion,
+  type CompanionSuggestion,
+} from '../lib/companions'
 import type { PlanItem } from '../lib/planItems'
 import type { Trip } from '../../../types'
 import type { Tables } from '../../../types/database.types'
@@ -57,13 +86,22 @@ const STARTER_QUESTIONS: Array<{ title: string; section_type: 'accommodation' | 
  */
 export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onScheduleIt, onNewQuestion }: PlanBoardProps) {
   const { user } = useAuth()
+  const { showToast } = useToast()
   const { data: places } = usePlaces(trip.id)
   const { data: sections } = useSections(trip.id)
+  const { data: bookings } = useBookings(trip.id)
+  const { data: events } = useTimeline(trip.id)
   const toggleVote = useToggleVote(trip.id)
   const createSection = useCreateSection(trip.id)
+  const createEvent = useCreateTimelineEvent(trip.id)
+  const logActivity = useTripActivityLog(trip.id)
   const [votingId, setVotingId] = useState<string | null>(null)
   const [creatingStarters, setCreatingStarters] = useState(false)
   const [matrixSectionId, setMatrixSectionId] = useState<string | null>(null)
+  const [materializingKey, setMaterializingKey] = useState<string | null>(null)
+  const [collapsedWeeks, setCollapsedWeeks] = useState<Set<number>>(() => new Set())
+  const [dismissedSuggestionKeys, setDismissedSuggestionKeys] = useState<Set<string>>(() => loadDismissedKeys(trip.id))
+  const [acceptingSuggestion, setAcceptingSuggestion] = useState<CompanionSuggestion | null>(null)
 
   const handleCreateStarterQuestions = async () => {
     setCreatingStarters(true)
@@ -96,6 +134,86 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const undatedBySection = useMemo(() => groupUndatedBySection(items), [items])
   const hasUndated = undatedBySection.size > 0
 
+  // Date-derived presets (UX_REDESIGN.md Part 3): rendered, never stored.
+  // Recomputed from trip + bookings + already-materialized events every
+  // render — no separate query, no cache to invalidate.
+  const milestones = useMemo(
+    () => deriveMilestones({ trip, bookings: bookings || [], events: events || [] }),
+    [trip, bookings, events]
+  )
+  const { byDate: milestonesByDate, spans: milestoneSpans } = useMemo(() => groupDerivedMilestones(milestones), [milestones])
+
+  // Companion suggestions (UX_REDESIGN.md Part 3 "Ambient AI" #3): a
+  // conservative rule engine over data already loaded here — no AI calls.
+  // Flight/accommodation times for the transfer-window rule come from
+  // whichever item is linked to that booking (its own event or option),
+  // when one exists.
+  const flightTimesByBookingId = useMemo(() => {
+    const map = new Map<string, string | null>()
+    for (const item of items) {
+      if (item.bookingId) map.set(item.bookingId, item.startTime)
+    }
+    return map
+  }, [items])
+
+  const materializedKeys = useMemo(() => materializedDerivedKeys(events || []), [events])
+
+  const companionSuggestions = useMemo(() => {
+    const transferSuggestions = suggestTransfers(bookings || [], items, flightTimesByBookingId)
+    const accommodationSuggestions = suggestAccommodationEvents(bookings || [], items, materializedKeys, trip.end_date)
+    return [...transferSuggestions, ...accommodationSuggestions].filter((s) => !dismissedSuggestionKeys.has(s.key))
+  }, [bookings, items, flightTimesByBookingId, materializedKeys, trip.end_date, dismissedSuggestionKeys])
+
+  const timeClashFlags = useMemo(() => detectTimeClashes(items), [items])
+  const clashedIds = useMemo(() => clashedItemIds(timeClashFlags), [timeClashFlags])
+
+  const handleDismissSuggestion = (suggestion: CompanionSuggestion) => {
+    dismissSuggestion(trip.id, suggestion.key)
+    setDismissedSuggestionKeys((prev) => new Set(prev).add(suggestion.key))
+  }
+
+  const skipDayChrome = shouldSkipDayGroupingChrome(dayDates)
+  const longTrip = isLongTrip(dayDates)
+  const weekChunks = useMemo(
+    () => (longTrip ? chunkIntoWeeks(dayDates, byDate) : []),
+    [longTrip, dayDates, byDate]
+  )
+
+  const handleMaterialize = async (milestone: DerivedMilestone) => {
+    if (!user) return
+    setMaterializingKey(milestone.derivedKey)
+    try {
+      await createEvent.mutateAsync({
+        trip_id: trip.id,
+        created_by: user.id,
+        title: milestone.title,
+        category: milestone.kind === 'flight_day' ? 'flight' : milestone.kind === 'accommodation_span' ? 'accommodation' : 'other',
+        event_date: milestone.date,
+        all_day: true,
+        metadata: { [MATERIALIZE_METADATA_FIELD]: milestone.derivedKey },
+      })
+      logActivity({
+        verb: 'milestone_materialized',
+        entity: { type: 'timeline_event', label: milestone.title },
+        metadata: { derived_key: milestone.derivedKey },
+      })
+      showToast({ type: 'success', message: `"${milestone.title}" is now a real event` })
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not create this event', description: (err as Error).message })
+    } finally {
+      setMaterializingKey(null)
+    }
+  }
+
+  const toggleWeekCollapse = (index: number) => {
+    setCollapsedWeeks((prev) => {
+      const next = new Set(prev)
+      if (next.has(index)) next.delete(index)
+      else next.add(index)
+      return next
+    })
+  }
+
   // The board's inline vote button only supports casting a fresh vote
   // (one tap = vote/approve). Un-voting requires the vote row's id, which
   // isn't loaded at board scope — that's a deliberate "do it in the detail
@@ -117,7 +235,11 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     )
   }
 
-  if (items.length === 0) {
+  // Milestones (arrival/departure/etc.) are system rows, not "plan items" —
+  // an otherwise-empty plan still shows them rather than falling through to
+  // the empty state, since they're always meaningful (every trip has an
+  // arrival day).
+  if (items.length === 0 && milestones.length === 0) {
     const planCompletelyEmpty = sections !== undefined && (sections || []).length === 0
     if (isOrganizer && planCompletelyEmpty) {
       return (
@@ -209,23 +331,135 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
         </div>
       )}
 
-      <div className="space-y-3">
-        {dayDates.map((date, i) => (
-          <PlanDaySection
-            key={date}
-            date={date}
-            dayItems={byDate.get(date) || []}
-            header={formatDayHeader(date, trip.start_date, trip.end_date)}
-            prevDate={dayDates[i - 1]}
-            nextDate={dayDates[i + 1]}
-            placesById={placesById}
-            onOpenItem={onOpenItem}
-            onVote={handleVote}
-            votingId={votingId}
-            isLast={i === dayDates.length - 1}
-          />
-        ))}
-      </div>
+      {/* Span banners (multi-day accommodation etc.) render ONCE, above the
+          day list, rather than being repeated into every covered day
+          (calendar edge case #3, UX_REDESIGN.md Part 3). */}
+      {milestoneSpans.length > 0 && (
+        <div className="space-y-1.5">
+          {milestoneSpans.map((span) => (
+            <DerivedMilestoneRow
+              key={span.derivedKey}
+              milestone={span}
+              onMaterialize={handleMaterialize}
+              isMaterializing={materializingKey === span.derivedKey}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* Companion suggestions (UX_REDESIGN.md Part 3 "Ambient AI" #3):
+          dismissible cards, distinct from the muted derived-milestone rows
+          above — these are opinions ("you might want this"), not facts. */}
+      {companionSuggestions.length > 0 && (
+        <div className="space-y-1.5">
+          {companionSuggestions.map((s) => (
+            <CompanionSuggestionCard
+              key={s.key}
+              suggestion={s}
+              onAccept={setAcceptingSuggestion}
+              onDismiss={handleDismissSuggestion}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* 1-day trips skip day-grouping chrome entirely (calendar edge case
+          #5): a single flat list of the day's items/milestones with no
+          "Day 1" header, sticky bar, or divider machinery. */}
+      {skipDayChrome ? (
+        <div className="space-y-2 stagger-list">
+          {dayDates.map((date) => (
+            <div key={date} className="space-y-2">
+              {(milestonesByDate.get(date) || []).map((m) => (
+                <DerivedMilestoneRow
+                  key={m.derivedKey}
+                  milestone={m}
+                  onMaterialize={handleMaterialize}
+                  isMaterializing={materializingKey === m.derivedKey}
+                />
+              ))}
+              {(byDate.get(date) || []).map((item) => (
+                <div key={item.id} className="stagger-item">
+                  <PlanItemCard
+                    item={item}
+                    place={item.placeId ? placesById.get(item.placeId) : undefined}
+                    onOpen={onOpenItem}
+                    onVote={item.vote ? handleVote : undefined}
+                    isVoting={votingId === item.id}
+                    myVoted={item.vote?.myVote.voted}
+                    outsideTripDates={isOutsideTripDates(item, trip.start_date, trip.end_date)}
+                    timeClash={clashedIds.has(item.id)}
+                  />
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      ) : longTrip ? (
+        <div className="space-y-3">
+          {weekChunks.map((chunk, i) =>
+            chunk.isEmpty ? (
+              <CollapsedWeekRow
+                key={chunk.start}
+                chunk={chunk}
+                collapsed={!collapsedWeeks.has(i)}
+                onToggle={() => toggleWeekCollapse(i)}
+              />
+            ) : (
+              <div key={chunk.start} className="space-y-3">
+                {chunk.dates.map((date, j) => {
+                  const globalIndex = i * 7 + j
+                  return (
+                    <PlanDaySection
+                      key={date}
+                      date={date}
+                      dayItems={byDate.get(date) || []}
+                      milestones={milestonesByDate.get(date) || []}
+                      header={formatDayHeader(date, trip.start_date, trip.end_date)}
+                      prevDate={dayDates[globalIndex - 1]}
+                      nextDate={dayDates[globalIndex + 1]}
+                      placesById={placesById}
+                      onOpenItem={onOpenItem}
+                      onVote={handleVote}
+                      votingId={votingId}
+                      isLast={globalIndex === dayDates.length - 1}
+                      tripStartDate={trip.start_date}
+                      tripEndDate={trip.end_date}
+                      onMaterialize={handleMaterialize}
+                      materializingKey={materializingKey}
+                      clashedIds={clashedIds}
+                    />
+                  )
+                })}
+              </div>
+            )
+          )}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {dayDates.map((date, i) => (
+            <PlanDaySection
+              key={date}
+              date={date}
+              dayItems={byDate.get(date) || []}
+              milestones={milestonesByDate.get(date) || []}
+              header={formatDayHeader(date, trip.start_date, trip.end_date)}
+              prevDate={dayDates[i - 1]}
+              nextDate={dayDates[i + 1]}
+              placesById={placesById}
+              onOpenItem={onOpenItem}
+              onVote={handleVote}
+              votingId={votingId}
+              isLast={i === dayDates.length - 1}
+              tripStartDate={trip.start_date}
+              tripEndDate={trip.end_date}
+              onMaterialize={handleMaterialize}
+              materializingKey={materializingKey}
+              clashedIds={clashedIds}
+            />
+          ))}
+        </div>
+      )}
 
       {/* Matrix/grid view, portal-rendered via the shared Modal (layering
           rule: overlays never nest inside content, always use the token
@@ -239,6 +473,36 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
           />
         )}
       </Modal>
+
+      {/* Companion suggestion "accept" (UX_REDESIGN.md Part 3 "Ambient AI"
+          #3): opens the same create-event sheet everything else uses,
+          prefilled from the suggestion, so the organizer still reviews/
+          edits before it's saved — never a silent write. */}
+      <EventEditorSheet
+        isOpen={!!acceptingSuggestion}
+        onClose={() => {
+          // Whether saved or cancelled, the suggestion has been acted on —
+          // treat it like a dismissal so it doesn't linger (if the event
+          // was actually created, the underlying data change also makes
+          // the suggestion's own "not already present" condition false on
+          // next compute; this dismissal is the fast-path for the cancel
+          // case, where nothing changed).
+          if (acceptingSuggestion) handleDismissSuggestion(acceptingSuggestion)
+          setAcceptingSuggestion(null)
+        }}
+        trip={trip}
+        event={null}
+        defaultDate={acceptingSuggestion?.prefill.event_date}
+        defaults={
+          acceptingSuggestion
+            ? {
+                title: acceptingSuggestion.prefill.title,
+                category: acceptingSuggestion.prefill.category,
+                startTime: acceptingSuggestion.prefill.start_time,
+              }
+            : undefined
+        }
+      />
     </div>
   )
 }
@@ -257,6 +521,8 @@ function ScheduleWinnerAffordance({ items, onScheduleIt }: { items: PlanItem[]; 
 interface PlanDaySectionProps {
   date: string
   dayItems: PlanItem[]
+  /** Date-derived system rows anchored to this exact day (span banners are rendered separately, once, by the caller). */
+  milestones: DerivedMilestone[]
   header: { dayNumber: number | null; dayLabel: string; label: string }
   prevDate?: string
   nextDate?: string
@@ -265,6 +531,11 @@ interface PlanDaySectionProps {
   onVote: (item: PlanItem) => void
   votingId: string | null
   isLast: boolean
+  tripStartDate: string
+  tripEndDate: string
+  onMaterialize: (milestone: DerivedMilestone) => void
+  materializingKey: string | null
+  clashedIds: Set<string>
 }
 
 /**
@@ -277,7 +548,24 @@ interface PlanDaySectionProps {
  * useDaySwipe module doc for the "why not a full paged carousel" judgment
  * call.
  */
-function PlanDaySection({ date, dayItems, header, prevDate, nextDate, placesById, onOpenItem, onVote, votingId, isLast }: PlanDaySectionProps) {
+function PlanDaySection({
+  date,
+  dayItems,
+  milestones,
+  header,
+  prevDate,
+  nextDate,
+  placesById,
+  onOpenItem,
+  onVote,
+  votingId,
+  isLast,
+  tripStartDate,
+  tripEndDate,
+  onMaterialize,
+  materializingKey,
+  clashedIds,
+}: PlanDaySectionProps) {
   const swipe = useDaySwipe(
     () => nextDate && scrollToDay(nextDate),
     () => prevDate && scrollToDay(prevDate)
@@ -300,7 +588,10 @@ function PlanDaySection({ date, dayItems, header, prevDate, nextDate, placesById
         onTouchEnd={swipe.onTouchEnd}
         style={swipe.style}
       >
-        {dayItems.length === 0 ? (
+        {milestones.map((m) => (
+          <DerivedMilestoneRow key={m.derivedKey} milestone={m} onMaterialize={onMaterialize} isMaterializing={materializingKey === m.derivedKey} />
+        ))}
+        {dayItems.length === 0 && milestones.length === 0 ? (
           <p className="text-xs text-[var(--text-muted)] pl-1">Nothing planned yet</p>
         ) : (
           dayItems.map((item) => (
@@ -312,6 +603,8 @@ function PlanDaySection({ date, dayItems, header, prevDate, nextDate, placesById
                 onVote={item.vote ? onVote : undefined}
                 isVoting={votingId === item.id}
                 myVoted={item.vote?.myVote.voted}
+                outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
+                timeClash={clashedIds.has(item.id)}
               />
             </div>
           ))
@@ -319,5 +612,36 @@ function PlanDaySection({ date, dayItems, header, prevDate, nextDate, placesById
       </div>
       {!isLast && <div className="mt-3 border-b border-[var(--border-subtle)]" />}
     </div>
+  )
+}
+
+/**
+ * A fully-empty week collapsed behind an expander (calendar edge case #5,
+ * long trips >14 days): shows the date span and a one-tap expand instead of
+ * seven blank "Nothing planned yet" day rows.
+ */
+function CollapsedWeekRow({ chunk, collapsed, onToggle }: { chunk: WeekChunk; collapsed: boolean; onToggle: () => void }) {
+  if (!collapsed) {
+    return (
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full text-left text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] px-1 py-1"
+      >
+        ▲ Collapse {chunk.dates.length} empty day{chunk.dates.length === 1 ? '' : 's'}
+      </button>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="w-full flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-dashed border-[var(--border-subtle)] px-3 py-2 text-sm text-[var(--text-muted)] hover:border-[var(--border-default)]"
+    >
+      <span>
+        {chunk.dates.length} day{chunk.dates.length === 1 ? '' : 's'} — nothing planned yet
+      </span>
+      <span aria-hidden="true">▾ Show</span>
+    </button>
   )
 }

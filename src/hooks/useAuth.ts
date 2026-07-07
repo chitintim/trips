@@ -38,7 +38,7 @@ export function useAuth() {
       password: credentials.password,
       options: {
         ...credentials.options,
-        emailRedirectTo: `${window.location.origin}/trips/`,
+        emailRedirectTo: `${window.location.origin}${import.meta.env.BASE_URL}`,
       },
     })
     return { user: data.user, session: data.session, error }
@@ -63,7 +63,7 @@ export function useAuth() {
 
   const resetPassword = async (email: string) => {
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/trips/reset-password`,
+      redirectTo: `${window.location.origin}${import.meta.env.BASE_URL}reset-password`,
     })
     return { error }
   }

@@ -450,7 +450,7 @@ const INVITATION_BADGE: Record<string, { label: string; variant: 'success' | 'wa
 function invitationLink(code: string): string {
   // Invitation links open the PUBLIC trip teaser first (UX_REDESIGN Part 2
   // "Invite → join funnel"); the teaser hands off to /signup?code=….
-  return `${window.location.origin}/trips/join/${code}`
+  return `${window.location.origin}${import.meta.env.BASE_URL}join/${code}`
 }
 
 function AdminInvitationsTab() {

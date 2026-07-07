@@ -65,7 +65,7 @@ export function ProfileModal({ isOpen, onClose, user, onUpdate }: ProfileModalPr
         onClose()
         setSuccess(false)
       }, 1500)
-    } catch (err) {
+    } catch {
       setError('An unexpected error occurred')
     } finally {
       setLoading(false)

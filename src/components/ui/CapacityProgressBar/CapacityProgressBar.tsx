@@ -51,7 +51,6 @@ export function CapacityProgressBar({
   interestedCount = 0,
   conditionalCount = 0,
   waitlistCount = 0,
-  showDetails = true,
   size = 'md',
   className = '',
   ...props

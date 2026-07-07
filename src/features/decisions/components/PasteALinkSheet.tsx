@@ -74,7 +74,7 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
           `This looks like a ${result.classification}, not an option to compare. Try the dedicated "${result.classification}" quick-add instead, or enter it manually.`
         )
       }
-    } catch (err) {
+    } catch {
       setError('Could not reach the extraction service. You can still add this option manually.')
       showToast({
         type: 'warning',

@@ -10,16 +10,12 @@
  *     selection (any catalog item ticked) under the section, with the
  *     compact label showing their live order total.
  *
- * Chaser alignment: no edge function changes were made in this pass —
- * supabase/functions/auto-chase's existing 'unvoted_poll' kind still only
- * checks `option_votes`, so it does NOT (yet) chase unfilled personal
- * orders, and can misfire if a personal-order section is given a
- * vote_deadline (it would see zero votes and nag everyone). A future
- * 'unfilled_order' chase kind should check `selections` rows instead of
- * `option_votes` for sections whose metadata.decision_shape is 'personal',
- * and the existing unvoted_poll query should skip those sections entirely
- * (flagged for a follow-up session — edge function deploys are out of
- * scope here).
+ * Chaser alignment: supabase/functions/auto-chase's section-deadline scan
+ * mirrors this shape split — group-vote sections still chase via the
+ * 'unvoted_poll' kind (checked via option_votes), while decision_shape
+ * 'personal' sections chase via a distinct 'unfilled_order' kind (checked
+ * via `selections` rows instead, since personal-order sections never get
+ * option_votes at all) with "fill in your picks" wording rather than "vote".
  *
  * Pure (no React/Supabase) so it's independently unit-testable — the Plan
  * tray / entry card / stepper components are thin wrappers over this.

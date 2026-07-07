@@ -7,7 +7,13 @@
 // their exact action:
 //   - unclaimed items on expenses w/ participant_ids past the trip's
 //     chase threshold;
-//   - polls approaching vote_deadline with missing votes;
+//   - polls approaching vote_deadline with missing votes (group-vote
+//     sections -> 'unvoted_poll', checked via option_votes), and personal-
+//     picks order forms nearing the same deadline with participants who
+//     haven't filled anything in yet (decision_shape 'personal' sections
+//     -> 'unfilled_order', checked via `selections` rows instead --
+//     option_votes never exist for these sections, see UX_REDESIGN.md
+//     Part 5 / decisionShapes.ts);
 //   - pending RSVPs near the confirmation deadline;
 //   - stated-date conditionals: conditional_date arrived;
 //   - waitlist lifecycle: freed spots -> claim offer to first in line
@@ -95,6 +101,7 @@ interface ChaseItem {
   kind:
     | 'unclaimed_items'
     | 'unvoted_poll'
+    | 'unfilled_order'
     | 'pending_rsvp'
     | 'conditional_date_arrived'
     | 'waitlist_offer'
@@ -209,32 +216,63 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ---- b. Polls approaching vote_deadline with missing votes ----
+      // ---- b. Sections approaching their deadline with participants who
+      // haven't responded: group-vote polls checked via option_votes
+      // ('unvoted_poll'), personal-picks order forms checked via
+      // `selections` instead ('unfilled_order' -- decision_shape 'personal'
+      // sections never get option_votes rows at all, so reusing the vote
+      // check here would nag everyone forever with the wrong "vote"
+      // wording; see UX_REDESIGN.md Part 5 / decisionShapes.ts's
+      // getDecisionShape convention: metadata.decision_shape, absent = 'vote'). ----
       {
         const { data: sections } = await admin
           .from('planning_sections')
-          .select('id, title, vote_deadline, options(id, option_votes(user_id))')
+          .select('id, title, vote_deadline, metadata, options(id, option_votes(user_id), selections(user_id))')
           .eq('trip_id', trip.id)
           .not('vote_deadline', 'is', null)
           .gt('vote_deadline', now.toISOString())
           .lt('vote_deadline', hoursAheadIso(48, now))
         for (const s of sections ?? []) {
-          const voted = new Set(
-            // deno-lint-ignore no-explicit-any
-            (s.options ?? []).flatMap((o: any) => (o.option_votes ?? []).map((v: any) => v.user_id))
-          )
-          for (const uid of participantIds) {
-            if (voted.has(uid)) continue
-            items.push({
-              tripId: trip.id,
-              tripName: trip.name,
-              userId: uid,
-              kind: 'unvoted_poll',
-              entityType: 'planning_section',
-              entityId: s.id,
-              description: `Vote on "${s.title}" before ${new Date(s.vote_deadline).toUTCString()}`,
-              deepLink: tripLink,
-            })
+          // deno-lint-ignore no-explicit-any
+          const meta = s.metadata as any
+          const isPersonal = !!meta && typeof meta === 'object' && meta.decision_shape === 'personal'
+
+          if (isPersonal) {
+            const responded = new Set(
+              // deno-lint-ignore no-explicit-any
+              (s.options ?? []).flatMap((o: any) => (o.selections ?? []).map((sel: any) => sel.user_id))
+            )
+            for (const uid of participantIds) {
+              if (responded.has(uid)) continue
+              items.push({
+                tripId: trip.id,
+                tripName: trip.name,
+                userId: uid,
+                kind: 'unfilled_order',
+                entityType: 'planning_section',
+                entityId: s.id,
+                description: `Fill in your picks for "${s.title}" before ${new Date(s.vote_deadline).toUTCString()}`,
+                deepLink: tripLink,
+              })
+            }
+          } else {
+            const voted = new Set(
+              // deno-lint-ignore no-explicit-any
+              (s.options ?? []).flatMap((o: any) => (o.option_votes ?? []).map((v: any) => v.user_id))
+            )
+            for (const uid of participantIds) {
+              if (voted.has(uid)) continue
+              items.push({
+                tripId: trip.id,
+                tripName: trip.name,
+                userId: uid,
+                kind: 'unvoted_poll',
+                entityType: 'planning_section',
+                entityId: s.id,
+                description: `Vote on "${s.title}" before ${new Date(s.vote_deadline).toUTCString()}`,
+                deepLink: tripLink,
+              })
+            }
           }
         }
       }

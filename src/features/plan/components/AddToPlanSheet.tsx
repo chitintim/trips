@@ -18,13 +18,25 @@ import { useTripActivityLog } from '../../organizer/lib/activity'
 import { PlacePicker, PlaceChip } from '../../places'
 import { PasteALinkSheet } from '../../decisions/components/PasteALinkSheet'
 import { CATEGORY_OPTIONS } from '../../timeline/lib/categoryConfig'
+import type { DecisionShape } from '../../decisions/lib/decisionShapes'
 import type { Trip, TimelineEventCategory } from '../../../types'
-import type { Tables } from '../../../types/database.types'
+import type { Json, Tables } from '../../../types/database.types'
 import type { OptionDraft } from '../../../shared/contracts'
 
 interface DraftOptionRow {
   title: string
   price: string
+  /** Personal-picks (decision_shape 'personal') catalog pricing — see decisionShapes.ts's OptionPricing. Ignored in vote shape. */
+  pricingPerDay: string
+  pricingFlat: string
+}
+
+/** Builds an option row's `metadata.pricing` (shape 2, personal picks) from its per-day/flat inputs, or null when neither is set — mirrors OptionEditorSheet's buildMetadata pricing branch. */
+function buildRowPricingMetadata(row: DraftOptionRow): Json | null {
+  const perDay = row.pricingPerDay ? parseFloat(row.pricingPerDay) : undefined
+  const flat = row.pricingFlat ? parseFloat(row.pricingFlat) : undefined
+  if (perDay == null && flat == null) return null
+  return { pricing: { ...(perDay != null ? { per_day: perDay } : {}), ...(flat != null ? { flat } : {}) } } as unknown as Json
 }
 
 interface AddToPlanFormValues {
@@ -42,6 +54,8 @@ interface AddToPlanFormValues {
   isVote: boolean
   voteTarget: 'new' | 'existing'
   existingSectionId: string
+  /** Group vote / Personal picks (UX_REDESIGN.md Part 5) — only meaningful (and shown) for the "new section" path; an existing section's shape is already fixed. */
+  decisionShape: DecisionShape
   votingMethod: 'single' | 'approval' | 'ranked'
   voteDeadline: string
   optionRows: DraftOptionRow[]
@@ -67,11 +81,12 @@ function emptyValues(baseCurrency: string, defaultDate: string, defaultIsVote: b
     isVote: defaultIsVote,
     voteTarget: 'new',
     existingSectionId: '',
+    decisionShape: 'vote',
     votingMethod: 'single',
     voteDeadline: '',
     optionRows: [
-      { title: '', price: '' },
-      { title: '', price: '' },
+      { title: '', price: '', pricingPerDay: '', pricingFlat: '' },
+      { title: '', price: '', pricingPerDay: '', pricingFlat: '' },
     ],
   }
 }
@@ -144,7 +159,8 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
     }))
   }
 
-  const addOptionRow = () => setValues((prev) => ({ ...prev, optionRows: [...prev.optionRows, { title: '', price: '' }] }))
+  const addOptionRow = () =>
+    setValues((prev) => ({ ...prev, optionRows: [...prev.optionRows, { title: '', price: '', pricingPerDay: '', pricingFlat: '' }] }))
   const removeOptionRow = (index: number) =>
     setValues((prev) => ({ ...prev, optionRows: prev.optionRows.filter((_, i) => i !== index) }))
 
@@ -154,7 +170,10 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
       ...prev,
       isVote: true,
       title: prev.title || draft.title,
-      optionRows: [{ title: draft.title, price: draft.price != null ? String(draft.price) : '' }, ...prev.optionRows.slice(1)],
+      optionRows: [
+        { title: draft.title, price: draft.price != null ? String(draft.price) : '', pricingPerDay: '', pricingFlat: '' },
+        ...prev.optionRows.slice(1),
+      ],
       currency: draft.currency || prev.currency,
     }))
   }
@@ -180,9 +199,11 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
 
         let sectionId = values.existingSectionId
         if (values.voteTarget === 'new') {
+          const isPersonal = values.decisionShape === 'personal'
           const created = await createSection.mutateAsync({
             title: values.title.trim(),
             description: values.description.trim() || null,
+            metadata: { decision_shape: values.decisionShape },
             section_type: 'activities',
             status: 'in_progress',
             allow_multiple_selections: false,
@@ -198,10 +219,15 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
             filledRows.map((row) => ({
               section_id: sectionId,
               title: row.title.trim(),
-              price: row.price ? parseFloat(row.price) : null,
-              currency: row.price ? values.currency : null,
+              // Personal picks (shape 2) price entirely through
+              // metadata.pricing (per-day/flat) -- no row-level price, but
+              // still stamp a currency for that pricing to be denominated
+              // in (mirrors OptionEditorSheet's buildMetadata/currency rule).
+              price: isPersonal ? null : row.price ? parseFloat(row.price) : null,
+              currency: isPersonal ? values.currency : row.price ? values.currency : null,
               price_type: 'per_person_fixed' as const,
               place_id: pickedPlace?.id ?? values.placeId,
+              metadata: isPersonal ? buildRowPricingMetadata(row) : null,
             }))
           )
           logActivity({ verb: 'option_added', entity: { type: 'section', id: sectionId, label: values.title.trim() } })
@@ -353,22 +379,63 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
               ) : (
                 <>
                   <div>
+                    <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Question type</label>
+                    <SegmentedControl
+                      fullWidth
+                      size="sm"
+                      value={values.decisionShape}
+                      onChange={(v) => updateField('decisionShape', v)}
+                      options={[
+                        { value: 'vote', label: 'Group vote' },
+                        { value: 'personal', label: 'Personal picks' },
+                      ]}
+                    />
+                    <p className="mt-1.5 text-xs text-[var(--text-muted)]">
+                      {values.decisionShape === 'vote'
+                        ? 'One winner for everyone — the group votes on options.'
+                        : 'Each person orders their own items (rental gear, lessons) — not a vote.'}
+                    </p>
+                  </div>
+
+                  <div>
                     <span className="mb-1.5 block text-sm font-medium text-[var(--text-primary)]">Options (2+)</span>
                     <div className="space-y-2">
                       {values.optionRows.map((row, i) => (
-                        <div key={i} className="flex gap-2">
-                          <Input value={row.title} onChange={(e) => updateOptionRow(i, 'title', e.target.value)} placeholder={`Option ${i + 1}`} fullWidth />
-                          <Input
-                            type="number"
-                            value={row.price}
-                            onChange={(e) => updateOptionRow(i, 'price', e.target.value)}
-                            placeholder="Price"
-                            className="w-28"
-                          />
-                          {values.optionRows.length > 2 && (
-                            <Button variant="ghost" size="sm" onClick={() => removeOptionRow(i)}>
-                              ✕
-                            </Button>
+                        <div key={i} className="space-y-1.5">
+                          <div className="flex gap-2">
+                            <Input value={row.title} onChange={(e) => updateOptionRow(i, 'title', e.target.value)} placeholder={`Option ${i + 1}`} fullWidth />
+                            {values.decisionShape === 'vote' && (
+                              <Input
+                                type="number"
+                                value={row.price}
+                                onChange={(e) => updateOptionRow(i, 'price', e.target.value)}
+                                placeholder="Price"
+                                className="w-28"
+                              />
+                            )}
+                            {values.optionRows.length > 2 && (
+                              <Button variant="ghost" size="sm" onClick={() => removeOptionRow(i)}>
+                                ✕
+                              </Button>
+                            )}
+                          </div>
+                          {values.decisionShape === 'personal' && (
+                            <div className="flex gap-2 pl-1">
+                              <Input
+                                type="number"
+                                value={row.pricingPerDay}
+                                onChange={(e) => updateOptionRow(i, 'pricingPerDay', e.target.value)}
+                                placeholder="Price per day"
+                                className="w-32"
+                              />
+                              <Input
+                                type="number"
+                                value={row.pricingFlat}
+                                onChange={(e) => updateOptionRow(i, 'pricingFlat', e.target.value)}
+                                placeholder="Flat price"
+                                className="w-32"
+                              />
+                            </div>
                           )}
                         </div>
                       ))}
@@ -378,22 +445,34 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
                     </Button>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Voting method</label>
-                    <SegmentedControl
-                      fullWidth
-                      size="sm"
-                      value={values.votingMethod}
-                      onChange={(v) => updateField('votingMethod', v)}
-                      options={[
-                        { value: 'single', label: 'Single choice' },
-                        { value: 'approval', label: 'Approve multiple' },
-                        { value: 'ranked', label: 'Ranked' },
-                      ]}
-                    />
-                  </div>
+                  {values.decisionShape === 'vote' && (
+                    <div>
+                      <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Voting method</label>
+                      <SegmentedControl
+                        fullWidth
+                        size="sm"
+                        value={values.votingMethod}
+                        onChange={(v) => updateField('votingMethod', v)}
+                        options={[
+                          { value: 'single', label: 'Single choice' },
+                          { value: 'approval', label: 'Approve multiple' },
+                          { value: 'ranked', label: 'Ranked' },
+                        ]}
+                      />
+                    </div>
+                  )}
 
-                  <Input label="Vote deadline (optional)" type="datetime-local" value={values.voteDeadline} onChange={(e) => updateField('voteDeadline', e.target.value)} />
+                  <Input
+                    label={values.decisionShape === 'personal' ? 'Answer by (optional)' : 'Vote deadline (optional)'}
+                    type="datetime-local"
+                    value={values.voteDeadline}
+                    onChange={(e) => updateField('voteDeadline', e.target.value)}
+                    helperText={
+                      values.decisionShape === 'personal'
+                        ? 'Reuses the same deadline field — shown as when orders close, not a vote.'
+                        : undefined
+                    }
+                  />
                 </>
               )}
             </div>

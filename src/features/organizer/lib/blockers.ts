@@ -5,6 +5,7 @@ import type { Settlement } from '../../../lib/queries/useSettlements'
 import type { Booking } from '../../../lib/queries/useBookings'
 import type { Notification } from '../../../lib/queries/useNotifications'
 import type { BlockerType } from '../../../shared/contracts/nudgeDraft'
+import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 
 /**
  * Pure computation behind the organizer BLOCKERS BOARD (plan §14): every
@@ -17,6 +18,7 @@ export type BlockerKind =
   | 'pending_rsvp'
   | 'due_conditional'
   | 'unvoted_poll'
+  | 'unfilled_order'
   | 'unclaimed_items'
   | 'unconfirmed_settlement'
   | 'expiring_waitlist_offer'
@@ -137,11 +139,29 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
   for (const section of sections) {
     if (!section.vote_deadline) continue
     if (new Date(section.vote_deadline).getTime() <= now) continue
-    const optionIds = (section.options ?? []).map((o) => o.id)
-    if (optionIds.length === 0) continue
+    const options = section.options ?? []
+    if (options.length === 0) continue
+    const isPersonal = getDecisionShape(section.metadata) === 'personal'
     for (const p of active) {
+      if (isPersonal) {
+        // Personal-picks sections never receive option_votes — a participant
+        // is done when they have any selections row on the section's options.
+        const hasOrdered = options.some((o) => (o.selections ?? []).some((s) => s.user_id === p.user_id))
+        if (!hasOrdered) {
+          push({
+            kind: 'unfilled_order',
+            userId: p.user_id,
+            label: `Picks needed: "${section.title}"`,
+            detail: `Hasn't filled in their picks for "${section.title}" (answer by ${new Date(section.vote_deadline).toLocaleDateString()}).`,
+            entityId: section.id,
+            deadline: section.vote_deadline,
+            nudgeType: 'unvoted_poll',
+          })
+        }
+        continue
+      }
       const voted = votedOptionsByUser.get(p.user_id)
-      const hasVoted = !!voted && optionIds.some((id) => voted.has(id))
+      const hasVoted = !!voted && options.some((o) => voted.has(o.id))
       if (!hasVoted) {
         push({
           kind: 'unvoted_poll',
@@ -274,7 +294,7 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
 /** Best-effort mapping from a notifications.kind to a nudge blocker_type. */
 function kindToNudgeType(kind: string): BlockerType | null {
   if (kind.includes('rsvp') || kind.includes('conditional') || kind.includes('waitlist')) return 'pending_rsvp'
-  if (kind.includes('poll') || kind.includes('vote')) return 'unvoted_poll'
+  if (kind.includes('poll') || kind.includes('vote') || kind.includes('order')) return 'unvoted_poll'
   if (kind.includes('claim') || kind.includes('item')) return 'unclaimed_items'
   if (kind.includes('settle')) return 'unpaid_settlement'
   if (kind.includes('cancel')) return 'expiring_cancellation_window'

@@ -156,3 +156,29 @@ Participant-facing status picker: I'm in (→confirmed, terms/capacity as now) �
 ## Motion & identity system
 - Motion tokens in index.css: --ease-spring, durations; sheet enter/exit springs; day-swipe (horizontal pan) between Plan days on mobile; press-scale feedback on cards/buttons (transform 0.98, fast); list item enter stagger (subtle, ≤150ms total); reduced-motion media query respected throughout.
 - Illustration identity: extend the 28-icon flat style into ~8 empty-state/hero illustrations (empty plan, no expenses yet, all settled, retrospective header, join teaser cover fallback, nothing-to-decide, offline, error) as in-repo SVG components — consistent stroke/palette with the avatar icons.
+
+---
+
+# Part 5 — Decision shapes (the Meribel lessons) + focused answering
+
+Real trips have THREE decision shapes; forcing all into "options you vote on" creates unreadable lists. Shape lives in planning_sections.metadata jsonb (ADDITIVE migration: add metadata column) as {decision_shape: 'vote'|'personal'|'vote'} with tier data on options.
+
+## Shape 1: Group vote (default — unchanged)
+One winner for everyone. Existing voting/deadline/quorum machinery.
+
+## Shape 2: Personal pick (order form — NOT a vote)
+For rental gear, lessons, add-ons: organizer defines a CATALOG (options = catalog entries; option.metadata.pricing {per_day?: number, flat?: number, variants?: [{label, per_day|flat}]}); each participant fills THEIR order via a focused sheet: tick items (+variant), date range per item DEFAULTING to their travel-details presence window (else trip dates), live "Your rental: £86" total. Stored as selections rows with metadata {start_date, end_date, variant, quantity}. No votes, no deadline pressure beyond section deadline (chaser: "you haven't filled your rental order").
+- Participant view: only their own order + total. Others' picks visible in a compact "who's ordered" avatar row (n/M done).
+- Organizer view: consolidated matrix (people × items, dates), per-item counts, group total, and "Copy order sheet" (plain-text summary for the vendor/WhatsApp).
+- Per-person cost estimate feeds from their own order.
+
+## Shape 3: Tiered group pricing (headcount-dependent)
+option.metadata.price_tiers: [{max_people: 6, total: 300}, {max_people: 12, total: 450}] (price_type 'total_split'). Cost engine picks the applicable tier from the RELEVANT headcount (confirmed count, or opted-in count for optional activities): "≈£50/person at 9" + sensitivity line "£75/pp if 6 · £38/pp if 12". Live-updates as RSVPs/opt-ins change. Winner's booking uses the final tier.
+
+## Focused answer flow (glanceability fix)
+- Decide lens = "N things need you · ~X min" entry → question-by-question stepper: one focused screen per open question (vote options OR personal order form), Skip/Next, progress dots, done-state 🎉. No more scrolling walls.
+- Question cards everywhere show response-state chips: "You're done ✓" / "Needs you" / "4 of 9 answered", so a glance tells whether you're needed.
+- Plan tray question rows collapse to one line each (question + state chip + deadline); expansion happens in the focused flow or item sheet.
+
+## Estimator integration
+Per-person trip estimate (Today/brief cost band) = accommodation share + own personal orders + tier-aware share of decided group choices + band (min/max across open questions' cheapest/priciest outcomes).

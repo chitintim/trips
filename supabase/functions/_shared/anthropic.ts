@@ -91,15 +91,26 @@ export async function createMessage(opts: AnthropicRequestOptions): Promise<Anth
     ...(opts.output_config ? { output_config: opts.output_config } : {}),
   }
 
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: {
-      'x-api-key': getApiKey(),
-      'anthropic-version': ANTHROPIC_VERSION,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  })
+  let response: Response
+  try {
+    response = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: {
+        'x-api-key': getApiKey(),
+        'anthropic-version': ANTHROPIC_VERSION,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+      // Hard deadline so a slow model call fails cleanly instead of grinding
+      // into the edge runtime's worker limit (546).
+      signal: AbortSignal.timeout(90_000),
+    })
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'TimeoutError') {
+      throw new Error('Claude API call timed out after 90s — please retry')
+    }
+    throw err
+  }
 
   if (!response.ok) {
     const errorText = await response.text()
@@ -136,6 +147,9 @@ export async function createMessageStream(opts: AnthropicRequestOptions): Promis
       'content-type': 'application/json',
     },
     body: JSON.stringify(body),
+    // Generous stream deadline: aborts the whole SSE stream if the model
+    // stalls, before the edge runtime's worker limit does it uncleanly.
+    signal: AbortSignal.timeout(120_000),
   })
 
   if (!response.ok) {

@@ -206,6 +206,9 @@ async function callClaudeForReceipt(
     ],
     messages,
     output_config: {
+      // Extraction, not deliberation: low effort curbs Sonnet 5's default
+      // adaptive thinking (on when 'thinking' is omitted) for fast parses.
+      effort: 'low',
       format: { type: 'json_schema', schema: ReceiptParseResultJsonSchema.schema},
     },
   })

@@ -3,15 +3,20 @@
  * auto-shows this panel for `trip_completed` trips — `showWhen` encodes
  * the rule so the shell doesn't hardcode it.
  */
-import type { ComponentType } from 'react'
-import { RetrospectivePanel, type RetrospectivePanelProps } from './components/RetrospectivePanel'
+import { lazy, type ComponentType } from 'react'
+import type { RetrospectivePanelProps } from './components/RetrospectivePanel'
 import type { Trip } from '../../types'
 
-export { RetrospectivePanel } from './components/RetrospectivePanel'
 export type { RetrospectivePanelProps } from './components/RetrospectivePanel'
 export { computeTripStats, formatMinor, categoryMeta, buildSummaryText, expenseBaseMinor } from './lib/tripStats'
 export type { TripStats, CategoryTotal, PersonTotal, DayTotal, Superlatives } from './lib/tripStats'
 
+/**
+ * `RetrospectivePanel` (and its leaflet-dependent PlaceMapThumb usage,
+ * superlative charts, share-image rendering) is loaded via React.lazy (WSH
+ * perf pass, plan §16 code-splitting target) -- it's only relevant for
+ * trip_completed trips, so most sessions never need this JS at all.
+ */
 export const retroConfig: {
   tabId: 'retro'
   label: string
@@ -24,5 +29,5 @@ export const retroConfig: {
   label: 'Recap',
   icon: '🎉',
   showWhen: (trip) => trip.status === 'trip_completed',
-  Component: RetrospectivePanel,
+  Component: lazy(() => import('./components/RetrospectivePanel').then((m) => ({ default: m.RetrospectivePanel }))),
 }

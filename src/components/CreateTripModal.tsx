@@ -1,6 +1,7 @@
 import { useState, FormEvent, useEffect } from 'react'
-import { Modal, Button, Input, Select } from './ui'
+import { Modal, Button, Input, Select, ConfirmDiscardSheet } from './ui'
 import { supabase } from '../lib/supabase'
+import { useUnsavedChangesGuard } from '../lib/forms'
 import { Trip } from '../types'
 
 interface CreateTripModalProps {
@@ -45,6 +46,17 @@ export function CreateTripModal({
     }
     setError(null)
   }, [editTrip, isOpen])
+
+  const isDirty = editTrip
+    ? name !== editTrip.name ||
+      location !== editTrip.location ||
+      startDate !== editTrip.start_date ||
+      endDate !== editTrip.end_date ||
+      status !== editTrip.status ||
+      isPublic !== editTrip.is_public
+    : name.trim() !== '' || location.trim() !== '' || !!startDate || !!endDate || isPublic
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(onClose)
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -134,7 +146,7 @@ export function CreateTripModal({
   return (
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={handleClose}
       title={editTrip ? 'Edit Trip' : 'Create Trip'}
       size="lg"
     >
@@ -231,7 +243,7 @@ export function CreateTripModal({
           <Button
             type="button"
             variant="outline"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={loading}
           >
             Cancel
@@ -241,6 +253,8 @@ export function CreateTripModal({
           </Button>
         </div>
       </form>
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

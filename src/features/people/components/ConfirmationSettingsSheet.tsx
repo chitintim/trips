@@ -52,7 +52,13 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
   const { showToast } = useToast()
 
   const draftKey = `confirmation-settings:${tripId}`
-  const { values, setValues, updateField, clearDraft } = useFormDraft<SettingsFormValues>(draftKey, EMPTY_VALUES)
+  // This sheet only ever edits the trip's existing confirmation settings
+  // (no create mode) -- draft persistence is disabled so a stale autosave
+  // from a previous open can never override the live trip record (Form &
+  // Flow Standard §5.2).
+  const { values, setValues, updateField, clearDraft } = useFormDraft<SettingsFormValues>(draftKey, EMPTY_VALUES, {
+    enabled: false,
+  })
 
   useEffect(() => {
     if (isOpen && trip) {

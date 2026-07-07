@@ -101,22 +101,35 @@ export function reconcileReceipt(receipt: ReceiptParseResult, toleranceMinorUnit
 
   const within = (a: number, b: number) => Math.abs(a - b) <= toleranceMinorUnits
 
+  const taxAddOnMinor = sumMinorUnits(
+    receipt.tax.filter((t) => !t.inclusive).map((t) => toMinorUnits(t.amount, currency))
+  )
+  const serviceChargeMinor = receipt.service_charge?.amount != null
+    ? toMinorUnits(receipt.service_charge.amount, currency)
+    : receipt.service_charge?.percent != null
+      ? roundHalfAwayFromZero((lineTotalsSumMinor * receipt.service_charge.percent) / 100)
+      : 0
+  // A voluntary/suggested service charge (auto === false, e.g. a printed "suggested
+  // gratuity" line on a US-style slip) is frequently NOT reflected in the receipt's
+  // own printed total -- the customer chooses whether to add it after the fact. Only
+  // a mandatory/auto charge (or one whose auto-ness is unspecified, matching prior
+  // behavior) should be assumed present in the printed total by default. When the
+  // charge is voluntary, prefer the "not applied" interpretation (it reconciles
+  // without silently attributing a declined suggestion to the total) and only fall
+  // back to including it if that's the sole way to reconcile.
+  const serviceIsVoluntary = receipt.service_charge?.auto === false
+  const serviceVariants = serviceIsVoluntary ? [0, serviceChargeMinor] : [serviceChargeMinor]
+
   // --- Hypothesis 1: printed fields as-is (Σlines + tax(non-inclusive) + service - discounts + rounding = total) ---
-  {
-    const taxAddOnMinor = sumMinorUnits(
-      receipt.tax.filter((t) => !t.inclusive).map((t) => toMinorUnits(t.amount, currency))
-    )
-    const serviceMinor = receipt.service_charge?.amount != null
-      ? toMinorUnits(receipt.service_charge.amount, currency)
-      : receipt.service_charge?.percent != null
-        ? roundHalfAwayFromZero((lineTotalsSumMinor * receipt.service_charge.percent) / 100)
-        : 0
+  for (const serviceMinor of serviceVariants) {
     const computedTotal = lineTotalsSumMinor + taxAddOnMinor + serviceMinor - discountsMinor + roundingMinor
     if (within(computedTotal, printedTotalMinor)) {
       return {
         reconciled: true,
         hypothesis: 'printed_fields_as_is',
-        explanation: 'Line items plus printed tax/service/discount/rounding fields reconcile exactly to the printed total.',
+        explanation: serviceIsVoluntary && serviceMinor === 0 && serviceChargeMinor !== 0
+          ? 'Line items plus printed tax/discount/rounding fields reconcile exactly to the printed total; the voluntary/suggested service charge printed on the receipt was not applied to this total.'
+          : 'Line items plus printed tax/service/discount/rounding fields reconcile exactly to the printed total.',
         computedSubtotalMinor: lineTotalsSumMinor,
         computedTotalMinor: computedTotal,
         printedTotalMinor,

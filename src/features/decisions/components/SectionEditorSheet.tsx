@@ -50,7 +50,12 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
 
   const isEditing = !!section
   const draftKey = isEditing ? `section-editor:${section!.id}` : `section-editor:new:${tripId}`
-  const { values, setValues, updateField, clearDraft } = useFormDraft<SectionFormValues>(draftKey, EMPTY_VALUES)
+  // Edit mode always seeds from the section record -- draft persistence is
+  // disabled so a stale autosave can never leak in (Form & Flow Standard
+  // §5.2). Create mode keeps draft persistence.
+  const { values, setValues, updateField, clearDraft } = useFormDraft<SectionFormValues>(draftKey, EMPTY_VALUES, {
+    enabled: !isEditing,
+  })
 
   useEffect(() => {
     if (isOpen) setValues(fromSection(section))

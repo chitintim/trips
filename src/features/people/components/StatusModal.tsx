@@ -129,13 +129,17 @@ export function StatusModal({
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [validationError, setValidationError] = useState<string | null>(null)
 
-  // Draft-persisted form state (Form & Flow Standard, UPGRADE_MASTER_PLAN.md
-  // §5): survives a mobile tab-switch mid-edit. Keyed per trip+user so
-  // different participants' in-flight edits never collide.
+  // This modal always edits the current user's own participant record (no
+  // create mode) -- draft persistence is disabled so a stale autosave from
+  // an earlier abandoned edit (e.g. a different candidate status/note left
+  // over from a prior open) can never leak in ahead of the live record
+  // (Form & Flow Standard §5.2). Keyed per trip+user purely for clarity;
+  // with persistence disabled the key is otherwise inert.
   const draftKey = participant ? `status-modal:${tripId}:${participant.user_id}` : 'status-modal:inactive'
   const { values, setValues, updateField, clearDraft } = useFormDraft<StatusFormValues>(
     draftKey,
-    seedFromParticipant(participant)
+    seedFromParticipant(participant),
+    { enabled: false }
   )
   const { status, conditionalType, conditionalDate, conditionalUserIds, note, agreedToTerms } = values
 

@@ -1941,6 +1941,15 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: undefined
       }
+      validate_invitation_code: {
+        Args: { p_code: string }
+        Returns: {
+          invitation_id: string
+          is_valid: boolean
+          reason: string
+          trip_id: string
+        }[]
+      }
     }
     Enums: {
       chat_message_role: "user" | "assistant" | "system"

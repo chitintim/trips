@@ -1,9 +1,10 @@
-import { useState } from 'react'
-import { Modal, Button, Input, TextArea, useToast } from '../../../components/ui'
+import { useRef, useState } from 'react'
+import { Modal, Button, Input, TextArea, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { supabase } from '../../../lib/supabase'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../../../lib/queries/queryKeys'
+import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { parsePaymentDetails, type PaymentRail } from './paymentDetails'
 import type { Json } from '../../../types/database.types'
 
@@ -18,9 +19,14 @@ export function PaymentDetailsSheet({ isOpen, onClose, currentPaymentDetails }: 
   const { user } = useAuth()
   const { showToast } = useToast()
   const queryClient = useQueryClient()
-  const [rails, setRails] = useState<PaymentRail[]>(() => parsePaymentDetails(currentPaymentDetails).rails)
-  const [notes, setNotes] = useState(() => parsePaymentDetails(currentPaymentDetails).notes ?? '')
+  const initial = useRef(parsePaymentDetails(currentPaymentDetails))
+  const [rails, setRails] = useState<PaymentRail[]>(initial.current.rails)
+  const [notes, setNotes] = useState(initial.current.notes ?? '')
   const [isSaving, setIsSaving] = useState(false)
+
+  const isDirty = JSON.stringify(rails) !== JSON.stringify(initial.current.rails) || notes !== (initial.current.notes ?? '')
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(onClose)
 
   const updateRail = (index: number, patch: Partial<PaymentRail>) => {
     setRails((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)))
@@ -47,7 +53,7 @@ export function PaymentDetailsSheet({ isOpen, onClose, currentPaymentDetails }: 
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Your payment details" size="sm">
+    <Modal isOpen={isOpen} onClose={handleClose} title="Your payment details" size="sm">
       <div className="space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">
           Shown to people who owe you money, so they know how to pay you back.
@@ -73,6 +79,8 @@ export function PaymentDetailsSheet({ isOpen, onClose, currentPaymentDetails }: 
           Save
         </Button>
       </div>
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

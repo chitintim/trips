@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Modal, Button, Input, useToast } from '../../../components/ui'
+import { Modal, Button, Input, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { supabase } from '../../../lib/supabase'
+import { useUnsavedChangesGuard } from '../../../lib/forms'
 import type { IngestResult, OptionDraft } from '../../../shared/contracts'
 
 interface PasteALinkSheetProps {
@@ -41,10 +42,14 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
     setNonOptionWarning(null)
   }
 
-  const handleClose = () => {
+  const closeAndReset = () => {
     reset()
     onClose()
   }
+
+  const isDirty = url.trim().length > 0
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(closeAndReset)
 
   const handleFetch = async () => {
     if (!url.trim()) return
@@ -145,6 +150,8 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
           </Button>
         </div>
       </div>
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

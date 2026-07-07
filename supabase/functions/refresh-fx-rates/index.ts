@@ -110,6 +110,21 @@ Deno.serve(async (req) => {
   }
 
   try {
+    // Cron-only: require the service-role key as the bearer token, mirroring
+    // auto-chase's gate. Without this, any caller holding a valid JWT (e.g.
+    // any logged-in app user, since this function has no explicit
+    // verify_jwt config block) could invoke a full cross-trip fx-recompute
+    // job on demand. This is a service-role batch job with no end-user
+    // caller, so no user JWT should ever be accepted here.
+    const authHeader = req.headers.get('Authorization') ?? ''
+    const token = authHeader.replace(/^Bearer\s+/i, '')
+    if (!token || token !== Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')) {
+      return new Response(
+        JSON.stringify({ success: false, error: 'refresh-fx-rates is cron/service-role only' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      )
+    }
+
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''

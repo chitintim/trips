@@ -98,9 +98,13 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
 
   const isEditing = !!booking
   const draftKey = isEditing ? `booking-editor:${booking!.id}` : `booking-editor:new:${tripId}`
+  // Edit mode always seeds from the booking record -- draft persistence is
+  // disabled so a stale autosave can never leak in (Form & Flow Standard
+  // §5.2). Create mode keeps draft persistence.
   const { values, setValues, updateField, clearDraft } = useFormDraft<BookingFormValues>(
     draftKey,
-    EMPTY(baseCurrency)
+    EMPTY(baseCurrency),
+    { enabled: !isEditing }
   )
   const [placePickerOpen, setPlacePickerOpen] = useState(false)
   const [pickedPlace, setPickedPlace] = useState<Tables<'places'> | null>(null)

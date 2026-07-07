@@ -1,7 +1,8 @@
 import { useState, useEffect, FormEvent } from 'react'
-import { Modal, Button, Select } from './ui'
+import { Modal, Button, Select, ConfirmDiscardSheet } from './ui'
 import { supabase } from '../lib/supabase'
 import { useAddParticipant } from '../lib/queries/useConfirmations'
+import { useUnsavedChangesGuard } from '../lib/forms'
 import { User } from '../types'
 
 interface AddParticipantModalProps {
@@ -27,11 +28,20 @@ export function AddParticipantModal({
   const [success, setSuccess] = useState(false)
   const addParticipant = useAddParticipant(tripId)
 
+  // Dirty only once the auto-picked defaults have been touched -- avoids
+  // prompting a discard-confirm for a form nobody has actually interacted
+  // with yet.
+  const [touched, setTouched] = useState(false)
+  const isDirty = touched && !success
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(onClose)
+
   useEffect(() => {
     if (isOpen) {
       fetchUsers()
       setError(null)
       setSuccess(false)
+      setTouched(false)
     }
   }, [isOpen])
 
@@ -103,7 +113,7 @@ export function AddParticipantModal({
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Add Participant" size="md">
+    <Modal isOpen={isOpen} onClose={handleClose} title="Add Participant" size="md">
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
@@ -122,7 +132,10 @@ export function AddParticipantModal({
         <Select
           label="Select User"
           value={selectedUserId}
-          onChange={(e) => setSelectedUserId(e.target.value)}
+          onChange={(e) => {
+            setSelectedUserId(e.target.value)
+            setTouched(true)
+          }}
           disabled={loading || success}
           options={users.map((user) => ({
             value: user.id,
@@ -135,7 +148,10 @@ export function AddParticipantModal({
         <Select
           label="Role"
           value={role}
-          onChange={(e) => setRole(e.target.value as 'organizer' | 'participant')}
+          onChange={(e) => {
+            setRole(e.target.value as 'organizer' | 'participant')
+            setTouched(true)
+          }}
           disabled={loading || success}
           options={[
             { value: 'participant', label: '👤 Participant - Can view and make selections' },
@@ -149,7 +165,7 @@ export function AddParticipantModal({
           <Button
             type="button"
             variant="outline"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={loading || success}
           >
             Cancel
@@ -159,6 +175,8 @@ export function AddParticipantModal({
           </Button>
         </div>
       </form>
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

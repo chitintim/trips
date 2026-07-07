@@ -84,7 +84,13 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
 
   const isEditing = !!option
   const draftKey = isEditing ? `option-editor:${option!.id}` : `option-editor:new:${sectionId}`
-  const { values, setValues, updateField, clearDraft } = useFormDraft<OptionFormValues>(draftKey, EMPTY_VALUES)
+  // Edit mode always seeds from the option record -- draft persistence is
+  // disabled so a stale autosave can never leak in (Form & Flow Standard
+  // §5.2). Create mode (including paste-a-link prefill) keeps draft
+  // persistence.
+  const { values, setValues, updateField, clearDraft } = useFormDraft<OptionFormValues>(draftKey, EMPTY_VALUES, {
+    enabled: !isEditing,
+  })
 
   useEffect(() => {
     if (isOpen) {

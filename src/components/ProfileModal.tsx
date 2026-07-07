@@ -1,7 +1,8 @@
 import { useState, FormEvent } from 'react'
-import { Modal, Button, Input } from './ui'
+import { Modal, Button, Input, ConfirmDiscardSheet } from './ui'
 import { AvatarBuilder } from './AvatarBuilder'
 import { supabase } from '../lib/supabase'
+import { useUnsavedChangesGuard } from '../lib/forms'
 import { AvatarData, User } from '../types'
 
 interface ProfileModalProps {
@@ -11,19 +12,28 @@ interface ProfileModalProps {
   onUpdate: () => void
 }
 
+const defaultAvatarData = (user: User): AvatarData =>
+  (user.avatar_data as any) || {
+    emoji: '😊',
+    accessory: null,
+    bgColor: '#0ea5e9',
+  }
+
 export function ProfileModal({ isOpen, onClose, user, onUpdate }: ProfileModalProps) {
   const [firstName, setFirstName] = useState(user.first_name || '')
   const [lastName, setLastName] = useState(user.last_name || '')
-  const [avatarData, setAvatarData] = useState<AvatarData>(
-    (user.avatar_data as any) || {
-      emoji: '😊',
-      accessory: null,
-      bgColor: '#0ea5e9',
-    }
-  )
+  const [avatarData, setAvatarData] = useState<AvatarData>(() => defaultAvatarData(user))
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+
+  const isDirty =
+    !success &&
+    (firstName !== (user.first_name || '') ||
+      lastName !== (user.last_name || '') ||
+      JSON.stringify(avatarData) !== JSON.stringify(defaultAvatarData(user)))
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(onClose)
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -63,7 +73,7 @@ export function ProfileModal({ isOpen, onClose, user, onUpdate }: ProfileModalPr
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Edit Profile">
+    <Modal isOpen={isOpen} onClose={handleClose} title="Edit Profile">
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
@@ -116,7 +126,7 @@ export function ProfileModal({ isOpen, onClose, user, onUpdate }: ProfileModalPr
           <Button
             type="button"
             variant="outline"
-            onClick={onClose}
+            onClick={handleClose}
             disabled={loading}
           >
             Cancel
@@ -130,6 +140,8 @@ export function ProfileModal({ isOpen, onClose, user, onUpdate }: ProfileModalPr
           </Button>
         </div>
       </form>
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

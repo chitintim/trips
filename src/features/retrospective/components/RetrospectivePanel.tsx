@@ -4,7 +4,12 @@ import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { getReceiptUrl } from '../../../lib/receiptUpload'
-import { PlaceMapThumb } from '../../places'
+// Imported directly from its component file, not the `places` barrel: the
+// barrel deliberately omits PlaceMapThumb from its eager exports (it pulls
+// in leaflet, ~2.7MB) since the barrel itself is imported eagerly elsewhere.
+// RetrospectivePanel is already lazy-loaded as a whole chunk, so importing
+// it here directly keeps leaflet out of the main bundle (WSH perf pass).
+import { PlaceMapThumb } from '../../places/components/PlaceMapThumb'
 import { streamChatMessage, ChatQuotaError } from '../../chat'
 import { computeTripStats, formatMinor, categoryMeta, buildSummaryText } from '../lib/tripStats'
 

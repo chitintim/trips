@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
-import { Modal, Button, Input, TextArea, Select, useToast } from '../../../components/ui'
+import { useMemo, useRef, useState } from 'react'
+import { Modal, Button, Input, TextArea, Select, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { useSections } from '../../../lib/queries/usePlanning'
+import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { ProposedActionSchema, type ProposedAction } from '../../../shared/contracts/aiProposal'
 
 export interface ProposalActionEditSheetProps {
@@ -25,17 +26,24 @@ export function ProposalActionEditSheet({ isOpen, onClose, tripId, action, onSav
   const { data: sections } = useSections(tripId)
   const type = (action as { type?: string }).type ?? ''
 
-  const [values, setValues] = useState<Record<string, string>>(() => {
+  const buildInitialValues = () => {
     const v: Record<string, string> = {}
     for (const [key, val] of Object.entries(action)) {
       if (val == null) continue
       if (typeof val === 'string' || typeof val === 'number') v[key] = String(val)
     }
     return v
-  })
+  }
+
+  const initialValues = useRef(buildInitialValues())
+  const [values, setValues] = useState<Record<string, string>>(initialValues.current)
 
   const set = (key: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
     setValues((prev) => ({ ...prev, [key]: e.target.value }))
+
+  const isDirty = JSON.stringify(values) !== JSON.stringify(initialValues.current)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(onClose)
 
   const sectionOptions = useMemo(
     () => (sections ?? []).map((s) => ({ value: s.id, label: s.title })),
@@ -73,7 +81,7 @@ export function ProposalActionEditSheet({ isOpen, onClose, tripId, action, onSav
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="md" title="Edit proposed change">
+    <Modal isOpen={isOpen} onClose={handleClose} size="md" title="Edit proposed change">
       <div className="space-y-4">
         {type === 'create_option' && (
           <Select
@@ -140,12 +148,14 @@ export function ProposalActionEditSheet({ isOpen, onClose, tripId, action, onSav
         )}
 
         <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={handleClose}>
             Cancel
           </Button>
           <Button onClick={handleSave}>Save changes</Button>
         </div>
       </div>
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

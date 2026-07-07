@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Modal, Button, Stepper, ConfirmDiscardSheet } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useCreateExpense, useUpdateExpense, type SplitRow } from '../../../lib/queries/useExpenses'
@@ -96,35 +96,16 @@ export function ExpenseEditorWizard({
 
   // Draft persistence only makes sense for fresh creates (edit mode always
   // seeds from the record -- Form & Flow Standard point 2's "edit-modals
-  // always seed from the record", not from a stale autosave). The shared
-  // useFormDraft has no `enabled` flag (unlike the old local shim, which
-  // skipped sessionStorage restore/writes entirely when disabled): it
-  // always restores-on-mount and debounce-writes. To preserve the "edit
-  // mode never restores a stale autosave" guarantee, seed the hook's
-  // initial value from the record and immediately overwrite (in the same
-  // render, before paint) any value it may have restored from a leftover
-  // draft under this key. Debounced writes still occur in edit mode, but
-  // that's harmless -- clearDraft() below wipes the key on every close path
-  // (submit success, discard, cancel), so no stale draft can outlive this
-  // session to be wrongly restored later.
+  // always seed from the record", not from a stale autosave). `enabled:
+  // !isEditMode` disables both restore-on-mount and debounced writes for
+  // edit mode, so a stale sessionStorage draft from a different (or the
+  // same) expense can never leak into the form.
   const seededInitialValue = initialReceiptPath ? { ...initialValue, receiptPath: initialReceiptPath } : initialValue
   const {
-    values: draftValues,
-    setValues: setDraftValues,
+    values: draft,
+    setValues: setDraft,
     clearDraft,
-  } = useFormDraft<ExpenseWizardDraft>(draftKey, seededInitialValue)
-  // Discard any value restored from a leftover sessionStorage draft when in
-  // edit mode -- computed during render (not an effect) so the very first
-  // paint already shows the seeded record, never a stale autosave. React
-  // re-renders synchronously before commit when state is set during render,
-  // so `draft` below is never observed with the stale restored value.
-  const didResetEditDraft = useRef(false)
-  if (isEditMode && !didResetEditDraft.current) {
-    didResetEditDraft.current = true
-    if (draftValues !== seededInitialValue) setDraftValues(seededInitialValue)
-  }
-  const draft = draftValues
-  const setDraft = setDraftValues
+  } = useFormDraft<ExpenseWizardDraft>(draftKey, seededInitialValue, { enabled: !isEditMode })
 
   const [stepIndex, setStepIndex] = useState(0)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)

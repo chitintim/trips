@@ -46,9 +46,14 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
   const logActivity = useTripActivityLog(trip.id)
 
   const seed = fromSettings(parseChaseSettings(trip.chase_settings))
+  // This sheet only ever edits the trip's existing chase settings (no
+  // create mode) -- draft persistence is disabled so a stale autosave from
+  // a previous open can never override the live trip record (Form & Flow
+  // Standard §5.2).
   const { values, setValues, updateField, clearDraft } = useFormDraft<ChaseFormValues>(
     `chase-settings:${trip.id}`,
-    seed
+    seed,
+    { enabled: false }
   )
 
   useEffect(() => {

@@ -8,7 +8,6 @@
  * - File validation
  */
 
-import imageCompression from 'browser-image-compression'
 import { supabase } from './supabase'
 
 const MAX_FILE_SIZE_MB = 3 // Final size after compression
@@ -68,6 +67,11 @@ async function convertHeicToJpeg(file: File): Promise<File> {
 
 /**
  * Compress image file
+ *
+ * Uses a dynamic import (like convertHeicToJpeg above) so
+ * browser-image-compression (~850KB unpacked) is only fetched when a user
+ * actually uploads a receipt, not on initial app load (WSH perf pass, plan
+ * §16 code-splitting target).
  */
 async function compressImage(file: File): Promise<File> {
   // Don't compress PDFs
@@ -84,6 +88,8 @@ async function compressImage(file: File): Promise<File> {
     console.log('Compressing image...', {
       originalSize: (file.size / 1024 / 1024).toFixed(2) + 'MB'
     })
+
+    const { default: imageCompression } = await import('browser-image-compression')
 
     const options = {
       maxSizeMB: 0.5, // Target 500KB

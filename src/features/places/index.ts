@@ -16,10 +16,17 @@ export type { PlaceChipProps, PlaceLike } from './components/PlaceChip'
 export { PlacePicker } from './components/PlacePicker'
 export type { PlacePickerProps } from './components/PlacePicker'
 
-export { PlaceMapThumb } from './components/PlaceMapThumb'
+// NOTE: `PlaceMapThumb` is deliberately NOT re-exported from this barrel
+// (unlike PlaceChip/PlacePicker above). It pulls in `react-leaflet`/`leaflet`
+// (~2.7MB) just like TripMapTab -- re-exporting it here would defeat
+// TripMapTab's lazy-loading below, because this barrel itself is imported
+// eagerly by many other features for PlaceChip/PlacePicker/etc., which would
+// drag leaflet back into the main chunk. Its one consumer
+// (RetrospectivePanel, already lazy-loaded as a whole chunk) imports it
+// directly from './components/PlaceMapThumb' instead. If a second, non-lazy
+// consumer ever needs it, reconsider this exception (e.g. lazy-wrap it too).
 export type { PlaceMapThumbProps } from './components/PlaceMapThumb'
 
-export { TripMapTab } from './TripMapTab'
 export type { TripMapTabProps } from './TripMapTab'
 
 // Marker/color helpers, exposed in case other features want visually
@@ -39,9 +46,14 @@ export {
  * splice into TripDetail.tsx's tab list. `Component` takes the minimal
  * `{ tripId, tripStartDate? }` props TripMapTab needs — the coordinator
  * supplies `trip.id` / `trip.start_date` at the call site.
+ *
+ * `TripMapTab` (and its leaflet/react-leaflet dependency, ~2.7MB) is loaded
+ * via React.lazy so the map tab's JS is only fetched when a user actually
+ * opens the Map tab (WSH perf pass, plan §16/code-splitting target) — the
+ * coordinator wraps `Component` in a `<Suspense>` with a skeleton fallback.
  */
-import type { ComponentType } from 'react'
-import { TripMapTab, type TripMapTabProps } from './TripMapTab'
+import { lazy, type ComponentType } from 'react'
+import type { TripMapTabProps } from './TripMapTab'
 
 export const tripMapTabConfig: {
   tabId: 'map'
@@ -52,5 +64,5 @@ export const tripMapTabConfig: {
   tabId: 'map',
   label: 'Map',
   icon: '🗺️',
-  Component: TripMapTab,
+  Component: lazy(() => import('./TripMapTab').then((m) => ({ default: m.TripMapTab }))),
 }

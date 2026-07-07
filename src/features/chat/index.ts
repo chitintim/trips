@@ -4,10 +4,15 @@
  * affordance opens <ChatSheet trip={trip} context={activeTabId} /> —
  * ChatSheet owns streaming, suggestion chips and the proposal review flow.
  */
-import type { ComponentType } from 'react'
-import { ChatSheet, type ChatSheetProps } from './components/ChatSheet'
+import { lazy, type ComponentType } from 'react'
+import type { ChatSheetProps } from './components/ChatSheet'
 
-export { ChatSheet } from './components/ChatSheet'
+// `ChatSheet` is loaded lazily (WSH perf pass, plan §16 code-splitting
+// target) -- it pulls in the streaming/markdown rendering + proposal review
+// UI which isn't needed until a user actually opens "Ask AI". Consumers that
+// render it directly (rather than via `chatEntryConfig.Component`) should
+// import `LazyChatSheet` below and wrap it in a `<Suspense>`.
+export const LazyChatSheet = lazy(() => import('./components/ChatSheet').then((m) => ({ default: m.ChatSheet })))
 export type { ChatSheetProps } from './components/ChatSheet'
 export { ProposalReview } from './components/ProposalReview'
 export type { ProposalReviewProps } from './components/ProposalReview'
@@ -26,5 +31,5 @@ export const chatEntryConfig: {
   id: 'chat',
   label: 'Ask',
   icon: '✨',
-  Component: ChatSheet,
+  Component: LazyChatSheet,
 }

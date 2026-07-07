@@ -2,10 +2,10 @@ import { useState, FormEvent, useEffect } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { supabase } from '../../lib/supabase'
-import { Button, Input, Card, SegmentedControl } from '../../components/ui'
+import { Button, Input, Card, SegmentedControl, Stepper } from '../../components/ui'
 import { AvatarBuilder } from '../../components/AvatarBuilder'
 import { Welcome } from '../../components/Welcome'
-import { AvatarData, Invitation } from '../../types'
+import { AvatarData } from '../../types'
 import { AuthLayout } from './AuthLayout'
 
 type Step = 'invitation' | 'details' | 'otp-verify' | 'welcome'
@@ -31,7 +31,7 @@ export function Signup() {
     const codeFromUrl = searchParams.get('code')
     if (codeFromUrl) setInvitationCode(codeFromUrl.toUpperCase())
   }, [searchParams])
-  const [invitation, setInvitation] = useState<Invitation | null>(null)
+  const [invitation, setInvitation] = useState<{ id: string; trip_id: string | null } | null>(null)
   const [validatingCode, setValidatingCode] = useState(false)
   const [codeError, setCodeError] = useState<string | null>(null)
 
@@ -61,37 +61,35 @@ export function Signup() {
     try {
       const codeToValidate = invitationCode.trim()
 
-      const { data, error } = await supabase
-        .from('invitations')
-        .select('*')
-        .eq('code', codeToValidate)
-        .maybeSingle()
+      // Narrow SECURITY DEFINER RPC: invitations are not directly readable
+      // pre-auth (see 20260707110000_security_hardening.sql).
+      const { data, error } = await supabase.rpc('validate_invitation_code', {
+        p_code: codeToValidate,
+      })
+      const result = Array.isArray(data) ? data[0] : data
 
-      const attemptSuccess = !!(data && !data.used_by && (!data.expires_at || new Date(data.expires_at) >= new Date()))
       await supabase.from('invitation_attempts').insert({
         code_attempted: codeToValidate,
-        success: attemptSuccess,
+        success: !!result?.is_valid,
         user_agent: navigator.userAgent,
       })
 
-      if (error) {
+      if (error || !result) {
         setCodeError('Error validating code. Please try again.')
         return
       }
-      if (!data) {
-        setCodeError('Invalid invitation code. Please check and try again.')
-        return
-      }
-      if (data.used_by) {
-        setCodeError('This invitation code has already been used.')
-        return
-      }
-      if (data.expires_at && new Date(data.expires_at) < new Date()) {
-        setCodeError('This invitation code has expired.')
+      if (!result.is_valid) {
+        setCodeError(
+          result.reason === 'already_used'
+            ? 'This invitation code has already been used.'
+            : result.reason === 'expired'
+              ? 'This invitation code has expired.'
+              : 'Invalid invitation code. Please check and try again.'
+        )
         return
       }
 
-      setInvitation(data)
+      setInvitation({ id: result.invitation_id!, trip_id: result.trip_id })
       setStep('details')
     } catch {
       setCodeError('An unexpected error occurred')
@@ -228,6 +226,21 @@ export function Signup() {
     )
   }
 
+  // Stepper steps (Form & Flow Standard §5.3): "otp-verify" only appears in
+  // the flow when the user picked the OTP account mode, so it's omitted
+  // from the rail entirely in password mode rather than shown as skipped.
+  const stepperSteps =
+    accountMode === 'otp'
+      ? [
+          { key: 'invitation', label: 'Invitation' },
+          { key: 'details', label: 'Details' },
+          { key: 'otp-verify', label: 'Verify' },
+        ]
+      : [
+          { key: 'invitation', label: 'Invitation' },
+          { key: 'details', label: 'Details' },
+        ]
+
   return (
     <AuthLayout
       title={step === 'invitation' ? 'You’re invited' : step === 'otp-verify' ? 'Check your email' : 'Create your account'}
@@ -239,6 +252,7 @@ export function Signup() {
             : 'Set up your profile and avatar'
       }
     >
+      <Stepper steps={stepperSteps} current={step} size="sm" className="mb-5" />
       {step === 'invitation' && (
         <Card>
           <Card.Content>

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Modal, Button, TextArea, Spinner, useToast } from '../../../components/ui'
+import { Modal, Button, TextArea, Spinner, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { requestNudgeDraft, NudgeQuotaError } from '../lib/nudgeClient'
 import { useTripActivityLog } from '../lib/activity'
+import { useUnsavedChangesGuard } from '../../../lib/forms'
 import type { Blocker } from '../lib/blockers'
 
 export interface NudgeDraftSheetProps {
@@ -28,6 +29,10 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
   const [loading, setLoading] = useState(false)
   const [aiNote, setAiNote] = useState<string | null>(null)
   const requestedFor = useRef<string | null>(null)
+  // Baseline to diff against for the dirty-close guard: the last
+  // auto-populated (AI draft or fallback) message, not '' -- so the guard
+  // only fires once the organizer actually edits the draft themselves.
+  const baselineMessage = useRef('')
 
   useEffect(() => {
     if (!isOpen) {
@@ -40,11 +45,14 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
 
     const fallbackLink = `${window.location.origin}${import.meta.env.BASE_URL ?? '/'}`.replace(/\/$/, '') + `/${tripId}`
     setMessage('')
+    baselineMessage.current = ''
     setDeepLink(fallbackLink)
     setAiNote(null)
 
     if (!blocker.nudgeType) {
-      setMessage(`Hey ${targetName.split(' ')[0]}! ${blocker.detail ?? blocker.label} ${fallbackLink}`)
+      const fallbackMessage = `Hey ${targetName.split(' ')[0]}! ${blocker.detail ?? blocker.label} ${fallbackLink}`
+      setMessage(fallbackMessage)
+      baselineMessage.current = fallbackMessage
       setAiNote('No AI draft for this blocker type — edit freely.')
       return
     }
@@ -58,6 +66,7 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
     })
       .then((draft) => {
         setMessage(draft.message)
+        baselineMessage.current = draft.message
         setDeepLink(draft.deep_link)
       })
       .catch((err) => {
@@ -66,10 +75,16 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
             ? 'Daily AI quota reached — write it yourself, the deep link still works.'
             : `AI draft unavailable (${(err as Error).message}) — write it yourself.`
         )
-        setMessage(`Hey ${targetName.split(' ')[0]}! ${blocker.detail ?? blocker.label} ${fallbackLink}`)
+        const fallbackMessage = `Hey ${targetName.split(' ')[0]}! ${blocker.detail ?? blocker.label} ${fallbackLink}`
+        setMessage(fallbackMessage)
+        baselineMessage.current = fallbackMessage
       })
       .finally(() => setLoading(false))
   }, [isOpen, tripId, targetUserId, targetName, blocker])
+
+  const isDirty = message !== baselineMessage.current
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const handleClose = () => confirmClose(onClose)
 
   const handleCopy = async () => {
     const text = message.includes(deepLink) || !deepLink ? message : `${message.trimEnd()} ${deepLink}`
@@ -88,7 +103,7 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="md" title={`Nudge ${targetName}`}>
+    <Modal isOpen={isOpen} onClose={handleClose} size="md" title={`Nudge ${targetName}`}>
       <div className="space-y-4">
         <div className="rounded-[var(--radius-md)] bg-[var(--surface-sunken)] px-3 py-2 text-sm text-[var(--text-secondary)]">
           {blocker.detail ?? blocker.label}
@@ -117,7 +132,7 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
         )}
 
         <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
-          <Button variant="ghost" onClick={onClose}>
+          <Button variant="ghost" onClick={handleClose}>
             Cancel
           </Button>
           <Button onClick={handleCopy} disabled={loading || !message.trim()} leftIcon={<span>📋</span>}>
@@ -125,6 +140,8 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
           </Button>
         </div>
       </div>
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

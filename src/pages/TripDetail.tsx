@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
-import { Button, Card, Spinner, EmptyState, Tabs } from '../components/ui'
+import { Button, Card, Spinner, EmptyState, Tabs, Skeleton } from '../components/ui'
 import { CreateTripModal, AddParticipantModal } from '../components'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { AppShell, StageRail, NeedsAttentionStrip, QuickActionsSheet } from '../components/layout'
@@ -25,7 +25,7 @@ import { notesTabConfig } from '../features/notes'
 import { checklistTabConfig } from '../features/checklists'
 import { organizerTabConfig } from '../features/organizer'
 import { retroConfig } from '../features/retrospective'
-import { chatEntryConfig, ChatSheet } from '../features/chat'
+import { chatEntryConfig, LazyChatSheet } from '../features/chat'
 import { EXPENSE_TAB_CONFIGS, QuickCaptureSheet } from '../features/expenses'
 
 /**
@@ -418,7 +418,9 @@ export function TripDetail() {
           )}
           {activeTab === 'map' && (
             <ErrorBoundary label="Map">
-              <tripMapTabConfig.Component tripId={trip.id} tripStartDate={trip.start_date} />
+              <Suspense fallback={<Skeleton variant="card" height={420} />}>
+                <tripMapTabConfig.Component tripId={trip.id} tripStartDate={trip.start_date} />
+              </Suspense>
             </ErrorBoundary>
           )}
           {activeTab === 'notes' && (
@@ -438,14 +440,26 @@ export function TripDetail() {
           )}
           {activeTab === 'retro' && (
             <ErrorBoundary label="Recap">
-              <retroConfig.Component tripId={trip.id} />
+              <Suspense fallback={<Skeleton variant="card" height={420} />}>
+                <retroConfig.Component tripId={trip.id} />
+              </Suspense>
             </ErrorBoundary>
           )}
         </div>
       </AppShell>
 
-      {/* Ask AI sheet — FAB's "Ask AI" action + header button both open this. */}
-      <ChatSheet trip={trip} isOpen={chatOpen} onClose={() => setChatOpen(false)} context={chatContextForTab(activeTab)} />
+      {/* Ask AI sheet — FAB's "Ask AI" action + header button both open this.
+          Lazy-loaded (WSH perf pass): only mounted once the user opens chat
+          at least once, keeping streaming/markdown/proposal-review JS out of
+          the main chunk. `chatOpen` already gates its internal queries, so
+          mounting on first-open (and keeping it mounted after, so state like
+          the message list persists across close/reopen) matches prior
+          behavior for anyone who has already opened chat. */}
+      {chatOpen && (
+        <Suspense fallback={null}>
+          <LazyChatSheet trip={trip} isOpen={chatOpen} onClose={() => setChatOpen(false)} context={chatContextForTab(activeTab)} />
+        </Suspense>
+      )}
 
       {/* Quick actions sheet (FAB landing menu) */}
       <QuickActionsSheet isOpen={quickActionsOpen} onClose={() => setQuickActionsOpen(false)} actions={quickActions} />

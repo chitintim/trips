@@ -28,6 +28,20 @@ export type { PlacePickerProps } from './components/PlacePicker'
 export type { PlaceMapThumbProps } from './components/PlaceMapThumb'
 
 export type { TripMapTabProps } from './TripMapTab'
+// NOTE: `dayIndexFor` (TripMapTab's local day-index helper) is deliberately
+// NOT re-exported here: TripMapTab.tsx is lazy-loaded by this barrel (see
+// tripMapTabConfig below) specifically to keep leaflet/react-leaflet out of
+// the main chunk, and a `export { x } from './TripMapTab'` line is a
+// *static* import that would defeat that lazy boundary (Vite warns "also
+// statically imported"). Consumers needing day-index math re-derive the
+// same one-line calc locally (see src/features/plan/components/PlanMapLens.tsx).
+
+// Leaflet bootstrap + emoji divIcon builder, needed by any feature that
+// renders its own react-leaflet map (e.g. plan's Map lens) rather than
+// reusing TripMapTab wholesale. Re-exporting here is safe re: bundle size
+// because these are plain functions (no react-leaflet JSX import), unlike
+// PlaceMapThumb/TripMapTab above.
+export { ensureLeafletDefaultIcon, emojiDivIcon } from './lib/leafletSetup'
 
 // Marker/color helpers, exposed in case other features want visually
 // consistent day-coloring or category emoji (e.g. a timeline day legend).

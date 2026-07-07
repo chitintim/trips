@@ -59,6 +59,40 @@ class BrevoEmailSender implements EmailSender {
   }
 }
 
+class ResendEmailSender implements EmailSender {
+  readonly channel = 'email'
+  readonly available = true
+  #apiKey: string
+  #from: string
+
+  constructor(apiKey: string) {
+    this.#apiKey = apiKey
+    // Tim's Resend account has mail.fontem.ai verified.
+    this.#from = Deno.env.get('RESEND_FROM') ?? 'Trips <trips@mail.fontem.ai>'
+  }
+
+  async send(message: EmailMessage): Promise<void> {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.#apiKey}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: this.#from,
+        to: [message.toName ? `${message.toName} <${message.toEmail}>` : message.toEmail],
+        subject: message.subject,
+        text: message.text,
+        html: message.html ?? `<pre style="font-family:sans-serif;white-space:pre-wrap">${escapeHtml(message.text)}</pre>`,
+      }),
+    })
+    if (!response.ok) {
+      const body = await response.text()
+      throw new Error(`Resend send failed (${response.status}): ${body}`)
+    }
+  }
+}
+
 class NullEmailSender implements EmailSender {
   readonly channel = 'skipped'
   readonly available = false
@@ -68,8 +102,12 @@ class NullEmailSender implements EmailSender {
 }
 
 export function getEmailSender(): EmailSender {
-  const apiKey = Deno.env.get('BREVO_API_KEY')
-  return apiKey ? new BrevoEmailSender(apiKey) : new NullEmailSender()
+  // Resend preferred (Tim's verified mail.fontem.ai domain), Brevo kept as a
+  // secondary option, else the null sender (auto-chase degrades to drafts).
+  const resendKey = Deno.env.get('RESEND_API_KEY')
+  if (resendKey) return new ResendEmailSender(resendKey)
+  const brevoKey = Deno.env.get('BREVO_API_KEY')
+  return brevoKey ? new BrevoEmailSender(brevoKey) : new NullEmailSender()
 }
 
 function escapeHtml(s: string): string {

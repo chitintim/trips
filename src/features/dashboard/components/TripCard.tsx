@@ -5,6 +5,7 @@ import { StageRail, getTripAccentStyle } from '../../../components/layout'
 import { useNeedsAttention } from '../../../lib/queries/useNeedsAttention'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
 import { effectiveTripStage } from '../../../lib/tripStage'
+import { daysUntilClamped } from '../../../lib/dates'
 import type { TripWithCount } from '../../../lib/queries/useTrip'
 
 interface TripCardProps {
@@ -50,9 +51,7 @@ export function TripCard({ trip, onAttentionCount }: TripCardProps) {
   // Countdown chip (UX_REDESIGN.md Part 3 "Countdown: ... dashboard
   // TripCard chip"): days-to-go for upcoming trips, computed off local
   // midnight so it doesn't flicker between values within the same day.
-  const daysToGo = isUpcoming
-    ? Math.max(0, Math.round((new Date(trip.start_date + 'T00:00:00').getTime() - new Date().setHours(0, 0, 0, 0)) / 86_400_000))
-    : null
+  const daysToGo = isUpcoming ? daysUntilClamped(trip.start_date) : null
 
   return (
     <div data-trip-accent style={getTripAccentStyle(trip.id)}>

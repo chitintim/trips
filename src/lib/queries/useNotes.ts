@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
-import { TripNoteWithUser, TripNoteInsert } from '../../types'
+import { TripNoteWithUser, TripNoteInsert, User } from '../../types'
 import { queryKeys } from './queryKeys'
+import { useOptimisticMutation } from './makeOptimisticMutation'
 
 /** Trip notes + author, matching TripNotesSection.tsx's select shape. */
 export function useNotes(tripId: string | undefined) {
@@ -30,14 +31,35 @@ export function useNotes(tripId: string | undefined) {
   })
 }
 
+/**
+ * Posting an announcement/note should appear instantly (Form & Flow
+ * Standard-adjacent UX expectation) — optimistically prepend a placeholder
+ * note built from the poster's own cached `currentUser` row (already
+ * fetched everywhere the composer is reachable), rolled back on failure,
+ * reconciled with the real row once the insert settles.
+ */
 export function useCreateNote(tripId: string) {
   const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: Omit<TripNoteInsert, 'trip_id'>) => {
+  return useOptimisticMutation<void, Omit<TripNoteInsert, 'trip_id'>, TripNoteWithUser[]>({
+    mutationFn: async (input) => {
       const { error } = await supabase.from('trip_notes').insert({ ...input, trip_id: tripId })
       if (error) throw error
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.notes(tripId) }),
+    queryKey: () => queryKeys.notes(tripId),
+    updater: (notes, input) => {
+      const author = queryClient.getQueryData<User | null>(queryKeys.currentUser(input.user_id))
+      const optimisticNote: TripNoteWithUser = {
+        id: `optimistic-${Date.now()}`,
+        trip_id: tripId,
+        user_id: input.user_id,
+        note_type: input.note_type ?? 'note',
+        content: input.content,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        user: author ?? undefined,
+      }
+      return [optimisticNote, ...(notes ?? [])]
+    },
   })
 }
 

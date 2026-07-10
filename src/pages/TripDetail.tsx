@@ -2,12 +2,13 @@ import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { Button, Card, Spinner, EmptyState, Skeleton, Modal } from '../components/ui'
-import { CreateTripModal, AddParticipantModal } from '../components'
+import { AddParticipantModal } from '../components'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { AppShell, StageRail, NeedsAttentionStrip } from '../components/layout'
 import type { AppShellTabItem } from '../components/layout'
 import { getTripAccentStyle } from '../components/layout/tripAccent'
 import { useTrip, useParticipants, useCurrentUserRow } from '../lib/queries/useTrip'
+import { CreateTripWizard } from '../features/dashboard'
 import { useTripRealtime } from '../lib/queries/useTripRealtime'
 import { useNeedsAttention } from '../lib/queries/useNeedsAttention'
 import { useExpenses } from '../lib/queries/useExpenses'
@@ -15,6 +16,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queries/queryKeys'
 import { getTripStatusLabel } from '../lib/tripStatus'
 import { effectiveTripStage } from '../lib/tripStage'
+import { daysUntil } from '../lib/dates'
 
 import { todayTabConfig } from '../features/today'
 import { planTabConfig, AddToPlanSheet } from '../features/plan'
@@ -109,6 +111,8 @@ export function TripDetail() {
   const [quickCaptureOpenCount, setQuickCaptureOpenCount] = useState(0)
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false)
   const overflowRef = useRef<HTMLDivElement>(null)
+  const overflowTriggerRef = useRef<HTMLButtonElement>(null)
+  const overflowMenuRef = useRef<HTMLDivElement>(null)
 
   const refetchTripData = () => {
     if (!tripId) return
@@ -143,14 +147,28 @@ export function TripDetail() {
     return () => window.removeEventListener(OPEN_QUICK_CAPTURE_EVENT, handler)
   }, [])
 
-  // Close the header overflow menu on outside click.
+  // Header overflow menu: close on outside click or Escape, move focus into
+  // the menu on open, restore it to the ••• trigger on close.
   useEffect(() => {
     if (!overflowOpen) return
     const onDown = (e: MouseEvent) => {
       if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) setOverflowOpen(false)
     }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        setOverflowOpen(false)
+      }
+    }
     document.addEventListener('mousedown', onDown)
-    return () => document.removeEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKeyDown)
+    overflowMenuRef.current?.querySelector<HTMLElement>('[role="menuitem"]')?.focus()
+    const trigger = overflowTriggerRef.current
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKeyDown)
+      trigger?.focus()
+    }
   }, [overflowOpen])
 
   const effectiveStage = useMemo(() => (trip ? effectiveTripStage(trip) : 'gathering_interest'), [trip])
@@ -298,6 +316,7 @@ export function TripDetail() {
                 {isOrganizer && (
                   <div className="relative" ref={overflowRef}>
                     <Button
+                      ref={overflowTriggerRef}
                       variant="secondary"
                       size="sm"
                       onClick={() => setOverflowOpen((v) => !v)}
@@ -309,6 +328,7 @@ export function TripDetail() {
                     </Button>
                     {overflowOpen && (
                       <div
+                        ref={overflowMenuRef}
                         role="menu"
                         className="absolute right-0 mt-1 w-44 rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--surface-raised)] shadow-lg py-1"
                       >
@@ -420,9 +440,14 @@ export function TripDetail() {
         </div>
       </AppShell>
 
-      {/* Ask AI sheet — header button opens this; lazy-mounted on first open. */}
+      {/* Ask AI sheet — header button opens this; lazy-mounted on first open.
+          Matches the recap panel's Skeleton fallback below rather than a
+          blank flash. (LazyChatSheet also wraps its lazy chunk in its own
+          inner Suspense — see features/chat/index.tsx — so this outer one is
+          a belt-and-suspenders fallback for the boundary closest to the
+          mount site.) */}
       {chatOpen && (
-        <Suspense fallback={null}>
+        <Suspense fallback={<Skeleton variant="card" height={420} />}>
           <LazyChatSheet trip={trip} isOpen={chatOpen} onClose={() => setChatOpen(false)} context={chatContext} />
         </Suspense>
       )}
@@ -479,7 +504,7 @@ export function TripDetail() {
       )}
 
       {/* Admin/organizer modals */}
-      <CreateTripModal isOpen={editModalOpen} onClose={() => setEditModalOpen(false)} onSuccess={refetchTripData} editTrip={trip} />
+      <CreateTripWizard isOpen={editModalOpen} onClose={() => setEditModalOpen(false)} onSuccess={refetchTripData} editTrip={trip} />
       <AddParticipantModal
         isOpen={addParticipantModalOpen}
         onClose={() => setAddParticipantModalOpen(false)}
@@ -496,8 +521,8 @@ function formatDateRange(startDate: string, endDate: string) {
   const start = new Date(startDate)
   const end = new Date(endDate)
 
-  const startMonth = start.toLocaleDateString('en-US', { month: 'short' })
-  const endMonth = end.toLocaleDateString('en-US', { month: 'short' })
+  const startMonth = start.toLocaleDateString('en-GB', { month: 'short' })
+  const endMonth = end.toLocaleDateString('en-GB', { month: 'short' })
   const startDay = start.getDate()
   const endDay = end.getDate()
   const startYear = start.getFullYear()
@@ -514,10 +539,8 @@ function formatDateRange(startDate: string, endDate: string) {
 
 // Countdown to trip (date-aware: quiet once the trip is over)
 function getCountdown(startDate: string, endDate: string) {
-  const start = new Date(startDate)
   const now = new Date()
-  const diffTime = start.getTime() - now.getTime()
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+  const diffDays = daysUntil(startDate, now)
 
   if (new Date(endDate).getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
     return '🏁 Trip finished'

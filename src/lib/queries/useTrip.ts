@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { Trip, TripInsert, TripUpdate, TripParticipant, User } from '../../types'
 import { queryKeys } from './queryKeys'
+import { useOptimisticMutation } from './makeOptimisticMutation'
 
 export interface ParticipantWithUser extends TripParticipant {
   user: User
@@ -140,6 +141,34 @@ export function useUpdateTrip(tripId: string) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.tripDetail(tripId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.trips() })
+    },
+  })
+}
+
+/**
+ * Optimistic variant of `useUpdateTrip`, for one-tap "accept" actions that
+ * should feel instant (stage-advance suggestions, setting dates from a
+ * closed date poll) — patches the single cached `tripDetail` object
+ * immediately, rolls back on error. Deliberately does NOT patch the
+ * `trips()` dashboard list optimistically (that cache holds an array of a
+ * different shape); it's still invalidated on success so the dashboard
+ * stays correct. Other `useUpdateTrip` consumers (edit forms, which already
+ * have their own saving/pending UI) are unaffected — use this only where an
+ * instant, low-risk optimistic patch is actually wanted.
+ */
+export function useOptimisticUpdateTrip(tripId: string) {
+  const queryClient = useQueryClient()
+  return useOptimisticMutation<void, TripUpdate, Trip | null>({
+    mutationFn: async (update) => {
+      const { error } = await supabase.from('trips').update(update).eq('id', tripId)
+      if (error) throw error
+    },
+    queryKey: () => queryKeys.tripDetail(tripId),
+    updater: (trip, update) => (trip ? { ...trip, ...update } : null),
+    options: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: queryKeys.trips() })
+      },
     },
   })
 }

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Button, Card, useToast } from '../../../components/ui'
-import { useUpdateTrip } from '../../../lib/queries/useTrip'
+import { useOptimisticUpdateTrip } from '../../../lib/queries/useTrip'
 import { useSections, useVotes, useUpdateSection } from '../../../lib/queries/usePlanning'
 import { useTripActivityLog } from '../../organizer'
 import { parseDatesPending, computeDatePollWinner, isDatePollClosed, mergeChaseSettingsJson, TRIP_DATES_SECTION_TITLE } from '../lib/datePoll'
@@ -26,7 +26,7 @@ export function SetDatesFromWinnerCard({ trip }: SetDatesFromWinnerCardProps) {
   const { showToast } = useToast()
   const { data: sections = [] } = useSections(trip.id)
   const { data: votes = [] } = useVotes(trip.id)
-  const updateTrip = useUpdateTrip(trip.id)
+  const updateTrip = useOptimisticUpdateTrip(trip.id)
   const updateSection = useUpdateSection(trip.id)
   const logActivity = useTripActivityLog(trip.id)
 

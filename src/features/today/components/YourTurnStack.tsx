@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Button, Card, Deadline } from '../../../components/ui'
+import { Button, Card, Deadline, EmptyState } from '../../../components/ui'
 import { useNeedsAttention } from '../../../lib/queries/useNeedsAttention'
 import { useSections } from '../../../lib/queries/usePlanning'
 import type { NeedsAttentionItem } from '../../../components/layout'
@@ -35,7 +35,18 @@ export function YourTurnStack({ tripId, onNavigate }: YourTurnStackProps) {
     return [...items.filter(isVote), ...items.filter((i) => !isVote(i))]
   }, [items])
 
-  if (ordered.length === 0) return null
+  if (ordered.length === 0) {
+    return (
+      <section aria-label="Your turn" className="space-y-2">
+        <h2 className="text-sm font-semibold text-[var(--text-muted)] uppercase tracking-wide">Your turn</h2>
+        <Card>
+          <Card.Content className="py-3">
+            <EmptyState compact icon="🎉" title="You're all caught up" description="Nothing needs your input right now." />
+          </Card.Content>
+        </Card>
+      </section>
+    )
+  }
 
   return (
     <section aria-label="Your turn" className="space-y-2">

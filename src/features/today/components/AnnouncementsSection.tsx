@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Modal, useToast } from '../../../components/ui'
+import { Button, EmptyState, Modal, Skeleton, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useNotes, useDeleteNote } from '../../../lib/queries/useNotes'
 import { NoteCard, NoteComposer, sortNotesForDisplay } from '../../notes'
@@ -20,7 +20,7 @@ export interface AnnouncementsSectionProps {
 export function AnnouncementsSection({ trip, isOrganizer }: AnnouncementsSectionProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
-  const { data: notes } = useNotes(trip.id)
+  const { data: notes, isLoading, isError, refetch } = useNotes(trip.id)
   const deleteNote = useDeleteNote(trip.id)
 
   const [composerOpen, setComposerOpen] = useState(false)
@@ -53,10 +53,31 @@ export function AnnouncementsSection({ trip, isOrganizer }: AnnouncementsSection
       </div>
 
       {composerOpen && (
-        <NoteComposer tripId={trip.id} onPosted={() => setComposerOpen(false)} onCancel={() => setComposerOpen(false)} />
+        <NoteComposer
+          tripId={trip.id}
+          defaultType="announcement"
+          onPosted={() => setComposerOpen(false)}
+          onCancel={() => setComposerOpen(false)}
+        />
       )}
 
-      {sorted.length === 0 && !composerOpen ? (
+      {isLoading ? (
+        <div className="space-y-2">
+          <Skeleton variant="list" lines={2} />
+        </div>
+      ) : isError ? (
+        <EmptyState
+          compact
+          icon="⚠️"
+          title="Couldn't load announcements"
+          description="Something went wrong fetching this trip's notes."
+          action={
+            <Button size="sm" variant="secondary" onClick={() => refetch()}>
+              Try again
+            </Button>
+          }
+        />
+      ) : sorted.length === 0 && !composerOpen ? (
         <p className="text-sm text-[var(--text-muted)]">
           Nothing posted yet.{' '}
           <button className="text-accent-700 hover:underline" onClick={() => setComposerOpen(true)}>

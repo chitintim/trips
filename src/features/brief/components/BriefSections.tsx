@@ -1,6 +1,6 @@
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
-import { Badge, Button, Card, CapacityProgressBar, Deadline, UserAvatar } from '../../../components/ui'
+import { Badge, Button, Card, CapacityProgressBar, Deadline, StatCard, UserAvatar } from '../../../components/ui'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
 import { formatMoney } from '../../decisions/lib/costImpact'
 import { FaqAccordion } from './FaqAccordion'
@@ -45,28 +45,26 @@ export function OrganizerMessageCard({ message }: { message: string | null }) {
 
 export function CostBandCard({ costBand, fullCostLink }: { costBand: CostBand | null; fullCostLink?: string | null }) {
   if (!costBand) return null
+  const value =
+    costBand.low === costBand.high
+      ? formatMoney(costBand.low, costBand.currency)
+      : `${formatMoney(costBand.low, costBand.currency)} – ${formatMoney(costBand.high, costBand.currency)}`
   return (
-    <Card>
-      <Card.Content>
-        <p className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide mb-1">Estimated cost per person</p>
-        <p className="text-2xl font-semibold text-[var(--text-primary)]">
-          {costBand.low === costBand.high
-            ? formatMoney(costBand.low, costBand.currency)
-            : `${formatMoney(costBand.low, costBand.currency)} – ${formatMoney(costBand.high, costBand.currency)}`}
-        </p>
-        {/* Honest range label (UX_REDESIGN.md Part 5 "Estimator
-            integration"): a spread means real uncertainty from open votes,
-            not organizer sloppiness -- say so rather than hiding it. */}
-        {costBand.low !== costBand.high && (
-          <p className="text-xs text-[var(--text-muted)] mt-0.5">depending on open votes</p>
-        )}
-        {fullCostLink && (
-          <a href={fullCostLink} target="_blank" rel="noreferrer" className="text-sm text-accent-700 hover:underline">
-            See full cost breakdown →
-          </a>
-        )}
-      </Card.Content>
-    </Card>
+    <div className="space-y-1.5">
+      <StatCard
+        label="Estimated cost per person"
+        value={value}
+        // Honest range label (UX_REDESIGN.md Part 5 "Estimator integration"):
+        // a spread means real uncertainty from open votes, not organizer
+        // sloppiness -- say so rather than hiding it.
+        delta={costBand.low !== costBand.high ? 'depending on open votes' : undefined}
+      />
+      {fullCostLink && (
+        <a href={fullCostLink} target="_blank" rel="noreferrer" className="text-sm text-accent-700 hover:underline">
+          See full cost breakdown →
+        </a>
+      )}
+    </div>
   )
 }
 

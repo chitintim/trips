@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Button, Card } from '../../../components/ui'
+import { Button, StatCard } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
@@ -69,17 +69,15 @@ export function SettleStatusCard({ trip, onNavigate, compact = false }: SettleSt
   }
 
   return (
-    <Card>
-      <Card.Content className="space-y-2">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)]">Settling up</h3>
-        <p className="text-2xl font-semibold text-[var(--text-primary)]">{statusLine}</p>
-        {!summary.isBalanced && (
-          <p className="text-sm text-[var(--text-muted)]">Suggested payments are ready in Settle up.</p>
-        )}
-        <Button size="sm" onClick={() => onNavigate('money')}>
-          {summary.isBalanced ? 'See the money summary' : 'Settle up'}
-        </Button>
-      </Card.Content>
-    </Card>
+    <div className="space-y-2">
+      <StatCard
+        label="Settling up"
+        value={statusLine}
+        delta={summary.isBalanced ? undefined : 'Suggested payments are ready in Settle up.'}
+      />
+      <Button size="sm" onClick={() => onNavigate('money')}>
+        {summary.isBalanced ? 'See the money summary' : 'Settle up'}
+      </Button>
+    </div>
   )
 }

@@ -1,12 +1,9 @@
+import { daysUntilClamped } from '../../../lib/dates'
 import type { Trip } from '../../../types'
 
 /** Pre-trip countdown hero (awaiting-departure Today layout). */
 export function CountdownHero({ trip }: { trip: Trip }) {
-  const msPerDay = 24 * 60 * 60 * 1000
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const start = new Date(trip.start_date + 'T00:00:00')
-  const days = Math.max(0, Math.round((start.getTime() - today.getTime()) / msPerDay))
+  const days = daysUntilClamped(trip.start_date)
 
   return (
     <div className="bg-accent-600 text-white px-4 py-8 sm:rounded-[var(--radius-xl)] text-center">

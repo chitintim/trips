@@ -10,13 +10,13 @@ interface NoteFormValues {
   content: string
 }
 
-const EMPTY_VALUES: NoteFormValues = { noteType: 'note', content: '' }
-
 export interface NoteComposerProps {
   tripId: string
   /** Rendered inline; caller controls whether the composer is shown (e.g. behind a "+ Add note" toggle). */
   onPosted?: () => void
   onCancel?: () => void
+  /** Type pre-selected on open, e.g. "announcement" when launched from the Announcements section's "+ Post". Defaults to "note". */
+  defaultType?: NoteType
 }
 
 /**
@@ -24,15 +24,16 @@ export interface NoteComposerProps {
  * selector, 1000-char-counted content via TextArea's showCount, draft
  * persistence, dirty-close guard.
  */
-export function NoteComposer({ tripId, onPosted, onCancel }: NoteComposerProps) {
+export function NoteComposer({ tripId, onPosted, onCancel, defaultType = 'note' }: NoteComposerProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const createNote = useCreateNote(tripId)
 
   const draftKey = `note-composer:${tripId}`
-  const { values, updateField, clearDraft } = useFormDraft<NoteFormValues>(draftKey, EMPTY_VALUES)
+  const emptyValues: NoteFormValues = { noteType: defaultType, content: '' }
+  const { values, updateField, clearDraft } = useFormDraft<NoteFormValues>(draftKey, emptyValues)
 
-  const isDirty = values.content.trim().length > 0 || values.noteType !== EMPTY_VALUES.noteType
+  const isDirty = values.content.trim().length > 0 || values.noteType !== defaultType
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
 
   const trimmedLength = values.content.trim().length

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, useToast } from '../../../components/ui'
-import { useParticipants, useUpdateTrip } from '../../../lib/queries/useTrip'
+import { useParticipants, useOptimisticUpdateTrip } from '../../../lib/queries/useTrip'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useTripActivityLog } from '../../organizer'
 import { computeStageSuggestion } from '../lib/stageSuggestions'
@@ -23,7 +23,7 @@ export function StageSuggestionCard({ trip, effectiveStage }: StageSuggestionCar
   const { showToast } = useToast()
   const { data: participants = [] } = useParticipants(trip.id)
   const { data: bookings = [] } = useBookings(trip.id)
-  const updateTrip = useUpdateTrip(trip.id)
+  const updateTrip = useOptimisticUpdateTrip(trip.id)
   const logActivity = useTripActivityLog(trip.id)
   const [dismissedKey, setDismissedKey] = useState<string | null>(null)
 

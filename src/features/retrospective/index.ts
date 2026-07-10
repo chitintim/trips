@@ -1,12 +1,12 @@
 /**
  * Trip retrospective feature (workstream G, plan §15). The coordinator
- * auto-shows this panel for `trip_completed` trips — `showWhen` encodes
- * the rule so the shell doesn't hardcode it.
+ * auto-shows this panel for `trip_completed` trips -- that rule lives with
+ * the coordinator itself, not here (retroConfig used to carry a `showWhen`
+ * field for it, but nothing ever consumed it, so it was removed).
  */
 import type { ComponentType } from 'react'
 import { lazyWithRetry } from '../../lib/lazyWithRetry'
 import type { RetrospectivePanelProps } from './components/RetrospectivePanel'
-import type { Trip } from '../../types'
 
 export type { RetrospectivePanelProps } from './components/RetrospectivePanel'
 export { computeTripStats, formatMinor, categoryMeta, buildSummaryText, expenseBaseMinor } from './lib/tripStats'
@@ -22,13 +22,10 @@ export const retroConfig: {
   tabId: 'retro'
   label: string
   icon: string
-  /** Coordinator: only show (and auto-open) for completed trips. */
-  showWhen: (trip: Pick<Trip, 'status'>) => boolean
   Component: ComponentType<RetrospectivePanelProps>
 } = {
   tabId: 'retro',
   label: 'Recap',
   icon: '🎉',
-  showWhen: (trip) => trip.status === 'trip_completed',
   Component: lazyWithRetry(() => import('./components/RetrospectivePanel').then((m) => ({ default: m.RetrospectivePanel }))),
 }

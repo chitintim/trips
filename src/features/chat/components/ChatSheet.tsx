@@ -6,7 +6,7 @@ import { queryKeys } from '../../../lib/queries/queryKeys'
 import { useChatMessages } from '../../../lib/queries/useChat'
 import { useProposals } from '../../../lib/queries/useProposals'
 import { useParticipants } from '../../../lib/queries/useTrip'
-import { streamChatMessage, ChatQuotaError } from '../lib/streamChat'
+import { streamChatMessage, ChatQuotaError, CHAT_QUOTA_MESSAGE } from '../lib/streamChat'
 import { ProposalReview } from './ProposalReview'
 import type { Trip } from '../../../types'
 
@@ -123,11 +123,7 @@ export function ChatSheet({ isOpen, onClose, trip, context }: ChatSheetProps) {
       })
     } catch (err) {
       setStreamText(null)
-      setNotice(
-        err instanceof ChatQuotaError
-          ? '⏳ Daily AI quota reached — the assistant will be back tomorrow. Your trip data is unaffected.'
-          : (err as Error).message
-      )
+      setNotice(err instanceof ChatQuotaError ? `⏳ ${CHAT_QUOTA_MESSAGE}` : (err as Error).message)
     } finally {
       setSending(false)
     }

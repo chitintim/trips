@@ -44,6 +44,9 @@ const ALLOWLIST = [
   'pages/TripDetail.tsx',
   'pages/Dashboard.tsx',
   // Overlays — portal-rendered, token scale (rule 3).
+  // AuthCallback mounts ABOVE the Router in App.tsx (not a route), so its
+  // full-page auth-processing scrim must cover route content AND chrome.
+  'components/AuthCallback.tsx',
   'components/ui/Modal',
   'components/ui/Toast',
   'components/ui/SelectionAvatars',

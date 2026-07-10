@@ -86,7 +86,7 @@ export function AuthCallback() {
 
   if (status === 'error') {
     return (
-      <div className="fixed inset-0 z-50 bg-[var(--surface-page)] flex items-center justify-center p-4">
+      <div className="fixed inset-0 z-modal bg-[var(--surface-page)] flex items-center justify-center p-4">
         <div className="text-center max-w-xs space-y-3">
           <p className="text-3xl">⚠️</p>
           <p className="text-[var(--text-primary)] font-medium">This link isn't working</p>
@@ -102,7 +102,7 @@ export function AuthCallback() {
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-[var(--surface-page)] flex items-center justify-center">
+    <div className="fixed inset-0 z-modal bg-[var(--surface-page)] flex items-center justify-center">
       <div className="text-center">
         <Spinner size="lg" />
         <p className="text-sm text-[var(--text-secondary)] mt-4">Signing you in…</p>

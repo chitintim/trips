@@ -225,7 +225,19 @@ function VoteStep({
                   isLoading={votingOptionId === option.id}
                   className="shrink-0"
                 >
-                  {myVote ? '✓ Voted' : votingMethod === 'approval' ? 'Approve' : 'Vote'}
+                  {/* Ranked-vote wording matches PlanItemSheet's VoteStep
+                      equivalent (UPGRADE_MASTER_PLAN.md audit item 4) — a
+                      ranked question previously fell through to the plain
+                      'Vote'/'✓ Voted' labels here, losing the ranked signal. */}
+                  {myVote
+                    ? votingMethod === 'ranked'
+                      ? `Ranked #${myVote.rank ?? 1}`
+                      : '✓ Voted'
+                    : votingMethod === 'approval'
+                      ? 'Approve'
+                      : votingMethod === 'ranked'
+                        ? 'Tap to rank next'
+                        : 'Vote'}
                 </Button>
               </div>
             )

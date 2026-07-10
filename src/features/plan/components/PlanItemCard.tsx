@@ -123,12 +123,16 @@ export function PlanItemCard({
   }
 
   return (
+    // Non-interactive container (UPGRADE_MASTER_PLAN.md audit item 5): this
+    // used to be div[role=button] wrapping a real vote/approve Button —
+    // invalid interactive-in-interactive nesting with a double tab stop, on
+    // the board's most-repeated component. The single focusable "open"
+    // affordance now lives on the inner content wrapper below; the vote
+    // Button is a sibling of it, outside the interactive region. Hover/
+    // stage styling stays on this outer box so the whole card still reacts
+    // to hover exactly as before.
     <div
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(item)}
-      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onOpen(item)}
-      className={`w-full text-left rounded-[var(--radius-lg)] border p-3 transition-colors cursor-pointer ${
+      className={`w-full rounded-[var(--radius-lg)] border p-3 transition-colors ${
         isSolid
           ? 'border-[var(--border-default)] bg-[var(--surface-raised)] hover:border-accent-300'
           : isProposal
@@ -137,7 +141,13 @@ export function PlanItemCard({
       }`}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => onOpen(item)}
+          onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onOpen(item)}
+          className="min-w-0 flex-1 text-left cursor-pointer"
+        >
           <div className="flex flex-wrap items-center gap-1.5">
             {timeRange && (
               <span className="rounded-[var(--radius-sm)] bg-[var(--surface-sunken)] px-1.5 py-0.5 text-xs font-medium text-[var(--text-secondary)]">
@@ -210,15 +220,15 @@ export function PlanItemCard({
           )}
         </div>
 
+        {/* Sibling of the interactive content wrapper above, not nested
+            inside it — no stopPropagation needed since there's no parent
+            click handler to bubble into. */}
         {isProposal && onVote && (
           <Button
             variant={myVoted ? 'primary' : 'secondary'}
             size="sm"
             isLoading={isVoting}
-            onClick={(e) => {
-              e.stopPropagation()
-              onVote(item)
-            }}
+            onClick={() => onVote(item)}
           >
             {myVoted ? '✓ Voted' : item.vote?.votingMethod === 'approval' ? 'Approve' : item.vote?.votingMethod === 'ranked' ? 'Rank' : 'Vote'}
           </Button>

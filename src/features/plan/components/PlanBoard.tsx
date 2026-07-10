@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Badge, EmptyState, Modal, useToast, formatDeadlineLabel, SelectionAvatars } from '../../../components/ui'
+import { Button, Badge, Deadline, EmptyState, Modal, useToast, SelectionAvatars } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useCreateSection, useVotes } from '../../../lib/queries/usePlanning'
@@ -11,6 +11,7 @@ import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
 import { MatrixView } from '../../decisions/components/MatrixView'
+import { SectionEditorSheet } from '../../decisions/components/SectionEditorSheet'
 import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
 import { computeQuestionState } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
@@ -106,6 +107,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const [votingId, setVotingId] = useState<string | null>(null)
   const [creatingStarters, setCreatingStarters] = useState(false)
   const [matrixSectionId, setMatrixSectionId] = useState<string | null>(null)
+  const [sectionSettingsId, setSectionSettingsId] = useState<string | null>(null)
   const [orderFormSectionId, setOrderFormSectionId] = useState<string | null>(null)
   const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
   const [expandedPicksSectionIds, setExpandedPicksSectionIds] = useState<Set<string>>(() => new Set())
@@ -348,7 +350,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
             return (
               <div key={sectionId ?? 'none'} className="space-y-2">
                 {section && (
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
                         <h4 className="text-sm font-medium text-[var(--text-primary)]">{section.title}</h4>
@@ -358,18 +360,37 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                           </Badge>
                         )}
                       </div>
-                      <p className="text-xs text-[var(--text-muted)]">
-                        {isPersonalOrder
-                          ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ${hasCatalogPricing ? 'ordered' : 'have picked'}`
-                          : `${section.options.length} option${section.options.length === 1 ? '' : 's'}`}
-                        {section.vote_deadline && <> · closes {formatDeadlineLabel(section.vote_deadline, 'vote')}</>}
-                      </p>
+                      <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
+                        <p className="text-xs text-[var(--text-muted)]">
+                          {isPersonalOrder
+                            ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ${hasCatalogPricing ? 'ordered' : 'have picked'}`
+                            : `${section.options.length} option${section.options.length === 1 ? '' : 's'}`}
+                        </p>
+                        {section.vote_deadline && <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />}
+                      </div>
                     </div>
-                    {isMatrix && (
-                      <Button variant="ghost" size="sm" onClick={() => setMatrixSectionId(section.id)} className="shrink-0">
-                        Grid view
-                      </Button>
-                    )}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {isMatrix && (
+                        <Button variant="ghost" size="sm" onClick={() => setMatrixSectionId(section.id)}>
+                          Grid view
+                        </Button>
+                      )}
+                      {/* Poll settings (organizer-only, mirrors delete's
+                          isOrganizer gate): wires the previously-unreachable
+                          SectionEditorSheet (voting method/deadline/quorum/
+                          decision shape) into the live tray. */}
+                      {isOrganizer && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setSectionSettingsId(section.id)}
+                          aria-label={`Poll settings for ${section.title}`}
+                          title="Poll settings"
+                        >
+                          ⚙️
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 )}
                 {isPersonalOrder && section ? (
@@ -607,6 +628,17 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
           />
         )}
       </Modal>
+
+      {/* Poll settings (UX_REDESIGN.md Part 5 / the vote-shape editing gap):
+          wires the previously-unreachable SectionEditorSheet in with the
+          real section record — voting method, deadline, quorum, decision
+          shape are all editable from here now. */}
+      <SectionEditorSheet
+        isOpen={!!sectionSettingsId}
+        onClose={() => setSectionSettingsId(null)}
+        tripId={trip.id}
+        section={(sections || []).find((s) => s.id === sectionSettingsId) ?? null}
+      />
 
       {/* Personal order form (UX_REDESIGN.md Part 5, shape 2): the "Fill in
           your order"/"Edit your order" affordance above opens this instead

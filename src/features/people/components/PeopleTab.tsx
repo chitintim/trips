@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
-import { Card, Button, CapacityProgressBar, Deadline, Tabs, Skeleton } from '../../../components/ui'
+import { Card, Button, CapacityProgressBar, Deadline, Tabs, Skeleton, EmptyState } from '../../../components/ui'
+import { ErrorState } from '../../../components/ui/illustrations'
 import { useTrip, useParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
@@ -36,8 +37,13 @@ interface PeopleTabProps {
  */
 export function PeopleTab({ tripId }: PeopleTabProps) {
   const { user } = useAuth()
-  const { data: trip, isLoading: tripLoading } = useTrip(tripId)
-  const { data: participants, isLoading: participantsLoading } = useParticipants(tripId)
+  const { data: trip, isLoading: tripLoading, isError: tripError, refetch: refetchTrip } = useTrip(tripId)
+  const {
+    data: participants,
+    isLoading: participantsLoading,
+    isError: participantsError,
+    refetch: refetchParticipants,
+  } = useParticipants(tripId)
   const { data: currentUserRow } = useCurrentUserRow(user?.id)
 
   const { data: timelineEvents = [] } = useTimeline(tripId)
@@ -81,11 +87,34 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
     if (!confirmationEnabled && (view === 'graph' || view === 'waitlist')) setView('list')
   }, [confirmationEnabled, view])
 
-  if (tripLoading || participantsLoading || !trip) {
+  if (tripLoading || participantsLoading) {
     return (
       <div className="p-4 space-y-4">
         <Skeleton variant="card" height={120} />
         <Skeleton variant="list" lines={5} />
+      </div>
+    )
+  }
+
+  if (tripError || participantsError || !trip) {
+    return (
+      <div className="p-4">
+        <EmptyState
+          icon={<ErrorState className="w-20 h-20 text-danger-500" />}
+          title="Couldn't load this trip's people"
+          description="Something went wrong fetching the roster. Check your connection and try again."
+          action={
+            <Button
+              variant="primary"
+              onClick={() => {
+                refetchTrip()
+                refetchParticipants()
+              }}
+            >
+              Try again
+            </Button>
+          }
+        />
       </div>
     )
   }
@@ -219,13 +248,12 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
               currentUserId={user?.id}
               groupByStatus={confirmationEnabled}
               onSelect={(p) => {
-                // Only the current user can edit their own status; viewing
-                // someone else's just shows the read-only recap via the
-                // same modal when they happen to be confirmed, otherwise
-                // organizers can still open it read-only in a future pass.
-                // No-op while confirmation tracking is off -- the plain list
-                // renders non-interactive rows in that case anyway.
-                if (confirmationEnabled && p.user_id === user?.id) setStatusModalParticipant(p)
+                // Only the current user can edit their own status --
+                // ParticipantList only renders a self row as a tappable
+                // button (grouped view) or nothing at all (flat view when
+                // confirmation tracking is off), so onSelect is only ever
+                // invoked for `user`'s own row.
+                setStatusModalParticipant(p)
               }}
               canManage={isOrganizer}
               onManage={(p) => setManageParticipant(p)}

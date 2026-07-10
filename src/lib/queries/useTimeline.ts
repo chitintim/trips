@@ -3,7 +3,7 @@ import { supabase } from '../supabase'
 import { TimelineEvent, TimelineEventInsert, TimelineEventUpdate } from '../../types'
 import { queryKeys } from './queryKeys'
 
-/** Trip timeline events, ordered exactly as TimelineTab.tsx expects (date, start_time, sort_order). */
+/** Trip timeline events, ordered exactly as PlanBoard's List lens expects (date, start_time, sort_order). */
 export function useTimeline(tripId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.timeline(tripId || ''),

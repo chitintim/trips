@@ -10,6 +10,7 @@ import { CategoryDonutChart } from './CategoryDonutChart'
 import { DayByDayBarChart } from './DayByDayBarChart'
 import { PaidVsOwedChart } from './PaidVsOwedChart'
 import { ReceiptGallery } from './ReceiptGallery'
+import { ExpenseFetchErrorState } from '../components/ExpenseFetchErrorState'
 import type { Trip } from '../../../types'
 
 export interface MySpendingTabProps {
@@ -22,7 +23,7 @@ export interface MySpendingTabProps {
  */
 export function MySpendingTab({ trip }: MySpendingTabProps) {
   const { user } = useAuth()
-  const { data, isLoading } = useExpenses(trip.id)
+  const { data, isLoading, isError, refetch } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
   // Folded cross-trip carryovers move real money here -- without them the
   // "net balance" stat disagrees with the Money header/Settle Up.
@@ -57,13 +58,17 @@ export function MySpendingTab({ trip }: MySpendingTabProps) {
     [expenses, settlements, people, trip.base_currency, carryovers]
   )
 
-  if (isLoading || !overview) {
+  if (isLoading || (!overview && !isError)) {
     return (
       <div className="space-y-4">
         <Skeleton variant="card" height={100} />
         <Skeleton variant="card" height={200} />
       </div>
     )
+  }
+
+  if (isError || !overview) {
+    return <ExpenseFetchErrorState label="your spending" onRetry={() => refetch()} />
   }
 
   return (

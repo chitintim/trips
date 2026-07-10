@@ -1,15 +1,24 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, EmptyState, Input, Select, Skeleton, UserAvatar, useToast } from '../../../components/ui'
+import { ErrorState } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
 import { useChecklists, useCreateChecklistItem, useToggleChecklistItem, useDeleteChecklistItem } from '../../../lib/queries/useChecklists'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
+import { useFormDraft } from '../../../lib/forms/useFormDraft'
 
 export interface ChecklistTabProps {
   tripId: string
   /** Lets the organizer mark/unmark on behalf of someone else's assigned item, de-emphasized vs. the assignee's own control. */
   isOrganizer?: boolean
 }
+
+interface AddItemFormValues {
+  title: string
+  assignee: string
+}
+
+const EMPTY_ADD_ITEM_VALUES: AddItemFormValues = { title: '', assignee: '' }
 
 /**
  * Shared trip checklist (plan §6.4: "who's bringing the speaker") —
@@ -23,15 +32,24 @@ export interface ChecklistTabProps {
 export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
-  const { data: items, isLoading } = useChecklists(tripId)
+  const { data: items, isLoading, isError, refetch, isRefetching } = useChecklists(tripId)
   const { data: participants } = useParticipants(tripId)
   const createItem = useCreateChecklistItem(tripId)
   const toggleItem = useToggleChecklistItem(tripId)
   const deleteItem = useDeleteChecklistItem(tripId)
   const logActivity = useTripActivityLog(tripId)
 
-  const [title, setTitle] = useState('')
-  const [assignee, setAssignee] = useState('')
+  // Add-item form draft (Form & Flow Standard §5.1) -- a half-typed
+  // "bring the speaker" note shouldn't vanish if the tab backgrounds.
+  // Create-only form (no edit mode), so persistence stays enabled by
+  // default and is cleared on successful add.
+  const { values: addItemValues, updateField: updateAddItemField, setValues: setAddItemValues, clearDraft: clearAddItemDraft } =
+    useFormDraft<AddItemFormValues>(`checklist-add-item:${tripId}`, EMPTY_ADD_ITEM_VALUES)
+  // Inline two-step delete confirm (ManageParticipantSheet.tsx's pattern,
+  // scaled down to a per-row toggle since this is a list): first tap on ✕
+  // arms the row, a second tap actually deletes. Only one row can be armed
+  // at a time.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null)
 
   const usersById = useMemo(() => {
     const map = new Map<string, { name: string; avatar_url: unknown; avatar_data: unknown }>()
@@ -57,17 +75,17 @@ export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps)
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault()
-    const trimmed = title.trim()
+    const trimmed = addItemValues.title.trim()
     if (!trimmed || !user) return
     try {
       await createItem.mutateAsync({
         title: trimmed,
         created_by: user.id,
-        assigned_to: assignee || null,
+        assigned_to: addItemValues.assignee || null,
       })
       logActivity({ verb: 'checklist_added', entity: { type: 'checklist_item', label: trimmed } })
-      setTitle('')
-      setAssignee('')
+      clearAddItemDraft()
+      setAddItemValues(EMPTY_ADD_ITEM_VALUES)
     } catch (err) {
       showToast({ type: 'error', message: 'Could not add item', description: (err as Error).message })
     }
@@ -88,12 +106,28 @@ export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps)
   const handleDelete = async (id: string) => {
     try {
       await deleteItem.mutateAsync(id)
+      setConfirmingDeleteId(null)
     } catch (err) {
       showToast({ type: 'error', message: 'Could not delete item', description: (err as Error).message })
     }
   }
 
   if (isLoading) return <Skeleton variant="list" lines={5} />
+
+  if (isError) {
+    return (
+      <EmptyState
+        icon={<ErrorState className="w-20 h-20 text-danger-500" />}
+        title="Couldn't load the checklist"
+        description="Something went wrong fetching this trip's checklist. Check your connection and try again."
+        action={
+          <Button variant="primary" onClick={() => refetch()} isLoading={isRefetching}>
+            Try again
+          </Button>
+        }
+      />
+    )
+  }
 
   const open = (items ?? []).filter((i) => !i.done)
   const done = (items ?? []).filter((i) => i.done)
@@ -106,15 +140,20 @@ export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps)
             <div className="flex-1">
               <Input
                 label="Add to the list"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                value={addItemValues.title}
+                onChange={(e) => updateAddItemField('title', e.target.value)}
                 placeholder="e.g. Bluetooth speaker, sunscreen, cards"
               />
             </div>
             <div className="sm:w-44">
-              <Select label="Who's bringing it" value={assignee} onChange={(e) => setAssignee(e.target.value)} options={assigneeOptions} />
+              <Select
+                label="Who's bringing it"
+                value={addItemValues.assignee}
+                onChange={(e) => updateAddItemField('assignee', e.target.value)}
+                options={assigneeOptions}
+              />
             </div>
-            <Button type="submit" isLoading={createItem.isPending} disabled={!title.trim()}>
+            <Button type="submit" isLoading={createItem.isPending} disabled={!addItemValues.title.trim()}>
               Add
             </Button>
           </form>
@@ -200,16 +239,36 @@ export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps)
                       {item.done ? 'Unmark' : 'Mark for them'}
                     </button>
                   )}
-                  {canDelete && (
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(item.id)}
-                      className="shrink-0 rounded px-1 text-[var(--text-muted)] opacity-0 transition-opacity hover:text-danger-600 group-hover:opacity-100 focus:opacity-100"
-                      aria-label={`Delete "${item.title}"`}
-                    >
-                      ✕
-                    </button>
-                  )}
+                  {canDelete &&
+                    (confirmingDeleteId === item.id ? (
+                      <span className="flex shrink-0 items-center gap-1 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setConfirmingDeleteId(null)}
+                          className="rounded px-1.5 py-0.5 text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(item.id)}
+                          disabled={deleteItem.isPending}
+                          className="rounded px-1.5 py-0.5 font-medium text-danger-600 hover:text-danger-700 disabled:opacity-60"
+                          aria-label={`Confirm delete "${item.title}"`}
+                        >
+                          {deleteItem.isPending ? 'Deleting…' : 'Delete?'}
+                        </button>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmingDeleteId(item.id)}
+                        className="shrink-0 rounded px-1 text-[var(--text-muted)] opacity-0 transition-opacity hover:text-danger-600 group-hover:opacity-100 focus:opacity-100"
+                        aria-label={`Delete "${item.title}"`}
+                      >
+                        ✕
+                      </button>
+                    ))}
                 </li>
               )
             })}

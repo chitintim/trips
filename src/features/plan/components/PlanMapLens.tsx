@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
 import type { LatLngBoundsExpression, LatLngTuple } from 'leaflet'
-import { EmptyState } from '../../../components/ui'
+import { Button, EmptyState, Skeleton } from '../../../components/ui'
+import { ErrorState } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { ensureLeafletDefaultIcon, emojiDivIcon } from '../../places'
 import { colorForDayIndex } from '../../places/lib/mapMarkers'
@@ -11,12 +12,7 @@ import type { Trip } from '../../../types'
 
 ensureLeafletDefaultIcon()
 
-/**
- * Local date-only day-index diff, matching TripMapTab's own dayIndexFor
- * exactly (kept in sync by convention; not imported from the places
- * barrel to avoid statically pulling in TripMapTab.tsx, which the barrel
- * lazy-loads on purpose — see the barrel's NOTE above tripMapTabConfig).
- */
+/** Local date-only day-index diff (day index within the trip), ignoring time-of-day/TZ noise — this lens's own copy since it's a one-liner, not worth a shared export. */
 function dayIndexFor(dateStr: string, tripStartDateStr: string): number {
   const date = new Date(`${dateStr}T00:00:00`)
   const start = new Date(`${tripStartDateStr}T00:00:00`)
@@ -45,7 +41,8 @@ export interface PlanMapLensProps {
  * everywhere else, via `onOpenItem`.
  */
 export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
-  const { data: places } = usePlaces(trip.id)
+  const placesQuery = usePlaces(trip.id)
+  const { data: places, isLoading: placesLoading, isError: placesError } = placesQuery
   const placesById = useMemo(() => new Map((places || []).map((p) => [p.id, p])), [places])
 
   const pins = useMemo(() => {
@@ -64,6 +61,27 @@ export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
 
   const points: LatLngTuple[] = pins.map((p) => [p.place.lat!, p.place.lng!])
   const bounds: LatLngBoundsExpression | null = points.length > 0 ? points : null
+
+  // Loading gate (UPGRADE_MASTER_PLAN.md audit item 3): without this, "no
+  // pinned places yet" briefly flashed while places was still in flight.
+  if (placesLoading) {
+    return <Skeleton variant="card" height={420} />
+  }
+
+  if (placesError) {
+    return (
+      <EmptyState
+        icon={<ErrorState className="w-24 h-24 text-danger-500" />}
+        title="Couldn't load the map"
+        description="Something went wrong loading this trip's places. Check your connection and try again."
+        action={
+          <Button variant="primary" onClick={() => placesQuery.refetch()}>
+            Retry
+          </Button>
+        }
+      />
+    )
+  }
 
   if (pins.length === 0) {
     return (

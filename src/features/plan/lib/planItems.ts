@@ -396,6 +396,26 @@ export function groupUndatedBySection(items: PlanItem[]): Map<string | null, Pla
   return grouped
 }
 
+/** Which editor (if any) PlanItemSheet's Edit affordance should open for a given item. */
+export type PlanItemEditTarget = 'event' | 'option' | null
+
+/**
+ * The item-detail sheet's Edit affordance (UPGRADE_MASTER_PLAN.md audit
+ * item 1: "vote-shape options and questions are uneditable anywhere in the
+ * live app"): organizer-only, same gate `handleDelete`/the delete button
+ * already use. Event-backed items open EventEditorSheet (unchanged);
+ * option-backed items (proposal/idea/decided/booked — every idKind
+ * 'option' PlanItem) now open OptionEditorSheet instead of having no edit
+ * path at all. Pulled out as a pure function so the wiring rule is
+ * unit-testable without mounting PlanItemSheet.
+ */
+export function planItemEditTarget(item: Pick<PlanItem, 'idKind'>, isOrganizer: boolean): PlanItemEditTarget {
+  if (!isOrganizer) return null
+  if (item.idKind === 'event') return 'event'
+  if (item.idKind === 'option') return 'option'
+  return null
+}
+
 /** Only open votables (proposals with a vote summary), sorted by deadline (nulls last) — the Decide lens. */
 export function getOpenVotables(items: PlanItem[]): PlanItem[] {
   return items

@@ -11,7 +11,7 @@ import { getReceiptUrl } from '../../../lib/receiptUpload'
 // RetrospectivePanel is already lazy-loaded as a whole chunk, so importing
 // it here directly keeps leaflet out of the main bundle (WSH perf pass).
 import { PlaceMapThumb } from '../../places/components/PlaceMapThumb'
-import { streamChatMessage, ChatQuotaError } from '../../chat'
+import { streamChatMessage, ChatQuotaError, CHAT_QUOTA_MESSAGE } from '../../chat'
 import { computeTripStats, formatMinor, categoryMeta, buildSummaryText } from '../lib/tripStats'
 
 export interface RetrospectivePanelProps {
@@ -31,7 +31,7 @@ const RECAP_PROMPT =
  */
 export function RetrospectivePanel({ tripId }: RetrospectivePanelProps) {
   const { showToast } = useToast()
-  const { data: trip, isLoading: tripLoading } = useTrip(tripId)
+  const { data: trip, isLoading: tripLoading, refetch: refetchTrip } = useTrip(tripId)
   const { data: expensesData, isLoading: expensesLoading } = useExpenses(tripId)
   const { data: participants } = useParticipants(tripId)
   const { data: places } = usePlaces(tripId)
@@ -117,7 +117,7 @@ export function RetrospectivePanel({ tripId }: RetrospectivePanelProps) {
       setRecap(null)
       setRecapNote(
         err instanceof ChatQuotaError
-          ? 'Daily AI quota reached — try the recap again tomorrow.'
+          ? CHAT_QUOTA_MESSAGE
           : 'The AI recap is unavailable right now — the numbers below still tell the story.'
       )
     } finally {
@@ -143,7 +143,20 @@ export function RetrospectivePanel({ tripId }: RetrospectivePanelProps) {
       </div>
     )
   }
-  if (!trip) return null
+  if (!trip) {
+    return (
+      <EmptyState
+        icon="❌"
+        title="Couldn't load this trip's recap"
+        description="Something went wrong fetching this trip. Try again, or check back later."
+        action={
+          <Button variant="primary" size="sm" onClick={() => refetchTrip()}>
+            Try again
+          </Button>
+        }
+      />
+    )
+  }
 
   const pinnedPlaces = (places ?? []).filter((p) => p.lat != null && p.lng != null)
   const perHead = stats.byPerson.length > 0 ? Math.round(stats.totalMinor / stats.byPerson.length) : 0

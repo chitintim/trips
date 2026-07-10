@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { EmptyState } from '../../../components/ui'
-import { NothingToDecide } from '../../../components/ui/illustrations'
+import { Button, EmptyState, Skeleton } from '../../../components/ui'
+import { NothingToDecide, ErrorState } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
 import { useSections, useVotes } from '../../../lib/queries/usePlanning'
 import { useParticipants } from '../../../lib/queries/useTrip'
@@ -21,9 +21,12 @@ export interface PlanDecideLensProps {
  */
 export function PlanDecideLens({ trip }: PlanDecideLensProps) {
   const { user } = useAuth()
-  const { data: sections } = useSections(trip.id)
-  const { data: votes } = useVotes(trip.id)
-  const { data: participants } = useParticipants(trip.id)
+  const sectionsQuery = useSections(trip.id)
+  const votesQuery = useVotes(trip.id)
+  const participantsQuery = useParticipants(trip.id)
+  const { data: sections, isLoading: sectionsLoading, isError: sectionsError } = sectionsQuery
+  const { data: votes, isLoading: votesLoading, isError: votesError } = votesQuery
+  const { data: participants, isLoading: participantsLoading, isError: participantsError } = participantsQuery
   const [flowOpen, setFlowOpen] = useState(false)
 
   const confirmedCount = (participants || []).filter((p) => p.confirmation_status === 'confirmed').length
@@ -35,6 +38,40 @@ export function PlanDecideLens({ trip }: PlanDecideLensProps) {
         (s) => computeQuestionState(s, votes || [], (participants || []).length, user?.id ?? null, trip.base_currency).state === 'needs_you'
       )
   }, [sections, votes, participants, user?.id, trip.base_currency])
+
+  // Loading gate (UPGRADE_MASTER_PLAN.md audit item 3): without this, the
+  // "nothing needs deciding" empty state briefly flashed while sections/
+  // votes/participants were still in flight, since openQuestions defaults
+  // to [] before any data has loaded.
+  if (sectionsLoading || votesLoading || participantsLoading) {
+    return (
+      <div className="space-y-3">
+        <Skeleton variant="card" height={140} />
+      </div>
+    )
+  }
+
+  if (sectionsError || votesError || participantsError) {
+    return (
+      <EmptyState
+        icon={<ErrorState className="w-24 h-24 text-danger-500" />}
+        title="Couldn't load what needs deciding"
+        description="Something went wrong. Check your connection and try again."
+        action={
+          <Button
+            variant="primary"
+            onClick={() => {
+              sectionsQuery.refetch()
+              votesQuery.refetch()
+              participantsQuery.refetch()
+            }}
+          >
+            Retry
+          </Button>
+        }
+      />
+    )
+  }
 
   if (openQuestions.length === 0) {
     return (

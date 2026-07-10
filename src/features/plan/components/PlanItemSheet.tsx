@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Modal, Badge, Button, Chip, UserAvatar, TextArea, Skeleton, SelectionAvatars } from '../../../components/ui'
+import { Modal, Badge, Button, Chip, UserAvatar, TextArea, SelectionAvatars } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useParticipants } from '../../../lib/queries/useTrip'
@@ -21,7 +21,10 @@ import { BookingEditorSheet } from '../../organizer/components/BookingEditorShee
 import { useBookings } from '../../../lib/queries/useBookings'
 import { areVotesVisible } from '../../decisions/lib/voting'
 import { formatCostImpact } from '../../decisions/lib/costImpact'
+import { OptionEditorSheet } from '../../decisions/components/OptionEditorSheet'
+import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import { formatTimeRange, CATEGORY_CONFIG } from '../../timeline/lib/categoryConfig'
+import { planItemEditTarget } from '../lib/planItems'
 import type { PlanItem } from '../lib/planItems'
 import type { Trip } from '../../../types'
 
@@ -77,6 +80,7 @@ export function PlanItemSheet({
   const [showComments, setShowComments] = useState(false)
   const [commentDraft, setCommentDraft] = useState('')
   const [editEventOpen, setEditEventOpen] = useState(false)
+  const [editOptionOpen, setEditOptionOpen] = useState(false)
   const [editBookingOpen, setEditBookingOpen] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
@@ -87,6 +91,7 @@ export function PlanItemSheet({
   const option = section?.options.find((o) => o.id === item.optionId)
   const event = item.eventId ? (events || []).find((e) => e.id === item.eventId) : undefined
   const booking = item.bookingId ? (bookings || []).find((b) => b.id === item.bookingId) : undefined
+  const editTarget = planItemEditTarget(item, isOrganizer)
 
   const optionVotes = item.optionId ? (votes || []).filter((v) => v.option_id === item.optionId) : []
   const myVote = optionVotes.find((v) => v.user_id === user?.id)
@@ -341,8 +346,18 @@ export function PlanItemSheet({
               )}
             </div>
             <div className="flex gap-2">
-              {isOrganizer && item.idKind === 'event' && (
+              {editTarget === 'event' && (
                 <Button variant="secondary" size="sm" onClick={() => setEditEventOpen(true)}>
+                  Edit
+                </Button>
+              )}
+              {/* Vote-shape options were previously uneditable anywhere in the
+                  live app (OptionEditorSheet existed but was only mounted by
+                  the unreachable DecisionsTab) — this is the wiring that
+                  fixes it, gated the same organizer-only way delete already
+                  is above (see planItemEditTarget). */}
+              {editTarget === 'option' && option && (
+                <Button variant="secondary" size="sm" onClick={() => setEditOptionOpen(true)}>
                   Edit
                 </Button>
               )}
@@ -356,6 +371,17 @@ export function PlanItemSheet({
 
       {item.idKind === 'event' && event && (
         <EventEditorSheet isOpen={editEventOpen} onClose={() => setEditEventOpen(false)} trip={trip} event={event} />
+      )}
+
+      {item.idKind === 'option' && section && option && (
+        <OptionEditorSheet
+          isOpen={editOptionOpen}
+          onClose={() => setEditOptionOpen(false)}
+          tripId={tripId}
+          sectionId={section.id}
+          option={option}
+          decisionShape={getDecisionShape(section.metadata)}
+        />
       )}
 
       {booking && <BookingEditorSheet isOpen={editBookingOpen} onClose={() => setEditBookingOpen(false)} trip={trip} booking={booking} />}
@@ -376,15 +402,5 @@ export function PlanItemSheet({
         </Modal>
       )}
     </>
-  )
-}
-
-/** Loading skeleton for the sheet's content while dependent queries settle (exported for the board to reuse if needed). */
-export function PlanItemSheetSkeleton() {
-  return (
-    <div className="space-y-3">
-      <Skeleton variant="text" width="60%" />
-      <Skeleton variant="text" lines={3} />
-    </div>
   )
 }

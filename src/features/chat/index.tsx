@@ -38,7 +38,7 @@ export type { ChatSheetProps } from './components/ChatSheet'
 export { ProposalReview } from './components/ProposalReview'
 export type { ProposalReviewProps } from './components/ProposalReview'
 
-export { streamChatMessage, ChatQuotaError } from './lib/streamChat'
+export { streamChatMessage, ChatQuotaError, CHAT_QUOTA_MESSAGE } from './lib/streamChat'
 export type { ChatStreamCallbacks } from './lib/streamChat'
 export { applyAction, describeAction, parseProposalActions } from './lib/applyProposal'
 export type { ApplyContext, ActionDescription, ParsedActionEntry } from './lib/applyProposal'

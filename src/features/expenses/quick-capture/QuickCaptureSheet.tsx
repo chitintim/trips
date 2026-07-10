@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Modal, Button, Input, Select, Spinner, useToast } from '../../../components/ui'
+import { Modal, Button, Input, Select, Spinner, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { uploadReceipt } from '../../../lib/receiptUpload'
 import { parseReceipt } from '../../../lib/receiptParsing'
@@ -9,6 +9,7 @@ import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../
 import { ALL_CATEGORIES, categoryIcon, categoryLabel } from '../lib/categoryStyle'
 import { defaultTaggedParticipantIds } from '../lib/participantDefaults'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
+import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { initialQuickCaptureState, applyParseResult } from './quickCaptureState'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -67,6 +68,17 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
     setShowFullEditor(false)
     onClose()
   }
+
+  // Confirm-stage dirty guard (audit finding #2): once a receipt has been
+  // parsed and we're showing the editable vendor/total/date/category form,
+  // there's real work (the parse + any edits) a stray backdrop click or
+  // Escape would silently throw away. Derived straight from `stage` rather
+  // than tracked separately -- reaching 'confirm' always means there's a
+  // parsed receipt to lose, and leaving it (save, or falling back to
+  // manual/full-editor) always means it no longer applies.
+  const isConfirmDirty = state.stage === 'confirm'
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isConfirmDirty)
+  const requestClose = () => confirmClose(resetAndClose)
 
   const handleFilePicked = async (file: File) => {
     if (!user) return
@@ -163,7 +175,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={resetAndClose} title="Quick capture" size="sm">
+    <Modal isOpen={isOpen} onClose={requestClose} title="Quick capture" size="sm">
       {state.stage === 'pick' && (
         <div className="space-y-4">
           <p className="text-sm text-[var(--text-secondary)]">Snap a receipt or pick a photo — we'll read it for you.</p>
@@ -260,6 +272,8 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
           <p className="text-sm text-[var(--text-secondary)]">Saving...</p>
         </div>
       )}
+
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
     </Modal>
   )
 }

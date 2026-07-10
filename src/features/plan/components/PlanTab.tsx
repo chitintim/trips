@@ -1,5 +1,6 @@
 import { Suspense, useState } from 'react'
-import { Button, SegmentedControl, Skeleton } from '../../../components/ui'
+import { Button, EmptyState, SegmentedControl, Skeleton } from '../../../components/ui'
+import { ErrorState } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { lazyWithRetry } from '../../../lib/lazyWithRetry'
@@ -36,7 +37,7 @@ export interface PlanTabProps {
 export function PlanTab({ trip, onNavigate }: PlanTabProps) {
   const { user } = useAuth()
   const { data: participants } = useParticipants(trip.id)
-  const { items, isLoading } = usePlanItems(trip.id)
+  const { items, isLoading, isError, refetch } = usePlanItems(trip.id)
 
   const [lens, setLens] = useState<Lens>('list')
   const [selectedItem, setSelectedItem] = useState<PlanItem | null>(null)
@@ -65,6 +66,23 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
         <Skeleton variant="card" height={48} />
         <Skeleton variant="card" height={120} />
         <Skeleton variant="card" height={120} />
+      </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <div className="p-4">
+        <EmptyState
+          icon={<ErrorState className="w-24 h-24 text-danger-500" />}
+          title="Couldn't load the plan"
+          description="Something went wrong fetching this trip's plan. Check your connection and try again."
+          action={
+            <Button variant="primary" onClick={() => refetch()}>
+              Retry
+            </Button>
+          }
+        />
       </div>
     )
   }

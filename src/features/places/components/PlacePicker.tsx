@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Modal, Button, Input, Spinner } from '../../../components/ui'
+import { Modal, Button, Input, SegmentedControl, Spinner } from '../../../components/ui'
 import { useCreatePlace, useUpdatePlace } from '../../../lib/queries'
 import { parseGoogleMapsLink } from '../../../lib/places/parseGoogleMapsLink'
 import { searchPlace, type GeocodeResult } from '../../../lib/places/geocode'
@@ -14,8 +14,15 @@ export interface PlacePickerProps {
   title?: string
   /**
    * When provided, the picker updates this existing place's coordinates
-   * instead of creating a new place row — used for the "places with no
-   * coordinates" geocode-fix flow so we don't create a duplicate place.
+   * instead of creating a new place row, so re-picking a name-only place
+   * doesn't create a duplicate. NOTE: no live caller currently passes this
+   * — it was wired for the legacy TripMapTab's "places with no
+   * coordinates" geocode-fix list, which was removed as unreachable dead
+   * code (UPGRADE_MASTER_PLAN.md audit item 7). Nothing in the current
+   * Plan Map lens (PlanMapLens.tsx) surfaces unpinned places for a fix-up
+   * — that capability has no live entry point right now. Kept on the prop
+   * API since PlacePicker is otherwise unchanged and a future "fix
+   * unpinned places" affordance would want it back.
    */
   existingPlace?: Tables<'places'>
 }
@@ -26,15 +33,14 @@ const SEARCH_DEBOUNCE_MS = 400
 
 /**
  * Sheet for attaching a place to any entity (option, timeline event,
- * expense), or fixing up an existing name-only place's coordinates. Three
- * ways in:
+ * expense). Three ways in:
  *  - Paste a Google Maps link (live parse feedback, handles short links by
  *    asking for the expanded URL)
  *  - Search by name (Nominatim, debounced)
- *  - Manual name-only fallback (no coordinates — shows up later in the
- *    "places with no coordinates" list for a geocode fix-up)
- * Ends by creating (or, with `existingPlace`, updating) a row and returning
- * it via onPicked.
+ *  - Manual name-only fallback (no coordinates — attaches fine, just
+ *    without a map pin)
+ * Ends by creating (or, with `existingPlace`, updating — see its doc)
+ * a row and returning it via onPicked.
  */
 export function PlacePicker({ isOpen, onClose, tripId, onPicked, title = 'Add a place', existingPlace }: PlacePickerProps) {
   const [mode, setMode] = useState<Mode>('link')
@@ -149,40 +155,17 @@ export function PlacePicker({ isOpen, onClose, tripId, onPicked, title = 'Add a 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={title} size="md">
       <div className="space-y-4">
-        <div className="flex gap-2 border-b border-[var(--border-subtle)] pb-3">
-          <button
-            type="button"
-            onClick={() => setMode('link')}
-            className={`flex-1 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors ${
-              mode === 'link'
-                ? 'bg-accent-600 text-white'
-                : 'bg-[var(--surface-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            Paste a link
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('search')}
-            className={`flex-1 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors ${
-              mode === 'search'
-                ? 'bg-accent-600 text-white'
-                : 'bg-[var(--surface-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            Search by name
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('manual')}
-            className={`flex-1 rounded-[var(--radius-md)] px-3 py-2 text-sm font-medium transition-colors ${
-              mode === 'manual'
-                ? 'bg-accent-600 text-white'
-                : 'bg-[var(--surface-sunken)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
-            }`}
-          >
-            Name only
-          </button>
+        <div className="border-b border-[var(--border-subtle)] pb-3">
+          <SegmentedControl
+            fullWidth
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: 'link', label: 'Paste a link' },
+              { value: 'search', label: 'Search by name' },
+              { value: 'manual', label: 'Name only' },
+            ]}
+          />
         </div>
 
         {mode === 'link' && (
@@ -281,7 +264,7 @@ export function PlacePicker({ isOpen, onClose, tripId, onPicked, title = 'Add a 
               placeholder="e.g. Grandma's chalet"
               value={manualName}
               onChange={(e) => setManualName(e.target.value)}
-              helperText="No map coordinates — you can geocode-fix this later from the map tab."
+              helperText='No map coordinates — it still attaches to this item, just without a pin. For a pin, try "Search by name" instead.'
               autoFocus
             />
             <Button variant="primary" fullWidth disabled={!manualName.trim() || submitting} isLoading={submitting} onClick={handleManualSubmit}>

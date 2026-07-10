@@ -13,6 +13,7 @@ import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
 import { SettleUpTab } from '../settle-up/SettleUpTab'
 import { MySpendingTab } from '../my-spending/MySpendingTab'
 import { EMPTY_FILTERS, applyExpenseFilters, groupExpensesByDay } from '../expenses-tab/ExpenseFilters'
+import { ExpenseFetchErrorState } from '../components/ExpenseFetchErrorState'
 import type { Trip } from '../../../types'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 
@@ -42,7 +43,7 @@ export interface MoneySpaceProps {
 export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
-  const { data, isLoading } = useExpenses(trip.id)
+  const { data, isLoading, isError, refetch } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
   const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
@@ -86,6 +87,10 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
         <Skeleton variant="list" lines={4} />
       </div>
     )
+  }
+
+  if (isError) {
+    return <ExpenseFetchErrorState label="expenses" onRetry={() => refetch()} />
   }
 
   return (

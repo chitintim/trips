@@ -66,7 +66,8 @@ export {
  * opens the Map tab (WSH perf pass, plan §16/code-splitting target) — the
  * coordinator wraps `Component` in a `<Suspense>` with a skeleton fallback.
  */
-import { lazy, type ComponentType } from 'react'
+import type { ComponentType } from 'react'
+import { lazyWithRetry } from '../../lib/lazyWithRetry'
 import type { TripMapTabProps } from './TripMapTab'
 
 export const tripMapTabConfig: {
@@ -78,5 +79,5 @@ export const tripMapTabConfig: {
   tabId: 'map',
   label: 'Map',
   icon: '🗺️',
-  Component: lazy(() => import('./TripMapTab').then((m) => ({ default: m.TripMapTab }))),
+  Component: lazyWithRetry(() => import('./TripMapTab').then((m) => ({ default: m.TripMapTab }))),
 }

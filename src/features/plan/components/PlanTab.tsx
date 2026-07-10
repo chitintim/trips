@@ -1,7 +1,8 @@
-import { lazy, Suspense, useState } from 'react'
+import { Suspense, useState } from 'react'
 import { Button, SegmentedControl, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
+import { lazyWithRetry } from '../../../lib/lazyWithRetry'
 import { usePlanItems } from '../lib/usePlanItems'
 import type { PlanItem } from '../lib/planItems'
 import { PlanBoard } from './PlanBoard'
@@ -18,7 +19,7 @@ type Lens = 'list' | 'map' | 'decide'
 // space is wired eagerly into TripDetail (v2.1 four-space nav), the lens is
 // lazy-loaded so leaflet stays out of the main chunk until a user actually
 // switches to Map — same treatment TripMapTab always had.
-const LazyPlanMapLens = lazy(() => import('./PlanMapLens').then((m) => ({ default: m.PlanMapLens })))
+const LazyPlanMapLens = lazyWithRetry(() => import('./PlanMapLens').then((m) => ({ default: m.PlanMapLens })))
 
 export interface PlanTabProps {
   trip: Trip

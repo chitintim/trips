@@ -71,7 +71,7 @@ export function ViewUserTripsModal({
       year: 'numeric',
     }
 
-    return `${start.toLocaleDateString('en-US', options)} - ${end.toLocaleDateString('en-US', options)}`
+    return `${start.toLocaleDateString('en-GB', options)} - ${end.toLocaleDateString('en-GB', options)}`
   }
 
   return (
@@ -100,12 +100,12 @@ export function ViewUserTripsModal({
             return (
               <div
                 key={trip.id}
-                className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors"
+                className="border border-[var(--border-subtle)] rounded-[var(--radius-md)] p-4 hover:bg-[var(--surface-sunken)] transition-colors"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
                     <div className="flex items-center gap-2 mb-2 flex-wrap">
-                      <h3 className="text-lg font-semibold text-gray-900">
+                      <h3 className="text-lg font-semibold text-[var(--text-primary)]">
                         {trip.name}
                       </h3>
                       <Badge variant={getTripStatusBadgeVariant(trip.status)}>
@@ -120,7 +120,7 @@ export function ViewUserTripsModal({
                         </Badge>
                       )}
                     </div>
-                  <div className="flex items-center gap-4 text-sm text-gray-600">
+                  <div className="flex items-center gap-4 text-sm text-[var(--text-secondary)]">
                     <span>📍 {trip.location}</span>
                     <span>📅 {formatDateRange(trip.start_date, trip.end_date)}</span>
                   </div>
@@ -139,7 +139,7 @@ export function ViewUserTripsModal({
         </div>
       )}
 
-      <div className="flex justify-end pt-4 mt-6 border-t border-gray-200">
+      <div className="flex justify-end pt-4 mt-6 border-t border-[var(--border-subtle)]">
         <Button variant="outline" onClick={onClose}>
           Close
         </Button>

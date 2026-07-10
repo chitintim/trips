@@ -14,9 +14,16 @@ export interface ChatStreamCallbacks {
   onError: (error: string) => void
 }
 
+/**
+ * Shared copy for the 429 rate-limit case -- every ChatQuotaError consumer
+ * (ChatSheet's notice banner, RetrospectivePanel's recap note, ...) should
+ * render this exact string rather than inventing its own variant.
+ */
+export const CHAT_QUOTA_MESSAGE = 'Daily AI quota reached — the assistant will be back tomorrow.'
+
 /** Thrown for the 429 rate-limit envelope (daily AI quota spent). */
 export class ChatQuotaError extends Error {
-  constructor(message = 'Daily AI quota reached — the assistant will be back tomorrow.') {
+  constructor(message = CHAT_QUOTA_MESSAGE) {
     super(message)
     this.name = 'ChatQuotaError'
   }

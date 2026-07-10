@@ -1,3 +1,4 @@
+import { EmptyState } from '../../../components/ui'
 import { formatMoney } from '../lib/formatMoney'
 import type { DayBreakdownEntry } from './personalAnalytics'
 
@@ -12,7 +13,12 @@ export interface DayByDayBarChartProps {
  * scales to the data, token colors.
  */
 export function DayByDayBarChart({ entries, currency }: DayByDayBarChartProps) {
-  if (entries.length === 0) return null
+  // Audit finding #10: returning null here left the enclosing
+  // "Spend per day" Card with a title and no content -- a dead-looking
+  // empty card rather than an explained empty state.
+  if (entries.length === 0) {
+    return <EmptyState compact icon="📊" title="No spending yet" description="Day-by-day spend shows up here once you've added expenses." />
+  }
 
   const maxValue = Math.max(1, ...entries.map((e) => e.myTotalMajor))
   const barWidth = 100 / entries.length

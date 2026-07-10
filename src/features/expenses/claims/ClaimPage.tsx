@@ -4,6 +4,7 @@ import { Card, Button, Badge, Spinner, EmptyState, useToast } from '../../../com
 import { useAuth } from '../../../hooks/useAuth'
 import { useSaveItemClaims } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
+import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { formatMoney } from '../lib/formatMoney'
 import { useClaimLink, useClaimRealtime } from './useClaimData'
 import { summarizeLineClaims, summarizeOverallProgress, maxClaimableQuantity, amountOwedForQuantity } from './claimMath'
@@ -20,7 +21,7 @@ import { ReceiptLightbox } from '../components/ReceiptLightbox'
 export function ClaimPage() {
   const { code } = useParams<{ code: string }>()
   const { user } = useAuth()
-  const { data: resolution, isLoading, error } = useClaimLink(code)
+  const { data: resolution, isLoading, error, refetch } = useClaimLink(code)
   const { data: participants = [] } = useParticipants(resolution?.tripId)
   const saveClaims = useSaveItemClaims()
   const { showToast } = useToast()
@@ -54,6 +55,32 @@ export function ClaimPage() {
     return map
   }, [resolution])
 
+  // Audit finding #4: localSelections diverging from the caller's last
+  // SAVED claims is exactly the "unsaved changes" state -- compare the two
+  // rather than tracking a separate dirty flag, so it's automatically right
+  // whether the divergence came from a tap here or a realtime update
+  // elsewhere. There's no in-app modal to intercept on this page (it's a
+  // standalone route, public or embedded), so the guard's main effect here
+  // is the beforeunload prompt on tab-close/refresh with claims pending.
+  const savedSelections = useMemo(() => {
+    const saved: Record<string, number> = {}
+    if (!resolution || !user) return saved
+    for (const claim of resolution.claims) {
+      if (claim.user_id === user.id) saved[claim.line_item_id] = claim.quantity_claimed
+    }
+    return saved
+  }, [resolution, user])
+
+  const isDirty = useMemo(() => {
+    const keys = new Set([...Object.keys(localSelections), ...Object.keys(savedSelections)])
+    for (const key of keys) {
+      if ((localSelections[key] ?? 0) !== (savedSelections[key] ?? 0)) return true
+    }
+    return false
+  }, [localSelections, savedSelections])
+
+  useUnsavedChangesGuard(isDirty)
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -63,10 +90,31 @@ export function ClaimPage() {
   }
 
   if (error || !resolution) {
+    // Audit finding #10: this used to render one "link not found" message
+    // for every failure, including transient network errors -- which
+    // silently offered no way to recover except a manual page reload. A
+    // Postgres/PostgREST "no rows" (PGRST116, from the .single() lookup by
+    // code) is genuinely a bad/expired link; anything else is a generic
+    // fetch failure and gets a retry instead.
+    const errorCode = (error as { code?: string } | null)?.code
+    const isNotFound = !error || errorCode === 'PGRST116'
     return (
       <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="max-w-md">
-          <EmptyState icon="🔗" title="Link not found" description="This claim link may have expired or is invalid." />
+          {isNotFound ? (
+            <EmptyState icon="🔗" title="Link not found" description="This claim link may have expired or is invalid." />
+          ) : (
+            <EmptyState
+              icon="⚠️"
+              title="Couldn't load this claim link"
+              description="Something went wrong. Check your connection and try again."
+              action={
+                <Button variant="primary" onClick={() => refetch()}>
+                  Try again
+                </Button>
+              }
+            />
+          )}
         </Card>
       </div>
     )
@@ -170,6 +218,7 @@ export function ClaimPage() {
                             type="button"
                             onClick={() => updateQuantity(li.id, Math.max(0, myQty - 1))}
                             disabled={myQty <= 0}
+                            aria-label={`Decrease claimed quantity for ${li.name_english || li.name_original}`}
                             className="w-8 h-8 flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border-default)] disabled:opacity-30"
                           >
                             −
@@ -179,6 +228,7 @@ export function ClaimPage() {
                             type="button"
                             onClick={() => updateQuantity(li.id, Math.min(maxQty, myQty + 1))}
                             disabled={myQty >= maxQty}
+                            aria-label={`Increase claimed quantity for ${li.name_english || li.name_original}`}
                             className="w-8 h-8 flex items-center justify-center rounded-[var(--radius-sm)] border border-[var(--border-default)] disabled:opacity-30"
                           >
                             +

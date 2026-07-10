@@ -140,6 +140,9 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
           </div>
           <button
             type="button"
+            role="switch"
+            aria-checked={values.confirmationEnabled}
+            aria-label="Enable confirmation tracking"
             onClick={() => updateField('confirmationEnabled', !values.confirmationEnabled)}
             className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-accent-500 ${
               values.confirmationEnabled ? 'bg-accent-600' : 'bg-[var(--surface-sunken)]'

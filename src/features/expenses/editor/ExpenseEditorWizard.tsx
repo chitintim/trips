@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Modal, Button, Stepper, ConfirmDiscardSheet, useToast } from '../../../components/ui'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Modal, Button, Stepper, Skeleton, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import {
   useCreateExpense,
@@ -332,8 +332,8 @@ export function ExpenseEditorWizard({
   const handleItemizedSave = async (params: {
     lineItems: Array<{ name_original: string; name_english: string | null; quantity: number; unit_price: number; subtotal: number; tax_amount: number; service_amount: number; line_discount_amount: number | null; total_amount: number }>
     totalMajor: number
-  }) => {
-    if (!user) return
+  }): Promise<boolean> => {
+    if (!user) return false
     setIsSaving(true)
     try {
       const lineItems = params.lineItems.map((li, i) => ({
@@ -393,8 +393,10 @@ export function ExpenseEditorWizard({
       }
       clearDraft()
       handleClosed()
+      return true
     } catch (err) {
       showToast({ type: 'error', message: 'Failed to save itemized expense', description: err instanceof Error ? err.message : undefined })
+      return false
     } finally {
       setIsSaving(false)
     }
@@ -423,9 +425,25 @@ export function ExpenseEditorWizard({
         <ItemizedEditorScreen
           initialDraft={itemizedSeed}
           noItemsParsedNotice={noItemsParsedNotice}
-          onBack={() => setShowItemized(false)}
+          // Audit #3b: Back used to bypass the unsaved-changes guard
+          // entirely (a direct setShowItemized(false)) -- route it through
+          // the same confirmClose the modal's own onClose uses, so
+          // in-progress itemized edits get the same discard confirmation.
+          onBack={() => confirmClose(() => setShowItemized(false))}
           onSave={handleItemizedSave}
           isSaving={isSaving}
+          // Audit #3a: bridges this screen's local draft edits up into the
+          // wizard's own isDirty so the guard above actually fires.
+          onDirty={() => setIsDirty(true)}
+          // Audit #3c: sessionStorage draft persistence, disabled in edit
+          // mode so re-editing an already-itemized expense always seeds
+          // from the saved line items (Form & Flow Standard point 2).
+          draftKey={`${draftKey}:itemized`}
+          draftEnabled={!isEditMode}
+          // Audit #3d: lets the user check the original receipt image
+          // against LineItemEditor's "ambiguous field" warnings without
+          // leaving this screen.
+          receiptPath={draft.receiptPath}
         />
         <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
       </Modal>
@@ -556,6 +574,7 @@ function ExistingReceiptRow({
   onRemove: () => void
 }) {
   const [thumbUrl, setThumbUrl] = useState<string | null>(null)
+  const replaceInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -569,26 +588,39 @@ function ExistingReceiptRow({
 
   return (
     <div className="flex items-center gap-3">
-      <button type="button" onClick={onView} className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden border border-[var(--border-subtle)]">
+      <button
+        type="button"
+        onClick={onView}
+        aria-label="View receipt"
+        className="shrink-0 rounded-[var(--radius-sm)] overflow-hidden border border-[var(--border-subtle)]"
+      >
         {thumbUrl ? (
           <img src={thumbUrl} alt="Receipt" className="w-12 h-12 object-cover" />
         ) : (
-          <div className="w-12 h-12 animate-pulse bg-[var(--surface-sunken)]" />
+          <Skeleton variant="card" width={48} height={48} className="rounded-none" />
         )}
       </button>
       <span className="text-sm text-[var(--text-secondary)] flex-1">Receipt attached</span>
-      <label className="text-sm font-medium text-accent-700 dark:text-accent-400 cursor-pointer press-scale">
+      {/* Hidden input triggered by a real, focusable <button> (not a <label>
+          wrapping a hidden input, which is unreachable by keyboard) --
+          mirrors QuickCaptureSheet's file-picker pattern (audit #9). */}
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0]
+          if (file) onReplace(file)
+        }}
+      />
+      <button
+        type="button"
+        onClick={() => replaceInputRef.current?.click()}
+        className="text-sm font-medium text-accent-700 dark:text-accent-400 press-scale"
+      >
         Replace
-        <input
-          type="file"
-          accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
-          className="hidden"
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) onReplace(file)
-          }}
-        />
-      </label>
+      </button>
       <Button variant="ghost" size="sm" onClick={onRemove}>
         Remove
       </Button>

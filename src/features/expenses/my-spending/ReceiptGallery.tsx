@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { EmptyState } from '../../../components/ui'
 import { getReceiptUrl } from '../../../lib/receiptUpload'
 import { ReceiptLightbox } from '../components/ReceiptLightbox'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -13,7 +14,7 @@ export function ReceiptGallery({ expenses }: ReceiptGalleryProps) {
   const [lightboxExpense, setLightboxExpense] = useState<ExpenseWithDetails | null>(null)
 
   if (withReceipts.length === 0) {
-    return <p className="text-sm text-[var(--text-muted)] py-4 text-center">No receipts uploaded yet</p>
+    return <EmptyState compact icon="🧾" title="No receipts uploaded yet" description="Receipts you attach to expenses show up here." />
   }
 
   return (

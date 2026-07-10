@@ -1,4 +1,5 @@
-import { Button, UserAvatar, useToast } from '../../../components/ui'
+import { useState } from 'react'
+import { Button, EmptyState, UserAvatar, useToast } from '../../../components/ui'
 import { useSaveItemClaims } from '../../../lib/queries/useExpenses'
 import { formatMoney } from '../lib/formatMoney'
 import { largestRemainderDistribute } from '../../../lib/money'
@@ -22,6 +23,7 @@ export interface ClaimMatrixProps {
 export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimMatrixProps) {
   const { showToast } = useToast()
   const saveClaims = useSaveItemClaims()
+  const [isSplitting, setIsSplitting] = useState(false)
 
   const taggedParticipants = expense.participant_ids
     ? participants.filter((p) => expense.participant_ids!.includes(p.user_id))
@@ -44,6 +46,7 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
       return
     }
 
+    setIsSplitting(true)
     try {
       const claimsByUser = new Map<string, Array<{ line_item_id: string; quantity_claimed: number; amount_owed: number }>>()
       for (const userId of nonClaimantIds) claimsByUser.set(userId, [])
@@ -79,7 +82,23 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
       showToast({ type: 'success', message: 'Remainder split among non-claimants' })
     } catch (err) {
       showToast({ type: 'error', message: 'Failed to split remainder', description: err instanceof Error ? err.message : undefined })
+    } finally {
+      setIsSplitting(false)
     }
+  }
+
+  // Audit finding #10: with zero tagged participants the table below would
+  // render a header-only, body-only-item-rows grid with no person columns
+  // at all -- reads as broken, not as "nothing to show here yet".
+  if (taggedParticipants.length === 0) {
+    return (
+      <EmptyState
+        compact
+        icon="🧾"
+        title="No one's tagged on this expense"
+        description="Tag participants on the expense itself before claims can be split or matched against them."
+      />
+    )
   }
 
   return (
@@ -136,7 +155,13 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
         </p>
       </div>
 
-      <Button variant="secondary" size="sm" onClick={handleSplitRemainder} disabled={nonClaimantIds.length === 0}>
+      <Button
+        variant="secondary"
+        size="sm"
+        onClick={handleSplitRemainder}
+        disabled={nonClaimantIds.length === 0 || isSplitting}
+        isLoading={isSplitting}
+      >
         Split remainder equally among non-claimants
       </Button>
 

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Button, Card, SegmentedControl, Skeleton } from '../../../components/ui'
+import { Button, Card, EmptyState, SegmentedControl, Skeleton } from '../../../components/ui'
+import { ErrorState } from '../../../components/ui/illustrations'
 import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
 import { useAuth } from '../../../hooks/useAuth'
 import { BlockersBoard } from './BlockersBoard'
@@ -24,8 +25,13 @@ type ConsoleView = 'blockers' | 'bookings' | 'activity'
  */
 export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
   const { user } = useAuth()
-  const { data: trip, isLoading: tripLoading } = useTrip(tripId)
-  const { data: participants, isLoading: participantsLoading } = useParticipants(tripId)
+  const { data: trip, isLoading: tripLoading, isError: tripError, refetch: refetchTrip } = useTrip(tripId)
+  const {
+    data: participants,
+    isLoading: participantsLoading,
+    isError: participantsError,
+    refetch: refetchParticipants,
+  } = useParticipants(tripId)
   const [view, setView] = useState<ConsoleView>('blockers')
   const [chaseOpen, setChaseOpen] = useState(false)
 
@@ -39,7 +45,26 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
     )
   }
 
-  if (!trip) return null
+  if (tripError || participantsError || !trip) {
+    return (
+      <EmptyState
+        icon={<ErrorState className="w-20 h-20 text-danger-500" />}
+        title="Couldn't load the organizer console"
+        description="Something went wrong fetching this trip. Check your connection and try again."
+        action={
+          <Button
+            variant="primary"
+            onClick={() => {
+              refetchTrip()
+              refetchParticipants()
+            }}
+          >
+            Try again
+          </Button>
+        }
+      />
+    )
+  }
 
   const me = participants?.find((p) => p.user_id === user?.id)
   const isOrganizer = me?.role === 'organizer' || trip.created_by === user?.id

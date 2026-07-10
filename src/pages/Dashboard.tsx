@@ -20,9 +20,8 @@ import {
   useToast,
 } from '../components/ui'
 import { ProfileModal } from '../components/ProfileModal'
-import { CreateTripModal } from '../components/CreateTripModal'
 import { ViewUserTripsModal } from '../components/ViewUserTripsModal'
-import { MemberDashboard } from '../features/dashboard'
+import { MemberDashboard, CreateTripWizard } from '../features/dashboard'
 import { useTrips, useCurrentUserRow, type TripWithCount } from '../lib/queries/useTrip'
 import { useInvitations, useCreateInvitation, useDeleteInvitation } from '../lib/queries/useInvitations'
 import { queryKeys } from '../lib/queries/queryKeys'
@@ -43,27 +42,29 @@ export function Dashboard() {
   const { user, signOut } = useAuth()
   const queryClient = useQueryClient()
   const scrollDirection = useScrollDirection()
+  const { showToast } = useToast()
   const [activeTab, setActiveTab] = useState<AdminTab>('trips')
   const [signingOut, setSigningOut] = useState(false)
   const [profileModalOpen, setProfileModalOpen] = useState(false)
+  const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false)
 
   const { data: currentUser, isLoading } = useCurrentUserRow(user?.id)
   const isAdmin = currentUser?.role === 'admin'
 
   const handleSignOut = async () => {
-    if (!window.confirm('Are you sure you want to sign out?')) return
+    setSignOutConfirmOpen(false)
     try {
       setSigningOut(true)
       const { error } = await signOut()
       if (error) {
-        alert(`Sign out failed: ${error.message}`)
+        showToast({ type: 'error', message: 'Sign out failed', description: error.message })
         setSigningOut(false)
         return
       }
       // Full reload clears state; window.location works best on mobile Safari.
       window.location.href = window.location.origin + '/trips/login'
     } catch (err) {
-      alert(`Unexpected error: ${(err as Error)?.message || 'Please try again'}`)
+      showToast({ type: 'error', message: 'Unexpected error', description: (err as Error)?.message || 'Please try again' })
       setSigningOut(false)
     }
   }
@@ -108,7 +109,7 @@ export function Dashboard() {
                   <span className="hidden sm:inline">{currentUser.full_name || user?.email}</span>
                 </button>
               )}
-              <Button variant="secondary" size="sm" onClick={handleSignOut} isLoading={signingOut}>
+              <Button variant="secondary" size="sm" onClick={() => setSignOutConfirmOpen(true)} isLoading={signingOut}>
                 Sign out
               </Button>
             </div>
@@ -151,6 +152,20 @@ export function Dashboard() {
           onUpdate={() => queryClient.invalidateQueries({ queryKey: queryKeys.currentUser(user?.id) })}
         />
       )}
+
+      <Modal isOpen={signOutConfirmOpen} onClose={() => setSignOutConfirmOpen(false)} size="sm" title="Sign out?">
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--text-secondary)]">You'll need to sign in again to get back to your trips.</p>
+          <div className="flex justify-end gap-3">
+            <Button variant="ghost" onClick={() => setSignOutConfirmOpen(false)} disabled={signingOut}>
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={handleSignOut} isLoading={signingOut}>
+              Sign out
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -176,7 +191,7 @@ function bucketAndSortTrips<T extends Trip>(trips: T[]): { ongoing: T[]; upcomin
 }
 
 function formatDate(date: string): string {
-  return new Date(date).toLocaleDateString()
+  return new Date(date).toLocaleDateString('en-GB')
 }
 
 // ---------------------------------------------------------------------------
@@ -304,7 +319,7 @@ function AdminTripsTab() {
         </Card>
       )}
 
-      <CreateTripModal
+      <CreateTripWizard
         isOpen={createModalOpen}
         onClose={() => {
           setCreateModalOpen(false)
@@ -462,6 +477,7 @@ function AdminInvitationsTab() {
   const deleteInvitation = useDeleteInvitation()
   const [createOpen, setCreateOpen] = useState(false)
   const [createKey, setCreateKey] = useState(0)
+  const [pendingDelete, setPendingDelete] = useState<Invitation | null>(null)
 
   const counts = useMemo(() => {
     const c = { active: 0, pending_verification: 0, completed: 0, expired: 0 }
@@ -478,16 +494,12 @@ function AdminInvitationsTab() {
     }
   }
 
-  const handleDelete = async (invitation: Invitation) => {
-    const status = invitationStatus(invitation)
-    const confirmMessage =
-      status === 'active'
-        ? `Delete ACTIVE invitation "${invitation.code}"? It can still be used to sign up — once deleted, the code stops working.`
-        : `Delete ${status.replace(/_/g, ' ')} invitation "${invitation.code}"?`
-    if (!window.confirm(confirmMessage)) return
+  const handleDelete = async () => {
+    if (!pendingDelete) return
     try {
-      await deleteInvitation.mutateAsync(invitation.id)
+      await deleteInvitation.mutateAsync(pendingDelete.id)
       showToast({ type: 'success', message: 'Invitation deleted' })
+      setPendingDelete(null)
     } catch (err) {
       showToast({ type: 'error', message: 'Could not delete invitation', description: (err as Error).message })
     }
@@ -576,7 +588,7 @@ function AdminInvitationsTab() {
                           <Button variant="ghost" size="sm" onClick={() => copyLink(invitation.code)}>
                             Copy link
                           </Button>
-                          <Button variant="ghost" size="sm" className="text-danger-600" onClick={() => handleDelete(invitation)}>
+                          <Button variant="ghost" size="sm" className="text-danger-600" onClick={() => setPendingDelete(invitation)}>
                             Delete
                           </Button>
                         </div>
@@ -591,6 +603,26 @@ function AdminInvitationsTab() {
       )}
 
       <CreateInvitationSheet key={createKey} isOpen={createOpen} onClose={() => setCreateOpen(false)} trips={trips ?? []} />
+
+      {pendingDelete && (
+        <Modal isOpen onClose={() => setPendingDelete(null)} size="sm" title="Delete this invitation?">
+          <div className="space-y-4">
+            <p className="text-sm text-[var(--text-secondary)]">
+              {invitationStatus(pendingDelete) === 'active'
+                ? `"${pendingDelete.code}" is still active and can be used to sign up — once deleted, the code stops working.`
+                : `Delete ${invitationStatus(pendingDelete).replace(/_/g, ' ')} invitation "${pendingDelete.code}"? This can't be undone.`}
+            </p>
+            <div className="flex justify-end gap-3">
+              <Button variant="ghost" onClick={() => setPendingDelete(null)}>
+                Cancel
+              </Button>
+              <Button variant="danger" onClick={handleDelete} isLoading={deleteInvitation.isPending}>
+                Delete invitation
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   )
 }
@@ -686,7 +718,7 @@ function CreateInvitationSheet({ isOpen, onClose, trips }: { isOpen: boolean; on
             />
             <Input
               label="Expiry date"
-              value={new Date(Date.now() + parseInt(values.expiresInDays, 10) * 86400000).toLocaleDateString()}
+              value={new Date(Date.now() + parseInt(values.expiresInDays, 10) * 86400000).toLocaleDateString('en-GB')}
               disabled
             />
           </div>

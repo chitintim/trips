@@ -48,10 +48,10 @@ describe('formatRelativeTime', () => {
   })
 
   it('falls back to a date for a week or older', () => {
-    expect(formatRelativeTime('2026-06-01T12:00:00Z', now)).toBe('Jun 1')
+    expect(formatRelativeTime('2026-06-01T12:00:00Z', now)).toBe('1 Jun')
   })
 
   it('includes the year when the note is from a different year', () => {
-    expect(formatRelativeTime('2025-06-01T12:00:00Z', now)).toBe('Jun 1, 2025')
+    expect(formatRelativeTime('2025-06-01T12:00:00Z', now)).toBe('1 Jun 2025')
   })
 })

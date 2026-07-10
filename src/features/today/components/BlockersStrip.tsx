@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Button, Card, Badge } from '../../../components/ui'
+import { Button, Card, Badge, EmptyState } from '../../../components/ui'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useSections, useVotes } from '../../../lib/queries/usePlanning'
 import { useExpenses } from '../../../lib/queries/useExpenses'
@@ -51,7 +51,15 @@ export function BlockersStrip({ trip, onOpenConsole }: BlockersStripProps) {
     return { top: flattened.slice(0, 3), totalCount: board.totalCount }
   }, [participants, sections, votes, expensesData, settlements, bookings, notifications, trip.chase_settings, trip.confirmation_enabled])
 
-  if (totalCount === 0) return null
+  if (totalCount === 0) {
+    return (
+      <Card variant="flat">
+        <Card.Content className="py-3">
+          <EmptyState compact icon="✅" title="Nothing needs your attention" description="The board is clear — no blockers right now." />
+        </Card.Content>
+      </Card>
+    )
+  }
 
   return (
     <Card variant="flat">

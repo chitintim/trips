@@ -97,7 +97,6 @@ export { InstallPrompt } from './InstallPrompt'
 // FEATURE COMPONENTS
 // ============================================================================
 
-export { CreateTripModal } from './CreateTripModal'
 export { ProfileModal } from './ProfileModal'
 export { AddParticipantModal } from './AddParticipantModal'
 export { ViewUserTripsModal } from './ViewUserTripsModal'

@@ -1,6 +1,7 @@
 import { Component, ErrorInfo, ReactNode } from 'react'
 import { Button, Card, EmptyState } from './ui'
 import { ErrorState } from './ui/illustrations'
+import { reportError } from '../lib/reportError'
 
 export interface ErrorBoundaryProps {
   /**
@@ -16,9 +17,10 @@ export interface ErrorBoundaryProps {
   label?: string
 
   /**
-   * Optional extra reporting hook (e.g. wiring to Sentry later) — called
-   * with the error and component stack. Intentionally not implemented
-   * here; Sentry itself is out of scope per the workstream brief.
+   * Optional extra local handler, called alongside the automatic
+   * reportError('error-boundary', ...) telemetry in componentDidCatch
+   * below -- e.g. if a tab wants to also reset some local state. Every
+   * caught error is reported regardless of whether this is passed.
    */
   onError?: (error: Error, info: ErrorInfo) => void
 }
@@ -60,6 +62,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error('ErrorBoundary caught an error:', error, info)
+    reportError(error, 'error-boundary')
     this.props.onError?.(error, info)
   }
 

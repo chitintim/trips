@@ -3,7 +3,8 @@
  * auto-shows this panel for `trip_completed` trips — `showWhen` encodes
  * the rule so the shell doesn't hardcode it.
  */
-import { lazy, type ComponentType } from 'react'
+import type { ComponentType } from 'react'
+import { lazyWithRetry } from '../../lib/lazyWithRetry'
 import type { RetrospectivePanelProps } from './components/RetrospectivePanel'
 import type { Trip } from '../../types'
 
@@ -29,5 +30,5 @@ export const retroConfig: {
   label: 'Recap',
   icon: '🎉',
   showWhen: (trip) => trip.status === 'trip_completed',
-  Component: lazy(() => import('./components/RetrospectivePanel').then((m) => ({ default: m.RetrospectivePanel }))),
+  Component: lazyWithRetry(() => import('./components/RetrospectivePanel').then((m) => ({ default: m.RetrospectivePanel }))),
 }

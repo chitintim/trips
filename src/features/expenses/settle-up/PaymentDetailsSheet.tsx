@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal, Button, Input, TextArea, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { supabase } from '../../../lib/supabase'
@@ -23,6 +23,25 @@ export function PaymentDetailsSheet({ isOpen, onClose, currentPaymentDetails }: 
   const [rails, setRails] = useState<PaymentRail[]>(initial.current.rails)
   const [notes, setNotes] = useState(initial.current.notes ?? '')
   const [isSaving, setIsSaving] = useState(false)
+
+  // Audit finding #5: this sheet is mounted unconditionally by SettleUpTab
+  // (no key remount), so the useRef/useState initializers above only ever
+  // run once, on the FIRST mount -- reopening after a discard showed the
+  // discarded edit again (state never reset), and reopening after a save
+  // computed isDirty against the pre-save baseline (initial.current never
+  // advanced). Re-seed both the editable state and the dirty-comparison
+  // baseline every time isOpen transitions false -> true, reading whatever
+  // currentPaymentDetails is at that moment.
+  const wasOpen = useRef(isOpen)
+  useEffect(() => {
+    if (isOpen && !wasOpen.current) {
+      const seeded = parsePaymentDetails(currentPaymentDetails)
+      initial.current = seeded
+      setRails(seeded.rails)
+      setNotes(seeded.notes ?? '')
+    }
+    wasOpen.current = isOpen
+  }, [isOpen, currentPaymentDetails])
 
   const isDirty = JSON.stringify(rails) !== JSON.stringify(initial.current.rails) || notes !== (initial.current.notes ?? '')
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)

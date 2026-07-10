@@ -33,7 +33,16 @@ function BarRow({ label, value, max, color, currency }: { label: string; value: 
   return (
     <div className="flex items-center gap-2">
       <span className="text-[10px] text-[var(--text-muted)] w-9 shrink-0">{label}</span>
-      <svg viewBox="0 0 100 8" width="100%" height="10" preserveAspectRatio="none" className="flex-1">
+      {/* Audit finding #10: siblings (DayByDayBarChart/CategoryDonutChart) both label their SVGs -- these per-row bars didn't. */}
+      <svg
+        viewBox="0 0 100 8"
+        width="100%"
+        height="10"
+        preserveAspectRatio="none"
+        className="flex-1"
+        role="img"
+        aria-label={`${label}: ${formatMoney(value, currency)}`}
+      >
         <rect x="0" y="0" width="100" height="8" rx="2" fill="var(--surface-sunken, #f3f4f6)" />
         <rect x="0" y="0" width={percent} height="8" rx="2" fill={color} />
       </svg>

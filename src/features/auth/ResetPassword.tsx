@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/supabase'
 import { Button, Input, Card, Spinner } from '../../components/ui'
 import { AuthLayout } from './AuthLayout'
+import { validatePassword } from './lib/validation'
 
 /**
  * Rebuilt from scratch (not ported) — the legacy ResetPassword had a
@@ -16,6 +17,8 @@ export function ResetPassword() {
   const navigate = useNavigate()
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [confirmPasswordError, setConfirmPasswordError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -70,14 +73,15 @@ export function ResetPassword() {
     e.preventDefault()
     setError(null)
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match')
-      return
-    }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters')
-      return
-    }
+    const passwordErr = validatePassword(password, 'New password')
+    const confirmErr = !confirmPassword
+      ? 'Please confirm your password'
+      : confirmPassword !== password
+        ? 'Passwords do not match'
+        : null
+    setPasswordError(passwordErr)
+    setConfirmPasswordError(confirmErr)
+    if (passwordErr || confirmErr) return
 
     setLoading(true)
     try {
@@ -127,7 +131,7 @@ export function ResetPassword() {
     <AuthLayout title="Set a new password">
       <Card>
         <Card.Content>
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form onSubmit={handleSubmit} className="space-y-4" noValidate>
             {error && (
               <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
                 {error}
@@ -137,21 +141,31 @@ export function ResetPassword() {
               label="New password"
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => {
+                setPassword(e.target.value)
+                setPasswordError(null)
+                // Re-validate confirm too, since it's checked against this value.
+                if (confirmPasswordError) setConfirmPasswordError(null)
+              }}
               placeholder="••••••••"
               required
               disabled={loading}
-              helperText="Minimum 6 characters"
+              helperText={passwordError ? undefined : 'Minimum 6 characters'}
+              error={passwordError ?? undefined}
               autoFocus
             />
             <Input
               label="Confirm password"
               type="password"
               value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value)
+                setConfirmPasswordError(null)
+              }}
               placeholder="••••••••"
               required
               disabled={loading}
+              error={confirmPasswordError ?? undefined}
             />
             <Button type="submit" variant="primary" fullWidth isLoading={loading}>
               Update password

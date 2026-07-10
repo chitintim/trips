@@ -4,6 +4,7 @@ import { useAuth } from '../../hooks/useAuth'
 import { Button, Input, Card, SegmentedControl } from '../../components/ui'
 import { AuthLayout } from './AuthLayout'
 import { resolvePostLoginDestination } from './lib/postLoginRedirect'
+import { validateEmail, validateRequired } from './lib/validation'
 
 type Mode = 'password' | 'otp'
 type OtpStep = 'request' | 'verify'
@@ -18,6 +19,8 @@ export function Login() {
   // Password tab
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -25,6 +28,7 @@ export function Login() {
   const [otpStep, setOtpStep] = useState<OtpStep>('request')
   const [otpEmail, setOtpEmail] = useState('')
   const [otpCode, setOtpCode] = useState('')
+  const [otpEmailError, setOtpEmailError] = useState<string | null>(null)
   const [otpError, setOtpError] = useState<string | null>(null)
   const [otpLoading, setOtpLoading] = useState(false)
 
@@ -37,6 +41,13 @@ export function Login() {
   const handlePasswordSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError(null)
+
+    const emailErr = validateEmail(email)
+    const passwordErr = validateRequired(password, 'Password')
+    setEmailError(emailErr)
+    setPasswordError(passwordErr)
+    if (emailErr || passwordErr) return
+
     setLoading(true)
     try {
       const { error } = await signIn({ email, password })
@@ -55,6 +66,11 @@ export function Login() {
   const handleRequestOtp = async (e: FormEvent) => {
     e.preventDefault()
     setOtpError(null)
+
+    const emailErr = validateEmail(otpEmail)
+    setOtpEmailError(emailErr)
+    if (emailErr) return
+
     setOtpLoading(true)
     try {
       const { error } = await requestEmailOtp(otpEmail)
@@ -99,6 +115,9 @@ export function Login() {
               setMode(v)
               setError(null)
               setOtpError(null)
+              setEmailError(null)
+              setPasswordError(null)
+              setOtpEmailError(null)
             }}
             options={[
               { value: 'password', label: 'Password' },
@@ -107,7 +126,7 @@ export function Login() {
           />
 
           {mode === 'password' && (
-            <form onSubmit={handlePasswordSubmit} className="space-y-4">
+            <form onSubmit={handlePasswordSubmit} className="space-y-4" noValidate>
               {error && (
                 <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
                   {error}
@@ -117,20 +136,28 @@ export function Login() {
                 label="Email"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value)
+                  setEmailError(null)
+                }}
                 placeholder="you@example.com"
                 required
                 disabled={loading}
                 autoFocus
+                error={emailError ?? undefined}
               />
               <Input
                 label="Password"
                 type="password"
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  setPasswordError(null)
+                }}
                 placeholder="••••••••"
                 required
                 disabled={loading}
+                error={passwordError ?? undefined}
               />
               <div className="text-right">
                 <Link to="/forgot-password" className="text-sm text-accent-700 hover:underline">
@@ -144,7 +171,7 @@ export function Login() {
           )}
 
           {mode === 'otp' && otpStep === 'request' && (
-            <form onSubmit={handleRequestOtp} className="space-y-4">
+            <form onSubmit={handleRequestOtp} className="space-y-4" noValidate>
               {otpError && (
                 <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
                   {otpError}
@@ -157,10 +184,14 @@ export function Login() {
                 label="Email"
                 type="email"
                 value={otpEmail}
-                onChange={(e) => setOtpEmail(e.target.value)}
+                onChange={(e) => {
+                  setOtpEmail(e.target.value)
+                  setOtpEmailError(null)
+                }}
                 placeholder="you@example.com"
                 required
                 disabled={otpLoading}
+                error={otpEmailError ?? undefined}
               />
               <Button type="submit" variant="primary" fullWidth isLoading={otpLoading}>
                 Send code
@@ -169,7 +200,7 @@ export function Login() {
           )}
 
           {mode === 'otp' && otpStep === 'verify' && (
-            <form onSubmit={handleVerifyOtp} className="space-y-4">
+            <form onSubmit={handleVerifyOtp} className="space-y-4" noValidate>
               {otpError && (
                 <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
                   {otpError}

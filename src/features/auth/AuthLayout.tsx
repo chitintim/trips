@@ -17,7 +17,10 @@ export function AuthLayout({ title, subtitle, children }: AuthLayoutProps) {
     <div className="min-h-screen bg-[var(--surface-page)] flex flex-col items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-[var(--radius-lg)] bg-accent-600 text-2xl mb-4">
+          <div
+            className="inline-flex items-center justify-center w-14 h-14 rounded-[var(--radius-lg)] bg-accent-600 text-2xl mb-4"
+            aria-hidden="true"
+          >
             🧳
           </div>
           <h1 className="text-2xl font-semibold text-[var(--text-primary)]">{title}</h1>

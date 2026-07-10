@@ -1,7 +1,10 @@
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { callRpc } from '../../lib/callRpc'
-import { Button, Card, Spinner } from '../../components/ui'
+import { useAuth } from '../../hooks/useAuth'
+import { useCurrentUserRow } from '../../lib/queries'
+import { Button, Card, Skeleton } from '../../components/ui'
 import { JoinCover } from '../../components/ui/illustrations'
 import { getTripAccentStyle } from '../../components/layout/tripAccent'
 import { formatMoney } from '../decisions/lib/costImpact'
@@ -16,6 +19,13 @@ interface InvitationPreview {
   cost_currency: string | null
   confirmed_count: number
   organizer_first_name: string | null
+}
+
+interface ValidateInvitationResult {
+  invitation_id: string
+  is_valid: boolean
+  reason: string
+  trip_id: string | null
 }
 
 /**
@@ -53,10 +63,19 @@ function formatDateRange(startDate: string, endDate: string): string {
  * and the organizer's name — then hands off to /signup with the code
  * pre-filled. Invalid/used/expired codes get a friendly dead-end, never a
  * crash.
+ *
+ * Returning users (already authenticated, e.g. they signed in via the
+ * "Sign in first" link below and were carried back here by
+ * postLoginRedirect) skip signup entirely and get a one-tap join instead --
+ * see `handleJoinAsAuthenticated`.
  */
 export function JoinTrip() {
   const { code = '' } = useParams<{ code: string }>()
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const { data: profile } = useCurrentUserRow(user?.id)
+  const [joining, setJoining] = useState(false)
+  const [joinError, setJoinError] = useState<string | null>(null)
 
   const { data: preview, isLoading } = useQuery({
     queryKey: ['invitationPreview', code.toUpperCase()],
@@ -66,10 +85,69 @@ export function JoinTrip() {
     staleTime: 60_000,
   })
 
+  /**
+   * Same two RPCs Signup's finalizeAccount uses (validate → mark used →
+   * assign to trip), reused here for an already-authenticated user instead
+   * of a brand-new signup. Re-validates right before joining (rather than
+   * trusting the preview fetched on page load) since the code could have
+   * expired or been used by someone else in the meantime. All three calls
+   * go through callRpc per src/lib/callRpc.ts's comment -- never a
+   * hand-rolled supabase.rpc cast.
+   */
+  const handleJoinAsAuthenticated = async () => {
+    if (!user) return
+    setJoining(true)
+    setJoinError(null)
+    try {
+      const { data, error } = await callRpc<ValidateInvitationResult[]>('validate_invitation_code', {
+        p_code: code.toUpperCase(),
+      })
+      const result = Array.isArray(data) ? data[0] : data
+      if (error || !result?.is_valid || !result.invitation_id) {
+        setJoinError('This invitation is no longer valid. Ask your organizer for a fresh link.')
+        return
+      }
+
+      const { data: marked, error: markError } = await callRpc<boolean>('mark_invitation_used', {
+        p_invitation_id: result.invitation_id,
+        p_user_id: user.id,
+      })
+      if (markError || !marked) {
+        setJoinError('Something went wrong joining this trip. Please try again.')
+        return
+      }
+
+      if (result.trip_id) {
+        const { error: assignError } = await callRpc('assign_user_to_trip', {
+          p_invitation_id: result.invitation_id,
+          p_user_id: user.id,
+        })
+        if (assignError) {
+          setJoinError('Something went wrong joining this trip. Please try again.')
+          return
+        }
+      }
+
+      navigate(result.trip_id ? `/${result.trip_id}` : '/', { replace: true })
+    } catch {
+      setJoinError('An unexpected error occurred')
+    } finally {
+      setJoining(false)
+    }
+  }
+
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-[var(--surface-page)] flex items-center justify-center">
-        <Spinner size="lg" label="Checking your invitation…" />
+      <div className="min-h-screen bg-[var(--surface-page)] flex items-center justify-center p-4">
+        <div className="max-w-md w-full space-y-4">
+          <Skeleton variant="card" height={168} />
+          <Card>
+            <Card.Content className="space-y-3">
+              <Skeleton variant="text" lines={2} />
+              <Skeleton variant="card" height={44} />
+            </Card.Content>
+          </Card>
+        </div>
       </div>
     )
   }
@@ -139,16 +217,35 @@ export function JoinTrip() {
                 </span>
               )}
             </div>
-            <Button fullWidth onClick={() => navigate(`/signup?code=${encodeURIComponent(code.toUpperCase())}`)}>
-              Join this trip
-            </Button>
-            <p className="text-center text-xs text-[var(--text-muted)]">
-              Already have an account?{' '}
-              <Link to="/login" className="text-accent-700 hover:underline">
-                Sign in
-              </Link>{' '}
-              first, then open this link again.
-            </p>
+
+            {joinError && (
+              <div role="alert" className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
+                {joinError}
+              </div>
+            )}
+
+            {user ? (
+              <Button fullWidth onClick={handleJoinAsAuthenticated} isLoading={joining}>
+                Join this trip{profile?.first_name ? ` as ${profile.first_name}` : ''}
+              </Button>
+            ) : (
+              <>
+                <Button fullWidth onClick={() => navigate(`/signup?code=${encodeURIComponent(code.toUpperCase())}`)}>
+                  Join this trip
+                </Button>
+                <p className="text-center text-xs text-[var(--text-muted)]">
+                  Already have an account?{' '}
+                  <Link
+                    to="/login"
+                    state={{ from: { pathname: `/join/${code.toUpperCase()}` } }}
+                    className="text-accent-700 hover:underline"
+                  >
+                    Sign in
+                  </Link>{' '}
+                  to join with your existing account.
+                </p>
+              </>
+            )}
           </Card.Content>
         </Card>
       </div>

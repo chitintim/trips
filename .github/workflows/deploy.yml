@@ -16,8 +16,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Same fast, deterministic gates as ci.yml's `checks` job (typecheck,
+  # lint, z-index layering, unit tests, contract-drift, build), so the
+  # commit that reaches production has actually been checked. Playwright
+  # E2E smoke is deliberately NOT run here: it needs a browser install and
+  # is slower/less deterministic than the rest, and every commit that
+  # lands on master via the normal PR flow has already been through it in
+  # ci.yml before merge. Direct pushes to master (bypassing a PR) are the
+  # one case that skips Playwright at deploy time too — accepted trade-off
+  # for keeping deploy latency low; these gates are still a strict
+  # improvement over the previous "no checks at all" state.
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc -b
+      - name: Lint
+        run: npx eslint src --max-warnings 75
+      - name: z-index layering check
+        run: node scripts/check-zindex.mjs
+      - name: Unit tests
+        run: npm run test -- --run
+      - name: Contract drift check
+        run: node scripts/check-contract-drift.mjs
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: https://placeholder.supabase.co
+          VITE_SUPABASE_ANON_KEY: placeholder
+
   build:
     runs-on: ubuntu-latest
+    needs: checks
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,7 +61,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies

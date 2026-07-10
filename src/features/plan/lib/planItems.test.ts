@@ -5,6 +5,7 @@ import {
   getUndatedItems,
   groupUndatedBySection,
   getOpenVotables,
+  planItemEditTarget,
   type ComposePlanItemsInput,
 } from './planItems'
 import type { TimelineEvent } from '../../../types'
@@ -628,5 +629,20 @@ describe('getOpenVotables', () => {
     })
     const votables = getOpenVotables(items)
     expect(votables.map((v) => v.title)).toEqual(['Ramen spot', 'Chalet A', 'BA flight'])
+  })
+})
+
+describe('planItemEditTarget', () => {
+  it('routes event-backed items to the event editor for organizers', () => {
+    expect(planItemEditTarget({ idKind: 'event' }, true)).toBe('event')
+  })
+
+  it('routes option-backed items to the option editor for organizers (the item-1 fix: vote-shape options are now editable)', () => {
+    expect(planItemEditTarget({ idKind: 'option' }, true)).toBe('option')
+  })
+
+  it('never offers an edit affordance to non-organizers, regardless of item kind', () => {
+    expect(planItemEditTarget({ idKind: 'event' }, false)).toBeNull()
+    expect(planItemEditTarget({ idKind: 'option' }, false)).toBeNull()
   })
 })

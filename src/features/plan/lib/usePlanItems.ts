@@ -11,6 +11,10 @@ export interface UsePlanItemsResult {
   items: PlanItem[]
   unlinkedBookings: Booking[]
   isLoading: boolean
+  /** True when any of the five underlying queries failed (UPGRADE_MASTER_PLAN.md audit item 2: previously only isLoading was surfaced, so a network failure silently rendered as "nothing on the plan yet"). */
+  isError: boolean
+  /** Re-fires every underlying query — for a caller's "Retry" action on the error branch. */
+  refetch: () => void
 }
 
 /**
@@ -22,11 +26,17 @@ export interface UsePlanItemsResult {
  */
 export function usePlanItems(tripId: string | undefined): UsePlanItemsResult {
   const { user } = useAuth()
-  const { data: events, isLoading: eventsLoading } = useTimeline(tripId)
-  const { data: sections, isLoading: sectionsLoading } = useSections(tripId)
-  const { data: votes, isLoading: votesLoading } = useVotes(tripId)
-  const { data: bookings, isLoading: bookingsLoading } = useBookings(tripId)
-  const { data: participants, isLoading: participantsLoading } = useParticipants(tripId)
+  const eventsQuery = useTimeline(tripId)
+  const sectionsQuery = useSections(tripId)
+  const votesQuery = useVotes(tripId)
+  const bookingsQuery = useBookings(tripId)
+  const participantsQuery = useParticipants(tripId)
+
+  const { data: events, isLoading: eventsLoading, isError: eventsError } = eventsQuery
+  const { data: sections, isLoading: sectionsLoading, isError: sectionsError } = sectionsQuery
+  const { data: votes, isLoading: votesLoading, isError: votesError } = votesQuery
+  const { data: bookings, isLoading: bookingsLoading, isError: bookingsError } = bookingsQuery
+  const { data: participants, isLoading: participantsLoading, isError: participantsError } = participantsQuery
 
   const confirmedCount = useMemo(
     () => (participants || []).filter((p) => p.confirmation_status === 'confirmed').length,
@@ -50,5 +60,13 @@ export function usePlanItems(tripId: string | undefined): UsePlanItemsResult {
     items: result.items,
     unlinkedBookings: result.unlinkedBookings,
     isLoading: eventsLoading || sectionsLoading || votesLoading || bookingsLoading || participantsLoading,
+    isError: eventsError || sectionsError || votesError || bookingsError || participantsError,
+    refetch: () => {
+      eventsQuery.refetch()
+      sectionsQuery.refetch()
+      votesQuery.refetch()
+      bookingsQuery.refetch()
+      participantsQuery.refetch()
+    },
   }
 }

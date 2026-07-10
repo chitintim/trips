@@ -23,7 +23,7 @@ interface MatrixViewProps {
 export function MatrixView({ tripId, options, currency = 'GBP' }: MatrixViewProps) {
   const { user } = useAuth()
   const toggleSelection = useToggleSelection(tripId)
-  const [activeCell, setActiveCell] = useState<{ option: OptionWithSelections; anchor: DOMRect } | null>(null)
+  const [activeCell, setActiveCell] = useState<{ option: OptionWithSelections; anchor: DOMRect; triggerEl: HTMLElement } | null>(null)
 
   const { rows, columns } = getMatrixAxes(options)
   const cellMap = new Map<string, OptionWithSelections>()
@@ -88,7 +88,13 @@ export function MatrixView({ tripId, options, currency = 'GBP' }: MatrixViewProp
                   <td key={col} className="p-1 border-t border-[var(--border-subtle)]">
                     <button
                       type="button"
-                      onClick={(e) => setActiveCell({ option, anchor: (e.target as HTMLElement).getBoundingClientRect() })}
+                      onClick={(e) =>
+                        setActiveCell({
+                          option,
+                          anchor: e.currentTarget.getBoundingClientRect(),
+                          triggerEl: e.currentTarget,
+                        })
+                      }
                       className={`w-full p-2 rounded-[var(--radius-md)] text-center transition-all ${
                         isSelected
                           ? 'bg-accent-50 border-2 border-accent-500 shadow-sm'
@@ -152,6 +158,7 @@ export function MatrixView({ tripId, options, currency = 'GBP' }: MatrixViewProp
         <CellPopover
           option={activeCell.option}
           anchor={activeCell.anchor}
+          triggerEl={activeCell.triggerEl}
           onClose={() => setActiveCell(null)}
           onSelect={() => handleSelect(activeCell.option)}
           isSelected={activeCell.option.id === mySelectedOptionId}
@@ -165,6 +172,7 @@ export function MatrixView({ tripId, options, currency = 'GBP' }: MatrixViewProp
 function CellPopover({
   option,
   anchor,
+  triggerEl,
   onClose,
   onSelect,
   isSelected,
@@ -172,6 +180,8 @@ function CellPopover({
 }: {
   option: OptionWithSelections
   anchor: DOMRect
+  /** The matrix cell button that opened this popover — focus returns here on close (a11y, UPGRADE_MASTER_PLAN.md audit item 6). */
+  triggerEl: HTMLElement
   onClose: () => void
   onSelect: () => void
   isSelected: boolean
@@ -187,13 +197,33 @@ function CellPopover({
     return () => document.removeEventListener('mousedown', handleClick)
   }, [onClose])
 
+  // Escape-to-close + focus trap/restore (this popover previously had
+  // neither): move focus into the popover on open so keyboard users land
+  // somewhere sensible, close on Escape, and always hand focus back to the
+  // triggering cell on unmount — whether closed via Escape, the outside-
+  // click handler above, or a successful select.
+  useEffect(() => {
+    ref.current?.focus()
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      triggerEl.focus()
+    }
+  }, [onClose, triggerEl])
+
   const top = Math.min(anchor.bottom + 8, window.innerHeight - 220)
   const left = Math.min(anchor.left, window.innerWidth - 296)
 
   return createPortal(
     <div
       ref={ref}
-      className="fixed z-popover bg-[var(--surface-raised)] rounded-[var(--radius-md)] shadow-xl border border-[var(--border-default)] p-4 w-72"
+      role="dialog"
+      aria-label={`${option.title} details`}
+      tabIndex={-1}
+      className="fixed z-popover bg-[var(--surface-raised)] rounded-[var(--radius-md)] shadow-xl border border-[var(--border-default)] p-4 w-72 focus:outline-none"
       style={{ top, left }}
     >
       <h4 className="font-semibold text-[var(--text-primary)] text-sm mb-2">{option.title}</h4>

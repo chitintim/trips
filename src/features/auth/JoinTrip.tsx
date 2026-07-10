@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { supabase } from '../../lib/supabase'
+import { callRpc } from '../../lib/callRpc'
 import { Button, Card, Spinner } from '../../components/ui'
 import { JoinCover } from '../../components/ui/illustrations'
 import { getTripAccentStyle } from '../../components/layout/tripAccent'
@@ -22,32 +22,21 @@ interface InvitationPreview {
  * `get_invitation_preview` is a post-codegen RPC (see
  * supabase/migrations/20260707130000_invitation_preview.sql) — the generated
  * Database types don't know it yet, hence the narrow local typing here.
- * Returns zero rows for invalid/used/expired codes.
+ * Returns zero rows for invalid/used/expired codes. Routed through callRpc
+ * (src/lib/callRpc.ts), which guarantees this never throws (a thrown
+ * client-side exception used to be swallowed by useQuery into an
+ * indistinguishable "invalid" dead end with zero trace, which is exactly
+ * what made the 2026-07-10 incident hard to diagnose — callRpc now reports
+ * every failure via reportError instead) and always calls
+ * `supabase.rpc(...)` as a direct method call, so the detached-`this`
+ * footgun that bit this exact call site on 2026-07-10 is structurally
+ * avoided rather than relying on a comment.
  */
 async function fetchInvitationPreview(code: string): Promise<InvitationPreview | null> {
-  // NOTE: must stay bound to `supabase` — supabase-js's SupabaseClient.rpc()
-  // is `return this.rest.rpc(...)` internally, so extracting it as a bare
-  // function reference (without .bind) makes `this` undefined at call time
-  // and throws "Cannot read properties of undefined (reading 'rest')"
-  // before any network request is even made. Bit us live on 2026-07-10 for
-  // every /join/:code invitation link.
-  const rpc = supabase.rpc.bind(supabase) as unknown as (
-    fn: string,
-    args: Record<string, unknown>
-  ) => PromiseLike<{ data: unknown; error: { message: string } | null }>
-  try {
-    const { data, error } = await rpc('get_invitation_preview', { p_code: code })
-    if (error) return null // treat any failure as "not a valid invitation"
-    const rows = Array.isArray(data) ? (data as InvitationPreview[]) : []
-    return rows[0] ?? null
-  } catch (err) {
-    // A thrown client-side exception (as opposed to a returned {error}) used
-    // to be swallowed by useQuery into an indistinguishable "invalid" dead
-    // end with zero network trace, which is exactly what made the 2026-07-10
-    // incident hard to diagnose. Log it so it's at least visible in console.
-    console.error('fetchInvitationPreview threw:', err)
-    return null
-  }
+  const { data, error } = await callRpc<InvitationPreview[]>('get_invitation_preview', { p_code: code })
+  if (error) return null // treat any failure as "not a valid invitation"
+  const rows = Array.isArray(data) ? data : []
+  return rows[0] ?? null
 }
 
 function formatDateRange(startDate: string, endDate: string): string {

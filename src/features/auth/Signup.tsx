@@ -2,6 +2,7 @@ import { useState, FormEvent, useEffect } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { supabase } from '../../lib/supabase'
+import { callRpc } from '../../lib/callRpc'
 import { Button, Input, Card, SegmentedControl, Stepper, Avatar } from '../../components/ui'
 import { AvatarBuilder } from '../../components/AvatarBuilder'
 import { AvatarIconPicker } from '../../components/AvatarIconPicker'
@@ -23,30 +24,18 @@ const DEFAULT_ICON: { icon: AvatarIconName; bgColor: string } = { icon: 'mountai
 /**
  * `log_invitation_attempt` is a post-codegen RPC (see
  * supabase/migrations/20260710150000_log_invitation_attempt.sql) — the
- * generated Database types don't know it yet, hence the local typing here
- * (mirrors fetchInvitationPreview in JoinTrip.tsx). invitation_attempts is
- * a write-only audit log; a logging failure must never block or throw into
- * the signup flow, so a failed call is only console.error'd. Must call via
- * `.bind(supabase)` — supabase-js's `rpc` reads `this.rest` internally, and
- * detaching the method from its receiver (as a plain `const rpc = supabase.rpc`)
- * throws "Cannot read properties of undefined (reading 'rest')" before any
- * request is sent, which the try/catch below exists specifically to survive.
+ * generated Database types don't know it yet. invitation_attempts is a
+ * write-only audit log; a logging failure must never block or throw into
+ * the signup flow, which callRpc guarantees (it never throws — see
+ * src/lib/callRpc.ts). Post-codegen RPCs go through callRpc; don't
+ * hand-roll a bind+cast here.
  */
 async function logInvitationAttempt(code: string, success: boolean): Promise<void> {
-  try {
-    const rpc = supabase.rpc.bind(supabase) as unknown as (
-      fn: string,
-      args: Record<string, unknown>
-    ) => PromiseLike<{ data: unknown; error: { message: string } | null }>
-    const { error } = await rpc('log_invitation_attempt', {
-      p_code: code,
-      p_success: success,
-      p_user_agent: navigator.userAgent,
-    })
-    if (error) console.error('Failed to log invitation attempt:', error)
-  } catch (err) {
-    console.error('Failed to log invitation attempt:', err)
-  }
+  await callRpc('log_invitation_attempt', {
+    p_code: code,
+    p_success: success,
+    p_user_agent: navigator.userAgent,
+  })
 }
 
 const SIGNUP_DISABLED_PATTERN = /signups?\s*(are\s*)?not\s*allowed/i

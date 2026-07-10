@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Modal, Button, Badge, UserAvatar, ConfirmationStatusBadge, useToast } from '../../../components/ui'
 import { useSetParticipantActive } from '../../../lib/queries/useConfirmations'
 import { useExpenses } from '../../../lib/queries/useExpenses'
+import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { computeBalances } from '../../expenses/lib/balances'
 import { formatMoneyMinor } from '../../expenses/lib/formatMoney'
@@ -44,6 +45,9 @@ export function ManageParticipantSheet({
   // fetched lazily here rather than in PeopleTab -- this sheet only mounts
   // while an organizer/admin has actually opened it (see PeopleTab.tsx).
   const { data: expensesData } = useExpenses(tripId)
+  // Folded cross-trip carryovers count toward the outstanding-balance note
+  // below -- same balance math (and same inputs) as every Money surface.
+  const { data: carryovers = [] } = useSettlementCarryovers(tripId)
 
   const [confirming, setConfirming] = useState(false)
 
@@ -65,7 +69,8 @@ export function ManageParticipantSheet({
         expensesData.expenses,
         expensesData.settlements,
         participants.map((p) => p.user_id),
-        baseCurrency
+        baseCurrency,
+        carryovers
       ).balances.find((b) => b.userId === participant.user_id)
     : undefined
 

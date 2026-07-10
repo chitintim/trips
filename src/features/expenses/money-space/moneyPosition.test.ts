@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { computeMoneyPosition } from './moneyPosition'
+import { computeMoneyPosition, computePairwiseBreakdown } from './moneyPosition'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
-import type { Settlement } from '../../../lib/queries/useSettlements'
+import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
 function makeExpense(overrides: Partial<ExpenseWithDetails> & { id: string }): ExpenseWithDetails {
   return {
@@ -81,6 +81,20 @@ function makeSettlement(overrides: Partial<Settlement> & { from_user_id: string;
   } as Settlement
 }
 
+function makeCarryover(
+  overrides: Partial<SettlementCarryover> & { from_user_id: string; to_user_id: string; amount: number }
+): SettlementCarryover {
+  return {
+    id: `carryover-${Math.random()}`,
+    trip_id: 'trip-1',
+    source_trip_id: 'trip-0-bali',
+    created_by: 'alice',
+    currency: 'GBP',
+    created_at: '2026-07-01T00:00:00Z',
+    ...overrides,
+  } as SettlementCarryover
+}
+
 describe('computeMoneyPosition', () => {
   it('returns "owed" when the current user is a net creditor', () => {
     const expenses = [
@@ -136,6 +150,19 @@ describe('computeMoneyPosition', () => {
     expect(pos.perPerson.find((r) => r.userId === 'carol')?.netMinor).toBe(10000)
   })
 
+  it('correctly zeroes out a pair when the CURRENT USER is the one who paid a real settlement (regression: this branch previously doubled the debt instead of clearing it)', () => {
+    // Bob paid £100 for a hotel, split equally -> Alice owes Bob £50.
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'bob', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    // Alice pays Bob back £50 (a REAL settlement where the current user,
+    // Alice, is the payer -- from_user_id).
+    const settlements = [makeSettlement({ from_user_id: 'alice', to_user_id: 'bob', amount: 50, status: 'confirmed' })]
+    const pos = computeMoneyPosition(expenses, settlements, ['alice', 'bob'], 'alice', 'GBP')
+    expect(pos.kind).toBe('settled')
+    expect(pos.perPerson).toEqual([]) // NOT [{ userId: 'bob', netMinor: -10000 }] (the pre-fix doubled-debt bug)
+  })
+
   it('excludes settled (near-zero) counterparties from the breakdown', () => {
     const expenses = [
       makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
@@ -152,5 +179,121 @@ describe('computeMoneyPosition', () => {
     ]
     const pos = computeMoneyPosition(expenses, [], ['alice', 'bob'], 'alice', 'GBP')
     expect(pos.expensesMissingRate).toEqual(['e1'])
+  })
+
+  it('folds an already-folded carryover into the headline AND the per-person breakdown consistently', () => {
+    // Alice and Bob are otherwise perfectly settled on this trip.
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 60, paid_by: 'alice', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+      makeExpense({ id: 'e2', amount: 60, paid_by: 'bob', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+    ]
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 25 })]
+    const pos = computeMoneyPosition(expenses, [], ['alice', 'bob'], 'alice', 'GBP', carryovers)
+    expect(pos.kind).toBe('owed')
+    expect(pos.amount).toBe(25)
+    expect(pos.perPerson).toEqual([{ userId: 'bob', netMinor: 2500 }])
+  })
+
+  it('excludes a mismatched-currency carryover from BOTH the headline and the per-person breakdown (never mixes minor units 1:1)', () => {
+    // Alice and Bob perfectly settled on this GBP trip; a bad historical
+    // JPY 10,000 carryover row exists. Reading its minor units as pence
+    // would show a phantom £100 (real value ~£52) -- it must contribute
+    // nothing anywhere, consistently across headline and breakdown.
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 60, paid_by: 'alice', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+      makeExpense({ id: 'e2', amount: 60, paid_by: 'bob', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+    ]
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 10000, currency: 'JPY' })]
+    const pos = computeMoneyPosition(expenses, [], ['alice', 'bob'], 'alice', 'GBP', carryovers)
+    expect(pos.kind).toBe('settled')
+    expect(pos.amount).toBe(0)
+    expect(pos.perPerson).toEqual([])
+  })
+
+  it('excludes a carryover involving a departed participant from BOTH the headline and the breakdown (zero-sum guard)', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    // 'charlie' is not in the participant list -- applying only Alice's side
+    // of this row would break zero-sum and desync header vs suggestions.
+    const carryovers = [makeCarryover({ from_user_id: 'charlie', to_user_id: 'alice', amount: 40 })]
+    const pos = computeMoneyPosition(expenses, [], ['alice', 'bob'], 'alice', 'GBP', carryovers)
+    expect(pos.kind).toBe('owed')
+    expect(pos.amount).toBe(50) // baseline only -- the charlie row contributes nothing
+    expect(pos.perPerson).toEqual([{ userId: 'bob', netMinor: 5000 }])
+  })
+})
+
+describe('computePairwiseBreakdown', () => {
+  it('gives DIFFERENT correct pairwise amounts per counterparty, not the same group-level net repeated (bug fix regression)', () => {
+    // Alice paid £90 total, itemized: Bob claimed £30, Charlie claimed £60.
+    // Alice's GROUP-level net is +£90 -- the OLD buggy carryover code
+    // offered that full £90 against BOTH Bob and Charlie. The pairwise
+    // breakdown must instead show £30 vs Bob and £60 vs Charlie.
+    const expenses = [
+      makeExpense({
+        id: 'e1',
+        amount: 90,
+        currency: 'GBP',
+        paid_by: 'alice',
+        ai_parsed: true,
+        status: 'allocated',
+        line_items: [
+          {
+            id: 'li1',
+            expense_id: 'e1',
+            line_number: 1,
+            name_original: 'Dinner',
+            name_english: null,
+            quantity: 1,
+            unit_price: 90,
+            subtotal: 90,
+            tax_amount: null,
+            service_amount: null,
+            line_discount_amount: null,
+            line_discount_percent: null,
+            total_amount: 90,
+            notes: null,
+            created_at: null,
+          },
+        ],
+        claims: [
+          { id: 'c1', expense_id: 'e1', line_item_id: 'li1', user_id: 'bob', quantity_claimed: 1, amount_owed: 30, confirmed: true, claimed_at: null, updated_at: null, user: {} as never },
+          { id: 'c2', expense_id: 'e1', line_item_id: 'li1', user_id: 'charlie', quantity_claimed: 1, amount_owed: 60, confirmed: true, claimed_at: null, updated_at: null, user: {} as never },
+        ],
+        splits: [], // itemized expenses carry no split rows
+      }),
+    ]
+    const breakdown = computePairwiseBreakdown(expenses, [], ['alice', 'bob', 'charlie'], 'alice', 'GBP')
+    const bob = breakdown.find((r) => r.userId === 'bob')!
+    const charlie = breakdown.find((r) => r.userId === 'charlie')!
+    expect(bob.netMinor).toBe(3000) // exactly £30, not Alice's full £90 group net
+    expect(charlie.netMinor).toBe(6000) // exactly £60, not Alice's full £90 group net
+    expect(bob.netMinor + charlie.netMinor).toBe(9000) // still sums to the group total
+  })
+
+  it('debits itemized claimants (not just credits the payer) in the pairwise computation -- mirrors computeBalances', () => {
+    const expenses = [
+      makeExpense({
+        id: 'e1',
+        amount: 100,
+        currency: 'GBP',
+        paid_by: 'alice',
+        ai_parsed: true,
+        status: 'allocated',
+        line_items: [
+          { id: 'li1', expense_id: 'e1', line_number: 1, name_original: 'Item', name_english: null, quantity: 1, unit_price: 100, subtotal: 100, tax_amount: null, service_amount: null, line_discount_amount: null, line_discount_percent: null, total_amount: 100, notes: null, created_at: null },
+        ],
+        claims: [
+          { id: 'c1', expense_id: 'e1', line_item_id: 'li1', user_id: 'bob', quantity_claimed: 1, amount_owed: 100, confirmed: true, claimed_at: null, updated_at: null, user: {} as never },
+        ],
+        splits: [],
+      }),
+    ]
+    const breakdown = computePairwiseBreakdown(expenses, [], ['alice', 'bob'], 'alice', 'GBP')
+    const bob = breakdown.find((r) => r.userId === 'bob')!
+    // Bob is correctly DEBITED £100 against Alice -- not left at 0 the way
+    // the pre-fix stubbed-claims path would (payer credited, nobody debited).
+    expect(bob.netMinor).toBe(10000)
   })
 })

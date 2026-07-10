@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { Card, Button, Badge, EmptyState, Skeleton, UserAvatar, useToast, SegmentedControl } from '../../../components/ui'
 import { AllSettled } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
@@ -6,6 +7,7 @@ import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
 import {
   useSettlements,
+  useSettlementCarryovers,
   useRecordSettlement,
   useUpdateSettlementStatus,
   useFinalizeSettlementSnapshot,
@@ -16,7 +18,7 @@ import { useLogActivity } from '../../../lib/queries/useActivityFeed'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { formatMoney } from '../lib/formatMoney'
 import { computeSuggestedPayments, readLegacySnapshot, buildSnapshot } from './settleUpLogic'
-import { computeBalances } from '../lib/balances'
+import { computeBalances, partitionCarryovers } from '../lib/balances'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
 import { PaymentDetailsSheet } from './PaymentDetailsSheet'
 import { parsePaymentDetails, formatPaymentDetailsForCopy } from './paymentDetails'
@@ -35,9 +37,14 @@ export interface SettleUpTabProps {
 export function SettleUpTab({ trip }: SettleUpTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
+  const queryClient = useQueryClient()
   const { data: expensesData, isLoading } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
   const { data: settlements = [] } = useSettlements(trip.id)
+  // Already-folded cross-trip carryovers for THIS trip (as fold target) --
+  // wired into computeSuggestedPayments/computeBalances below so a folded
+  // debt actually changes what's owed here, not just the success toast.
+  const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
   const { data: currentUserRow } = useCurrentUserRow(user?.id)
 
   const recordSettlement = useRecordSettlement(trip.id)
@@ -60,18 +67,29 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const legacySnapshot = useMemo(() => readLegacySnapshot(trip.settlement_snapshot), [trip.settlement_snapshot])
 
   const suggested = useMemo(
-    () => (isFrozen ? [] : computeSuggestedPayments(expenses, settlements, people, trip.base_currency, simplify)),
+    () => (isFrozen ? [] : computeSuggestedPayments(expenses, settlements, people, trip.base_currency, simplify, carryovers)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expenses, settlements, people, trip.base_currency, simplify, isFrozen]
+    [expenses, settlements, people, trip.base_currency, simplify, isFrozen, carryovers]
   )
 
   const nameById = Object.fromEntries(people.map((p) => [p.userId, p.name]))
+
+  // Same partition computeBalances/computeSuggestedPayments apply
+  // internally -- recomputed here only to tell the user when folded rows
+  // were EXCLUDED from the math (different currency, or a party no longer
+  // on this trip). Money is never silently dropped.
+  const carryoverPartition = useMemo(
+    () => partitionCarryovers(carryovers, trip.base_currency, people.map((p) => p.userId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [carryovers, trip.base_currency, participants]
+  )
+  const excludedCarryoverCount = carryoverPartition.excludedCurrency.length + carryoverPartition.excludedParticipant.length
 
   const handleFreeze = async () => {
     if (!user) return
     setIsFreezing(true)
     try {
-      const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), trip.base_currency)
+      const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), trip.base_currency, carryovers)
       const balancesMinor = new Map(balances.map((b) => [b.userId, b.netBalanceMinor]))
       const snapshot = buildSnapshot(suggested, people, balancesMinor, trip.base_currency)
 
@@ -125,15 +143,39 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const handleFoldInCarryover = async (candidate: (typeof carryoverCandidates)[number]) => {
     if (!user) return
     const isOwedByOther = candidate.netAmount > 0
-    await createCarryover.mutateAsync({
-      source_trip_id: candidate.sourceTripId,
-      from_user_id: isOwedByOther ? candidate.otherUserId : user.id,
-      to_user_id: isOwedByOther ? user.id : candidate.otherUserId,
-      amount: Math.abs(candidate.netAmount),
-      currency: candidate.currency,
-      created_by: user.id,
-    })
-    showToast({ type: 'success', message: 'Folded into this settlement' })
+    try {
+      await createCarryover.mutateAsync({
+        source_trip_id: candidate.sourceTripId,
+        from_user_id: isOwedByOther ? candidate.otherUserId : user.id,
+        to_user_id: isOwedByOther ? user.id : candidate.otherUserId,
+        amount: Math.abs(candidate.netAmount),
+        currency: candidate.currency,
+        created_by: user.id,
+      })
+      showToast({ type: 'success', message: 'Folded into this settlement' })
+    } catch (err) {
+      // Postgres unique violation (23505, surfaced as PostgrestError.code)
+      // on the (source_trip_id, from_user_id, to_user_id) unique index
+      // means this pair's debt was ALREADY folded -- possibly into another
+      // trip's settlement, or by a second organizer racing this click. The
+      // candidate list is stale: refresh it so the offer disappears instead
+      // of inviting endlessly-failing retries.
+      const code = (err as { code?: string } | null)?.code
+      if (code === '23505') {
+        showToast({
+          type: 'info',
+          message: 'Already folded',
+          description: 'This balance was already folded into a settlement — refreshing the list.',
+        })
+        queryClient.invalidateQueries({ queryKey: ['carryoverCandidates'] })
+      } else {
+        showToast({
+          type: 'error',
+          message: 'Could not fold in this balance',
+          description: err instanceof Error ? err.message : undefined,
+        })
+      }
+    }
   }
 
   if (isLoading) {
@@ -284,6 +326,40 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
         })}
       </div>
 
+      {carryovers.length > 0 && (
+        <Card variant="sunken" noPadding className="p-4 space-y-2">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">Carried over from other trips</h3>
+          {carryovers.map((c) => {
+            const isExcluded =
+              carryoverPartition.excludedCurrency.some((e) => e.id === c.id) ||
+              carryoverPartition.excludedParticipant.some((e) => e.id === c.id)
+            return (
+              <div key={c.id} className="flex items-center justify-between gap-3 text-sm">
+                <span className="text-[var(--text-secondary)] truncate">
+                  {nameById[c.from_user_id] ?? 'Someone'} → {nameById[c.to_user_id] ?? 'someone'}
+                  {isExcluded && (
+                    <Badge variant="warning" size="sm" className="ml-2">
+                      not included
+                    </Badge>
+                  )}
+                </span>
+                <span className="font-medium tabular-nums">{formatMoney(c.amount, c.currency)}</span>
+              </div>
+            )
+          })}
+          {excludedCarryoverCount > 0 ? (
+            <p className="text-xs text-[var(--text-muted)] pt-1">
+              ⚠️ {excludedCarryoverCount} carryover{excludedCarryoverCount === 1 ? " isn't" : "s aren't"} included in the
+              balances above{carryoverPartition.excludedCurrency.length > 0 ? ' (different currency' : ' ('}
+              {carryoverPartition.excludedCurrency.length > 0 && carryoverPartition.excludedParticipant.length > 0 ? '; ' : ''}
+              {carryoverPartition.excludedParticipant.length > 0 ? 'a person involved is no longer on this trip' : ''})
+            </p>
+          ) : (
+            <p className="text-xs text-[var(--text-muted)] pt-1">Included in the balances and suggested payments above.</p>
+          )}
+        </Card>
+      )}
+
       {carryoverCandidates.length > 0 && (
         <Card noPadding className="p-4 space-y-3">
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">Unsettled from other trips</h3>
@@ -297,7 +373,14 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
                   {c.netAmount >= 0 ? 'Owed to you' : 'You owe'}: {formatMoney(Math.abs(c.netAmount), c.currency)}
                 </p>
               </div>
-              <Button variant="secondary" size="sm" onClick={() => handleFoldInCarryover(c)} className="shrink-0">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleFoldInCarryover(c)}
+                disabled={createCarryover.isPending}
+                isLoading={createCarryover.isPending}
+                className="shrink-0"
+              >
                 Fold in
               </Button>
             </div>

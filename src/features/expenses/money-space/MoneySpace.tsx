@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Modal, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
+import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { effectiveTripStage } from '../../../lib/tripStage'
 import { MoneyPositionHeader } from './MoneyPositionHeader'
@@ -43,6 +44,7 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
   const navigate = useNavigate()
   const { data, isLoading } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
+  const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -91,6 +93,7 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
       <MoneyPositionHeader
         expenses={expenses}
         settlements={settlements}
+        carryovers={carryovers}
         participants={participants}
         currentUserId={user?.id}
         baseCurrency={trip.base_currency}

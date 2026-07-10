@@ -22,7 +22,7 @@
  */
 import { toMinorUnits, fromMinorUnits, sumMinorUnits } from '../../../lib/money'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
-import type { Settlement } from '../../../lib/queries/useSettlements'
+import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
 export const BALANCE_EPSILON_MINOR = 1 // 1 minor unit tolerance, matches v1's 0.01 GBP epsilon
 
@@ -69,11 +69,87 @@ function toBaseMinor(amountOwnCurrencyMajor: number, expense: ExpenseWithDetails
   return toMinorUnits(amountOwnCurrencyMajor * rate, baseCurrency)
 }
 
+/**
+ * Converts already-folded settlement_carryovers rows (plan §12) into
+ * pseudo-Settlement objects so computeBalances / computePairwiseBreakdown
+ * can fold them into the SAME math path a real settlement uses, instead of
+ * needing a parallel code path.
+ *
+ * IMPORTANT — from_user_id/to_user_id are DELIBERATELY REVERSED relative to
+ * the carryover row's own columns. A settlement_carryovers row records WHO
+ * OWES WHOM (from_user_id = the debtor, to_user_id = the creditor -- see
+ * handleFoldInCarryover in SettleUpTab.tsx): the debt is UNPAID. A real
+ * `settlements` row instead records a CASH TRANSFER THAT ALREADY HAPPENED
+ * (from_user_id physically paid to_user_id), which the settlement loop
+ * below treats as REDUCING from_user_id's debt and to_user_id's claim.
+ * Since a carryover has NOT been paid, folding it into the target trip must
+ * INCREASE the debtor's outstanding balance and the creditor's claim --
+ * exactly like an unpaid expense would, not like a payment that resolves
+ * one. Feeding the row through unchanged would incorrectly cancel the debt
+ * instead of carrying it forward, so from/to are swapped here to land on
+ * the correct sign while reusing the settlement-shaped math untouched.
+ */
+export function carryoversToPseudoSettlements(carryovers: SettlementCarryover[]): Settlement[] {
+  return carryovers.map((c) => ({
+    id: `carryover:${c.id}`,
+    trip_id: c.trip_id,
+    from_user_id: c.to_user_id, // reversed -- see doc comment above
+    to_user_id: c.from_user_id, // reversed -- see doc comment above
+    amount: c.amount,
+    currency: c.currency,
+    status: 'confirmed',
+    created_by: c.created_by,
+    settled_at: c.created_at,
+    created_at: c.created_at,
+    notes: null,
+    payment_method: null,
+  }))
+}
+
+export interface CarryoverPartition {
+  /** Rows safe to feed into this trip's balance math. */
+  usable: SettlementCarryover[]
+  /** Rows excluded because their currency differs from the trip's base currency. There is no FX-conversion path for carryovers (no fx_rate concept on them), and reading minor units 1:1 across currencies silently mis-states money -- e.g. a JPY 10,000 row folded into a GBP trip would be counted as GBP 100.00 (10000 JPY minor units re-read as pence) instead of its real ~GBP 52. Excluded rows must be surfaced to the user as "not included", never silently converted or silently counted. */
+  excludedCurrency: SettlementCarryover[]
+  /** Rows excluded because one (or both) of the from/to parties is not in the participant list being computed over. The settlement loops guard each side with .has() independently, so applying such a row would move only ONE side's balance and break the zero-sum invariant (and min-cash-flow suggestions would silently disagree with the header) -- the whole row is excluded instead. */
+  excludedParticipant: SettlementCarryover[]
+}
+
+/**
+ * Splits a trip's folded carryovers into rows the balance math can safely
+ * use vs. rows that must be excluded (see CarryoverPartition field docs for
+ * why each exclusion exists). computeBalances/computeMoneyPosition apply
+ * this internally so every surface stays consistent without each caller
+ * pre-filtering; SettleUpTab also calls it directly to render a visible
+ * "N carryovers not included" note whenever anything was excluded.
+ */
+export function partitionCarryovers(
+  carryovers: SettlementCarryover[],
+  baseCurrency: string,
+  participantUserIds: string[]
+): CarryoverPartition {
+  const participantIds = new Set(participantUserIds)
+  const usable: SettlementCarryover[] = []
+  const excludedCurrency: SettlementCarryover[] = []
+  const excludedParticipant: SettlementCarryover[] = []
+  for (const c of carryovers) {
+    if (c.currency !== baseCurrency) {
+      excludedCurrency.push(c)
+    } else if (!participantIds.has(c.from_user_id) || !participantIds.has(c.to_user_id)) {
+      excludedParticipant.push(c)
+    } else {
+      usable.push(c)
+    }
+  }
+  return { usable, excludedCurrency, excludedParticipant }
+}
+
 export function computeBalances(
   expenses: ExpenseWithDetails[],
   settlements: Settlement[],
   participantUserIds: string[],
-  baseCurrency: string
+  baseCurrency: string,
+  carryovers: SettlementCarryover[] = []
 ): BalanceComputationResult {
   const paidMinor = new Map<string, number>()
   const owedMinor = new Map<string, number>()
@@ -85,6 +161,12 @@ export function computeBalances(
     settlementsPaidMinor.set(id, 0)
     settlementsReceivedMinor.set(id, 0)
   }
+
+  // Mismatched-currency / missing-participant carryovers are excluded from
+  // the math entirely (see partitionCarryovers) -- callers surface them.
+  const { usable: usableCarryovers } = partitionCarryovers(carryovers, baseCurrency, participantUserIds)
+  const allSettlements =
+    usableCarryovers.length > 0 ? [...settlements, ...carryoversToPseudoSettlements(usableCarryovers)] : settlements
 
   const expensesMissingRate: string[] = []
   let groupTotalMinor = 0
@@ -128,7 +210,7 @@ export function computeBalances(
     }
   }
 
-  for (const settlement of settlements) {
+  for (const settlement of allSettlements) {
     // Only rows that represent a REAL, completed payment move money in the
     // ledger sense: v2's 'suggested'/'marked_paid' rows are proposals, not
     // yet confirmed transfers, so they're excluded here (they still show up

@@ -13,7 +13,7 @@ import { useQuery } from '@tanstack/react-query'
 import { supabase } from '../../../lib/supabase'
 import { computePairwiseBreakdown } from '../money-space/moneyPosition'
 import { BALANCE_EPSILON_MINOR } from '../lib/balances'
-import { computeRemainingCarryoverMinor } from './carryoverDedupe'
+import { computeRemainingCarryoverMinor, isEligibleCarryoverSourceTrip } from './carryoverDedupe'
 import { fromMinorUnits } from '../../../lib/money'
 import type { ExpenseWithDetails, ExpenseLineItem, ExpenseItemClaim } from '../../../lib/queries/useExpenses'
 import type { Tables } from '../../../types/database.types'
@@ -67,12 +67,13 @@ export function useCarryoverCandidates(currentTripId: string | undefined, curren
     queryFn: async (): Promise<CarryoverCandidate[]> => {
       if (!currentTripId || !currentUserId) return []
 
-      const { data: currentParticipants } = await supabase
-        .from('trip_participants')
-        .select('user_id')
-        .eq('trip_id', currentTripId)
-        .eq('active', true)
+      const [{ data: currentParticipants }, { data: currentTripRow }] = await Promise.all([
+        supabase.from('trip_participants').select('user_id').eq('trip_id', currentTripId).eq('active', true),
+        supabase.from('trips').select('base_currency').eq('id', currentTripId).single(),
+      ])
       const currentTripUserIds = new Set((currentParticipants || []).map((p) => p.user_id))
+      const targetBaseCurrency = currentTripRow?.base_currency
+      if (!targetBaseCurrency) return []
 
       const { data: myOtherTripRows } = await supabase
         .from('trip_participants')
@@ -83,7 +84,10 @@ export function useCarryoverCandidates(currentTripId: string | undefined, curren
       type TripRow = Pick<Tables<'trips'>, 'id' | 'name' | 'status' | 'base_currency'>
       const otherTrips = ((myOtherTripRows || []) as unknown as Array<{ trip_id: string; trips: TripRow }>)
         .map((r) => r.trips)
-        .filter((t) => t.status === 'trip_completed')
+        // Completed AND same base currency as the target trip -- carryovers
+        // have no FX-conversion path, so cross-currency folds are never
+        // offered (see isEligibleCarryoverSourceTrip's doc comment).
+        .filter((t) => isEligibleCarryoverSourceTrip(t, targetBaseCurrency))
 
       const candidates: CarryoverCandidate[] = []
 
@@ -150,11 +154,20 @@ export function useCarryoverCandidates(currentTripId: string | undefined, curren
         const existingCarryovers = existingCarryoversRes.data || []
 
         for (const other of sharedParticipants) {
+          // A missing pairwise row means the pair nets to ~zero ON THE
+          // SOURCE TRIP -- but that must NOT short-circuit the de-dupe
+          // arithmetic: if a carryover was folded earlier and the debt was
+          // THEN also repaid on the source trip (row disappears), skipping
+          // here would leave the stale fold permanently overstating the
+          // target trip. Treating the missing row as 0 lets the arithmetic
+          // surface the compensating COUNTER-candidate (0 - foldedAmount)
+          // instead. Pairs with no row AND no prior folds still net to 0
+          // and are dropped by the epsilon check below, exactly as before.
           const row = pairwise.find((r) => r.userId === other.user_id)
-          if (!row) continue // balanced (or no shared expense history) between exactly these two on this trip
+          const pairNetMinor = row?.netMinor ?? 0
 
-          const remainingMinor = computeRemainingCarryoverMinor(row.netMinor, existingCarryovers, currentUserId, other.user_id)
-          if (Math.abs(remainingMinor) < BALANCE_EPSILON_MINOR) continue // fully folded already -- don't re-offer
+          const remainingMinor = computeRemainingCarryoverMinor(pairNetMinor, existingCarryovers, currentUserId, other.user_id)
+          if (Math.abs(remainingMinor) < BALANCE_EPSILON_MINOR) continue // nothing left to fold (or nothing was ever owed)
 
           const userInfo = (other as unknown as { user: { full_name: string | null; email: string } }).user
           candidates.push({

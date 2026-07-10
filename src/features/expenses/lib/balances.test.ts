@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements } from './balances'
+import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from './balances'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
@@ -308,6 +308,57 @@ describe('computeBalances with folded settlement_carryovers', () => {
     expect(pseudo.amount).toBe(30)
     expect(pseudo.status).toBe('confirmed')
     expect(pseudo.id).toBe('carryover:c1')
+  })
+
+  it('EXCLUDES a mismatched-currency carryover from the math instead of reading its minor units 1:1 (JPY 10,000 must never count as GBP 100)', () => {
+    // Target trip (GBP): Alice paid £100 split equally -> Bob owes Alice £50.
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    // A bad historical row: JPY 10,000 folded into this GBP trip. Counting
+    // its 10000 minor units as pence would add a phantom £100 (real value
+    // is roughly £52) -- it must contribute NOTHING to the math.
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 10000, currency: 'JPY' })]
+
+    const { balances } = computeBalances(expenses, [], ['alice', 'bob'], 'GBP', carryovers)
+    const alice = balances.find((b) => b.userId === 'alice')!
+    const bob = balances.find((b) => b.userId === 'bob')!
+    // Identical to the no-carryover baseline -- the JPY row is fully excluded.
+    expect(bob.netBalanceMinor).toBe(-5000)
+    expect(alice.netBalanceMinor).toBe(5000)
+    // Zero-sum invariant preserved.
+    expect(alice.netBalanceMinor + bob.netBalanceMinor).toBe(0)
+  })
+
+  it('EXCLUDES a carryover whose party is not among the participants (applying one side only would break zero-sum)', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    // 'charlie' has left this trip (not in the participant list below) --
+    // the .has() guards in the settlement loop would apply only Alice's
+    // side of this row, breaking the zero-sum invariant.
+    const carryovers = [makeCarryover({ from_user_id: 'charlie', to_user_id: 'alice', amount: 40 })]
+
+    const { balances } = computeBalances(expenses, [], ['alice', 'bob'], 'GBP', carryovers)
+    const alice = balances.find((b) => b.userId === 'alice')!
+    const bob = balances.find((b) => b.userId === 'bob')!
+    // Row fully excluded: same as baseline, and the group still sums to zero.
+    expect(alice.netBalanceMinor).toBe(5000)
+    expect(bob.netBalanceMinor).toBe(-5000)
+    expect(balances.reduce((sum, b) => sum + b.netBalanceMinor, 0)).toBe(0)
+  })
+})
+
+describe('partitionCarryovers', () => {
+  it('splits rows into usable / excludedCurrency / excludedParticipant buckets', () => {
+    const usableRow = makeCarryover({ id: 'ok', from_user_id: 'bob', to_user_id: 'alice', amount: 30, currency: 'GBP' })
+    const wrongCurrency = makeCarryover({ id: 'jpy', from_user_id: 'bob', to_user_id: 'alice', amount: 10000, currency: 'JPY' })
+    const goneParticipant = makeCarryover({ id: 'gone', from_user_id: 'charlie', to_user_id: 'alice', amount: 40, currency: 'GBP' })
+
+    const partition = partitionCarryovers([usableRow, wrongCurrency, goneParticipant], 'GBP', ['alice', 'bob'])
+    expect(partition.usable.map((c) => c.id)).toEqual(['ok'])
+    expect(partition.excludedCurrency.map((c) => c.id)).toEqual(['jpy'])
+    expect(partition.excludedParticipant.map((c) => c.id)).toEqual(['gone'])
   })
 })
 

@@ -6,7 +6,7 @@
  * functions the legacy BalanceHeader/SettleUpTab use, so the figures always
  * agree across every surface that shows money.
  */
-import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements } from '../lib/balances'
+import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from '../lib/balances'
 import { toMinorUnits } from '../../../lib/money'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
@@ -52,11 +52,14 @@ export function computeMoneyPosition(
   const amount = kind === 'owed' ? owedToYou : kind === 'owe' ? youOwe : 0
 
   // Same settlement-shaped list computeBalances just used above (real
-  // settlements + folded carryovers) -- computePairwiseBreakdown has its own
-  // independent settlements loop (not routed through computeBalances), so it
-  // needs the merged list passed explicitly to stay in sync with the
-  // headline figure.
-  const settlementsWithCarryovers = carryovers.length > 0 ? [...settlements, ...carryoversToPseudoSettlements(carryovers)] : settlements
+  // settlements + USABLE folded carryovers, filtered by the SAME
+  // partitionCarryovers rules computeBalances applies internally) --
+  // computePairwiseBreakdown has its own independent settlements loop (not
+  // routed through computeBalances), so it needs the merged list passed
+  // explicitly to stay in sync with the headline figure.
+  const { usable: usableCarryovers } = partitionCarryovers(carryovers, baseCurrency, participantUserIds)
+  const settlementsWithCarryovers =
+    usableCarryovers.length > 0 ? [...settlements, ...carryoversToPseudoSettlements(usableCarryovers)] : settlements
   const perPerson = computePairwiseBreakdown(expenses, settlementsWithCarryovers, participantUserIds, currentUserId, baseCurrency)
 
   return { kind, amount, currency: baseCurrency, perPerson, expensesMissingRate }

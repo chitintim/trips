@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeRemainingCarryoverMinor } from './carryoverDedupe'
+import { computeRemainingCarryoverMinor, isEligibleCarryoverSourceTrip } from './carryoverDedupe'
 
 describe('computeRemainingCarryoverMinor (carryover de-dupe arithmetic)', () => {
   it('returns the full pairwise net when nothing has been folded yet', () => {
@@ -48,5 +48,32 @@ describe('computeRemainingCarryoverMinor (carryover de-dupe arithmetic)', () => 
     // 5000 JPY net, already fully folded as 5000 JPY (minor unit exponent 0, so amount === minor units).
     const remaining = computeRemainingCarryoverMinor(5000, existing, 'alice', 'bob')
     expect(remaining).toBe(0)
+  })
+
+  it('surfaces a COUNTER-candidate when the source pair nets to zero but a prior fold exists (debt repaid at source AFTER folding)', () => {
+    // Bob owed Alice £30 on the source trip and it was folded into a target
+    // trip. Bob then ALSO repaid the £30 directly on the source trip, so the
+    // source pairwise net is now 0 -- but the folded £30 still (incorrectly)
+    // inflates the target trip. The arithmetic must offer the compensating
+    // reverse candidate: 0 - (+3000) = -3000, i.e. "Alice owes Bob £30",
+    // which when folded inserts the counter-row that nets the stale fold out.
+    const existing = [{ from_user_id: 'bob', to_user_id: 'alice', amount: 30, currency: 'GBP' }]
+    const remaining = computeRemainingCarryoverMinor(0, existing, 'alice', 'bob')
+    expect(remaining).toBe(-3000)
+  })
+})
+
+describe('isEligibleCarryoverSourceTrip (cross-currency fold suppression)', () => {
+  it('rejects a completed source trip whose base currency differs from the target trip (JPY source, GBP target)', () => {
+    expect(isEligibleCarryoverSourceTrip({ status: 'trip_completed', base_currency: 'JPY' }, 'GBP')).toBe(false)
+  })
+
+  it('accepts a completed source trip in the same base currency', () => {
+    expect(isEligibleCarryoverSourceTrip({ status: 'trip_completed', base_currency: 'GBP' }, 'GBP')).toBe(true)
+  })
+
+  it('rejects a same-currency trip that is not completed', () => {
+    expect(isEligibleCarryoverSourceTrip({ status: 'trip_ongoing', base_currency: 'GBP' }, 'GBP')).toBe(false)
+    expect(isEligibleCarryoverSourceTrip({ status: null, base_currency: 'GBP' }, 'GBP')).toBe(false)
   })
 })

@@ -112,6 +112,31 @@ describe('computeSuggestedPayments with folded settlement_carryovers', () => {
   })
 })
 
+describe('computeSuggestedPayments carryover exclusion guards', () => {
+  it('a carryover involving a departed participant is excluded -- suggestions stay consistent with the zero-sum header instead of silently desyncing', () => {
+    // Trip: Bob owes Alice £50. A stale carryover names 'charlie', who has
+    // left the trip. Pre-guard, only Alice's side of that row was applied,
+    // breaking zero-sum -- and min-cash-flow over a non-zero-sum input
+    // produces payments that disagree with the position header.
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    const carryovers = [makeCarryover({ from_user_id: 'charlie', to_user_id: 'alice', amount: 40 })]
+    const suggested = computeSuggestedPayments(expenses, [], people, 'GBP', true, carryovers)
+    expect(suggested).toEqual([{ from: 'bob', to: 'alice', fromName: 'Bob', toName: 'Alice', amount: 50 }])
+  })
+
+  it('a mismatched-currency carryover row is excluded from suggested payments (no 1:1 minor-unit mixing)', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 10000, currency: 'JPY' })]
+    const suggested = computeSuggestedPayments(expenses, [], people, 'GBP', true, carryovers)
+    // Identical to baseline -- the JPY row contributes nothing (NOT +£100).
+    expect(suggested).toEqual([{ from: 'bob', to: 'alice', fromName: 'Bob', toName: 'Alice', amount: 50 }])
+  })
+})
+
 describe('isFullySettled with folded settlement_carryovers', () => {
   it('a trip that looks settled on its own is NOT fully settled once an unpaid carryover is folded in', () => {
     const expenses = [

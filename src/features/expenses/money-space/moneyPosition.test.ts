@@ -193,6 +193,35 @@ describe('computeMoneyPosition', () => {
     expect(pos.amount).toBe(25)
     expect(pos.perPerson).toEqual([{ userId: 'bob', netMinor: 2500 }])
   })
+
+  it('excludes a mismatched-currency carryover from BOTH the headline and the per-person breakdown (never mixes minor units 1:1)', () => {
+    // Alice and Bob perfectly settled on this GBP trip; a bad historical
+    // JPY 10,000 carryover row exists. Reading its minor units as pence
+    // would show a phantom £100 (real value ~£52) -- it must contribute
+    // nothing anywhere, consistently across headline and breakdown.
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 60, paid_by: 'alice', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+      makeExpense({ id: 'e2', amount: 60, paid_by: 'bob', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+    ]
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 10000, currency: 'JPY' })]
+    const pos = computeMoneyPosition(expenses, [], ['alice', 'bob'], 'alice', 'GBP', carryovers)
+    expect(pos.kind).toBe('settled')
+    expect(pos.amount).toBe(0)
+    expect(pos.perPerson).toEqual([])
+  })
+
+  it('excludes a carryover involving a departed participant from BOTH the headline and the breakdown (zero-sum guard)', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    // 'charlie' is not in the participant list -- applying only Alice's side
+    // of this row would break zero-sum and desync header vs suggestions.
+    const carryovers = [makeCarryover({ from_user_id: 'charlie', to_user_id: 'alice', amount: 40 })]
+    const pos = computeMoneyPosition(expenses, [], ['alice', 'bob'], 'alice', 'GBP', carryovers)
+    expect(pos.kind).toBe('owed')
+    expect(pos.amount).toBe(50) // baseline only -- the charlie row contributes nothing
+    expect(pos.perPerson).toEqual([{ userId: 'bob', netMinor: 5000 }])
+  })
 })
 
 describe('computePairwiseBreakdown', () => {

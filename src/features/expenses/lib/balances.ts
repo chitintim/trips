@@ -106,6 +106,44 @@ export function carryoversToPseudoSettlements(carryovers: SettlementCarryover[])
   }))
 }
 
+export interface CarryoverPartition {
+  /** Rows safe to feed into this trip's balance math. */
+  usable: SettlementCarryover[]
+  /** Rows excluded because their currency differs from the trip's base currency. There is no FX-conversion path for carryovers (no fx_rate concept on them), and reading minor units 1:1 across currencies silently mis-states money -- e.g. a JPY 10,000 row folded into a GBP trip would be counted as GBP 100.00 (10000 JPY minor units re-read as pence) instead of its real ~GBP 52. Excluded rows must be surfaced to the user as "not included", never silently converted or silently counted. */
+  excludedCurrency: SettlementCarryover[]
+  /** Rows excluded because one (or both) of the from/to parties is not in the participant list being computed over. The settlement loops guard each side with .has() independently, so applying such a row would move only ONE side's balance and break the zero-sum invariant (and min-cash-flow suggestions would silently disagree with the header) -- the whole row is excluded instead. */
+  excludedParticipant: SettlementCarryover[]
+}
+
+/**
+ * Splits a trip's folded carryovers into rows the balance math can safely
+ * use vs. rows that must be excluded (see CarryoverPartition field docs for
+ * why each exclusion exists). computeBalances/computeMoneyPosition apply
+ * this internally so every surface stays consistent without each caller
+ * pre-filtering; SettleUpTab also calls it directly to render a visible
+ * "N carryovers not included" note whenever anything was excluded.
+ */
+export function partitionCarryovers(
+  carryovers: SettlementCarryover[],
+  baseCurrency: string,
+  participantUserIds: string[]
+): CarryoverPartition {
+  const participantIds = new Set(participantUserIds)
+  const usable: SettlementCarryover[] = []
+  const excludedCurrency: SettlementCarryover[] = []
+  const excludedParticipant: SettlementCarryover[] = []
+  for (const c of carryovers) {
+    if (c.currency !== baseCurrency) {
+      excludedCurrency.push(c)
+    } else if (!participantIds.has(c.from_user_id) || !participantIds.has(c.to_user_id)) {
+      excludedParticipant.push(c)
+    } else {
+      usable.push(c)
+    }
+  }
+  return { usable, excludedCurrency, excludedParticipant }
+}
+
 export function computeBalances(
   expenses: ExpenseWithDetails[],
   settlements: Settlement[],
@@ -124,7 +162,11 @@ export function computeBalances(
     settlementsReceivedMinor.set(id, 0)
   }
 
-  const allSettlements = carryovers.length > 0 ? [...settlements, ...carryoversToPseudoSettlements(carryovers)] : settlements
+  // Mismatched-currency / missing-participant carryovers are excluded from
+  // the math entirely (see partitionCarryovers) -- callers surface them.
+  const { usable: usableCarryovers } = partitionCarryovers(carryovers, baseCurrency, participantUserIds)
+  const allSettlements =
+    usableCarryovers.length > 0 ? [...settlements, ...carryoversToPseudoSettlements(usableCarryovers)] : settlements
 
   const expensesMissingRate: string[] = []
   let groupTotalMinor = 0

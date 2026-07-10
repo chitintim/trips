@@ -3,12 +3,14 @@ import { Badge, Button, UserAvatar } from '../../../components/ui'
 import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
 import { computeMoneyPosition } from './moneyPosition'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
-import type { Settlement } from '../../../lib/queries/useSettlements'
+import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 
 export interface MoneyPositionHeaderProps {
   expenses: ExpenseWithDetails[]
   settlements: Settlement[]
+  /** Already-folded cross-trip carryovers for this trip (as fold target) -- folded into the SAME balance math settlements use, so this header agrees with Settle Up. */
+  carryovers?: SettlementCarryover[]
   participants: ParticipantWithUser[]
   currentUserId: string | undefined
   baseCurrency: string
@@ -34,6 +36,7 @@ const KIND_COPY: Record<'owed' | 'owe' | 'settled', { verb: string; emoji: strin
 export function MoneyPositionHeader({
   expenses,
   settlements,
+  carryovers = [],
   participants,
   currentUserId,
   baseCurrency,
@@ -46,7 +49,8 @@ export function MoneyPositionHeader({
     settlements,
     participants.map((p) => p.user_id),
     currentUserId,
-    baseCurrency
+    baseCurrency,
+    carryovers
   )
   const copy = KIND_COPY[position.kind]
   const byUserId = new Map(participants.map((p) => [p.user_id, p]))

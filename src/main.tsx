@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { queryClient } from './lib/queries/queryClient'
 import { registerShareTargetSw } from './lib/registerShareTargetSw'
+import { reportError } from './lib/reportError'
 import './index.css'
 import App from './App.tsx'
 
@@ -17,7 +18,11 @@ registerShareTargetSw()
 // lag) can't bounce the tab in a loop -- the flag re-arms 60s later so a
 // tab kept open across a LATER, unrelated redeploy still self-heals once.
 const CHUNK_RELOAD_KEY = 'chunk-reload-attempted'
-window.addEventListener('vite:preloadError', () => {
+window.addEventListener('vite:preloadError', (event) => {
+  // Report before reloading -- reportError is fire-and-forget, but the
+  // reload below tears down the page immediately after, so this must not
+  // await anything.
+  reportError((event as { payload?: unknown }).payload ?? event, 'preload-error')
   if (sessionStorage.getItem(CHUNK_RELOAD_KEY)) return
   sessionStorage.setItem(CHUNK_RELOAD_KEY, '1')
   window.location.reload()

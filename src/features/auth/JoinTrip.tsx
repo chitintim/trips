@@ -25,14 +25,29 @@ interface InvitationPreview {
  * Returns zero rows for invalid/used/expired codes.
  */
 async function fetchInvitationPreview(code: string): Promise<InvitationPreview | null> {
-  const rpc = supabase.rpc as unknown as (
+  // NOTE: must stay bound to `supabase` — supabase-js's SupabaseClient.rpc()
+  // is `return this.rest.rpc(...)` internally, so extracting it as a bare
+  // function reference (without .bind) makes `this` undefined at call time
+  // and throws "Cannot read properties of undefined (reading 'rest')"
+  // before any network request is even made. Bit us live on 2026-07-10 for
+  // every /join/:code invitation link.
+  const rpc = supabase.rpc.bind(supabase) as unknown as (
     fn: string,
     args: Record<string, unknown>
   ) => PromiseLike<{ data: unknown; error: { message: string } | null }>
-  const { data, error } = await rpc('get_invitation_preview', { p_code: code })
-  if (error) return null // treat any failure as "not a valid invitation"
-  const rows = Array.isArray(data) ? (data as InvitationPreview[]) : []
-  return rows[0] ?? null
+  try {
+    const { data, error } = await rpc('get_invitation_preview', { p_code: code })
+    if (error) return null // treat any failure as "not a valid invitation"
+    const rows = Array.isArray(data) ? (data as InvitationPreview[]) : []
+    return rows[0] ?? null
+  } catch (err) {
+    // A thrown client-side exception (as opposed to a returned {error}) used
+    // to be swallowed by useQuery into an indistinguishable "invalid" dead
+    // end with zero network trace, which is exactly what made the 2026-07-10
+    // incident hard to diagnose. Log it so it's at least visible in console.
+    console.error('fetchInvitationPreview threw:', err)
+    return null
+  }
 }
 
 function formatDateRange(startDate: string, endDate: string): string {

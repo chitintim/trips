@@ -145,13 +145,13 @@ export function ProfileModal({ isOpen, onClose, user, onUpdate }: ProfileModalPr
     <Modal isOpen={isOpen} onClose={handleClose} title="Edit Profile">
       <form onSubmit={handleSubmit} className="space-y-6">
         {error && (
-          <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
+          <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
             {error}
           </div>
         )}
 
         {success && (
-          <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg p-3 text-sm">
+          <div className="bg-success-50 border border-success-200 text-success-800 rounded-[var(--radius-md)] p-3 text-sm">
             Profile updated successfully!
           </div>
         )}

@@ -34,4 +34,11 @@ describe('resolvePostLoginDestination', () => {
   it('honors a custom fallback', () => {
     expect(resolvePostLoginDestination(undefined, '/dashboard')).toBe('/dashboard')
   })
+
+  // Returning-user invite path (P2): JoinTrip's "Sign in first" link now
+  // carries `state: { from: { pathname: '/join/:code' } }` so signing in
+  // lands the user back on the teaser instead of a dead-end /login.
+  it('round-trips the /join/:code invite teaser', () => {
+    expect(resolvePostLoginDestination({ from: { pathname: '/join/ABCD1234' } })).toBe('/join/ABCD1234')
+  })
 })

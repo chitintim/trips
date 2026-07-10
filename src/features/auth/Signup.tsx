@@ -1,8 +1,10 @@
-import { useState, FormEvent, useEffect } from 'react'
+import { useState, FormEvent, useEffect, useMemo } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { supabase } from '../../lib/supabase'
 import { callRpc } from '../../lib/callRpc'
+import { useFormDraft } from '../../lib/forms/useFormDraft'
+import { useUnsavedChangesGuard } from '../../lib/forms/useUnsavedChangesGuard'
 import { Button, Input, Card, SegmentedControl, Stepper, Avatar } from '../../components/ui'
 import { AvatarBuilder } from '../../components/AvatarBuilder'
 import { AvatarIconPicker } from '../../components/AvatarIconPicker'
@@ -12,6 +14,7 @@ import { processAndUploadAvatar } from '../../lib/avatarUpload'
 import { type AvatarIconName } from '../../components/ui/Avatar'
 import { AvatarData, AnyAvatarData } from '../../types'
 import { AuthLayout } from './AuthLayout'
+import { validateEmail, validatePassword, validateRequired } from './lib/validation'
 
 type Step = 'invitation' | 'details' | 'otp-verify' | 'welcome'
 type AccountMode = 'otp' | 'password'
@@ -20,6 +23,7 @@ type AvatarTab = 'photo' | 'icons' | 'emoji'
 // Matches ProfileModal's DEFAULT_ICON (same default icon/color for both
 // pickers, since they're the same design).
 const DEFAULT_ICON: { icon: AvatarIconName; bgColor: string } = { icon: 'mountain', bgColor: '#0ea5e9' }
+const DEFAULT_EMOJI_AVATAR: AvatarData = { emoji: '😊', accessory: null, bgColor: '#0ea5e9' }
 
 /**
  * `log_invitation_attempt` is a post-codegen RPC (see
@@ -53,6 +57,33 @@ function mapSignupError(message: string): string {
     : message
 }
 
+/** Fields draft-persisted across the details step (Form & Flow Standard §5.2)
+ * -- an app-switch mid-signup (e.g. tabbing away to fetch an OTP from email)
+ * must not lose what the user already typed. Deliberately excludes:
+ *  - `password`: sessionStorage is readable by any script/extension on the
+ *    page, and unlike name/avatar it's a single quick field to retype, so
+ *    the security cost of persisting it isn't worth the convenience.
+ *  - the pending photo File: not JSON-serializable (see below, kept in
+ *    plain state and accepted lost on reload).
+ */
+interface SignupDraftValues {
+  email: string
+  firstName: string
+  lastName: string
+  avatarTab: AvatarTab
+  iconChoice: { icon: AvatarIconName; bgColor: string }
+  avatarData: AvatarData
+}
+
+const EMPTY_DRAFT: SignupDraftValues = {
+  email: '',
+  firstName: '',
+  lastName: '',
+  avatarTab: 'icons',
+  iconChoice: DEFAULT_ICON,
+  avatarData: DEFAULT_EMOJI_AVATAR,
+}
+
 /**
  * Invitation-only signup, OTP-first: after the invitation code validates,
  * the user picks between "email me a code" (no password ever needed,
@@ -69,8 +100,11 @@ export function Signup() {
 
   const [step, setStep] = useState<Step>('invitation')
 
-  // Invitation validation
-  const [invitationCode, setInvitationCode] = useState('')
+  // Invitation validation. Lazy-initialized from the URL (not a useEffect)
+  // so a `?code=` deep link is available synchronously on first render --
+  // needed so the draft below can be keyed correctly from the very first
+  // mount instead of a tick later.
+  const [invitationCode, setInvitationCode] = useState(() => searchParams.get('code')?.toUpperCase() ?? '')
   useEffect(() => {
     const codeFromUrl = searchParams.get('code')
     if (codeFromUrl) setInvitationCode(codeFromUrl.toUpperCase())
@@ -86,6 +120,14 @@ export function Signup() {
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
 
+  // Field-level validation errors (Form & Flow Standard: submitting invalid
+  // input must show inline, role="alert" text under the offending field --
+  // never a silent no-op).
+  const [emailError, setEmailError] = useState<string | null>(null)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [firstNameError, setFirstNameError] = useState<string | null>(null)
+  const [lastNameError, setLastNameError] = useState<string | null>(null)
+
   // Avatar system v2 (UX_REDESIGN.md "Avatar system v2"): same three-tab
   // Photo/Icons/Emoji picker as ProfileModal, so the account-creation avatar
   // UI matches profile editing instead of only offering the legacy emoji
@@ -93,13 +135,14 @@ export function Signup() {
   // there's no existing avatar to preserve at signup, unlike ProfileModal's
   // `initialTabFor(user)`.
   const [avatarTab, setAvatarTab] = useState<AvatarTab>('icons')
+  // Collapsed by default (Form & Flow Standard, "compact by default"): the
+  // picker takes ~2/3 of the details screen otherwise, and most users are
+  // happy with the default icon. Tapping the summary row expands the full
+  // tab control + picker body.
+  const [avatarExpanded, setAvatarExpanded] = useState(false)
   const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null)
   const [iconChoice, setIconChoice] = useState<{ icon: AvatarIconName; bgColor: string }>(DEFAULT_ICON)
-  const [avatarData, setAvatarData] = useState<AvatarData>({
-    emoji: '😊',
-    accessory: null,
-    bgColor: '#0ea5e9',
-  })
+  const [avatarData, setAvatarData] = useState<AvatarData>(DEFAULT_EMOJI_AVATAR)
   // What actually got saved once finalizeAccount runs -- passed to Welcome
   // so its hero avatar matches whichever tab (photo/icon/emoji) was used,
   // instead of Welcome only ever knowing how to render the emoji shape.
@@ -113,14 +156,69 @@ export function Signup() {
   const [otpCode, setOtpCode] = useState('')
   const [otpError, setOtpError] = useState<string | null>(null)
 
+  // Draft persistence for the details step (P5): keyed per invitation code
+  // so different invite links never collide. Restoration only works when
+  // the code arrived via URL (see lazy init above) -- a manually-typed code
+  // means the key isn't known until the user has already typed it, so
+  // there's nothing to restore on that particular mount; a low-risk
+  // tradeoff since real invites are almost always clicked links, not
+  // hand-typed codes.
+  const draftKey = `signup-details:${invitationCode || 'no-code'}`
+  const { values: draft, setValues: setDraft, clearDraft: clearSignupDraft, isRestored } = useFormDraft<SignupDraftValues>(
+    draftKey,
+    EMPTY_DRAFT,
+    { enabled: invitationCode.length > 0 }
+  )
+
+  // One-time hydration from the restored draft into the individual field
+  // states that the rest of this component (and its many handlers) reads
+  // directly -- keeps the existing field-by-field structure intact instead
+  // of a risky full refactor to a single values object.
+  useEffect(() => {
+    if (!isRestored) return
+    setEmail(draft.email)
+    setFirstName(draft.firstName)
+    setLastName(draft.lastName)
+    setAvatarTab(draft.avatarTab)
+    setIconChoice(draft.iconChoice)
+    setAvatarData(draft.avatarData)
+    // Only ever hydrate once, right after restoration is detected.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRestored])
+
+  // Signup is a full page, not a closable modal -- only the beforeunload
+  // half of this hook is relevant here (no confirm-discard sheet to render).
+  const isDirty =
+    (step === 'details' || step === 'otp-verify') &&
+    Boolean(email.trim() || firstName.trim() || lastName.trim() || password)
+  useUnsavedChangesGuard(isDirty)
+
+  // Local preview for the pending photo file (not draft-persisted -- File
+  // objects aren't JSON-serializable) so the compact avatar summary row can
+  // show it even before upload happens in finalizeAccount.
+  const photoPreviewUrl = useMemo(() => {
+    if (avatarTab !== 'photo' || !pendingPhotoFile) return null
+    return URL.createObjectURL(pendingPhotoFile)
+  }, [avatarTab, pendingPhotoFile])
+  useEffect(() => {
+    return () => {
+      if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl)
+    }
+  }, [photoPreviewUrl])
+
   const handleValidateCode = async (e: FormEvent) => {
     e.preventDefault()
     setCodeError(null)
+
+    const codeToValidate = invitationCode.trim()
+    const requiredErr = validateRequired(codeToValidate, 'Invitation code')
+    if (requiredErr) {
+      setCodeError(requiredErr)
+      return
+    }
+
     setValidatingCode(true)
-
     try {
-      const codeToValidate = invitationCode.trim()
-
       // Narrow SECURITY DEFINER RPC: invitations are not directly readable
       // pre-auth (see 20260707110000_security_hardening.sql).
       const { data, error } = await supabase.rpc('validate_invitation_code', {
@@ -211,6 +309,7 @@ export function Signup() {
       if (assignError) console.error('Trip assignment error:', assignError)
     }
 
+    clearSignupDraft()
     setStep('welcome')
   }
 
@@ -232,12 +331,29 @@ export function Signup() {
     return undefined
   }
 
+  /** Shared client-side validation for the details step's text fields (Form &
+   * Flow Standard): both submit paths need first/last name + email, and
+   * password mode additionally needs a password. */
+  const validateDetailsFields = (): boolean => {
+    const emailErr = validateEmail(email)
+    const firstNameErr = validateRequired(firstName, 'First name')
+    const lastNameErr = validateRequired(lastName, 'Last name')
+    const passwordErr = accountMode === 'password' ? validatePassword(password) : null
+    setEmailError(emailErr)
+    setFirstNameError(firstNameErr)
+    setLastNameError(lastNameErr)
+    setPasswordError(passwordErr)
+    return !emailErr && !firstNameErr && !lastNameErr && !passwordErr
+  }
+
   // Password-mode signup: create the account and profile in one step.
   const handlePasswordSignup = async (e: FormEvent) => {
     e.preventDefault()
     setSignupError(null)
-    setLoading(true)
 
+    if (!validateDetailsFields()) return
+
+    setLoading(true)
     try {
       if (!invitation) {
         setSignupError('Invalid invitation')
@@ -273,10 +389,7 @@ export function Signup() {
     e.preventDefault()
     setSignupError(null)
 
-    if (!firstName.trim() || !lastName.trim()) {
-      setSignupError('Please enter your first and last name')
-      return
-    }
+    if (!validateDetailsFields()) return
 
     setLoading(true)
     try {
@@ -322,6 +435,7 @@ export function Signup() {
         avatarUrl={savedAvatarUrl}
         avatarData={savedAvatarData}
         tripId={invitation?.trip_id}
+        mode={accountMode}
         // Invitation tied to a trip → land INSIDE that trip (its Today
         // space shows the RSVP card), not on the dashboard (UX_REDESIGN
         // Part 2 "Invite → join funnel").
@@ -345,6 +459,9 @@ export function Signup() {
           { key: 'details', label: 'Details' },
         ]
 
+  const compactAvatarPreview =
+    avatarTab === 'icons' ? { type: 'icon' as const, icon: iconChoice.icon, bgColor: iconChoice.bgColor } : avatarData
+
   return (
     <AuthLayout
       title={step === 'invitation' ? 'You’re invited' : step === 'otp-verify' ? 'Check your email' : 'Create your account'}
@@ -360,21 +477,20 @@ export function Signup() {
       {step === 'invitation' && (
         <Card>
           <Card.Content>
-            <form onSubmit={handleValidateCode} className="space-y-4">
-              {codeError && (
-                <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
-                  {codeError}
-                </div>
-              )}
+            <form onSubmit={handleValidateCode} className="space-y-4" noValidate>
               <Input
                 label="Invitation code"
                 type="text"
                 value={invitationCode}
-                onChange={(e) => setInvitationCode(e.target.value.toUpperCase())}
+                onChange={(e) => {
+                  setInvitationCode(e.target.value.toUpperCase())
+                  setCodeError(null)
+                }}
                 placeholder="ABCD1234"
                 required
                 disabled={validatingCode}
                 helperText="Enter the code exactly as provided (case-insensitive)"
+                error={codeError ?? undefined}
                 autoFocus
               />
               <Button type="submit" variant="primary" fullWidth isLoading={validatingCode}>
@@ -396,7 +512,7 @@ export function Signup() {
       {step === 'details' && (
         <Card>
           <Card.Content>
-            <form onSubmit={accountMode === 'otp' ? handleSendOtp : handlePasswordSignup} className="space-y-5">
+            <form onSubmit={accountMode === 'otp' ? handleSendOtp : handlePasswordSignup} className="space-y-5" noValidate>
               {signupError && (
                 <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
                   {signupError}
@@ -417,10 +533,15 @@ export function Signup() {
                 label="Email"
                 type="email"
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value)
+                  setEmailError(null)
+                  setDraft((prev) => ({ ...prev, email: e.target.value }))
+                }}
                 placeholder="you@example.com"
                 required
                 disabled={loading}
+                error={emailError ?? undefined}
               />
 
               {accountMode === 'password' && (
@@ -428,11 +549,15 @@ export function Signup() {
                   label="Password"
                   type="password"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value)
+                    setPasswordError(null)
+                  }}
                   placeholder="••••••••"
                   required
                   disabled={loading}
-                  helperText="Minimum 6 characters — you can also add this later in your profile"
+                  helperText={passwordError ? undefined : 'Minimum 6 characters — you can also add this later in your profile'}
+                  error={passwordError ?? undefined}
                 />
               )}
 
@@ -440,69 +565,125 @@ export function Signup() {
                 label="First name"
                 type="text"
                 value={firstName}
-                onChange={(e) => setFirstName(e.target.value)}
+                onChange={(e) => {
+                  setFirstName(e.target.value)
+                  setFirstNameError(null)
+                  setDraft((prev) => ({ ...prev, firstName: e.target.value }))
+                }}
                 required
                 disabled={loading}
+                error={firstNameError ?? undefined}
               />
               <Input
                 label="Last name"
                 type="text"
                 value={lastName}
-                onChange={(e) => setLastName(e.target.value)}
+                onChange={(e) => {
+                  setLastName(e.target.value)
+                  setLastNameError(null)
+                  setDraft((prev) => ({ ...prev, lastName: e.target.value }))
+                }}
                 required
                 disabled={loading}
+                error={lastNameError ?? undefined}
               />
 
               <div>
-                <div className="flex items-center justify-between mb-3">
-                  <label className="block text-sm font-medium text-[var(--text-primary)]">Choose your avatar</label>
-                  <SegmentedControl
-                    size="sm"
-                    value={avatarTab}
-                    onChange={setAvatarTab}
-                    options={[
-                      { value: 'photo', label: 'Photo' },
-                      { value: 'icons', label: 'Icons' },
-                      { value: 'emoji', label: 'Emoji' },
-                    ]}
-                  />
-                </div>
+                <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Avatar</label>
 
-                {avatarTab === 'photo' && (
-                  <AvatarPhotoPicker
-                    currentUrl={null}
-                    onFileReady={setPendingPhotoFile}
-                    disabled={loading}
+                {/* Compact-by-default (Form & Flow Standard): the user who
+                    doesn't care gets the default icon and scrolls straight
+                    past; tapping expands the full picker. */}
+                <button
+                  type="button"
+                  onClick={() => setAvatarExpanded((v) => !v)}
+                  disabled={loading}
+                  aria-expanded={avatarExpanded}
+                  className="w-full flex items-center gap-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3 text-left transition-colors hover:brightness-95"
+                >
+                  <Avatar
+                    size="md"
+                    alt="Your avatar"
+                    avatarUrl={avatarTab === 'photo' ? photoPreviewUrl : undefined}
+                    avatarData={avatarTab === 'photo' ? undefined : compactAvatarPreview}
+                    fallback={firstName ? firstName.charAt(0) : undefined}
                   />
-                )}
+                  <span className="flex-1 text-sm text-[var(--text-secondary)]">
+                    {avatarExpanded ? 'Choose your avatar' : "We picked a default — tap to change"}
+                  </span>
+                  <svg
+                    className={`w-4 h-4 text-[var(--text-muted)] transition-transform shrink-0 ${avatarExpanded ? 'rotate-180' : ''}`}
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    strokeWidth={2}
+                    stroke="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+                  </svg>
+                </button>
 
-                {avatarTab === 'icons' && (
-                  <AvatarIconPicker
-                    icon={iconChoice.icon}
-                    bgColor={iconChoice.bgColor}
-                    onChange={setIconChoice}
-                    disabled={loading}
-                  />
-                )}
+                {avatarExpanded && (
+                  <div className="mt-3 space-y-3">
+                    <SegmentedControl
+                      size="sm"
+                      fullWidth
+                      value={avatarTab}
+                      onChange={(v) => {
+                        setAvatarTab(v)
+                        setDraft((prev) => ({ ...prev, avatarTab: v }))
+                      }}
+                      options={[
+                        { value: 'photo', label: 'Photo' },
+                        { value: 'icons', label: 'Icons' },
+                        { value: 'emoji', label: 'Emoji' },
+                      ]}
+                    />
 
-                {avatarTab === 'emoji' && (
-                  <AvatarBuilder value={avatarData} onChange={setAvatarData} disabled={loading} />
+                    {avatarTab === 'photo' && (
+                      <AvatarPhotoPicker
+                        currentUrl={null}
+                        onFileReady={setPendingPhotoFile}
+                        disabled={loading}
+                      />
+                    )}
+
+                    {avatarTab === 'icons' && (
+                      <AvatarIconPicker
+                        icon={iconChoice.icon}
+                        bgColor={iconChoice.bgColor}
+                        onChange={(v) => {
+                          setIconChoice(v)
+                          setDraft((prev) => ({ ...prev, iconChoice: v }))
+                        }}
+                        disabled={loading}
+                      />
+                    )}
+
+                    {avatarTab === 'emoji' && (
+                      <AvatarBuilder
+                        value={avatarData}
+                        onChange={(v) => {
+                          setAvatarData(v)
+                          setDraft((prev) => ({ ...prev, avatarData: v }))
+                        }}
+                        disabled={loading}
+                      />
+                    )}
+
+                    {/* Live preview of what will actually render app-wide --
+                        matches ProfileModal's avatar preview pattern (Photo
+                        tab already has its own crop preview above). */}
+                    {avatarTab !== 'photo' && (
+                      <div className="flex items-center justify-center gap-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3">
+                        <Avatar size="lg" alt="Preview" avatarData={compactAvatarPreview} />
+                        <span className="text-sm text-[var(--text-muted)]">This is how you'll appear to others</span>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
-
-              {/* Live preview of what will actually render app-wide -- matches
-                  ProfileModal's avatar preview pattern (Photo tab already has
-                  its own crop preview above). */}
-              {avatarTab !== 'photo' && (
-                <div className="flex items-center justify-center gap-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3">
-                  <Avatar
-                    size="lg"
-                    alt="Preview"
-                    avatarData={avatarTab === 'icons' ? { type: 'icon', icon: iconChoice.icon, bgColor: iconChoice.bgColor } : avatarData}
-                  />
-                  <span className="text-sm text-[var(--text-muted)]">This is how you'll appear to others</span>
-                </div>
-              )}
 
               <div className="flex gap-3">
                 <Button type="button" variant="outline" onClick={() => setStep('invitation')} disabled={loading}>
@@ -520,7 +701,7 @@ export function Signup() {
       {step === 'otp-verify' && (
         <Card>
           <Card.Content>
-            <form onSubmit={handleVerifySignupOtp} className="space-y-4">
+            <form onSubmit={handleVerifySignupOtp} className="space-y-4" noValidate>
               {otpError && (
                 <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
                   {otpError}

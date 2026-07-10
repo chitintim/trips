@@ -72,7 +72,13 @@ export function Stepper({
         const StepButtonOrDiv = isTappable ? 'button' : 'div'
 
         return (
-          <div key={step.key} className={`flex items-center ${isLast ? '' : 'flex-1'}`}>
+          // min-w-0 overrides the flex item's default `min-width: auto`,
+          // which otherwise floors shrinking at the dot+label's content
+          // size (the classic flexbox-overflow footgun) — without it, a
+          // step whose current label is wide enough (or whose font is
+          // scaled up by OS text-size settings) can't compress and can
+          // push the row past the container width on narrow phones.
+          <div key={step.key} className={`flex items-center min-w-0 ${isLast ? '' : 'flex-1'}`}>
             <div className="flex flex-col items-center gap-1.5">
               <StepButtonOrDiv
                 type={isTappable ? 'button' : undefined}

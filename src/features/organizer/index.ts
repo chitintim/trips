@@ -1,12 +1,9 @@
 /**
  * Public surface of the organizer console feature (workstream G, plan §14
- * + §9 bookings tracker). The coordinator wires organizerTabConfig into
- * TripDetail's tab list — the tab must only be shown to organizers
- * (organizerOnly flag), and the component self-guards regardless.
+ * + §9 bookings tracker). Consumers mount `OrganizerConsole` directly and
+ * are responsible for their own organizer-only gating; the component also
+ * self-guards regardless (see OrganizerConsole.tsx).
  */
-import type { ComponentType } from 'react'
-import { OrganizerConsole, type OrganizerConsoleProps } from './components/OrganizerConsole'
-
 export { OrganizerConsole } from './components/OrganizerConsole'
 export type { OrganizerConsoleProps } from './components/OrganizerConsole'
 export { BlockersBoard } from './components/BlockersBoard'
@@ -30,18 +27,3 @@ export type { Blocker, BlockerKind, PersonBlockers, BlockersBoardData } from './
 export { parseChaseSettings, DEFAULT_CHASE_SETTINGS } from './lib/chaseSettings'
 export type { ChaseSettings } from './lib/chaseSettings'
 export { requestNudgeDraft, NudgeQuotaError } from './lib/nudgeClient'
-
-export const organizerTabConfig: {
-  tabId: 'organizer'
-  label: string
-  icon: string
-  /** Coordinator: hide this tab for non-organizers. */
-  organizerOnly: true
-  Component: ComponentType<OrganizerConsoleProps>
-} = {
-  tabId: 'organizer',
-  label: 'Console',
-  icon: '🎛️',
-  organizerOnly: true,
-  Component: OrganizerConsole,
-}

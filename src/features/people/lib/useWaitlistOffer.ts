@@ -1,6 +1,7 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../../lib/supabase'
 import { queryKeys } from '../../../lib/queries/queryKeys'
+import { useOptimisticMutation } from '../../../lib/queries/makeOptimisticMutation'
+import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { computeOfferExpiry } from './waitlist'
 
 /**
@@ -14,11 +15,15 @@ import { computeOfferExpiry } from './waitlist'
  * confirmation_status — claiming the offer is a normal status update to
  * 'confirmed' via useUpdateConfirmationStatus, which the capacity trigger
  * will honor since a spot is now actually free.
+ *
+ * Optimistic against the participants cache (mirroring
+ * useUpdateConfirmationStatus in useConfirmations.ts) -- the offer/withdraw
+ * buttons in WaitlistPanel should react instantly, same as every other RSVP
+ * affordance, rather than waiting a round trip.
  */
 export function useOfferWaitlistSpot(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async ({ userId, hours }: { userId: string; hours?: number }) => {
+  return useOptimisticMutation<void, { userId: string; hours?: number }, ParticipantWithUser[]>({
+    mutationFn: async ({ userId, hours }) => {
       const { error } = await supabase
         .from('trip_participants')
         .update({ waitlist_offer_expires_at: computeOfferExpiry(Date.now(), hours) })
@@ -26,15 +31,19 @@ export function useOfferWaitlistSpot(tripId: string) {
         .eq('user_id', userId)
       if (error) throw error
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) }),
+    queryKey: () => queryKeys.participants(tripId),
+    updater: (participants, { userId, hours }) => {
+      if (!participants) return participants as unknown as ParticipantWithUser[]
+      const expiresAt = computeOfferExpiry(Date.now(), hours)
+      return participants.map((p) => (p.user_id === userId ? { ...p, waitlist_offer_expires_at: expiresAt } : p))
+    },
   })
 }
 
 /** Clear an offer (expired-and-cascaded, or claimed) without changing status. */
 export function useClearWaitlistOffer(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (userId: string) => {
+  return useOptimisticMutation<void, string, ParticipantWithUser[]>({
+    mutationFn: async (userId) => {
       const { error } = await supabase
         .from('trip_participants')
         .update({ waitlist_offer_expires_at: null })
@@ -42,6 +51,10 @@ export function useClearWaitlistOffer(tripId: string) {
         .eq('user_id', userId)
       if (error) throw error
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) }),
+    queryKey: () => queryKeys.participants(tripId),
+    updater: (participants, userId) => {
+      if (!participants) return participants as unknown as ParticipantWithUser[]
+      return participants.map((p) => (p.user_id === userId ? { ...p, waitlist_offer_expires_at: null } : p))
+    },
   })
 }

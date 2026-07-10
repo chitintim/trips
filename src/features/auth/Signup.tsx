@@ -2,14 +2,23 @@ import { useState, FormEvent, useEffect } from 'react'
 import { useNavigate, Link, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { supabase } from '../../lib/supabase'
-import { Button, Input, Card, SegmentedControl, Stepper } from '../../components/ui'
+import { Button, Input, Card, SegmentedControl, Stepper, Avatar } from '../../components/ui'
 import { AvatarBuilder } from '../../components/AvatarBuilder'
+import { AvatarIconPicker } from '../../components/AvatarIconPicker'
+import { AvatarPhotoPicker } from '../../components/AvatarPhotoPicker'
 import { Welcome } from '../../components/Welcome'
-import { AvatarData } from '../../types'
+import { processAndUploadAvatar } from '../../lib/avatarUpload'
+import { type AvatarIconName } from '../../components/ui/Avatar'
+import { AvatarData, AnyAvatarData } from '../../types'
 import { AuthLayout } from './AuthLayout'
 
 type Step = 'invitation' | 'details' | 'otp-verify' | 'welcome'
 type AccountMode = 'otp' | 'password'
+type AvatarTab = 'photo' | 'icons' | 'emoji'
+
+// Matches ProfileModal's DEFAULT_ICON (same default icon/color for both
+// pickers, since they're the same design).
+const DEFAULT_ICON: { icon: AvatarIconName; bgColor: string } = { icon: 'mountain', bgColor: '#0ea5e9' }
 
 /**
  * `log_invitation_attempt` is a post-codegen RPC (see
@@ -59,8 +68,10 @@ function mapSignupError(message: string): string {
  * Invitation-only signup, OTP-first: after the invitation code validates,
  * the user picks between "email me a code" (no password ever needed,
  * settable later in profile) or setting a password up front. Both paths
- * converge on the same profile completion (name + AvatarBuilder emoji)
- * before finalizing the account and consuming the invitation.
+ * converge on the same profile completion (name + avatar system v2 picker
+ * -- Photo/Icons/Emoji(legacy), same as ProfileModal, UX_REDESIGN.md
+ * "Avatar system v2") before finalizing the account and consuming the
+ * invitation.
  */
 export function Signup() {
   const navigate = useNavigate()
@@ -85,11 +96,27 @@ export function Signup() {
   const [password, setPassword] = useState('')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
+
+  // Avatar system v2 (UX_REDESIGN.md "Avatar system v2"): same three-tab
+  // Photo/Icons/Emoji picker as ProfileModal, so the account-creation avatar
+  // UI matches profile editing instead of only offering the legacy emoji
+  // builder. Defaults to "icons" (the new primary), not "emoji" (legacy) --
+  // there's no existing avatar to preserve at signup, unlike ProfileModal's
+  // `initialTabFor(user)`.
+  const [avatarTab, setAvatarTab] = useState<AvatarTab>('icons')
+  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null)
+  const [iconChoice, setIconChoice] = useState<{ icon: AvatarIconName; bgColor: string }>(DEFAULT_ICON)
   const [avatarData, setAvatarData] = useState<AvatarData>({
     emoji: '😊',
     accessory: null,
     bgColor: '#0ea5e9',
   })
+  // What actually got saved once finalizeAccount runs -- passed to Welcome
+  // so its hero avatar matches whichever tab (photo/icon/emoji) was used,
+  // instead of Welcome only ever knowing how to render the emoji shape.
+  const [savedAvatarUrl, setSavedAvatarUrl] = useState<string | null>(null)
+  const [savedAvatarData, setSavedAvatarData] = useState<AnyAvatarData | null>(null)
+
   const [signupError, setSignupError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
@@ -142,14 +169,40 @@ export function Signup() {
   const finalizeAccount = async (userId: string) => {
     if (!invitation) return
 
+    // Avatar system v2: mirrors ProfileModal.handleSubmit's branching. Photo
+    // upload can only happen now (not in signUp's options.data) because it
+    // needs the real userId for the storage path -- a failed upload must
+    // not block account creation, so it's caught and logged rather than
+    // thrown, same as the other best-effort steps below (invitation mark,
+    // trip assignment).
+    const update: Record<string, unknown> = {
+      first_name: firstName,
+      last_name: lastName,
+      full_name: `${firstName} ${lastName}`,
+    }
+
+    if (avatarTab === 'photo' && pendingPhotoFile) {
+      try {
+        const publicUrl = await processAndUploadAvatar(pendingPhotoFile, userId)
+        update.avatar_url = publicUrl
+        setSavedAvatarUrl(publicUrl)
+      } catch (err) {
+        console.error('Avatar upload failed:', err)
+      }
+    } else if (avatarTab === 'icons') {
+      const iconData: AnyAvatarData = { type: 'icon', icon: iconChoice.icon, bgColor: iconChoice.bgColor }
+      update.avatar_data = iconData
+      update.avatar_url = null
+      setSavedAvatarData(iconData)
+    } else if (avatarTab === 'emoji') {
+      update.avatar_data = avatarData
+      update.avatar_url = null
+      setSavedAvatarData(avatarData)
+    }
+
     const { error: profileError } = await supabase
       .from('users')
-      .update({
-        first_name: firstName,
-        last_name: lastName,
-        full_name: `${firstName} ${lastName}`,
-        avatar_data: avatarData as unknown as any,
-      })
+      .update(update)
       .eq('id', userId)
     if (profileError) console.error('Profile update error:', profileError)
 
@@ -172,6 +225,24 @@ export function Signup() {
     setStep('welcome')
   }
 
+  /**
+   * Initial `avatar_data` sent as auth signup metadata (raw_user_meta_data,
+   * consumed by the not-migration-tracked new-user trigger that creates the
+   * `public.users` row -- see `finalizeAccount`, which always overwrites it
+   * right after with the authoritative value). Photo has no representation
+   * here since it needs the real userId to upload to; `finalizeAccount`
+   * handles it exclusively once the account exists.
+   */
+  const avatarMetadataForSignup = (): Record<string, unknown> | undefined => {
+    if (avatarTab === 'icons') {
+      return { type: 'icon', icon: iconChoice.icon, bgColor: iconChoice.bgColor }
+    }
+    if (avatarTab === 'emoji') {
+      return avatarData as unknown as Record<string, unknown>
+    }
+    return undefined
+  }
+
   // Password-mode signup: create the account and profile in one step.
   const handlePasswordSignup = async (e: FormEvent) => {
     e.preventDefault()
@@ -187,7 +258,7 @@ export function Signup() {
       const { user, error: authError } = await signUp({
         email,
         password,
-        options: { data: { first_name: firstName, last_name: lastName, avatar_data: avatarData as Record<string, any> } },
+        options: { data: { first_name: firstName, last_name: lastName, avatar_data: avatarMetadataForSignup() } },
       })
 
       if (authError) {
@@ -259,7 +330,8 @@ export function Signup() {
     return (
       <Welcome
         firstName={firstName}
-        avatarData={avatarData}
+        avatarUrl={savedAvatarUrl}
+        avatarData={savedAvatarData}
         tripId={invitation?.trip_id}
         // Invitation tied to a trip → land INSIDE that trip (its Today
         // space shows the RSVP card), not on the dashboard (UX_REDESIGN
@@ -393,9 +465,55 @@ export function Signup() {
               />
 
               <div>
-                <label className="block text-sm font-medium text-[var(--text-primary)] mb-3">Choose your avatar</label>
-                <AvatarBuilder value={avatarData} onChange={setAvatarData} disabled={loading} />
+                <div className="flex items-center justify-between mb-3">
+                  <label className="block text-sm font-medium text-[var(--text-primary)]">Choose your avatar</label>
+                  <SegmentedControl
+                    size="sm"
+                    value={avatarTab}
+                    onChange={setAvatarTab}
+                    options={[
+                      { value: 'photo', label: 'Photo' },
+                      { value: 'icons', label: 'Icons' },
+                      { value: 'emoji', label: 'Emoji' },
+                    ]}
+                  />
+                </div>
+
+                {avatarTab === 'photo' && (
+                  <AvatarPhotoPicker
+                    currentUrl={null}
+                    onFileReady={setPendingPhotoFile}
+                    disabled={loading}
+                  />
+                )}
+
+                {avatarTab === 'icons' && (
+                  <AvatarIconPicker
+                    icon={iconChoice.icon}
+                    bgColor={iconChoice.bgColor}
+                    onChange={setIconChoice}
+                    disabled={loading}
+                  />
+                )}
+
+                {avatarTab === 'emoji' && (
+                  <AvatarBuilder value={avatarData} onChange={setAvatarData} disabled={loading} />
+                )}
               </div>
+
+              {/* Live preview of what will actually render app-wide -- matches
+                  ProfileModal's avatar preview pattern (Photo tab already has
+                  its own crop preview above). */}
+              {avatarTab !== 'photo' && (
+                <div className="flex items-center justify-center gap-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3">
+                  <Avatar
+                    size="lg"
+                    alt="Preview"
+                    avatarData={avatarTab === 'icons' ? { type: 'icon', icon: iconChoice.icon, bgColor: iconChoice.bgColor } : avatarData}
+                  />
+                  <span className="text-sm text-[var(--text-muted)]">This is how you'll appear to others</span>
+                </div>
+              )}
 
               <div className="flex gap-3">
                 <Button type="button" variant="outline" onClick={() => setStep('invitation')} disabled={loading}>

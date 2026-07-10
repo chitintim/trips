@@ -1,11 +1,19 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { AvatarData, User, Trip } from '../types'
-import { Button, Spinner } from './ui'
+import { AnyAvatarData, User, Trip } from '../types'
+import { Avatar, Button, Spinner, UserAvatar } from './ui'
 
 interface WelcomeProps {
   firstName: string
-  avatarData: AvatarData
+  /**
+   * Avatar system v2 (UX_REDESIGN.md "Avatar system v2"): whichever of
+   * photo/icon/emoji the signup avatar picker produced, resolved the same
+   * way as everywhere else via the shared `Avatar` component -- this used
+   * to be a bespoke emoji-only renderer that couldn't show a photo or
+   * curated icon even though Signup could produce either.
+   */
+  avatarUrl?: string | null
+  avatarData?: AnyAvatarData | null
   tripId?: string | null
   onContinue: () => void
 }
@@ -14,7 +22,7 @@ interface Participant {
   user: User
 }
 
-export function Welcome({ firstName, avatarData, tripId, onContinue }: WelcomeProps) {
+export function Welcome({ firstName, avatarUrl, avatarData, tripId, onContinue }: WelcomeProps) {
   const [trip, setTrip] = useState<Trip | null>(null)
   const [participants, setParticipants] = useState<Participant[]>([])
   const [loading, setLoading] = useState(true)
@@ -65,38 +73,6 @@ export function Welcome({ firstName, avatarData, tripId, onContinue }: WelcomePr
     return () => clearTimeout(timer)
   }, [tripId])
 
-  // Render avatar
-  const renderAvatar = (data: AvatarData, size: 'sm' | 'lg' = 'lg') => {
-    const sizeClasses = size === 'lg' ? 'w-32 h-32 text-6xl' : 'w-12 h-12 text-2xl'
-    const accessorySize = size === 'lg' ? 'text-3xl -top-3 -right-3' : 'text-lg -top-1 -right-1'
-
-    return (
-      <div
-        className={`${sizeClasses} rounded-full flex items-center justify-center relative transition-all duration-300`}
-        style={{ backgroundColor: data.bgColor }}
-      >
-        <span className="relative">
-          {data.emoji}
-          {data.accessory && (
-            <span className={`absolute ${accessorySize}`}>
-              {data.accessory}
-            </span>
-          )}
-        </span>
-      </div>
-    )
-  }
-
-  // Render user avatar from database
-  const renderUserAvatar = (user: User) => {
-    const data = (user.avatar_data as unknown as AvatarData) || {
-      emoji: '😊',
-      accessory: null,
-      bgColor: '#0ea5e9',
-    }
-    return renderAvatar(data, 'sm')
-  }
-
   // Format display name
   const getDisplayName = (user: User) => {
     if (user.first_name) {
@@ -117,7 +93,13 @@ export function Welcome({ firstName, avatarData, tripId, onContinue }: WelcomePr
         <div className="bg-white rounded-2xl shadow-xl p-8 text-center">
           {/* Animated Avatar */}
           <div className="flex justify-center mb-6 animate-bounce-slow">
-            {renderAvatar(avatarData, 'lg')}
+            <Avatar
+              size="2xl"
+              avatarUrl={avatarUrl}
+              avatarData={avatarData}
+              alt={firstName || 'Your avatar'}
+              fallback={firstName ? firstName.charAt(0) : undefined}
+            />
           </div>
 
           {/* Welcome Message */}
@@ -161,7 +143,7 @@ export function Welcome({ firstName, avatarData, tripId, onContinue }: WelcomePr
                         key={participant.user.id}
                         className="flex flex-col items-center gap-1"
                       >
-                        {renderUserAvatar(participant.user)}
+                        <UserAvatar avatarData={participant.user} size="sm" alt={getDisplayName(participant.user)} />
                         <span className="text-xs font-medium text-gray-700">
                           {getDisplayName(participant.user)}
                         </span>

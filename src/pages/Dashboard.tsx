@@ -28,7 +28,7 @@ import { useInvitations, useCreateInvitation, useDeleteInvitation } from '../lib
 import { queryKeys } from '../lib/queries/queryKeys'
 import { useFormDraft, useUnsavedChangesGuard } from '../lib/forms'
 import { User, Trip, Invitation } from '../types'
-import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming } from '../lib/tripStatus'
+import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming, isConfirmationEnabled } from '../lib/tripStatus'
 
 type AdminTab = 'trips' | 'users' | 'invitations'
 
@@ -278,7 +278,9 @@ function AdminTripsTab() {
                         {formatDate(trip.start_date)} – {formatDate(trip.end_date)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
-                        👥 {trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit}` : trip.confirmed_count}
+                        {isConfirmationEnabled(trip)
+                          ? `👥 ${trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit}` : trip.confirmed_count}`
+                          : '—'}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">
                         <Button

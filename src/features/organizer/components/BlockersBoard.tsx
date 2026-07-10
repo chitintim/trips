@@ -9,6 +9,7 @@ import { useNotifications } from '../../../lib/queries/useNotifications'
 import { computeBlockers, type Blocker } from '../lib/blockers'
 import { parseChaseSettings } from '../lib/chaseSettings'
 import { NudgeDraftSheet } from './NudgeDraftSheet'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import type { Trip } from '../../../types'
 
 const KIND_BADGE: Record<Blocker['kind'], { icon: string; variant: 'warning' | 'error' | 'info' | 'neutral' }> = {
@@ -56,8 +57,9 @@ export function BlockersBoard({ trip }: BlockersBoardProps) {
         bookings: bookings ?? [],
         notifications: notifications ?? [],
         maxReminders: parseChaseSettings(trip.chase_settings).max_reminders,
+        confirmationEnabled: isConfirmationEnabled(trip),
       }),
-    [participants, sections, votes, expensesData, settlements, bookings, notifications, trip.chase_settings]
+    [participants, sections, votes, expensesData, settlements, bookings, notifications, trip.chase_settings, trip.confirmation_enabled]
   )
 
   if (loadingParticipants) {

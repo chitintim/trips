@@ -34,19 +34,28 @@ export function useCreateChecklistItem(tripId: string) {
   })
 }
 
-/** Check/uncheck a checklist item — optimistic. */
+/**
+ * Check/uncheck a checklist item — optimistic. `doneBy` is the acting
+ * user's id (the assignee marking their own item, or an organizer
+ * overriding on someone else's behalf); it's only persisted when `done` is
+ * true and cleared back to null on un-check, regardless of who un-checks.
+ */
 export function useToggleChecklistItem(tripId: string) {
-  return useOptimisticMutation<void, { id: string; done: boolean }, ChecklistItem[]>({
-    mutationFn: async ({ id, done }) => {
+  return useOptimisticMutation<void, { id: string; done: boolean; doneBy: string | null }, ChecklistItem[]>({
+    mutationFn: async ({ id, done, doneBy }) => {
       const { error } = await supabase
         .from('trip_checklists')
-        .update({ done, done_at: done ? new Date().toISOString() : null })
+        .update({ done, done_at: done ? new Date().toISOString() : null, done_by: done ? doneBy : null })
         .eq('id', id)
       if (error) throw error
     },
     queryKey: () => queryKeys.checklists(tripId),
-    updater: (items, { id, done }) =>
-      (items || []).map((item) => (item.id === id ? { ...item, done, done_at: done ? new Date().toISOString() : null } : item)),
+    updater: (items, { id, done, doneBy }) =>
+      (items || []).map((item) =>
+        item.id === id
+          ? { ...item, done, done_at: done ? new Date().toISOString() : null, done_by: done ? doneBy : null }
+          : item
+      ),
   })
 }
 

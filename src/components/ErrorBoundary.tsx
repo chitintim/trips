@@ -27,6 +27,23 @@ interface ErrorBoundaryState {
   error: Error | null
 }
 
+// Browsers word "the dynamically-imported chunk isn't there" differently --
+// Chrome/Vite: "Failed to fetch dynamically imported module"; Firefox:
+// "error loading dynamically imported module"; Safari: "Importing a module
+// script failed". All three show up when GitHub Pages' atomic dist/
+// replacement (see .github/workflows/deploy.yml) has retired a hashed chunk
+// a still-open tab is asking for -- the SPA 404 fallback answers with HTML
+// instead of JS. That's not "something went wrong", it's "reload to update".
+const CHUNK_LOAD_ERROR_PATTERNS = [
+  /failed to fetch dynamically imported module/i,
+  /error loading dynamically imported module/i,
+  /importing a module script failed/i,
+]
+
+function isChunkLoadError(error: Error): boolean {
+  return CHUNK_LOAD_ERROR_PATTERNS.some((pattern) => pattern.test(error.message))
+}
+
 /**
  * Per-tab error boundary (per UPGRADE_MASTER_PLAN §4/§16: "error boundaries
  * per tab"). Wrap each TripDetail tab's content independently so a bug in,
@@ -52,6 +69,25 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render() {
     if (this.state.error) {
+      if (isChunkLoadError(this.state.error)) {
+        return (
+          <Card className="max-w-lg mx-auto">
+            <Card.Content className="py-10">
+              <EmptyState
+                icon={<ErrorState className="w-24 h-24 text-danger-500" />}
+                title="A new version of Trips was deployed"
+                description="Reload the page to pick up the update."
+                action={
+                  <Button variant="primary" onClick={() => window.location.reload()}>
+                    Reload
+                  </Button>
+                }
+              />
+            </Card.Content>
+          </Card>
+        )
+      }
+
       const label = this.props.label || 'this section'
       return (
         <Card className="max-w-lg mx-auto">

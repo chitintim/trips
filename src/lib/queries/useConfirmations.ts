@@ -97,7 +97,17 @@ export function useAddParticipant(tripId: string) {
   const logActivity = useTripActivityLog(tripId)
   return useMutation({
     mutationFn: async ({ userId, role = 'participant' }: { userId: string; role?: 'organizer' | 'participant' }) => {
-      const { error } = await supabase.from('trip_participants').insert({ trip_id: tripId, user_id: userId, role })
+      // Upsert on the (trip_id, user_id) unique constraint rather than a
+      // plain insert: someone who was previously removed from the trip
+      // still has a row here with active=false, and a plain insert would
+      // violate the constraint. Upserting reactivates that existing row
+      // (active: true, requested role) in the same round trip a brand-new
+      // participant gets inserted in -- People tab "add participant" covers
+      // both cases without needing to branch on whether the user was ever
+      // on the trip before.
+      const { error } = await supabase
+        .from('trip_participants')
+        .upsert({ trip_id: tripId, user_id: userId, role, active: true }, { onConflict: 'trip_id,user_id' })
       if (error) throw error
     },
     onSuccess: (_data, input) => {

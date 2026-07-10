@@ -12,6 +12,42 @@ type Step = 'invitation' | 'details' | 'otp-verify' | 'welcome'
 type AccountMode = 'otp' | 'password'
 
 /**
+ * `log_invitation_attempt` is a post-codegen RPC (see
+ * supabase/migrations/20260710150000_log_invitation_attempt.sql) — the
+ * generated Database types don't know it yet, hence the local typing here
+ * (mirrors fetchInvitationPreview in JoinTrip.tsx). invitation_attempts is
+ * a write-only audit log; a logging failure must never block or throw into
+ * the signup flow, so a failed call is only console.error'd.
+ */
+async function logInvitationAttempt(code: string, success: boolean): Promise<void> {
+  const rpc = supabase.rpc as unknown as (
+    fn: string,
+    args: Record<string, unknown>
+  ) => PromiseLike<{ data: unknown; error: { message: string } | null }>
+  const { error } = await rpc('log_invitation_attempt', {
+    p_code: code,
+    p_success: success,
+    p_user_agent: navigator.userAgent,
+  })
+  if (error) console.error('Failed to log invitation attempt:', error)
+}
+
+const SIGNUP_DISABLED_PATTERN = /signups?\s*(are\s*)?not\s*allowed/i
+
+/**
+ * GoTrue returns its literal "Signups not allowed for otp"/"...for this
+ * instance" string when the project's "Allow new users to sign up" Auth
+ * setting is off — a Dashboard-only toggle affecting both OTP and password
+ * signup identically (no per-method fallback exists), so this maps to the
+ * same actionable message regardless of which form submitted it.
+ */
+function mapSignupError(message: string): string {
+  return SIGNUP_DISABLED_PATTERN.test(message)
+    ? 'Signups are currently disabled for this app — please ask your organizer to check the Supabase dashboard.'
+    : message
+}
+
+/**
  * Invitation-only signup, OTP-first: after the invitation code validates,
  * the user picks between "email me a code" (no password ever needed,
  * settable later in profile) or setting a password up front. Both paths
@@ -68,11 +104,7 @@ export function Signup() {
       })
       const result = Array.isArray(data) ? data[0] : data
 
-      await supabase.from('invitation_attempts').insert({
-        code_attempted: codeToValidate,
-        success: !!result?.is_valid,
-        user_agent: navigator.userAgent,
-      })
+      await logInvitationAttempt(codeToValidate, !!result?.is_valid)
 
       if (error || !result) {
         setCodeError('Error validating code. Please try again.')
@@ -151,7 +183,7 @@ export function Signup() {
       })
 
       if (authError) {
-        setSignupError(authError.message)
+        setSignupError(mapSignupError(authError.message))
         return
       }
       if (!user) {
@@ -182,7 +214,7 @@ export function Signup() {
     try {
       const { error } = await requestSignupOtp(email)
       if (error) {
-        setSignupError(error.message)
+        setSignupError(mapSignupError(error.message))
       } else {
         setStep('otp-verify')
       }

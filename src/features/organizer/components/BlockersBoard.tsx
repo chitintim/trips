@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Badge, Button, Card, Deadline, EmptyState, Skeleton, UserAvatar } from '../../../components/ui'
+import { ErrorState } from '../../../components/ui/illustrations'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useSections, useVotes } from '../../../lib/queries/usePlanning'
 import { useExpenses } from '../../../lib/queries/useExpenses'
@@ -36,13 +37,33 @@ export interface BlockersBoardProps {
  */
 export function BlockersBoard({ trip }: BlockersBoardProps) {
   const tripId = trip.id
-  const { data: participants, isLoading: loadingParticipants } = useParticipants(tripId)
-  const { data: sections } = useSections(tripId)
-  const { data: votes } = useVotes(tripId)
-  const { data: expensesData } = useExpenses(tripId)
-  const { data: settlements } = useSettlements(tripId)
-  const { data: bookings } = useBookings(tripId)
-  const { data: notifications } = useNotifications(tripId)
+  const {
+    data: participants,
+    isLoading: loadingParticipants,
+    isError: participantsError,
+    refetch: refetchParticipants,
+  } = useParticipants(tripId)
+  const { data: sections, isLoading: loadingSections, isError: sectionsError, refetch: refetchSections } = useSections(tripId)
+  const { data: votes, isLoading: loadingVotes, isError: votesError, refetch: refetchVotes } = useVotes(tripId)
+  const {
+    data: expensesData,
+    isLoading: loadingExpenses,
+    isError: expensesError,
+    refetch: refetchExpenses,
+  } = useExpenses(tripId)
+  const {
+    data: settlements,
+    isLoading: loadingSettlements,
+    isError: settlementsError,
+    refetch: refetchSettlements,
+  } = useSettlements(tripId)
+  const { data: bookings, isLoading: loadingBookings, isError: bookingsError, refetch: refetchBookings } = useBookings(tripId)
+  const {
+    data: notifications,
+    isLoading: loadingNotifications,
+    isError: notificationsError,
+    refetch: refetchNotifications,
+  } = useNotifications(tripId)
 
   const [nudge, setNudge] = useState<{ userId: string; name: string; blocker: Blocker } | null>(null)
 
@@ -62,12 +83,46 @@ export function BlockersBoard({ trip }: BlockersBoardProps) {
     [participants, sections, votes, expensesData, settlements, bookings, notifications, trip.chase_settings, trip.confirmation_enabled]
   )
 
-  if (loadingParticipants) {
+  // All six data sources feed computeBlockers -- gating on participants
+  // alone let the board render "No open loops 🎉" while the others were
+  // still in flight (a false all-clear flash).
+  const isLoading =
+    loadingParticipants || loadingSections || loadingVotes || loadingExpenses || loadingSettlements || loadingBookings || loadingNotifications
+  const isError =
+    participantsError || sectionsError || votesError || expensesError || settlementsError || bookingsError || notificationsError
+
+  if (isLoading) {
     return (
       <div className="space-y-3">
         <Skeleton variant="card" height={90} />
         <Skeleton variant="card" height={90} />
       </div>
+    )
+  }
+
+  if (isError) {
+    return (
+      <EmptyState
+        icon={<ErrorState className="w-20 h-20 text-danger-500" />}
+        title="Couldn't load the blockers board"
+        description="Something went wrong fetching the trip's open loops. Check your connection and try again."
+        action={
+          <Button
+            variant="primary"
+            onClick={() => {
+              refetchParticipants()
+              refetchSections()
+              refetchVotes()
+              refetchExpenses()
+              refetchSettlements()
+              refetchBookings()
+              refetchNotifications()
+            }}
+          >
+            Try again
+          </Button>
+        }
+      />
     )
   }
 

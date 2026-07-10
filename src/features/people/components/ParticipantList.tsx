@@ -108,47 +108,65 @@ export function ParticipantList({ participants, currentUserId, onSelect, groupBy
           <div className="space-y-2">
             {group.members.map((p) => {
               const waitlistEntry = group.status === 'waitlist' ? positionByUserId.get(p.user_id) : undefined
-              return (
-                <div key={p.user_id} className="relative">
-                  <button
-                    type="button"
-                    onClick={() => onSelect(p)}
-                    className={`w-full flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border-subtle)] hover:border-accent-300 transition-colors text-left ${canManage ? 'pr-12' : ''}`}
-                  >
-                    <UserAvatar avatarData={p.user} size="md" />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium text-[var(--text-primary)] truncate">
-                          {p.user?.full_name || p.user?.email}
-                          {p.user_id === currentUserId && <span className="text-[var(--text-muted)] font-normal"> (you)</span>}
-                        </span>
-                        {p.role === 'organizer' && (
-                          <Badge variant="secondary" size="sm">
-                            Organizer
-                          </Badge>
-                        )}
-                      </div>
-                      {p.confirmation_note && (
-                        <p className="text-sm text-[var(--text-secondary)] truncate mt-0.5 italic">"{p.confirmation_note}"</p>
-                      )}
-                      {waitlistEntry && (
-                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                          <Badge variant="info" size="sm">
-                            Queue position #{waitlistEntry.position}
-                          </Badge>
-                          {waitlistEntry.hasActiveOffer && p.waitlist_offer_expires_at && (
-                            <Deadline date={p.waitlist_offer_expires_at} kind="offer" size="sm" />
-                          )}
-                        </div>
-                      )}
-                      {p.confirmation_status === 'conditional' && p.conditional_date && (
-                        <div className="mt-1.5">
-                          <Deadline date={p.conditional_date} kind="deadline" size="sm" />
-                        </div>
+              const isSelf = p.user_id === currentUserId
+              const rowContent = (
+                <>
+                  <UserAvatar avatarData={p.user} size="md" />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-[var(--text-primary)] truncate">
+                        {p.user?.full_name || p.user?.email}
+                        {isSelf && <span className="text-[var(--text-muted)] font-normal"> (you)</span>}
+                      </span>
+                      {p.role === 'organizer' && (
+                        <Badge variant="secondary" size="sm">
+                          Organizer
+                        </Badge>
                       )}
                     </div>
-                    <ConfirmationStatusBadge status={p.confirmation_status || 'pending'} size="sm" />
-                  </button>
+                    {p.confirmation_note && (
+                      <p className="text-sm text-[var(--text-secondary)] truncate mt-0.5 italic">"{p.confirmation_note}"</p>
+                    )}
+                    {waitlistEntry && (
+                      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                        <Badge variant="info" size="sm">
+                          Queue position #{waitlistEntry.position}
+                        </Badge>
+                        {waitlistEntry.hasActiveOffer && p.waitlist_offer_expires_at && (
+                          <Deadline date={p.waitlist_offer_expires_at} kind="offer" size="sm" />
+                        )}
+                      </div>
+                    )}
+                    {p.confirmation_status === 'conditional' && p.conditional_date && (
+                      <div className="mt-1.5">
+                        <Deadline date={p.conditional_date} kind="deadline" size="sm" />
+                      </div>
+                    )}
+                  </div>
+                  <ConfirmationStatusBadge status={p.confirmation_status || 'pending'} size="sm" />
+                </>
+              )
+              return (
+                <div key={p.user_id} className="relative">
+                  {isSelf ? (
+                    <button
+                      type="button"
+                      onClick={() => onSelect(p)}
+                      className={`w-full flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border-subtle)] hover:border-accent-300 transition-colors text-left ${canManage ? 'pr-12' : ''}`}
+                    >
+                      {rowContent}
+                    </button>
+                  ) : (
+                    // Non-self rows have nothing to select (only you can edit
+                    // your own RSVP) -- render as a plain, non-interactive
+                    // row (same treatment as the flat groupByStatus=false
+                    // path) instead of a button that silently no-ops on tap.
+                    <div
+                      className={`w-full flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border-subtle)] ${canManage ? 'pr-12' : ''}`}
+                    >
+                      {rowContent}
+                    </div>
+                  )}
                   {canManage && onManage && <ManageButton participant={p} onManage={onManage} />}
                 </div>
               )

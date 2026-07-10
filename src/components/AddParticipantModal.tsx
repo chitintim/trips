@@ -1,5 +1,5 @@
 import { useState, useEffect, FormEvent } from 'react'
-import { Modal, Button, Select, ConfirmDiscardSheet } from './ui'
+import { Modal, Button, Select, ConfirmDiscardSheet, Skeleton, useToast } from './ui'
 import { supabase } from '../lib/supabase'
 import { useAddParticipant } from '../lib/queries/useConfirmations'
 import { useUnsavedChangesGuard } from '../lib/forms'
@@ -20,32 +20,33 @@ export function AddParticipantModal({
   existingParticipantIds,
   onSuccess,
 }: AddParticipantModalProps) {
+  const { showToast } = useToast()
   const [users, setUsers] = useState<User[]>([])
+  // Distinct from `users.length === 0` so the fetch-in-flight state doesn't
+  // briefly render as "everyone's already on this trip" before the first
+  // response lands.
+  const [usersLoading, setUsersLoading] = useState(false)
   const [selectedUserId, setSelectedUserId] = useState('')
   const [role, setRole] = useState<'organizer' | 'participant'>('participant')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState(false)
   const addParticipant = useAddParticipant(tripId)
 
   // Dirty only once the auto-picked defaults have been touched -- avoids
   // prompting a discard-confirm for a form nobody has actually interacted
   // with yet.
   const [touched, setTouched] = useState(false)
-  const isDirty = touched && !success
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(touched)
   const handleClose = () => confirmClose(onClose)
 
   useEffect(() => {
     if (isOpen) {
       fetchUsers()
-      setError(null)
-      setSuccess(false)
       setTouched(false)
     }
   }, [isOpen])
 
   const fetchUsers = async () => {
+    setUsersLoading(true)
     const { data, error: fetchError } = await supabase
       .from('users')
       .select('*')
@@ -61,46 +62,54 @@ export function AddParticipantModal({
       // Reset selection
       setSelectedUserId(availableUsers.length > 0 ? availableUsers[0].id : '')
     }
+    setUsersLoading(false)
   }
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    setError(null)
+
+    if (!selectedUserId) {
+      showToast({ type: 'error', message: 'Please select a user' })
+      return
+    }
+
     setLoading(true)
-
     try {
-      if (!selectedUserId) {
-        setError('Please select a user')
-        setLoading(false)
-        return
-      }
-
       await addParticipant.mutateAsync({ userId: selectedUserId, role })
 
-      setLoading(false)
-      setSuccess(true)
+      showToast({ type: 'success', message: 'Participant added' })
+      onSuccess()
+      onClose()
 
-      // Wait a moment to show success, then refresh and close
-      setTimeout(() => {
-        onSuccess()
-        onClose()
-
-        // Reset form
-        setSelectedUserId('')
-        setRole('participant')
-        setSuccess(false)
-      }, 800)
+      // Reset form
+      setSelectedUserId('')
+      setRole('participant')
     } catch (err) {
       console.error('Participant add error:', err)
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred')
+      showToast({
+        type: 'error',
+        message: 'Could not add participant',
+        description: err instanceof Error ? err.message : undefined,
+      })
+    } finally {
       setLoading(false)
     }
   }
 
-  if (users.length === 0 && isOpen) {
+  if (isOpen && usersLoading) {
     return (
       <Modal isOpen={isOpen} onClose={onClose} title="Add Participant">
-        <div className="py-8 text-center text-gray-600">
+        <div className="py-2">
+          <Skeleton variant="list" lines={3} />
+        </div>
+      </Modal>
+    )
+  }
+
+  if (isOpen && users.length === 0) {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} title="Add Participant">
+        <div className="py-8 text-center text-[var(--text-secondary)]">
           All users are already participants in this trip!
         </div>
         <div className="flex justify-end pt-4">
@@ -115,19 +124,6 @@ export function AddParticipantModal({
   return (
     <Modal isOpen={isOpen} onClose={handleClose} title="Add Participant" size="md">
       <form onSubmit={handleSubmit} className="space-y-6">
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-800 rounded-lg p-3 text-sm">
-            {error}
-          </div>
-        )}
-
-        {success && (
-          <div className="bg-green-50 border border-green-200 text-green-800 rounded-lg p-3 text-sm flex items-center gap-2">
-            <span className="text-lg">✓</span>
-            <span>Participant added successfully!</span>
-          </div>
-        )}
-
         {/* User Selection */}
         <Select
           label="Select User"
@@ -136,7 +132,7 @@ export function AddParticipantModal({
             setSelectedUserId(e.target.value)
             setTouched(true)
           }}
-          disabled={loading || success}
+          disabled={loading}
           options={users.map((user) => ({
             value: user.id,
             label: user.full_name || user.email,
@@ -152,7 +148,7 @@ export function AddParticipantModal({
             setRole(e.target.value as 'organizer' | 'participant')
             setTouched(true)
           }}
-          disabled={loading || success}
+          disabled={loading}
           options={[
             { value: 'participant', label: '👤 Participant - Can view and make selections' },
             { value: 'organizer', label: '⭐ Organizer - Can manage trip settings' },
@@ -166,11 +162,11 @@ export function AddParticipantModal({
             type="button"
             variant="outline"
             onClick={handleClose}
-            disabled={loading || success}
+            disabled={loading}
           >
             Cancel
           </Button>
-          <Button type="submit" variant="primary" isLoading={loading} disabled={success}>
+          <Button type="submit" variant="primary" isLoading={loading}>
             Add Participant
           </Button>
         </div>

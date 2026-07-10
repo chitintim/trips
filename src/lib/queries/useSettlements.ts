@@ -157,6 +157,15 @@ export function useCreateSettlementCarryover(tripId: string) {
       const { error } = await supabase.from('settlement_carryovers').insert({ trip_id: tripId, ...input })
       if (error) throw error
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.settlementCarryovers(tripId) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.settlementCarryovers(tripId) })
+      // useCarryoverCandidates keys on ['carryoverCandidates', tripId, userId]
+      // (not part of the queryKeys factory -- it's not trip-detail-prefixed
+      // data). Invalidate the whole family by its literal string prefix so
+      // de-dupe reflects this fold immediately instead of waiting out its
+      // 5-minute staleTime, for whichever trip(s) the candidate was surfaced
+      // from/into.
+      queryClient.invalidateQueries({ queryKey: ['carryoverCandidates'] })
+    },
   })
 }

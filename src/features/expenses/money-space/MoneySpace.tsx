@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Modal, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
+import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { effectiveTripStage } from '../../../lib/tripStage'
 import { MoneyPositionHeader } from './MoneyPositionHeader'
@@ -34,15 +35,16 @@ export interface MoneySpaceProps {
  * "see my breakdown" from the position header. Both push as full-screen
  * sheets built from the SAME SettleUpTab/MySpendingTab components v2.0
  * shipped (Money internals unchanged per UX_REDESIGN.md §3/Part 4 — only
- * the hub chrome around them changes). EXPENSE_TAB_CONFIGS stays exported
- * from the feature barrel for back-compat but is no longer rendered as an
- * inner tab strip anywhere.
+ * the hub chrome around them changes). The old inner tab strip (ExpensesTab
+ * + EXPENSE_TAB_CONFIGS) has been removed as dead code — this component is
+ * the only Money surface now.
  */
 export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
   const { data, isLoading } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
+  const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -91,6 +93,7 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
       <MoneyPositionHeader
         expenses={expenses}
         settlements={settlements}
+        carryovers={carryovers}
         participants={participants}
         currentUserId={user?.id}
         baseCurrency={trip.base_currency}

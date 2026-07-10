@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { Card, StatCard, Skeleton, Badge } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
+import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { formatMoney } from '../lib/formatMoney'
 import { computePersonalOverview, computeCategoryBreakdown, computeDayBreakdown, computePaidVsOwed } from './personalAnalytics'
@@ -23,6 +24,9 @@ export function MySpendingTab({ trip }: MySpendingTabProps) {
   const { user } = useAuth()
   const { data, isLoading } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
+  // Folded cross-trip carryovers move real money here -- without them the
+  // "net balance" stat disagrees with the Money header/Settle Up.
+  const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
   const expenses = data?.expenses ?? []
   const settlements = data?.settlements ?? []
@@ -31,10 +35,10 @@ export function MySpendingTab({ trip }: MySpendingTabProps) {
   const overview = useMemo(
     () =>
       user
-        ? computePersonalOverview(expenses, settlements, people.map((p) => p.userId), user.id, trip.base_currency, trip.start_date, trip.end_date)
+        ? computePersonalOverview(expenses, settlements, people.map((p) => p.userId), user.id, trip.base_currency, trip.start_date, trip.end_date, carryovers)
         : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expenses, settlements, people, user, trip.base_currency, trip.start_date, trip.end_date]
+    [expenses, settlements, people, user, trip.base_currency, trip.start_date, trip.end_date, carryovers]
   )
 
   const categoryBreakdown = useMemo(
@@ -48,9 +52,9 @@ export function MySpendingTab({ trip }: MySpendingTabProps) {
   )
 
   const paidVsOwed = useMemo(
-    () => computePaidVsOwed(expenses, settlements, people, trip.base_currency),
+    () => computePaidVsOwed(expenses, settlements, people, trip.base_currency, carryovers),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [expenses, settlements, people, trip.base_currency]
+    [expenses, settlements, people, trip.base_currency, carryovers]
   )
 
   if (isLoading || !overview) {

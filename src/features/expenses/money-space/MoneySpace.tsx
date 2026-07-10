@@ -35,9 +35,9 @@ export interface MoneySpaceProps {
  * "see my breakdown" from the position header. Both push as full-screen
  * sheets built from the SAME SettleUpTab/MySpendingTab components v2.0
  * shipped (Money internals unchanged per UX_REDESIGN.md §3/Part 4 — only
- * the hub chrome around them changes). EXPENSE_TAB_CONFIGS stays exported
- * from the feature barrel for back-compat but is no longer rendered as an
- * inner tab strip anywhere.
+ * the hub chrome around them changes). The old inner tab strip (ExpensesTab
+ * + EXPENSE_TAB_CONFIGS) has been removed as dead code — this component is
+ * the only Money surface now.
  */
 export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
   const { user } = useAuth()

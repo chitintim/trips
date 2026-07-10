@@ -1,4 +1,4 @@
-import { HTMLAttributes, forwardRef } from 'react'
+import { HTMLAttributes, KeyboardEvent, MouseEvent, forwardRef } from 'react'
 
 // ============================================================================
 // TYPES
@@ -48,6 +48,10 @@ const CardRoot = forwardRef<HTMLDivElement, CardProps>(
       variant = 'default',
       className = '',
       children,
+      onClick,
+      onKeyDown,
+      role,
+      tabIndex,
       ...props
     },
     ref
@@ -78,8 +82,37 @@ const CardRoot = forwardRef<HTMLDivElement, CardProps>(
       ${className}
     `.trim().replace(/\s+/g, ' ')
 
+    // Only a card that is both visually "clickable" AND actually wired up
+    // with a click handler gets interactive a11y semantics -- a merely
+    // hoverable card, or a clickable-but-handlerless one, stays a plain
+    // <div> (never adds a role/tabIndex a screen reader or keyboard user
+    // can't act on).
+    const isInteractive = clickable && !!onClick
+
+    const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+      onKeyDown?.(e)
+      if (!isInteractive || e.defaultPrevented) return
+      // Only activate on a key event that originated on the card itself --
+      // if it bubbled up from a nested real <button>/<a>/input, that
+      // element already handles its own activation and firing here too
+      // would double-fire the card's onClick.
+      if (e.target !== e.currentTarget) return
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+        e.preventDefault()
+        onClick?.(e as unknown as MouseEvent<HTMLDivElement>)
+      }
+    }
+
     return (
-      <div ref={ref} className={cardClasses} {...props}>
+      <div
+        ref={ref}
+        className={cardClasses}
+        onClick={onClick}
+        role={isInteractive ? role ?? 'button' : role}
+        tabIndex={isInteractive ? tabIndex ?? 0 : tabIndex}
+        onKeyDown={isInteractive ? handleKeyDown : onKeyDown}
+        {...props}
+      >
         {children}
       </div>
     )

@@ -1,4 +1,4 @@
-import { UserAvatar, Badge, Button, Deadline, EmptyState } from '../../../components/ui'
+import { UserAvatar, Badge, Button, Deadline, EmptyState, useToast } from '../../../components/ui'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { getWaitlistQueue, getNextWaitlistOffer } from '../lib/waitlist'
 import { useOfferWaitlistSpot, useClearWaitlistOffer } from '../lib/useWaitlistOffer'
@@ -21,6 +21,7 @@ function displayName(p: ParticipantWithUser): string {
  * waitlist_offer_expires_at state that function (and this UI) reads.
  */
 export function WaitlistPanel({ tripId, participants, isOrganizer }: WaitlistPanelProps) {
+  const { showToast } = useToast()
   const queue = getWaitlistQueue(participants)
   const nextToOffer = getNextWaitlistOffer(queue)
   const offerSpot = useOfferWaitlistSpot(tripId)
@@ -56,7 +57,13 @@ export function WaitlistPanel({ tripId, participants, isOrganizer }: WaitlistPan
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => clearOffer.mutate(entry.participant.user_id)}
+                  onClick={() =>
+                    clearOffer.mutate(entry.participant.user_id, {
+                      onSuccess: () => showToast({ type: 'success', message: `Offer to ${displayName(entry.participant)} withdrawn` }),
+                      onError: (err) =>
+                        showToast({ type: 'error', message: 'Could not withdraw the offer', description: err instanceof Error ? err.message : undefined }),
+                    })
+                  }
                   isLoading={clearOffer.isPending}
                 >
                   Withdraw offer
@@ -65,7 +72,16 @@ export function WaitlistPanel({ tripId, participants, isOrganizer }: WaitlistPan
                 <Button
                   variant="primary"
                   size="sm"
-                  onClick={() => offerSpot.mutate({ userId: entry.participant.user_id })}
+                  onClick={() =>
+                    offerSpot.mutate(
+                      { userId: entry.participant.user_id },
+                      {
+                        onSuccess: () => showToast({ type: 'success', message: `Spot offered to ${displayName(entry.participant)}` }),
+                        onError: (err) =>
+                          showToast({ type: 'error', message: 'Could not offer the spot', description: err instanceof Error ? err.message : undefined }),
+                      }
+                    )
+                  }
                   isLoading={offerSpot.isPending}
                 >
                   Offer spot

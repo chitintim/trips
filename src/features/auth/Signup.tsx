@@ -17,19 +17,27 @@ type AccountMode = 'otp' | 'password'
  * generated Database types don't know it yet, hence the local typing here
  * (mirrors fetchInvitationPreview in JoinTrip.tsx). invitation_attempts is
  * a write-only audit log; a logging failure must never block or throw into
- * the signup flow, so a failed call is only console.error'd.
+ * the signup flow, so a failed call is only console.error'd. Must call via
+ * `.bind(supabase)` — supabase-js's `rpc` reads `this.rest` internally, and
+ * detaching the method from its receiver (as a plain `const rpc = supabase.rpc`)
+ * throws "Cannot read properties of undefined (reading 'rest')" before any
+ * request is sent, which the try/catch below exists specifically to survive.
  */
 async function logInvitationAttempt(code: string, success: boolean): Promise<void> {
-  const rpc = supabase.rpc as unknown as (
-    fn: string,
-    args: Record<string, unknown>
-  ) => PromiseLike<{ data: unknown; error: { message: string } | null }>
-  const { error } = await rpc('log_invitation_attempt', {
-    p_code: code,
-    p_success: success,
-    p_user_agent: navigator.userAgent,
-  })
-  if (error) console.error('Failed to log invitation attempt:', error)
+  try {
+    const rpc = supabase.rpc.bind(supabase) as unknown as (
+      fn: string,
+      args: Record<string, unknown>
+    ) => PromiseLike<{ data: unknown; error: { message: string } | null }>
+    const { error } = await rpc('log_invitation_attempt', {
+      p_code: code,
+      p_success: success,
+      p_user_agent: navigator.userAgent,
+    })
+    if (error) console.error('Failed to log invitation attempt:', error)
+  } catch (err) {
+    console.error('Failed to log invitation attempt:', err)
+  }
 }
 
 const SIGNUP_DISABLED_PATTERN = /signups?\s*(are\s*)?not\s*allowed/i

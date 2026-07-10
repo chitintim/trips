@@ -29,6 +29,13 @@ export interface SettleUpTabProps {
   trip: Trip
 }
 
+/** Audit finding #8: the settlement status badge used to render the raw DB enum value (e.g. "marked_paid") straight into the UI -- human-readable copy for each status, falling back to the raw value for anything unrecognized. */
+const SETTLEMENT_STATUS_LABELS: Record<string, string> = {
+  suggested: 'Suggested',
+  marked_paid: 'Marked paid',
+  confirmed: 'Confirmed',
+}
+
 /**
  * Settle Up v2 (plan §12): freeze flow, min-cash-flow suggestions (opt-in),
  * suggested -> marked_paid -> confirmed status flow, recipient payment
@@ -38,14 +45,19 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const queryClient = useQueryClient()
-  const { data: expensesData, isLoading } = useExpenses(trip.id)
-  const { data: participants = [] } = useParticipants(trip.id)
-  const { data: settlements = [] } = useSettlements(trip.id)
+  const { data: expensesData, isLoading: expensesLoading } = useExpenses(trip.id)
+  const { data: participants = [], isLoading: participantsLoading } = useParticipants(trip.id)
+  const { data: settlements = [], isLoading: settlementsLoading } = useSettlements(trip.id)
   // Already-folded cross-trip carryovers for THIS trip (as fold target) --
   // wired into computeSuggestedPayments/computeBalances below so a folded
   // debt actually changes what's owed here, not just the success toast.
   const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
-  const { data: currentUserRow } = useCurrentUserRow(user?.id)
+  const { data: currentUserRow, isLoading: currentUserRowLoading } = useCurrentUserRow(user?.id)
+  // Audit finding #7: this used to gate on expenses' isLoading alone, so the
+  // screen could render its balance-derived cards (which read participants/
+  // settlements/currentUserRow too) with partially-loaded data on a slow
+  // connection instead of the skeleton.
+  const isLoading = expensesLoading || participantsLoading || settlementsLoading || currentUserRowLoading
 
   const recordSettlement = useRecordSettlement(trip.id)
   const updateStatus = useUpdateSettlementStatus(trip.id)
@@ -58,6 +70,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const [simplify, setSimplify] = useState(true)
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false)
   const [isFreezing, setIsFreezing] = useState(false)
+  const [isUnfreezing, setIsUnfreezing] = useState(false)
   const { data: carryoverCandidates = [] } = useCarryoverCandidates(trip.id, user?.id)
 
   const expenses = expensesData?.expenses ?? []
@@ -128,9 +141,16 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
 
   const handleUnfreeze = async () => {
     if (!user) return
-    await finalizeSnapshot.mutateAsync({ snapshotData: null, snapshotBy: user.id })
-    await logActivity.mutateAsync({ actor: user.id, verb: 'unfroze_settlement', entity: { trip_id: trip.id } })
-    showToast({ type: 'info', message: 'Settlement unfrozen — expenses can be edited again' })
+    setIsUnfreezing(true)
+    try {
+      await finalizeSnapshot.mutateAsync({ snapshotData: null, snapshotBy: user.id })
+      await logActivity.mutateAsync({ actor: user.id, verb: 'unfroze_settlement', entity: { trip_id: trip.id } })
+      showToast({ type: 'info', message: 'Settlement unfrozen — expenses can be edited again' })
+    } catch (err) {
+      showToast({ type: 'error', message: 'Failed to unfreeze balances', description: err instanceof Error ? err.message : undefined })
+    } finally {
+      setIsUnfreezing(false)
+    }
   }
 
   const handleExportCsv = () => {
@@ -138,6 +158,16 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
     const settlementCsv = buildSettlementSummaryCsv(settlements, (id) => nameById[id] ?? id)
     downloadCsv(`${trip.name.replace(/\s+/g, '_')}_expense_ledger.csv`, ledgerCsv)
     downloadCsv(`${trip.name.replace(/\s+/g, '_')}_settlement_summary.csv`, settlementCsv)
+  }
+
+  /** Audit finding #6: both payment-details "Copy" buttons called navigator.clipboard.writeText fire-and-forget, so a permission-denied/insecure-context failure just silently did nothing -- mirrors Dashboard.tsx's copyLink pattern. */
+  const copyPaymentDetails = async (details: ReturnType<typeof parsePaymentDetails>) => {
+    try {
+      await navigator.clipboard.writeText(formatPaymentDetailsForCopy(details))
+      showToast({ type: 'success', message: 'Copied to clipboard' })
+    } catch {
+      showToast({ type: 'error', message: 'Could not copy to clipboard' })
+    }
   }
 
   const handleFoldInCarryover = async (candidate: (typeof carryoverCandidates)[number]) => {
@@ -208,7 +238,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
         <Card noPadding className="p-4 space-y-3">
           <div className="flex items-center justify-between">
             <Badge variant="info">🔒 Balances frozen</Badge>
-            <Button variant="ghost" size="sm" onClick={handleUnfreeze}>
+            <Button variant="ghost" size="sm" onClick={handleUnfreeze} disabled={isUnfreezing} isLoading={isUnfreezing}>
               Unfreeze
             </Button>
           </div>
@@ -280,11 +310,23 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
                 </div>
 
                 <Badge variant={s.status === 'confirmed' ? 'success' : s.status === 'marked_paid' ? 'warning' : 'neutral'} size="sm">
-                  {s.status}
+                  {SETTLEMENT_STATUS_LABELS[s.status] ?? s.status}
                 </Badge>
 
                 {isMePaying && s.status === 'suggested' && (
-                  <Button variant="secondary" size="sm" onClick={() => updateStatus.mutate({ settlementId: s.id, status: 'marked_paid' })}>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      updateStatus.mutate(
+                        { settlementId: s.id, status: 'marked_paid' },
+                        {
+                          onError: (err) =>
+                            showToast({ type: 'error', message: 'Failed to mark as paid', description: err instanceof Error ? err.message : undefined }),
+                        }
+                      )
+                    }
+                  >
                     Mark paid
                   </Button>
                 )}
@@ -293,7 +335,13 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
                     variant="primary"
                     size="sm"
                     onClick={() => {
-                      updateStatus.mutate({ settlementId: s.id, status: 'confirmed' })
+                      updateStatus.mutate(
+                        { settlementId: s.id, status: 'confirmed' },
+                        {
+                          onError: (err) =>
+                            showToast({ type: 'error', message: 'Failed to confirm payment', description: err instanceof Error ? err.message : undefined }),
+                        }
+                      )
                       logTypedActivity({
                         verb: 'settlement_confirmed',
                         entity: { type: 'settlement', id: s.id, label: `${nameById[s.from_user_id] ?? 'Someone'} → ${nameById[s.to_user_id] ?? 'you'}` },
@@ -314,7 +362,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
                   ))}
                   <button
                     type="button"
-                    onClick={() => navigator.clipboard.writeText(formatPaymentDetailsForCopy(recipientDetails))}
+                    onClick={() => copyPaymentDetails(recipientDetails)}
                     className="text-xs font-medium text-accent-700 dark:text-accent-400"
                   >
                     Copy
@@ -401,7 +449,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
             ))}
             <button
               type="button"
-              onClick={() => navigator.clipboard.writeText(formatPaymentDetailsForCopy(myPaymentDetails))}
+              onClick={() => copyPaymentDetails(myPaymentDetails)}
               className="text-xs font-medium text-accent-700 dark:text-accent-400 mt-1"
             >
               Copy

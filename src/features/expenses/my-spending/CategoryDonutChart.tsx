@@ -1,3 +1,4 @@
+import { EmptyState } from '../../../components/ui'
 import { CATEGORY_HEX, categoryIcon, categoryLabel } from '../lib/categoryStyle'
 import { formatMoney } from '../lib/formatMoney'
 import type { CategoryBreakdownEntry } from './personalAnalytics'
@@ -16,7 +17,7 @@ export interface CategoryDonutChartProps {
 export function CategoryDonutChart({ entries, currency, size = 160 }: CategoryDonutChartProps) {
   const total = entries.reduce((sum, e) => sum + e.myTotalMajor, 0)
   if (total <= 0 || entries.length === 0) {
-    return <p className="text-sm text-[var(--text-muted)] py-6 text-center">No spending yet</p>
+    return <EmptyState compact icon="🥧" title="No spending yet" description="A breakdown by category shows up here once you've added expenses." />
   }
 
   const radius = 45

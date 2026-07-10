@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Modal, Button } from '../../../components/ui'
+import { Modal, Button, Skeleton } from '../../../components/ui'
 import { getReceiptUrl } from '../../../lib/receiptUpload'
 
 export interface ReceiptLightboxProps {
@@ -79,7 +79,7 @@ export function ReceiptLightbox({ path, title, onClose }: ReceiptLightboxProps) 
             <img src={url} alt={title || 'Receipt'} className="w-full h-auto rounded-[var(--radius-md)]" />
           )
         ) : (
-          <div className="aspect-square animate-pulse bg-[var(--surface-sunken)] rounded-[var(--radius-md)]" />
+          <Skeleton variant="card" style={{ height: 'auto', aspectRatio: '1' }} />
         )}
         <Button variant="secondary" size="sm" onClick={handleDownload} disabled={!url} isLoading={downloading}>
           Download

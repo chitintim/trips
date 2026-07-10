@@ -101,7 +101,7 @@ export function AdjustmentsPanel({ draft, onChange }: AdjustmentsPanelProps) {
         role="status"
       >
         <div className="flex items-center justify-between">
-          <span>{reconciliation.isExact ? '✓ Reconciled exactly' : '⚠ Doesn\'t reconcile'}</span>
+          <span>{reconciliation.isExact ? '✓ Reconciled exactly' : "⚠️ Doesn't reconcile"}</span>
           <span className="tabular-nums">{formatMoneyMinor(reconciliation.computedTotalMinor, draft.currency)}</span>
         </div>
         {!reconciliation.isExact && (

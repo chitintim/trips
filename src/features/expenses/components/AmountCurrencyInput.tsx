@@ -11,6 +11,8 @@ export interface AmountCurrencyInputProps {
   label?: string
   disabled?: boolean
   error?: string
+  /** Fires on the amount field losing focus -- callers use this to flip a local "touched" flag so validation errors only appear after the user has actually interacted with the field, not on first render (audit finding #10). */
+  onBlur?: () => void
 }
 
 /**
@@ -28,6 +30,7 @@ export function AmountCurrencyInput({
   label = 'Amount',
   disabled,
   error,
+  onBlur,
 }: AmountCurrencyInputProps) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -53,6 +56,7 @@ export function AmountCurrencyInput({
         inputMode="decimal"
         value={amount}
         onChange={(e) => onAmountChange(e.target.value)}
+        onBlur={onBlur}
         placeholder="0.00"
         disabled={disabled}
         error={error}

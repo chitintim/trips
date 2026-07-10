@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Input, Select } from '../../../components/ui'
 import { AmountCurrencyInput } from '../components/AmountCurrencyInput'
 import { ParticipantChipRow } from '../components/ParticipantChipRow'
@@ -17,6 +18,13 @@ export interface DetailsStepProps {
  * Place linking deferred to Workstream F (places/maps) -- not built here.
  */
 export function DetailsStep({ draft, onChange, participants }: DetailsStepProps) {
+  // Audit finding #10: this field had no inline validation at all -- an
+  // empty/zero amount just silently blocked "Continue" (canAdvance in the
+  // wizard) with no explanation. Only show the error once the user has
+  // actually left the field (touched), not on first render of a blank form.
+  const [amountTouched, setAmountTouched] = useState(false)
+  const amountInvalid = amountTouched && (parseFloat(draft.amount) || 0) <= 0
+
   const toggleParticipant = (userId: string) => {
     const isSelected = draft.participantIds.includes(userId)
     onChange({
@@ -41,6 +49,8 @@ export function DetailsStep({ draft, onChange, participants }: DetailsStepProps)
         onAmountChange={(v) => onChange({ amount: v })}
         currency={draft.currency}
         onCurrencyChange={(v) => onChange({ currency: v })}
+        onBlur={() => setAmountTouched(true)}
+        error={amountInvalid ? 'Enter an amount greater than 0' : undefined}
       />
 
       <div className="grid grid-cols-2 gap-3">

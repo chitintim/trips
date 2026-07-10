@@ -129,7 +129,13 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
   const bulkCreateOptions = useBulkCreateOptions(tripId)
   const logActivity = useTripActivityLog(tripId)
 
-  const draftKey = `add-to-plan:new:${tripId}`
+  // Namespaced by defaultIsVote (UPGRADE_MASTER_PLAN.md audit item 8): a
+  // regular "+ Add" draft and a tray "+ New question" draft must never
+  // collide — sharing one key meant a stale plain-item draft (isVote:
+  // false, hasDate: true) could silently override the "New question"
+  // intent (isVote: true, hasDate: false) on the next open, since
+  // useFormDraft only restores/seeds once per mount.
+  const draftKey = `add-to-plan:new:${tripId}:${defaultIsVote ? 'vote' : 'item'}`
   const seed = emptyValues(baseCurrency, defaultDate || trip.start_date, defaultIsVote)
   const { values, setValues, updateField, clearDraft } = useFormDraft<AddToPlanFormValues>(draftKey, seed)
 

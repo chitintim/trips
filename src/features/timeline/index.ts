@@ -2,25 +2,25 @@
  * Public surface of the timeline feature (owns src/features/timeline/**).
  * Other features/pages should only import from this barrel.
  *
- * Empty-state quick-capture contract: TimelineTab's empty state dispatches
- * `window.dispatchEvent(new CustomEvent('open-quick-capture'))` when the
- * organizer taps "Paste a booking". The app shell (or whichever component
- * owns the quick-capture "+" flow) should add a `window` listener for the
- * `open-quick-capture` event and open its quick-capture sheet in response —
- * this lets any empty state in the app invite the same fast path without
- * importing the shell's internals or the quick-capture feature directly.
+ * NOTE: the legacy `TimelineTab`/`timelineTabConfig` (and the
+ * `TimelineEventCard` it alone consumed) were removed — TripDetail's v2.1
+ * four-space nav (UX_REDESIGN.md) never mapped any space to this tab (see
+ * LEGACY_TAB_TO_SPACE in src/pages/TripDetail.tsx, which routes the old
+ * ?tab=timeline deep link straight to 'plan'), so the tab was unreachable
+ * dead code. The live itinerary surface is PlanBoard's List lens
+ * (src/features/plan/components/PlanBoard.tsx), which already reuses this
+ * feature's EventEditorSheet/dayGrouping/categoryConfig exports directly.
+ *
+ * `OPEN_QUICK_CAPTURE_EVENT` is kept exported even though TimelineTab was
+ * its only dispatcher: src/pages/TripDetail.tsx (out of this workstream's
+ * ownership) still imports it and registers a `window` listener for it, so
+ * removing the export would break that page's build. The listener is now a
+ * harmless no-op (nothing dispatches the event anymore) — flagged in the
+ * audit report rather than silently left, since re-wiring a dispatcher is a
+ * TripDetail-side call the coordinator/owning agent should make.
  */
-import type { ComponentType } from 'react'
-import { TimelineTab, type TimelineTabProps } from './components/TimelineTab'
-
-export { TimelineTab } from './components/TimelineTab'
-export type { TimelineTabProps } from './components/TimelineTab'
-
 export { EventEditorSheet } from './components/EventEditorSheet'
 export type { EventEditorSheetProps } from './components/EventEditorSheet'
-
-export { TimelineEventCard } from './components/TimelineEventCard'
-export type { TimelineEventCardProps } from './components/TimelineEventCard'
 
 export {
   formatLocalDate,
@@ -37,17 +37,5 @@ export type { DayHeaderInfo, DayBucket } from './lib/dayGrouping'
 export { CATEGORY_CONFIG, CATEGORY_OPTIONS, formatTime, formatTimeRange } from './lib/categoryConfig'
 export type { CategoryStyle } from './lib/categoryConfig'
 
-/** The event name TimelineTab's empty state dispatches — see module doc above. */
+/** The event name TimelineTab's empty state used to dispatch — see module doc above. */
 export const OPEN_QUICK_CAPTURE_EVENT = 'open-quick-capture'
-
-export const timelineTabConfig: {
-  tabId: 'timeline'
-  label: string
-  icon: string
-  Component: ComponentType<TimelineTabProps>
-} = {
-  tabId: 'timeline',
-  label: 'Timeline',
-  icon: '🗓️',
-  Component: TimelineTab,
-}

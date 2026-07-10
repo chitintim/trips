@@ -7,6 +7,7 @@
 import { Suspense, type ComponentType } from 'react'
 import { lazyWithRetry } from '../../lib/lazyWithRetry'
 import { ErrorBoundary } from '../../components/ErrorBoundary'
+import { Modal, Skeleton } from '../../components/ui'
 import type { ChatSheetProps } from './components/ChatSheet'
 
 // `ChatSheet` is loaded lazily (WSH perf pass, plan §16 code-splitting
@@ -27,7 +28,19 @@ const LazyChatSheetChunk = lazyWithRetry(() =>
 export function LazyChatSheet(props: ChatSheetProps) {
   return (
     <ErrorBoundary label="Ask AI">
-      <Suspense fallback={null}>
+      <Suspense
+        // While the chunk downloads on a cold first open, show the same
+        // modal shell the sheet will render into (Modal is portal-rendered
+        // and owns the layering) instead of nothing -- tapping "Ask" used
+        // to appear to do nothing for the duration of the download.
+        fallback={
+          props.isOpen ? (
+            <Modal isOpen onClose={props.onClose} size="lg" title="✨ Ask">
+              <Skeleton variant="text" lines={4} />
+            </Modal>
+          ) : null
+        }
+      >
         <LazyChatSheetChunk {...props} />
       </Suspense>
     </ErrorBoundary>

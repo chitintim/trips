@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { Card, Button, CapacityProgressBar, Deadline, Tabs, Skeleton } from '../../../components/ui'
-import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
+import { useTrip, useParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
@@ -12,6 +12,8 @@ import { WaitlistPanel } from './WaitlistPanel'
 import { StatusModal } from './StatusModal'
 import { ConfirmationSettingsSheet } from './ConfirmationSettingsSheet'
 import { TravelDetailsSheet } from './TravelDetailsSheet'
+import { ManageParticipantSheet } from './ManageParticipantSheet'
+import { AddParticipantModal } from '../../../components/AddParticipantModal'
 import { getMyTravelEvents, travelEventFlightRef, travelEventAirportCode } from '../lib/travelDetails'
 import { formatTime } from '../../timeline'
 
@@ -36,12 +38,15 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
   const { user } = useAuth()
   const { data: trip, isLoading: tripLoading } = useTrip(tripId)
   const { data: participants, isLoading: participantsLoading } = useParticipants(tripId)
+  const { data: currentUserRow } = useCurrentUserRow(user?.id)
 
   const { data: timelineEvents = [] } = useTimeline(tripId)
 
   const [statusModalParticipant, setStatusModalParticipant] = useState<ParticipantWithUser | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [travelOpen, setTravelOpen] = useState(false)
+  const [addParticipantOpen, setAddParticipantOpen] = useState(false)
+  const [manageParticipant, setManageParticipant] = useState<ParticipantWithUser | null>(null)
   const [view, setView] = useState<'list' | 'graph' | 'waitlist' | 'checklist'>('list')
 
   const myTravel = useMemo(() => getMyTravelEvents(timelineEvents, user?.id), [timelineEvents, user?.id])
@@ -50,7 +55,12 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
     () => participants?.find((p) => p.user_id === user?.id) ?? null,
     [participants, user?.id]
   )
-  const isOrganizer = myParticipant?.role === 'organizer'
+  // Same definition TripDetail.tsx uses for its own isOrganizer: a system
+  // admin (users.role = 'admin') or the trip's creator can manage the
+  // roster even without an active 'organizer' participant row -- e.g. an
+  // admin helping out on a trip they didn't personally organize.
+  const isSystemAdmin = currentUserRow?.role === 'admin'
+  const isOrganizer = isSystemAdmin || myParticipant?.role === 'organizer' || trip?.created_by === user?.id
   const confirmationEnabled = isConfirmationEnabled(trip)
 
   const counts = useMemo(() => {
@@ -95,9 +105,14 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                 </p>
               </div>
               {isOrganizer && (
-                <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
-                  Settings
-                </Button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button variant="outline" size="sm" onClick={() => setAddParticipantOpen(true)}>
+                    Add participant
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
+                    Settings
+                  </Button>
+                </div>
               )}
             </div>
 
@@ -133,9 +148,14 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                   {(participants || []).length} {(participants || []).length === 1 ? 'person' : 'people'} on this trip
                 </p>
               </div>
-              <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
-                Settings
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button variant="outline" size="sm" onClick={() => setAddParticipantOpen(true)}>
+                  Add participant
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
+                  Settings
+                </Button>
+              </div>
             </Card.Content>
           </Card>
         )
@@ -207,6 +227,8 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                 // renders non-interactive rows in that case anyway.
                 if (confirmationEnabled && p.user_id === user?.id) setStatusModalParticipant(p)
               }}
+              canManage={isOrganizer}
+              onManage={(p) => setManageParticipant(p)}
             />
           </Tabs.Panel>
           {confirmationEnabled && (
@@ -248,6 +270,31 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
       />
 
       <TravelDetailsSheet isOpen={travelOpen} onClose={() => setTravelOpen(false)} tripId={tripId} />
+
+      {isOrganizer && (
+        <AddParticipantModal
+          isOpen={addParticipantOpen}
+          onClose={() => setAddParticipantOpen(false)}
+          tripId={tripId}
+          existingParticipantIds={(participants || []).map((p) => p.user_id)}
+          onSuccess={() => {}}
+        />
+      )}
+
+      {/* Conditionally mounted (rather than always-mounted + isOpen) so the
+          balance lookup inside only fires while an organizer/admin actually
+          has it open. */}
+      {manageParticipant && (
+        <ManageParticipantSheet
+          tripId={tripId}
+          participant={manageParticipant}
+          onClose={() => setManageParticipant(null)}
+          participants={participants || []}
+          baseCurrency={trip.base_currency}
+          confirmationEnabled={confirmationEnabled}
+          currentUserId={user?.id}
+        />
+      )}
     </div>
   )
 }

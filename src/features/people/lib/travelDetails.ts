@@ -15,6 +15,8 @@ export interface TravelDetailsMetadata {
   travel_details: true
   direction: TravelDirection
   flight_ref?: string
+  /** 3-letter IATA-style airport code, uppercase, optional — not everyone knows theirs. */
+  airport_code?: string
 }
 
 export function isTravelDetailsEvent(event: Pick<TimelineEvent, 'metadata'>): boolean {
@@ -42,6 +44,15 @@ export function travelEventFlightRef(event: Pick<TimelineEvent, 'metadata'>): st
   return null
 }
 
+export function travelEventAirportCode(event: Pick<TimelineEvent, 'metadata'>): string | null {
+  const m = event.metadata
+  if (m && typeof m === 'object' && !Array.isArray(m)) {
+    const code = (m as Record<string, unknown>).airport_code
+    if (typeof code === 'string' && code.trim()) return code.trim().toUpperCase()
+  }
+  return null
+}
+
 export interface MyTravelEvents {
   arrival: TimelineEvent | null
   departure: TimelineEvent | null
@@ -60,8 +71,10 @@ export function getMyTravelEvents(events: TimelineEvent[], userId: string | unde
   return result
 }
 
-export function buildTravelMetadata(direction: TravelDirection, flightRef: string): Json {
+export function buildTravelMetadata(direction: TravelDirection, flightRef: string, airportCode = ''): Json {
   const metadata: TravelDetailsMetadata = { travel_details: true, direction }
   if (flightRef.trim()) metadata.flight_ref = flightRef.trim()
+  const code = airportCode.trim().toUpperCase()
+  if (code) metadata.airport_code = code
   return metadata as unknown as Json
 }

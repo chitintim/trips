@@ -8,6 +8,7 @@ import { useBookings } from '../../../lib/queries/useBookings'
 import { useNotifications } from '../../../lib/queries/useNotifications'
 import { computeBlockers, parseChaseSettings } from '../../organizer'
 import type { Blocker } from '../../organizer'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import type { Trip } from '../../../types'
 
 export interface BlockersStripProps {
@@ -39,6 +40,7 @@ export function BlockersStrip({ trip, onOpenConsole }: BlockersStripProps) {
       bookings,
       notifications,
       maxReminders: parseChaseSettings(trip.chase_settings).max_reminders,
+      confirmationEnabled: isConfirmationEnabled(trip),
     })
     // Flatten person blockers (already sorted most-blocked first) with the
     // person's name attached, deadline-carrying booking warnings first.
@@ -47,7 +49,7 @@ export function BlockersStrip({ trip, onOpenConsole }: BlockersStripProps) {
       ...board.people.flatMap((p) => p.blockers.map((b) => ({ name: p.name, blocker: b }))),
     ]
     return { top: flattened.slice(0, 3), totalCount: board.totalCount }
-  }, [participants, sections, votes, expensesData, settlements, bookings, notifications, trip.chase_settings])
+  }, [participants, sections, votes, expensesData, settlements, bookings, notifications, trip.chase_settings, trip.confirmation_enabled])
 
   if (totalCount === 0) return null
 

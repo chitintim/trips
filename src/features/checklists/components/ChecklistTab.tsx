@@ -7,14 +7,20 @@ import { useTripActivityLog } from '../../organizer/lib/activity'
 
 export interface ChecklistTabProps {
   tripId: string
+  /** Lets the organizer mark/unmark on behalf of someone else's assigned item, de-emphasized vs. the assignee's own control. */
+  isOrganizer?: boolean
 }
 
 /**
  * Shared trip checklist (plan §6.4: "who's bringing the speaker") —
  * lightweight items with an optional assignee, optimistic check/uncheck,
- * and assignee avatars. Anyone on the trip can add and tick items.
+ * and assignee avatars. Anyone on the trip can add items; an ASSIGNED
+ * item's completion belongs to that assignee (an actionable "Mark as
+ * packed" button for them, a passive "waiting on/packed by" status for
+ * everyone else, with a de-emphasized organizer-override link). Unassigned
+ * items keep the plain shared checkbox.
  */
-export function ChecklistTab({ tripId }: ChecklistTabProps) {
+export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const { data: items, isLoading } = useChecklists(tripId)
@@ -69,7 +75,7 @@ export function ChecklistTab({ tripId }: ChecklistTabProps) {
 
   const handleToggle = (id: string, done: boolean, itemTitle: string) => {
     toggleItem.mutate(
-      { id, done },
+      { id, done, doneBy: user?.id ?? null },
       {
         onError: (err) => showToast({ type: 'error', message: 'Could not update item', description: (err as Error).message }),
         onSuccess: () => {
@@ -127,18 +133,42 @@ export function ChecklistTab({ tripId }: ChecklistTabProps) {
             {[...open, ...done].map((item) => {
               const assigneeInfo = item.assigned_to ? usersById.get(item.assigned_to) : undefined
               const canDelete = item.created_by === user?.id
+              const isAssigned = !!item.assigned_to
+              const isAssignee = isAssigned && item.assigned_to === user?.id
+              const canOverride = isAssigned && !isAssignee && isOrganizer
               return (
                 <li
                   key={item.id}
                   className="group flex items-center gap-3 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border-subtle)] px-3 py-2"
                 >
-                  <input
-                    type="checkbox"
-                    checked={item.done}
-                    onChange={(e) => handleToggle(item.id, e.target.checked, item.title)}
-                    className="h-5 w-5 shrink-0 accent-accent-600 cursor-pointer"
-                    aria-label={`Mark "${item.title}" ${item.done ? 'not done' : 'done'}`}
-                  />
+                  {!isAssigned ? (
+                    <input
+                      type="checkbox"
+                      checked={item.done}
+                      onChange={(e) => handleToggle(item.id, e.target.checked, item.title)}
+                      className="h-5 w-5 shrink-0 accent-accent-600 cursor-pointer"
+                      aria-label={`Mark "${item.title}" ${item.done ? 'not done' : 'done'}`}
+                    />
+                  ) : isAssignee ? (
+                    <button
+                      type="button"
+                      onClick={() => handleToggle(item.id, !item.done, item.title)}
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                        item.done
+                          ? 'bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-300'
+                          : 'bg-accent-600 text-white hover:bg-accent-700'
+                      }`}
+                    >
+                      {item.done ? '✓ Packed' : 'Mark as packed'}
+                    </button>
+                  ) : (
+                    <span
+                      className="flex h-5 w-5 shrink-0 items-center justify-center text-[var(--text-muted)]"
+                      aria-hidden="true"
+                    >
+                      {item.done ? '✓' : '○'}
+                    </span>
+                  )}
                   <span
                     className={`min-w-0 flex-1 text-sm ${
                       item.done ? 'text-[var(--text-muted)] line-through' : 'text-[var(--text-primary)]'
@@ -146,11 +176,29 @@ export function ChecklistTab({ tripId }: ChecklistTabProps) {
                   >
                     {item.title}
                   </span>
-                  {assigneeInfo && (
-                    <span className="flex shrink-0 items-center gap-1.5" title={`${assigneeInfo.name} is bringing this`}>
+                  {isAssigned && !isAssignee && assigneeInfo && (
+                    <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-muted)]">
                       <UserAvatar avatarData={assigneeInfo} size="xs" />
-                      <span className="hidden text-xs text-[var(--text-muted)] sm:inline">{assigneeInfo.name}</span>
+                      <span className="hidden sm:inline">
+                        {item.done ? `${assigneeInfo.name} packed it` : `Waiting on ${assigneeInfo.name}`}
+                      </span>
                     </span>
+                  )}
+                  {isAssigned && isAssignee && (
+                    <span className="flex shrink-0 items-center gap-1.5">
+                      <UserAvatar avatarData={assigneeInfo} size="xs" />
+                      <span className="hidden text-xs text-[var(--text-muted)] sm:inline">You</span>
+                    </span>
+                  )}
+                  {canOverride && (
+                    <button
+                      type="button"
+                      onClick={() => handleToggle(item.id, !item.done, item.title)}
+                      className="shrink-0 text-[10px] text-[var(--text-muted)] underline opacity-0 transition-opacity hover:text-[var(--text-secondary)] group-hover:opacity-100 focus:opacity-100"
+                      title="Organizer override"
+                    >
+                      {item.done ? 'Unmark' : 'Mark for them'}
+                    </button>
                   )}
                   {canDelete && (
                     <button

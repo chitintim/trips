@@ -72,6 +72,13 @@ export interface ComputeBlockersInput {
   now?: number
   /** How far ahead a booking cancellation deadline counts as "upcoming". Default 7 days. */
   bookingDeadlineWindowMs?: number
+  /**
+   * Whether the trip tracks RSVP confirmation status (trips.confirmation_enabled).
+   * Suppresses pending_rsvp/due_conditional/expiring_waitlist_offer blockers
+   * when false — confirmation_status carries no meaning for a trip that
+   * doesn't use it. Defaults to true so existing callers/tests are unaffected.
+   */
+  confirmationEnabled?: boolean
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -92,6 +99,7 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
     maxReminders = 3,
     now = Date.now(),
     bookingDeadlineWindowMs = 7 * DAY_MS,
+    confirmationEnabled = true,
   } = input
 
   const active = participants.filter((p) => p.active !== false)
@@ -103,29 +111,31 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
   }
 
   // ---- Pending RSVPs + arrived conditional_date promises -----------------
-  for (const p of active) {
-    if (p.confirmation_status === 'pending') {
-      push({
-        kind: 'pending_rsvp',
-        userId: p.user_id,
-        label: 'RSVP pending',
-        detail: 'Has not said whether they are joining.',
-        nudgeType: 'pending_rsvp',
-        deadline: null,
-      })
-    } else if (
-      p.confirmation_status === 'conditional' &&
-      p.conditional_date &&
-      new Date(p.conditional_date).getTime() <= now
-    ) {
-      push({
-        kind: 'due_conditional',
-        userId: p.user_id,
-        label: `Promised an answer by ${p.conditional_date}`,
-        detail: `Said they would know by ${p.conditional_date} — that date has arrived.`,
-        nudgeType: 'pending_rsvp',
-        deadline: p.conditional_date,
-      })
+  if (confirmationEnabled) {
+    for (const p of active) {
+      if (p.confirmation_status === 'pending') {
+        push({
+          kind: 'pending_rsvp',
+          userId: p.user_id,
+          label: 'RSVP pending',
+          detail: 'Has not said whether they are joining.',
+          nudgeType: 'pending_rsvp',
+          deadline: null,
+        })
+      } else if (
+        p.confirmation_status === 'conditional' &&
+        p.conditional_date &&
+        new Date(p.conditional_date).getTime() <= now
+      ) {
+        push({
+          kind: 'due_conditional',
+          userId: p.user_id,
+          label: `Promised an answer by ${p.conditional_date}`,
+          detail: `Said they would know by ${p.conditional_date} — that date has arrived.`,
+          nudgeType: 'pending_rsvp',
+          deadline: p.conditional_date,
+        })
+      }
     }
   }
 
@@ -222,19 +232,21 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
     }
   }
 
-  // ---- Expiring waitlist offers -------------------------------------------
-  for (const p of active) {
-    if (!p.waitlist_offer_expires_at) continue
-    const expires = new Date(p.waitlist_offer_expires_at).getTime()
-    if (expires <= now) continue // already lapsed; auto-chase cascades it
-    push({
-      kind: 'expiring_waitlist_offer',
-      userId: p.user_id,
-      label: 'Waitlist offer expiring',
-      detail: `Their claim offer expires ${new Date(p.waitlist_offer_expires_at).toLocaleString()}.`,
-      deadline: p.waitlist_offer_expires_at,
-      nudgeType: 'pending_rsvp',
-    })
+  // ---- Expiring waitlist offers (part of the confirmation/RSVP system) ---
+  if (confirmationEnabled) {
+    for (const p of active) {
+      if (!p.waitlist_offer_expires_at) continue
+      const expires = new Date(p.waitlist_offer_expires_at).getTime()
+      if (expires <= now) continue // already lapsed; auto-chase cascades it
+      push({
+        kind: 'expiring_waitlist_offer',
+        userId: p.user_id,
+        label: 'Waitlist offer expiring',
+        detail: `Their claim offer expires ${new Date(p.waitlist_offer_expires_at).toLocaleString()}.`,
+        deadline: p.waitlist_offer_expires_at,
+        nudgeType: 'pending_rsvp',
+      })
+    }
   }
 
   // ---- Escalations: 3+ reminders sent for the same open loop --------------

@@ -1462,6 +1462,7 @@ export type Database = {
           created_by: string
           done: boolean
           done_at: string | null
+          done_by: string | null
           id: string
           title: string
           trip_id: string
@@ -1472,6 +1473,7 @@ export type Database = {
           created_by: string
           done?: boolean
           done_at?: string | null
+          done_by?: string | null
           id?: string
           title: string
           trip_id: string
@@ -1482,6 +1484,7 @@ export type Database = {
           created_by?: string
           done?: boolean
           done_at?: string | null
+          done_by?: string | null
           id?: string
           title?: string
           trip_id?: string
@@ -1497,6 +1500,13 @@ export type Database = {
           {
             foreignKeyName: "trip_checklists_created_by_fkey"
             columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_checklists_done_by_fkey"
+            columns: ["done_by"]
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]

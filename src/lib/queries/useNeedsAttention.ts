@@ -2,11 +2,12 @@ import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth'
 import { NeedsAttentionItem } from '../../components/layout'
-import { useParticipants } from './useTrip'
+import { useTrip, useParticipants } from './useTrip'
 import { useSections, useVotes } from './usePlanning'
 import { useExpenses } from './useExpenses'
 import { useSettlements } from './useSettlements'
 import { getDecisionShape } from '../../features/decisions/lib/decisionShapes'
+import { isConfirmationEnabled } from '../tripStatus'
 
 /**
  * Computes the current user's open loops for a trip, purely by reading
@@ -42,6 +43,7 @@ export function useNeedsAttention(
   const { user } = useAuth()
   const navigate = useNavigate()
 
+  const { data: trip } = useTrip(tripId)
   const { data: participants } = useParticipants(tripId)
   const { data: sections } = useSections(tripId)
   const { data: votes } = useVotes(tripId)
@@ -54,9 +56,9 @@ export function useNeedsAttention(
     const items: NeedsAttentionItem[] = []
     const now = Date.now()
 
-    // ---- Pending RSVP ------------------------------------------------
+    // ---- Pending RSVP (only when the trip actually tracks confirmation) --
     const myParticipant = participants?.find((p) => p.user_id === user.id)
-    if (myParticipant) {
+    if (myParticipant && isConfirmationEnabled(trip)) {
       const isPending = myParticipant.confirmation_status === 'pending'
       const isDueConditional =
         myParticipant.confirmation_status === 'conditional' &&
@@ -140,5 +142,5 @@ export function useNeedsAttention(
     }
 
     return items
-  }, [tripId, user, participants, sections, votes, expensesData, settlements, navigate, onNavigateTab])
+  }, [tripId, user, trip, participants, sections, votes, expensesData, settlements, navigate, onNavigateTab])
 }

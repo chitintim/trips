@@ -5,6 +5,17 @@ export type TripStatus = Database['public']['Enums']['trip_status']
 export type BadgeVariant = 'info' | 'success' | 'warning' | 'error' | 'neutral'
 
 /**
+ * confirmation_enabled is a nullable boolean (default NULL on the trips
+ * table). NULL and false both mean "off" -- only an explicit `true` (what
+ * ConfirmationSettingsSheet writes when the organizer flips the toggle on)
+ * means confirmation tracking is active. Every RSVP/confirmation-status UI
+ * site should gate through this helper rather than re-deriving the check.
+ */
+export function isConfirmationEnabled(trip: { confirmation_enabled: boolean | null } | null | undefined): boolean {
+  return trip?.confirmation_enabled === true
+}
+
+/**
  * Get badge variant for a trip status
  */
 export function getTripStatusBadgeVariant(status: TripStatus): BadgeVariant {

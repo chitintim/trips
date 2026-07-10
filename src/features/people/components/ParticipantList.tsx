@@ -21,15 +21,47 @@ interface ParticipantListProps {
   participants: ParticipantWithUser[]
   currentUserId?: string
   onSelect: (participant: ParticipantWithUser) => void
+  /**
+   * Status-grouped with badges/deadlines/waitlist position (the default) vs.
+   * a flat, non-interactive list of just avatar + name + organizer badge --
+   * for trips with confirmation tracking off, where confirmation_status has
+   * no meaning (People sub-task A: "plain participant list, no status
+   * grouping").
+   */
+  groupByStatus?: boolean
 }
 
 /**
  * Status-grouped participant list: avatars, notes, waitlist queue
  * position + live offer countdown where relevant.
  */
-export function ParticipantList({ participants, currentUserId, onSelect }: ParticipantListProps) {
+export function ParticipantList({ participants, currentUserId, onSelect, groupByStatus = true }: ParticipantListProps) {
   if (participants.length === 0) {
     return <EmptyState compact icon="👥" title="No participants yet" />
+  }
+
+  if (!groupByStatus) {
+    return (
+      <div className="space-y-2">
+        {participants.map((p) => (
+          <div
+            key={p.user_id}
+            className="w-full flex items-center gap-3 p-3 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border-subtle)]"
+          >
+            <UserAvatar avatarData={p.user} size="md" />
+            <span className="flex-1 min-w-0 font-medium text-[var(--text-primary)] truncate">
+              {p.user?.full_name || p.user?.email}
+              {p.user_id === currentUserId && <span className="text-[var(--text-muted)] font-normal"> (you)</span>}
+            </span>
+            {p.role === 'organizer' && (
+              <Badge variant="secondary" size="sm">
+                Organizer
+              </Badge>
+            )}
+          </div>
+        ))}
+      </div>
+    )
   }
 
   const waitlistQueue = getWaitlistQueue(participants)

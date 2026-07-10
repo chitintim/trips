@@ -3,7 +3,7 @@ import { Button, Card } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
-import { useSettlements } from '../../../lib/queries/useSettlements'
+import { useSettlements, useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import { computeBalances, splitOwedAmounts } from '../../expenses'
 import { formatMoney } from '../../decisions/lib/costImpact'
 import type { Trip } from '../../../types'
@@ -25,6 +25,11 @@ export function SettleStatusCard({ trip, onNavigate, compact = false }: SettleSt
   const { data: participants = [] } = useParticipants(trip.id)
   const { data: expensesData } = useExpenses(trip.id)
   const { data: settlements = [] } = useSettlements(trip.id)
+  // Folded cross-trip carryovers move real money on this trip -- computing
+  // without them would show a phantom (even sign-flipped) balance here once
+  // a carryover-inclusive settlement is paid, disagreeing with Money/Settle
+  // Up. Same balance math, same inputs, everywhere.
+  const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
   const summary = useMemo(() => {
     if (!user || participants.length === 0) return null
@@ -32,12 +37,13 @@ export function SettleStatusCard({ trip, onNavigate, compact = false }: SettleSt
       expensesData?.expenses ?? [],
       settlements,
       participants.map((p) => p.user_id),
-      trip.base_currency
+      trip.base_currency,
+      carryovers
     )
     const mine = balances.find((b) => b.userId === user.id)
     if (!mine) return null
     return { ...splitOwedAmounts(mine.netBalanceMinor, trip.base_currency), isBalanced: mine.isBalanced }
-  }, [user, participants, expensesData, settlements, trip.base_currency])
+  }, [user, participants, expensesData, settlements, trip.base_currency, carryovers])
 
   if (!summary) return null
   if (compact && summary.isBalanced && (expensesData?.expenses ?? []).length === 0) return null

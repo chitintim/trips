@@ -15,7 +15,7 @@ function balanceEpsilonMajor(currency: string): number {
 }
 import { computeBalances } from '../lib/balances'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
-import type { Settlement, SettlementSnapshot } from '../../../lib/queries/useSettlements'
+import type { Settlement, SettlementSnapshot, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
 export interface SettleUpPerson {
   userId: string
@@ -28,19 +28,26 @@ export interface SettleUpPerson {
  * it changes who pays whom"). When `simplify` is false, returns direct
  * "everyone who owes pays the person(s) they owe" pairs derived straight
  * from expense splits/claims instead of the greedy min-transaction result.
+ *
+ * `carryovers` (already-folded settlement_carryovers rows for this trip)
+ * are folded into the SAME computeBalances call used everywhere else, so a
+ * folded cross-trip debt actually changes the suggested payment amounts --
+ * not just the balances screen.
  */
 export function computeSuggestedPayments(
   expenses: ExpenseWithDetails[],
   settlements: Settlement[],
   people: SettleUpPerson[],
   baseCurrency: string,
-  simplify: boolean
+  simplify: boolean,
+  carryovers: SettlementCarryover[] = []
 ): Transaction[] {
   const { balances } = computeBalances(
     expenses,
     settlements,
     people.map((p) => p.userId),
-    baseCurrency
+    baseCurrency,
+    carryovers
   )
 
   const personInputs: Person[] = people.map((p) => {
@@ -74,8 +81,14 @@ export function getMyTransactions(allTransactions: Transaction[], userId: string
 }
 
 /** True once every participant's net balance is within epsilon of zero. */
-export function isFullySettled(people: SettleUpPerson[], expenses: ExpenseWithDetails[], settlements: Settlement[], baseCurrency: string): boolean {
-  const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), baseCurrency)
+export function isFullySettled(
+  people: SettleUpPerson[],
+  expenses: ExpenseWithDetails[],
+  settlements: Settlement[],
+  baseCurrency: string,
+  carryovers: SettlementCarryover[] = []
+): boolean {
+  const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), baseCurrency, carryovers)
   return balances.every((b) => b.isBalanced)
 }
 

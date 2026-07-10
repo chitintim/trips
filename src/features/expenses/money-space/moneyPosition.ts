@@ -6,10 +6,10 @@
  * functions the legacy BalanceHeader/SettleUpTab use, so the figures always
  * agree across every surface that shows money.
  */
-import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR } from '../lib/balances'
+import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from '../lib/balances'
 import { toMinorUnits } from '../../../lib/money'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
-import type { Settlement } from '../../../lib/queries/useSettlements'
+import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
 export type MoneyPositionKind = 'owed' | 'owe' | 'settled'
 
@@ -41,16 +41,26 @@ export function computeMoneyPosition(
   settlements: Settlement[],
   participantUserIds: string[],
   currentUserId: string | undefined,
-  baseCurrency: string
+  baseCurrency: string,
+  carryovers: SettlementCarryover[] = []
 ): MoneyPosition {
-  const { balances, expensesMissingRate } = computeBalances(expenses, settlements, participantUserIds, baseCurrency)
+  const { balances, expensesMissingRate } = computeBalances(expenses, settlements, participantUserIds, baseCurrency, carryovers)
   const mine = balances.find((b) => b.userId === currentUserId)
   const { youOwe, owedToYou } = splitOwedAmounts(mine?.netBalanceMinor ?? 0, baseCurrency)
 
   const kind: MoneyPositionKind = !mine || mine.isBalanced ? 'settled' : mine.netBalanceMinor > 0 ? 'owed' : 'owe'
   const amount = kind === 'owed' ? owedToYou : kind === 'owe' ? youOwe : 0
 
-  const perPerson = computePairwiseBreakdown(expenses, settlements, participantUserIds, currentUserId, baseCurrency)
+  // Same settlement-shaped list computeBalances just used above (real
+  // settlements + USABLE folded carryovers, filtered by the SAME
+  // partitionCarryovers rules computeBalances applies internally) --
+  // computePairwiseBreakdown has its own independent settlements loop (not
+  // routed through computeBalances), so it needs the merged list passed
+  // explicitly to stay in sync with the headline figure.
+  const { usable: usableCarryovers } = partitionCarryovers(carryovers, baseCurrency, participantUserIds)
+  const settlementsWithCarryovers =
+    usableCarryovers.length > 0 ? [...settlements, ...carryoversToPseudoSettlements(usableCarryovers)] : settlements
+  const perPerson = computePairwiseBreakdown(expenses, settlementsWithCarryovers, participantUserIds, currentUserId, baseCurrency)
 
   return { kind, amount, currency: baseCurrency, perPerson, expensesMissingRate }
 }
@@ -62,8 +72,13 @@ export function computeMoneyPosition(
  * just "the group"), then settlements between the two are applied the same
  * way. This mirrors computeBalances' totals exactly when summed, but keeps
  * the per-counterparty detail the position header's expander needs.
+ *
+ * Exported (not just used internally by computeMoneyPosition) because
+ * useCarryoverCandidates reuses it to compute a TRUE pairwise net between
+ * the current user and a specific other participant on a source trip,
+ * instead of broadcasting that trip's group-level net balance to everyone.
  */
-function computePairwiseBreakdown(
+export function computePairwiseBreakdown(
   expenses: ExpenseWithDetails[],
   settlements: Settlement[],
   participantUserIds: string[],
@@ -116,8 +131,17 @@ function computePairwiseBreakdown(
     // currency's exponent, not a hardcoded 2-decimal assumption.
     const amountMinor = toMinorUnits(s.amount, s.currency || baseCurrency)
     if (s.from_user_id === currentUserId && net.has(s.to_user_id)) {
-      // I paid them -> reduces what they owe me (or increases what I owe them).
-      net.set(s.to_user_id, (net.get(s.to_user_id) ?? 0) - amountMinor)
+      // I paid them -> mirrors computeBalances' settlement loop exactly
+      // (from_user_id's netBalanceMinor is INCREASED by settlementsPaid):
+      // transferring money always moves the payer's own net UP, whether
+      // that means "I owe them less" (net[them] rises toward/through zero)
+      // or "they now owe me more" (net[them] rises past zero). A previous
+      // version of this branch SUBTRACTED here, which silently doubled a
+      // debt instead of clearing it whenever the current user was the one
+      // who paid a real settlement (bug fix -- no prior test exercised this
+      // branch, since existing coverage only had the current user RECEIVE
+      // settlements; see moneyPosition.test.ts for the regression test).
+      net.set(s.to_user_id, (net.get(s.to_user_id) ?? 0) + amountMinor)
     } else if (s.to_user_id === currentUserId && net.has(s.from_user_id)) {
       // They paid me -> reduces what I'm owed by them.
       net.set(s.from_user_id, (net.get(s.from_user_id) ?? 0) - amountMinor)

@@ -15,14 +15,11 @@ export interface PlacePickerProps {
   /**
    * When provided, the picker updates this existing place's coordinates
    * instead of creating a new place row, so re-picking a name-only place
-   * doesn't create a duplicate. NOTE: no live caller currently passes this
-   * — it was wired for the legacy TripMapTab's "places with no
-   * coordinates" geocode-fix list, which was removed as unreachable dead
-   * code (UPGRADE_MASTER_PLAN.md audit item 7). Nothing in the current
-   * Plan Map lens (PlanMapLens.tsx) surfaces unpinned places for a fix-up
-   * — that capability has no live entry point right now. Kept on the prop
-   * API since PlacePicker is otherwise unchanged and a future "fix
-   * unpinned places" affordance would want it back.
+   * doesn't create a duplicate. Originally wired for the legacy
+   * TripMapTab's "places with no coordinates" geocode-fix list (removed as
+   * unreachable dead code, UPGRADE_MASTER_PLAN.md audit item 7); now used
+   * by the Plan Map lens's "N places aren't on the map yet" section
+   * (PlanMapLens.tsx's UnpinnedPlacesSection) for the same fix-up flow.
    */
   existingPlace?: Tables<'places'>
 }

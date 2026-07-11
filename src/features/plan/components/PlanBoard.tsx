@@ -6,7 +6,7 @@ import { useSections, useCreateSection, useVotes } from '../../../lib/queries/us
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { useBookings } from '../../../lib/queries/useBookings'
-import { useTimeline, useCreateTimelineEvent } from '../../../lib/queries/useTimeline'
+import { useTimeline, useMaterializeMilestone } from '../../../lib/queries/useTimeline'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
@@ -102,7 +102,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const { data: participants } = useParticipants(trip.id)
   const toggleVote = useToggleVote(trip.id)
   const createSection = useCreateSection(trip.id)
-  const createEvent = useCreateTimelineEvent(trip.id)
+  const materializeMilestone = useMaterializeMilestone(trip.id)
   const logActivity = useTripActivityLog(trip.id)
   const [votingId, setVotingId] = useState<string | null>(null)
   const [creatingStarters, setCreatingStarters] = useState(false)
@@ -111,7 +111,10 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const [orderFormSectionId, setOrderFormSectionId] = useState<string | null>(null)
   const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
   const [expandedPicksSectionIds, setExpandedPicksSectionIds] = useState<Set<string>>(() => new Set())
-  const [materializingKey, setMaterializingKey] = useState<string | null>(null)
+  // A Set (not a single string) so two different rows materializing at once
+  // each keep their own spinner/disabled state instead of the second click
+  // clobbering the first row's in-flight indicator.
+  const [materializingKeys, setMaterializingKeys] = useState<Set<string>>(() => new Set())
   const [collapsedWeeks, setCollapsedWeeks] = useState<Set<number>>(() => new Set())
   const [expandedDenseDays, setExpandedDenseDays] = useState<Set<string>>(() => loadExpandedDays(trip.id))
   const [dismissedSuggestionKeys, setDismissedSuggestionKeys] = useState<Set<string>>(() => loadDismissedKeys(trip.id))
@@ -195,9 +198,13 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
 
   const handleMaterialize = async (milestone: DerivedMilestone) => {
     if (!user) return
-    setMaterializingKey(milestone.derivedKey)
+    // Guard against a second click on the same row while its own request is
+    // still in flight (e.g. a slow connection) — a different row is fine,
+    // each tracked independently in the Set above.
+    if (materializingKeys.has(milestone.derivedKey)) return
+    setMaterializingKeys((prev) => new Set(prev).add(milestone.derivedKey))
     try {
-      await createEvent.mutateAsync({
+      await materializeMilestone.mutateAsync({
         trip_id: trip.id,
         created_by: user.id,
         title: milestone.title,
@@ -215,7 +222,11 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     } catch (err) {
       showToast({ type: 'error', message: 'Could not create this event', description: (err as Error).message })
     } finally {
-      setMaterializingKey(null)
+      setMaterializingKeys((prev) => {
+        const next = new Set(prev)
+        next.delete(milestone.derivedKey)
+        return next
+      })
     }
   }
 
@@ -485,7 +496,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
               key={span.derivedKey}
               milestone={span}
               onMaterialize={handleMaterialize}
-              isMaterializing={materializingKey === span.derivedKey}
+              isMaterializing={materializingKeys.has(span.derivedKey)}
+              canMaterialize={isOrganizer}
             />
           ))}
         </div>
@@ -522,7 +534,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                     key={m.derivedKey}
                     milestone={m}
                     onMaterialize={handleMaterialize}
-                    isMaterializing={materializingKey === m.derivedKey}
+                    isMaterializing={materializingKeys.has(m.derivedKey)}
+                    canMaterialize={isOrganizer}
                   />
                 ))}
                 {dayItems.map((item) => (
@@ -575,7 +588,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       tripStartDate={trip.start_date}
                       tripEndDate={trip.end_date}
                       onMaterialize={handleMaterialize}
-                      materializingKey={materializingKey}
+                      materializingKeys={materializingKeys}
+                      canMaterialize={isOrganizer}
                       clashedIds={clashedIds}
                       today={today}
                       expanded={expandedDenseDays.has(date)}
@@ -606,7 +620,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
               tripStartDate={trip.start_date}
               tripEndDate={trip.end_date}
               onMaterialize={handleMaterialize}
-              materializingKey={materializingKey}
+              materializingKeys={materializingKeys}
+              canMaterialize={isOrganizer}
               clashedIds={clashedIds}
               today={today}
               expanded={expandedDenseDays.has(date)}
@@ -734,7 +749,9 @@ interface PlanDaySectionProps {
   tripStartDate: string
   tripEndDate: string
   onMaterialize: (milestone: DerivedMilestone) => void
-  materializingKey: string | null
+  materializingKeys: Set<string>
+  /** Organizer-only gate on DerivedMilestoneRow's "+ Make it an event" button (developer call: milestones are informative for everyone, materializing them is an organizer action). */
+  canMaterialize: boolean
   clashedIds: Set<string>
   /** Today's date (YYYY-MM-DD), for density.ts's isPastDay/shouldDensifyDay. */
   today: string
@@ -768,7 +785,8 @@ function PlanDaySection({
   tripStartDate,
   tripEndDate,
   onMaterialize,
-  materializingKey,
+  materializingKeys,
+  canMaterialize,
   clashedIds,
   today,
   expanded,
@@ -807,7 +825,13 @@ function PlanDaySection({
         style={swipe.style}
       >
         {milestones.map((m) => (
-          <DerivedMilestoneRow key={m.derivedKey} milestone={m} onMaterialize={onMaterialize} isMaterializing={materializingKey === m.derivedKey} />
+          <DerivedMilestoneRow
+            key={m.derivedKey}
+            milestone={m}
+            onMaterialize={onMaterialize}
+            isMaterializing={materializingKeys.has(m.derivedKey)}
+            canMaterialize={canMaterialize}
+          />
         ))}
         {dayItems.length === 0 && milestones.length === 0 ? (
           <p className="text-xs text-[var(--text-muted)] pl-1">Nothing planned yet</p>

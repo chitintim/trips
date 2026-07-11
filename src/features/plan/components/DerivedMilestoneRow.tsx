@@ -16,7 +16,9 @@ export interface DerivedMilestoneRowProps {
   canMaterialize?: boolean
 }
 
-const MATERIALIZE_HINT = 'Added automatically from your trip dates — not yet a real plan item'
+const MATERIALIZE_HINT =
+  'Added automatically from your trip dates — it moves if the dates change, but nobody can edit or comment on it. ' +
+  'Making it an event turns it into a normal plan item (times, notes, comments) that you manage from then on.'
 
 /**
  * One date-derived system row (UX_REDESIGN.md Part 3 "Date-derived

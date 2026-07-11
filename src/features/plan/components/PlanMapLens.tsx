@@ -1,11 +1,12 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet'
 import type { LatLngBoundsExpression, LatLngTuple } from 'leaflet'
 import { Button, EmptyState, Skeleton } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
-import { usePlaces } from '../../../lib/queries/usePlaces'
-import { ensureLeafletDefaultIcon, emojiDivIcon } from '../../places'
+import { usePlaces, type Place } from '../../../lib/queries/usePlaces'
+import { ensureLeafletDefaultIcon, emojiDivIcon, PlacePicker } from '../../places'
 import { colorForDayIndex } from '../../places/lib/mapMarkers'
+import { placesWithoutCoordinates } from '../../places/lib/unpinnedPlaces'
 import { CATEGORY_CONFIG } from '../../timeline/lib/categoryConfig'
 import type { PlanItem } from '../lib/planItems'
 import type { Trip } from '../../../types'
@@ -26,6 +27,60 @@ function FitBounds({ bounds }: { bounds: LatLngBoundsExpression | null }) {
     if (bounds) map.fitBounds(bounds, { padding: [32, 32], maxZoom: 16 })
   }, [bounds, map])
   return null
+}
+
+interface UnpinnedPlacesSectionProps {
+  places: Place[]
+  onFix: (place: Place) => void
+}
+
+/**
+ * Compact, collapsed-by-default disclosure for places that exist on the
+ * trip but have no coordinates (see unpinnedPlaces.ts) — the only surface
+ * left after TripMapTab's removal that surfaces this gap and offers a fix
+ * path. Sits below the map (or below the "no pins yet" empty state) rather
+ * than blocking either, since it's a secondary, non-blocking affordance.
+ */
+function UnpinnedPlacesSection({ places, onFix }: UnpinnedPlacesSectionProps) {
+  const [expanded, setExpanded] = useState(false)
+  if (places.length === 0) return null
+
+  return (
+    <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--surface-sunken)] transition-colors"
+        aria-expanded={expanded}
+      >
+        <span>
+          📍 {places.length} {places.length === 1 ? 'place' : 'places'} {places.length === 1 ? "isn't" : "aren't"} on
+          the map yet
+        </span>
+        <span aria-hidden="true" className="shrink-0 text-[var(--text-muted)]">
+          {expanded ? '▲' : '▼'}
+        </span>
+      </button>
+      {expanded && (
+        <ul className="space-y-1.5 border-t border-[var(--border-subtle)] p-3">
+          {places.map((place) => (
+            <li key={place.id}>
+              <button
+                type="button"
+                onClick={() => onFix(place)}
+                className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-page)] px-3 py-2 text-left text-sm hover:border-accent-400 transition-colors"
+              >
+                <span className="truncate">{place.name}</span>
+                <span className="shrink-0 text-xs font-medium text-accent-700 dark:text-accent-400">
+                  Fix location
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 export interface PlanMapLensProps {
@@ -62,6 +117,16 @@ export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
   const points: LatLngTuple[] = pins.map((p) => [p.place.lat!, p.place.lng!])
   const bounds: LatLngBoundsExpression | null = points.length > 0 ? points : null
 
+  // Places on this trip with no lat/lng (name-only PlacePicker entries, or
+  // an unresolved link paste) — they can never render as pins. Any
+  // participant can fix one via the same PlacePicker used to create it
+  // (existingPlace mode); there's no existing permission pattern
+  // restricting place edits elsewhere (AddToPlanSheet/EventEditorSheet/
+  // BookingEditorSheet all let any participant create/attach places), so
+  // this stays consistent rather than inventing a new gate.
+  const unpinnedPlaces = useMemo(() => placesWithoutCoordinates(places), [places])
+  const [fixPlace, setFixPlace] = useState<Place | null>(null)
+
   // Loading gate (UPGRADE_MASTER_PLAN.md audit item 3): without this, "no
   // pinned places yet" briefly flashed while places was still in flight.
   if (placesLoading) {
@@ -85,38 +150,64 @@ export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
 
   if (pins.length === 0) {
     return (
-      <EmptyState
-        icon="🗺️"
-        title="No pinned places yet"
-        description="Attach a place to a plan item and it'll show up here as a pin."
-      />
+      <div className="space-y-3">
+        <EmptyState
+          icon="🗺️"
+          title="No pinned places yet"
+          description="Attach a place to a plan item and it'll show up here as a pin."
+        />
+        <UnpinnedPlacesSection places={unpinnedPlaces} onFix={setFixPlace} />
+        {fixPlace && (
+          <PlacePicker
+            isOpen={!!fixPlace}
+            onClose={() => setFixPlace(null)}
+            tripId={trip.id}
+            title={`Pin "${fixPlace.name}"`}
+            existingPlace={fixPlace}
+            onPicked={() => setFixPlace(null)}
+          />
+        )}
+      </div>
     )
   }
 
   return (
-    <div className="relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-subtle)]" style={{ height: 'min(70vh, 560px)' }}>
-      <MapContainer center={points[0]} zoom={13} style={{ height: '100%', width: '100%' }} scrollWheelZoom>
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+    <div className="space-y-3">
+      <div className="relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--border-subtle)]" style={{ height: 'min(70vh, 560px)' }}>
+        <MapContainer center={points[0]} zoom={13} style={{ height: '100%', width: '100%' }} scrollWheelZoom>
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          <FitBounds bounds={bounds} />
+          {pins.map(({ item, place, color, emoji, isSolid }) => (
+            <Marker
+              key={item.id}
+              position={[place.lat!, place.lng!]}
+              icon={emojiDivIcon(emoji, color, { size: isSolid ? 30 : 24, ring: isSolid })}
+              eventHandlers={{ click: () => onOpenItem(item) }}
+            >
+              <Popup>
+                <span className={isSolid ? '' : 'italic'}>
+                  {item.title}
+                  {!isSolid && ' (proposed)'}
+                </span>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
+      <UnpinnedPlacesSection places={unpinnedPlaces} onFix={setFixPlace} />
+      {fixPlace && (
+        <PlacePicker
+          isOpen={!!fixPlace}
+          onClose={() => setFixPlace(null)}
+          tripId={trip.id}
+          title={`Pin "${fixPlace.name}"`}
+          existingPlace={fixPlace}
+          onPicked={() => setFixPlace(null)}
         />
-        <FitBounds bounds={bounds} />
-        {pins.map(({ item, place, color, emoji, isSolid }) => (
-          <Marker
-            key={item.id}
-            position={[place.lat!, place.lng!]}
-            icon={emojiDivIcon(emoji, color, { size: isSolid ? 30 : 24, ring: isSolid })}
-            eventHandlers={{ click: () => onOpenItem(item) }}
-          >
-            <Popup>
-              <span className={isSolid ? '' : 'italic'}>
-                {item.title}
-                {!isSolid && ' (proposed)'}
-              </span>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
+      )}
     </div>
   )
 }

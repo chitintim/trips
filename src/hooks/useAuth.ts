@@ -92,11 +92,16 @@ export function useAuth() {
    * OTP-first invitation signup: send a code to an email that does NOT
    * have an account yet (shouldCreateUser: true creates the auth user on
    * verify, without requiring a password).
+   *
+   * `metadata` (first_name/last_name/avatar_data) is passed through as
+   * `options.data` -- raw_user_meta_data consumed by the new-user trigger,
+   * mirroring the password `signUp` path above -- so an OTP signup never
+   * creates a bare auth user with an empty profile row.
    */
-  const requestSignupOtp = async (email: string) => {
+  const requestSignupOtp = async (email: string, metadata?: Record<string, unknown>) => {
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { shouldCreateUser: true },
+      options: { shouldCreateUser: true, data: metadata },
     })
     return { error }
   }

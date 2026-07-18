@@ -1,5 +1,7 @@
 import { supabase } from '../../../lib/supabase'
 import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
+import { resolveExpenseFxFields, splitBaseCurrencyAmount } from '../../../lib/fx/resolveExpenseFxFields'
+import { reportError } from '../../../lib/reportError'
 import { ProposedActionSchema, type ProposedAction } from '../../../shared/contracts/aiProposal'
 import type { Json } from '../../../types/database.types'
 
@@ -354,6 +356,16 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext, ref
     case 'create_expense_draft': {
       const paidBy = action.paid_by ?? ctx.userId
       const participantIds = action.participant_ids?.length ? action.participant_ids : [paidBy]
+      const paymentDate = action.payment_date ?? new Date().toISOString().slice(0, 10)
+      // Foreign-currency proposals: best-effort auto FX rate so the created
+      // expense counts in balances (null fields when the fetch fails --
+      // balances flag the missing rate, same as the manual editor paths).
+      const fx = await resolveExpenseFxFields({
+        amountMajor: action.amount,
+        currency: action.currency,
+        baseCurrency: ctx.baseCurrency,
+        paymentDate,
+      })
       const { data: expense, error } = await supabase
         .from('expenses')
         .insert({
@@ -362,9 +374,13 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext, ref
           amount: action.amount,
           currency: action.currency,
           paid_by: paidBy,
-          payment_date: action.payment_date ?? new Date().toISOString().slice(0, 10),
+          payment_date: paymentDate,
           category: action.category ?? 'other',
           participant_ids: participantIds,
+          fx_rate: fx.fx_rate,
+          fx_rate_date: fx.fx_rate_date,
+          base_currency_amount: fx.base_currency_amount,
+          rate_source: fx.rate_source,
         })
         .select()
         .single()
@@ -378,11 +394,17 @@ export async function applyAction(action: ProposedAction, ctx: ApplyContext, ref
         user_id: userId,
         amount: fromMinorUnits(shares[i], action.currency),
         split_type: 'equal' as const,
+        base_currency_amount: splitBaseCurrencyAmount(fromMinorUnits(shares[i], action.currency), fx),
       }))
       const { error: splitsError } = await supabase.from('expense_splits').insert(splitRows)
       if (splitsError) {
         // Roll back the orphaned expense so a partial apply doesn't corrupt balances.
-        await supabase.from('expenses').delete().eq('id', expense.id)
+        const { error: rollbackError } = await supabase.from('expenses').delete().eq('id', expense.id)
+        if (rollbackError) {
+          // Rollback failure means an orphaned expense with no splits is now
+          // corrupting zero-sum -- surface it instead of swallowing it.
+          reportError(rollbackError, 'applyProposal.create_expense_draft.rollback')
+        }
         throw new Error(splitsError.message)
       }
       return { table: 'expenses', id: expense.id }

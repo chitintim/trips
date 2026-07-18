@@ -354,6 +354,18 @@ verify_jwt = true
 import_map = "./functions/trip-chat/deno.json"
 entrypoint = "./functions/trip-chat/index.ts"
 
+[functions.refresh-fx-rates]
+enabled = true
+verify_jwt = true
+import_map = "./functions/refresh-fx-rates/deno.json"
+entrypoint = "./functions/refresh-fx-rates/index.ts"
+
+[functions.auto-chase]
+enabled = true
+verify_jwt = true
+import_map = "./functions/auto-chase/deno.json"
+entrypoint = "./functions/auto-chase/index.ts"
+
 [functions.parse-receipt]
 enabled = true
 verify_jwt = true

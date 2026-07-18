@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { reportError } from '../lib/reportError'
+import { reconcilePendingSignup } from '../features/auth/lib/finalizeSignup'
 import { Button, Spinner } from './ui'
 
 type Status = 'idle' | 'processing' | 'error'
@@ -50,9 +52,50 @@ export function AuthCallback() {
 
     if (type === 'signup' && accessToken) {
       setStatus('processing')
-      // Email confirmation - redirect to dashboard
-      navigate('/', { replace: true })
-      return
+      // Email confirmation. A user who clicked the emailed magic link
+      // (instead of typing the 6-digit code into Signup's verify step)
+      // lands here signed in but WITHOUT Signup.tsx's finalizeAccount
+      // having run -- profile fields and invitation consumption would be
+      // silently dropped. Reconcile from the pending payload Signup stored
+      // in localStorage when it requested the OTP (no-op when absent or
+      // already finalized) before heading to the dashboard. Reconciliation
+      // failures are reported but never trap the user on this spinner --
+      // the trigger-populated metadata profile still exists either way.
+      let cancelled = false
+      // detectSessionInUrl may still be exchanging the hash for a session
+      // when this effect runs, so fall back to waiting (bounded) for the
+      // SIGNED_IN event before giving up on reconciliation.
+      const waitForUserId = async (): Promise<string | null> => {
+        const { data: { session } } = await supabase.auth.getSession()
+        if (session?.user) return session.user.id
+        return new Promise((resolve) => {
+          // Timer created first (it can never fire before the next macrotask,
+          // so `subscription` below is always initialized when it runs).
+          const timer = setTimeout(() => {
+            subscription.unsubscribe()
+            resolve(null)
+          }, 5000)
+          const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+            if (s?.user) {
+              clearTimeout(timer)
+              subscription.unsubscribe()
+              resolve(s.user.id)
+            }
+          })
+        })
+      }
+      void (async () => {
+        try {
+          const userId = await waitForUserId()
+          if (userId) await reconcilePendingSignup(userId)
+        } catch (err) {
+          reportError(err, 'auth-callback:reconcile-pending-signup')
+        }
+        if (!cancelled) navigate('/', { replace: true })
+      })()
+      return () => {
+        cancelled = true
+      }
     }
 
     // Hash present but not a recovery/signup callback. Only treat it as a

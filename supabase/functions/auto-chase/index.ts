@@ -19,7 +19,14 @@
 //   - waitlist lifecycle: freed spots -> claim offer to first in line
 //     (feature-detected -- skipped if trip_participants.waitlist_offer_
 //     expires_at doesn't exist yet, it ships in a later feature migration);
-//   - settlements 'suggested'/'marked_paid' older than N days.
+//   - settlements 'suggested'/'marked_paid' older than N days;
+//   - trip_actions (Task D) that are open (not completed) and overdue or
+//     due within 48h -> 'overdue_action', targeting assigned_to if set (skip
+//     if they already completed it via trip_action_completions), else every
+//     active participant without a completion row. Effective due date is
+//     due_date for 'fixed' deadline_kind, trip.start_date for
+//     'before_trip' (skipped when start_date is null). Date math lives in
+//     ./actionDueDate.ts so it's unit-testable without the service client.
 //
 // T-minus date-intelligence kinds (UX_REDESIGN.md Part 3 "T-minus nudges
 // feed the existing chaser"), all respecting the same chase_settings
@@ -54,6 +61,7 @@ import { handleCorsPreflight } from '../_shared/cors.ts'
 import { errorResponse, jsonResponse, UnauthorizedError } from '../_shared/errors.ts'
 import { serviceClient } from '../_shared/supabaseClients.ts'
 import { getEmailSender } from '../_shared/emailSender.ts'
+import { effectiveActionDueDate, isActionDueOrOverdue, isActionOverdue } from './actionDueDate.ts'
 
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://chitintim.github.io/trips'
 
@@ -110,6 +118,7 @@ interface ChaseItem {
     | 't30_no_transport'
     | 't14_missing_arrival'
     | 't1_checkin'
+    | 'overdue_action'
   entityType: string
   entityId: string
   description: string
@@ -403,6 +412,50 @@ Deno.serve(async (req) => {
               entityType: 'settlement',
               entityId: s.id,
               description: `Confirm you received ${s.currency ?? ''} ${s.amount} for "${trip.name}"`,
+              deepLink: tripLink,
+            })
+          }
+        }
+      }
+
+      // ---- g. Open trip_actions: overdue, or due within 48h. Effective due
+      // date is due_date for 'fixed', trip.start_date for 'before_trip'
+      // (skipped when start_date is null -- nothing to chase against yet).
+      // Targets: assigned_to if set (skip if they already completed it);
+      // otherwise every active participant without a completion row. ----
+      {
+        const { data: actions } = await admin
+          .from('trip_actions')
+          .select('id, title, notes, assigned_to, deadline_kind, due_date, completed_at, trip_action_completions(user_id)')
+          .eq('trip_id', trip.id)
+          .is('completed_at', null)
+        for (const a of actions ?? []) {
+          const dueDate = effectiveActionDueDate({
+            deadline_kind: a.deadline_kind,
+            due_date: a.due_date,
+            tripStartDate: trip.start_date,
+          })
+          if (!dueDate) continue
+          if (!isActionDueOrOverdue(dueDate, now)) continue
+
+          const overdue = isActionOverdue(dueDate, now)
+          const dueLabel = overdue ? `overdue since ${dueDate}` : `due ${dueDate}`
+          const description = `${overdue ? 'Overdue' : 'Due soon'}: "${a.title}" for "${trip.name}" (${dueLabel})`
+
+          // deno-lint-ignore no-explicit-any
+          const completedBy = new Set((a.trip_action_completions ?? []).map((c: any) => c.user_id))
+          const targets: string[] = a.assigned_to ? [a.assigned_to] : participantIds
+
+          for (const uid of targets) {
+            if (completedBy.has(uid)) continue
+            items.push({
+              tripId: trip.id,
+              tripName: trip.name,
+              userId: uid,
+              kind: 'overdue_action',
+              entityType: 'trip_action',
+              entityId: a.id,
+              description,
               deepLink: tripLink,
             })
           }

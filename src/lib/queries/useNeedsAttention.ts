@@ -6,8 +6,10 @@ import { useTrip, useParticipants } from './useTrip'
 import { useSections, useVotes } from './usePlanning'
 import { useExpenses } from './useExpenses'
 import { useSettlements } from './useSettlements'
+import { useActions } from './useActions'
 import { getDecisionShape } from '../../features/decisions/lib/decisionShapes'
 import { isConfirmationEnabled } from '../tripStatus'
+import { daysUntilDue, isActionCompleteForUser, isOverdue } from '../../features/actions/lib/actionStatus'
 
 /**
  * Computes the current user's open loops for a trip, purely by reading
@@ -49,6 +51,7 @@ export function useNeedsAttention(
   const { data: votes } = useVotes(tripId)
   const { data: expensesData } = useExpenses(tripId)
   const { data: settlements } = useSettlements(tripId)
+  const { data: actions } = useActions(tripId)
 
   return useMemo(() => {
     if (!tripId || !user) return []
@@ -141,6 +144,28 @@ export function useNeedsAttention(
       })
     }
 
+    // ---- Actions overdue or due within 48h, assigned to the user or a --
+    // ---- group action they haven't confirmed yet -----------------------
+    let urgentActionCount = 0
+    for (const action of actions || []) {
+      const isMine = action.assigned_to ? action.assigned_to === user.id : !isActionCompleteForUser(action, user.id)
+      if (!isMine) continue
+      if (action.assigned_to && action.completed_at != null) continue // individual, already done
+
+      const overdue = isOverdue(action, trip)
+      const days = daysUntilDue(action, trip)
+      const dueSoon = days != null && days >= 0 && days * 24 <= 48
+      if (overdue || dueSoon) urgentActionCount++
+    }
+    if (urgentActionCount > 0) {
+      items.push({
+        icon: '✅',
+        label: 'Actions due',
+        count: urgentActionCount,
+        onClick: () => (onNavigateTab ? onNavigateTab('today') : navigate(`/${tripId}?tab=today`)),
+      })
+    }
+
     return items
-  }, [tripId, user, trip, participants, sections, votes, expensesData, settlements, navigate, onNavigateTab])
+  }, [tripId, user, trip, participants, sections, votes, expensesData, settlements, actions, navigate, onNavigateTab])
 }

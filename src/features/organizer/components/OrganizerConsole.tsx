@@ -4,6 +4,7 @@ import { ErrorState } from '../../../components/ui/illustrations'
 import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
 import { useAuth } from '../../../hooks/useAuth'
 import { BlockersBoard } from './BlockersBoard'
+import { OrganizerActionsPanel } from './OrganizerActionsPanel'
 import { BookingsTracker } from './BookingsTracker'
 import { ActivityFeedPanel } from './ActivityFeedPanel'
 import { ChaseSettingsSheet } from './ChaseSettingsSheet'
@@ -13,7 +14,7 @@ export interface OrganizerConsoleProps {
   tripId: string
 }
 
-type ConsoleView = 'blockers' | 'bookings' | 'activity'
+type ConsoleView = 'blockers' | 'actions' | 'bookings' | 'activity'
 
 /**
  * Organizer console (plan §14): blockers board, bookings tracker and the
@@ -91,6 +92,7 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
           onChange={(v) => setView(v as ConsoleView)}
           options={[
             { value: 'blockers', label: 'Blockers', icon: <span>🚧</span> },
+            { value: 'actions', label: 'Actions', icon: <span>✅</span> },
             { value: 'bookings', label: 'Bookings', icon: <span>🧾</span> },
             { value: 'activity', label: 'Activity', icon: <span>📰</span> },
           ]}
@@ -104,6 +106,7 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
       </div>
 
       {view === 'blockers' && <BlockersBoard trip={trip} />}
+      {view === 'actions' && <OrganizerActionsPanel tripId={tripId} />}
       {view === 'bookings' && <BookingsTracker trip={trip} />}
       {view === 'activity' && (
         <Card variant="flat">

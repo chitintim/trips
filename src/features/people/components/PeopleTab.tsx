@@ -6,7 +6,6 @@ import { useTrip, useParticipants, useCurrentUserRow } from '../../../lib/querie
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
-import { ChecklistTab } from '../../checklists'
 import { ParticipantList } from './ParticipantList'
 import { DependencyGraph } from './DependencyGraph'
 import { WaitlistPanel } from './WaitlistPanel'
@@ -53,7 +52,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
   const [travelOpen, setTravelOpen] = useState(false)
   const [addParticipantOpen, setAddParticipantOpen] = useState(false)
   const [manageParticipant, setManageParticipant] = useState<ParticipantWithUser | null>(null)
-  const [view, setView] = useState<'list' | 'graph' | 'waitlist' | 'checklist'>('list')
+  const [view, setView] = useState<'list' | 'graph' | 'waitlist'>('list')
 
   const myTravel = useMemo(() => getMyTravelEvents(timelineEvents, user?.id), [timelineEvents, user?.id])
 
@@ -238,7 +237,6 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
           {confirmationEnabled && (
             <Tabs.Tab value="waitlist">Waitlist{counts.waitlist > 0 ? ` (${counts.waitlist})` : ''}</Tabs.Tab>
           )}
-          <Tabs.Tab value="checklist">Checklist</Tabs.Tab>
         </Tabs.List>
 
         <div className="mt-4">
@@ -269,12 +267,6 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
               <WaitlistPanel tripId={tripId} participants={participants || []} isOrganizer={isOrganizer} />
             </Tabs.Panel>
           )}
-          <Tabs.Panel value="checklist">
-            {/* "Who's bringing what" is a people thing (UX_REDESIGN §4) — the
-                standalone Checklist tab died with the v2.1 nav rework. Stays
-                available regardless of confirmation_enabled. */}
-            <ChecklistTab tripId={tripId} isOrganizer={isOrganizer} />
-          </Tabs.Panel>
         </div>
       </Tabs>
 

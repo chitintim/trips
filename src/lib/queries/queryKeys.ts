@@ -52,4 +52,5 @@ export const queryKeys = {
 
   confirmationSummary: (tripId: string) => ['trip', tripId, 'confirmationSummary'] as const,
   chatMessages: (tripId: string) => ['trip', tripId, 'chatMessages'] as const,
+  actions: (tripId: string) => ['trip', tripId, 'actions'] as const,
 } as const

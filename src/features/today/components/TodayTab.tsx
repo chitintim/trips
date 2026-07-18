@@ -10,6 +10,7 @@ import {
   FaqCard,
 } from '../../brief'
 import { StatusModal, ConfirmationSettingsSheet } from '../../people'
+import { ActionsSection } from '../../actions'
 import { usePlanItems } from '../../plan'
 import { formatTime } from '../../timeline'
 import { YourTurnStack } from './YourTurnStack'
@@ -39,6 +40,8 @@ export interface TodayTabProps {
   onQuickCapture: () => void
   /** Organizer "invite people" affordance (Add participant sheet). */
   onInvite: () => void
+  /** Opens the Actions sheet (trip to-dos + bring list). */
+  onOpenActions: () => void
 }
 
 /**
@@ -57,6 +60,7 @@ export function TodayTab({
   onOpenRecap,
   onQuickCapture,
   onInvite,
+  onOpenActions,
 }: TodayTabProps) {
   const brief = useBriefData(trip.id)
   const [rsvpOpen, setRsvpOpen] = useState(false)
@@ -111,6 +115,7 @@ export function TodayTab({
           />
           <WhosInRow participants={brief.participants} />
           <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
+          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
           <FaqCard entries={brief.faqEntries} />
           {announcements}
           {activity}
@@ -123,6 +128,7 @@ export function TodayTab({
       layout = (
         <>
           <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
+          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
           {organizerCards}
           {announcements}
           <DecidedSoFarCard trip={trip} onNavigate={onNavigate} />
@@ -137,6 +143,7 @@ export function TodayTab({
         <>
           <CountdownHero trip={trip} />
           <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
+          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
           <TravelDetailsPromptCard tripId={trip.id} />
           {organizerCards}
           <KeyBookingsCard tripId={trip.id} />
@@ -160,6 +167,7 @@ export function TodayTab({
           </div>
           <SettleStatusCard trip={trip} onNavigate={onNavigate} compact />
           <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
+          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
           {isOrganizer && <BlockersStrip trip={trip} onOpenConsole={onOpenConsole} />}
           {isOrganizer && <StageSuggestionCard trip={trip} effectiveStage={effectiveStage} />}
           {announcements}
@@ -175,6 +183,7 @@ export function TodayTab({
           <RecapTeaserCard onOpenRecap={onOpenRecap} />
           {isOrganizer && <StageSuggestionCard trip={trip} effectiveStage={effectiveStage} />}
           <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
+          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
           {announcements}
           {activity}
         </>
@@ -185,6 +194,7 @@ export function TodayTab({
       layout = (
         <>
           <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
+          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
           {announcements}
           {activity}
         </>

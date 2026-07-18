@@ -16,8 +16,8 @@
 // Rate limit: 20 parses/day/user (plan §10).
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
-import { handleCorsPreflight, corsHeaders } from '../_shared/cors.ts'
-import { errorResponse, jsonResponse, ForbiddenError, UnauthorizedError } from '../_shared/errors.ts'
+import { handleCorsPreflight } from '../_shared/cors.ts'
+import { errorResponse, jsonResponse } from '../_shared/errors.ts'
 import { callerClient, requireUser, requireTripParticipant } from '../_shared/supabaseClients.ts'
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
 import { createMessage, padForCaching, CLAUDE_MODEL, type AnthropicContentBlock } from '../_shared/anthropic.ts'
@@ -226,13 +226,11 @@ Deno.serve(async (req) => {
   const preflight = handleCorsPreflight(req)
   if (preflight) return preflight
 
-  let userId: string | null = null
   let tripId: string | null = null
 
   try {
     const supabaseClient = callerClient(req)
     const user = await requireUser(supabaseClient)
-    userId = user.id
 
     const { receiptPath, tripId: bodyTripId } = await req.json()
     if (!receiptPath || !bodyTripId) {
@@ -283,7 +281,7 @@ Deno.serve(async (req) => {
       : { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }
 
     // --- First pass ---
-    let response = await callClaudeForReceipt(fileBlock)
+    const response = await callClaudeForReceipt(fileBlock)
     let totalUsage = { ...response.usage }
     let parsed = ReceiptParseResultSchema.parse(extractJsonFromResponse(response.content))
     let reconciliation = reconcileReceipt(parsed)

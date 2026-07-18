@@ -96,6 +96,7 @@ class ResendEmailSender implements EmailSender {
 class NullEmailSender implements EmailSender {
   readonly channel = 'skipped'
   readonly available = false
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature required by EmailSender interface
   send(_message: EmailMessage): Promise<void> {
     return Promise.resolve()
   }

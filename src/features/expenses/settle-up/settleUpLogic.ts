@@ -13,7 +13,8 @@ import { fromMinorUnits } from '../../../lib/money'
 function balanceEpsilonMajor(currency: string): number {
   return fromMinorUnits(1, currency)
 }
-import { computeBalances } from '../lib/balances'
+import { computeBalances, carryoversToPseudoSettlements, partitionCarryovers } from '../lib/balances'
+import { computePairwiseBreakdown } from '../money-space/moneyPosition'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementSnapshot, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
@@ -62,18 +63,59 @@ export function computeSuggestedPayments(
   const epsilon = balanceEpsilonMajor(baseCurrency)
 
   if (!simplify) {
-    // Direct (non-minimized) pairing: still uses the same greedy algorithm
-    // since without simplification "direct" settlement in a group context
-    // has no single canonical definition beyond min-cash-flow itself in
-    // this app's model (no per-expense debtor/creditor pairing is tracked
-    // independently of the net balance) -- min-cash-flow is used as the
-    // baseline either way, with `simplify` primarily gating whether the UI
-    // presents it as "the" plan or an optional suggestion. This keeps the
-    // n-1 payments guarantee (plan §12) regardless of the toggle.
-    return minimizeTransactions(personInputs, epsilon)
+    // Direct (non-minimized) mode: pairwise who-owes-whom straight from the
+    // actual expense/settlement history, WITHOUT netting a debt through a
+    // third party (previously both branches called minimizeTransactions
+    // identically, making the simplify toggle a no-op). Reuses the exact
+    // pairwise ledger MoneySpace's per-person breakdown is built on
+    // (computePairwiseBreakdown), with usable carryovers folded in as
+    // pseudo-settlements via the SAME partitionCarryovers rules
+    // computeBalances applies, so figures stay in sync with the header.
+    return computeDirectPayments(expenses, settlements, people, baseCurrency, carryovers)
   }
 
   return minimizeTransactions(personInputs, epsilon)
+}
+
+/**
+ * Direct pairwise payments: for every participant, each counterparty they
+ * NET owe (per computePairwiseBreakdown's ledger over expenses +
+ * settlements) becomes one payment from them to that counterparty. Uses the
+ * same BALANCE_EPSILON_MINOR threshold as the breakdown (1 minor unit,
+ * matching balanceEpsilonMajor), so a settled pair never produces a
+ * dust-amount payment.
+ */
+function computeDirectPayments(
+  expenses: ExpenseWithDetails[],
+  settlements: Settlement[],
+  people: SettleUpPerson[],
+  baseCurrency: string,
+  carryovers: SettlementCarryover[]
+): Transaction[] {
+  const participantUserIds = people.map((p) => p.userId)
+  const { usable: usableCarryovers } = partitionCarryovers(carryovers, baseCurrency, participantUserIds)
+  const settlementsWithCarryovers =
+    usableCarryovers.length > 0 ? [...settlements, ...carryoversToPseudoSettlements(usableCarryovers)] : settlements
+
+  const nameOf = new Map(people.map((p) => [p.userId, p.name]))
+  const transactions: Transaction[] = []
+  for (const person of people) {
+    const rows = computePairwiseBreakdown(expenses, settlementsWithCarryovers, participantUserIds, person.userId, baseCurrency)
+    for (const row of rows) {
+      // Negative netMinor = this person owes that counterparty. Only the
+      // debtor side emits the payment, so each pair appears exactly once.
+      if (row.netMinor < 0) {
+        transactions.push({
+          from: person.userId,
+          to: row.userId,
+          fromName: nameOf.get(person.userId) ?? person.userId,
+          toName: nameOf.get(row.userId) ?? row.userId,
+          amount: fromMinorUnits(-row.netMinor, baseCurrency),
+        })
+      }
+    }
+  }
+  return transactions
 }
 
 export function getMyTransactions(allTransactions: Transaction[], userId: string) {

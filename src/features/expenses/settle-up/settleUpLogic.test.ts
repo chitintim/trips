@@ -137,6 +137,81 @@ describe('computeSuggestedPayments carryover exclusion guards', () => {
   })
 })
 
+describe('computeSuggestedPayments direct (simplify=false) mode', () => {
+  const threePeople: SettleUpPerson[] = [
+    { userId: 'alice', name: 'Alice' },
+    { userId: 'bob', name: 'Bob' },
+    { userId: 'charlie', name: 'Charlie' },
+  ]
+  // Chain: Bob owes Alice £30 (e1), Charlie owes Bob £30 (e2).
+  const chainExpenses = [
+    makeExpense({ id: 'e1', amount: 60, paid_by: 'alice', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+    makeExpense({ id: 'e2', amount: 60, paid_by: 'bob', splits: [makeSplit('bob', 30), makeSplit('charlie', 30)] }),
+  ]
+
+  it('direct mode preserves actual pairwise debts instead of netting through third parties', () => {
+    const direct = computeSuggestedPayments(chainExpenses, [], threePeople, 'GBP', false)
+    expect(direct).toHaveLength(2)
+    expect(direct).toEqual(
+      expect.arrayContaining([
+        { from: 'bob', to: 'alice', fromName: 'Bob', toName: 'Alice', amount: 30 },
+        { from: 'charlie', to: 'bob', fromName: 'Charlie', toName: 'Bob', amount: 30 },
+      ])
+    )
+  })
+
+  it('simplify mode collapses the same chain into fewer payments (the toggle actually changes the plan)', () => {
+    const simplified = computeSuggestedPayments(chainExpenses, [], threePeople, 'GBP', true)
+    expect(simplified).toEqual([{ from: 'charlie', to: 'alice', fromName: 'Charlie', toName: 'Alice', amount: 30 }])
+  })
+
+  it('direct mode folds usable carryovers into the pairwise amounts', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 30 })]
+    const direct = computeSuggestedPayments(expenses, [], people, 'GBP', false, carryovers)
+    expect(direct).toEqual([{ from: 'bob', to: 'alice', fromName: 'Bob', toName: 'Alice', amount: 80 }])
+  })
+
+  it('direct mode excludes mismatched-currency carryovers, same as simplify mode', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 10000, currency: 'JPY' })]
+    const direct = computeSuggestedPayments(expenses, [], people, 'GBP', false, carryovers)
+    expect(direct).toEqual([{ from: 'bob', to: 'alice', fromName: 'Bob', toName: 'Alice', amount: 50 }])
+  })
+
+  it('direct mode emits no dust payments for a settled pair (epsilon behavior)', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 60, paid_by: 'alice', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+      makeExpense({ id: 'e2', amount: 60, paid_by: 'bob', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+    ]
+    expect(computeSuggestedPayments(expenses, [], people, 'GBP', false)).toEqual([])
+  })
+
+  it('direct mode respects recorded settlements between a pair', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
+    ]
+    const settlements = [
+      {
+        id: 's1',
+        trip_id: 'trip-1',
+        from_user_id: 'bob',
+        to_user_id: 'alice',
+        amount: 20,
+        currency: 'GBP',
+        status: 'confirmed',
+        created_at: '2026-08-02T00:00:00Z',
+      } as never,
+    ]
+    const direct = computeSuggestedPayments(expenses, settlements, people, 'GBP', false)
+    expect(direct).toEqual([{ from: 'bob', to: 'alice', fromName: 'Bob', toName: 'Alice', amount: 30 }])
+  })
+})
+
 describe('isFullySettled with folded settlement_carryovers', () => {
   it('a trip that looks settled on its own is NOT fully settled once an unpaid carryover is folded in', () => {
     const expenses = [

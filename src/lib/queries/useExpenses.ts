@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
+import { reportError } from '../reportError'
 import { Expense, ExpenseSplit, ExpenseInsert, ExpenseUpdate, User } from '../../types'
 import { Tables, TablesInsert } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
@@ -195,7 +196,14 @@ export function useCreateExpense(tripId: string) {
       if (splits.length > 0) {
         const rows: TablesInsert<'expense_splits'>[] = splits.map((s) => ({ expense_id: expenseData.id, ...s }))
         const { error: splitsError } = await supabase.from('expense_splits').insert(rows)
-        if (splitsError) throw splitsError
+        if (splitsError) {
+          // Roll back the just-created expense so a splits failure can't
+          // leave an orphaned expense corrupting zero-sum balances (mirrors
+          // applyProposal's create_expense_draft rollback).
+          const { error: rollbackError } = await supabase.from('expenses').delete().eq('id', expenseData.id)
+          if (rollbackError) reportError(rollbackError, 'useCreateExpense.rollback')
+          throw splitsError
+        }
       }
 
       return expenseData
@@ -232,6 +240,21 @@ export function useUpdateExpense(tripId: string) {
 
       if (skipSplits) return
 
+      // Upsert the current splits BEFORE deleting removed participants'
+      // rows: if the upsert fails, the previous splits are still intact
+      // (delete-first left the expense with missing rows -- broken zero-sum
+      // -- whenever the subsequent upsert failed). If the later delete
+      // fails, the removed participants' old rows temporarily remain and
+      // the thrown error prompts a retry -- an over-complete split set is
+      // recoverable, an orphaned/partial one silently corrupts balances.
+      if (splits && splits.length > 0) {
+        const rows: TablesInsert<'expense_splits'>[] = splits.map((s) => ({ expense_id: expenseId, ...s }))
+        const { error: splitsError } = await supabase
+          .from('expense_splits')
+          .upsert(rows, { onConflict: 'expense_id,user_id' })
+        if (splitsError) throw splitsError
+      }
+
       if (removedUserIds && removedUserIds.length > 0) {
         const { error: delError } = await supabase
           .from('expense_splits')
@@ -239,14 +262,6 @@ export function useUpdateExpense(tripId: string) {
           .eq('expense_id', expenseId)
           .in('user_id', removedUserIds)
         if (delError) throw delError
-      }
-
-      if (splits && splits.length > 0) {
-        const rows: TablesInsert<'expense_splits'>[] = splits.map((s) => ({ expense_id: expenseId, ...s }))
-        const { error: splitsError } = await supabase
-          .from('expense_splits')
-          .upsert(rows, { onConflict: 'expense_id,user_id' })
-        if (splitsError) throw splitsError
       }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),

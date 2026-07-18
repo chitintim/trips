@@ -15,6 +15,8 @@ import { type AvatarIconName } from '../../components/ui/Avatar'
 import { AvatarData, AnyAvatarData } from '../../types'
 import { AuthLayout } from './AuthLayout'
 import { validateEmail, validatePassword, validateRequired } from './lib/validation'
+import { finalizeSignup, storePendingSignup, clearPendingSignup } from './lib/finalizeSignup'
+import { reportError } from '../../lib/reportError'
 
 type Step = 'invitation' | 'details' | 'otp-verify' | 'welcome'
 type AccountMode = 'otp' | 'password'
@@ -152,6 +154,11 @@ export function Signup() {
   const [signupError, setSignupError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
+  // Set when the auth user exists but finalizeAccount failed (profile
+  // update / invitation consumption) -- drives the "Try again" button so
+  // the user is never silently advanced past a half-created account.
+  const [finalizeRetryUserId, setFinalizeRetryUserId] = useState<string | null>(null)
+
   // OTP verify step
   const [otpCode, setOtpCode] = useState('')
   const [otpError, setOtpError] = useState<string | null>(null)
@@ -252,16 +259,22 @@ export function Signup() {
     }
   }
 
-  /** Finish account creation once we have an authenticated user (either just signed up with password, or just verified an OTP). */
+  /**
+   * Finish account creation once we have an authenticated user (either just
+   * signed up with password, or just verified an OTP). Idempotent -- the
+   * "Try again" retry path re-runs it wholesale (the profile update just
+   * rewrites the same values; mark_invitation_used returning false on a
+   * retry means we already consumed it ourselves, treated as non-fatal by
+   * finalizeSignup).
+   */
   const finalizeAccount = async (userId: string) => {
     if (!invitation) return
 
     // Avatar system v2: mirrors ProfileModal.handleSubmit's branching. Photo
     // upload can only happen now (not in signUp's options.data) because it
     // needs the real userId for the storage path -- a failed upload must
-    // not block account creation, so it's caught and logged rather than
-    // thrown, same as the other best-effort steps below (invitation mark,
-    // trip assignment).
+    // not block account creation, so it's caught and reported rather than
+    // thrown.
     const update: Record<string, unknown> = {
       first_name: firstName,
       last_name: lastName,
@@ -274,7 +287,7 @@ export function Signup() {
         update.avatar_url = publicUrl
         setSavedAvatarUrl(publicUrl)
       } catch (err) {
-        console.error('Avatar upload failed:', err)
+        reportError(err, 'signup:avatar-upload')
       }
     } else if (avatarTab === 'icons') {
       const iconData: AnyAvatarData = { type: 'icon', icon: iconChoice.icon, bgColor: iconChoice.bgColor }
@@ -287,30 +300,47 @@ export function Signup() {
       setSavedAvatarData(avatarData)
     }
 
-    const { error: profileError } = await supabase
-      .from('users')
-      .update(update)
-      .eq('id', userId)
-    if (profileError) console.error('Profile update error:', profileError)
-
-    const { data: invitationMarked, error: invitationError } = await supabase.rpc('mark_invitation_used', {
-      p_invitation_id: invitation.id,
-      p_user_id: userId,
+    const result = await finalizeSignup({
+      userId,
+      invitationId: invitation.id,
+      tripId: invitation.trip_id,
+      profileUpdate: update,
     })
-    if (invitationError || !invitationMarked) {
-      console.error('Invitation update error:', invitationError)
+
+    if (!result.ok) {
+      // Visible error + retry instead of silently advancing to welcome
+      // with a half-created account. The auth user already exists, so the
+      // retry only re-runs the finalize writes.
+      setFinalizeRetryUserId(userId)
+      const message = `${result.errors.join(' ')} Your account was created — tap Try again to finish setting it up.`
+      if (step === 'otp-verify') {
+        setOtpError(message)
+      } else {
+        setSignupError(message)
+      }
+      return
     }
 
-    if (invitation.trip_id) {
-      const { error: assignError } = await supabase.rpc('assign_user_to_trip', {
-        p_invitation_id: invitation.id,
-        p_user_id: userId,
-      })
-      if (assignError) console.error('Trip assignment error:', assignError)
-    }
-
+    setFinalizeRetryUserId(null)
+    clearPendingSignup()
     clearSignupDraft()
     setStep('welcome')
+  }
+
+  const handleRetryFinalize = async () => {
+    if (!finalizeRetryUserId) return
+    setSignupError(null)
+    setOtpError(null)
+    setLoading(true)
+    try {
+      await finalizeAccount(finalizeRetryUserId)
+    } catch {
+      const message = 'An unexpected error occurred. Please try again.'
+      if (step === 'otp-verify') setOtpError(message)
+      else setSignupError(message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   /**
@@ -393,10 +423,28 @@ export function Signup() {
 
     setLoading(true)
     try {
-      const { error } = await requestSignupOtp(email)
+      // Same metadata as the password signUp path: the new-user trigger
+      // populates public.users from raw_user_meta_data, so an OTP-created
+      // account gets its name/avatar even if the client-side finalize step
+      // never runs (e.g. the user clicks the emailed magic link instead of
+      // typing the code -- see finalizeSignup.ts reconciliation).
+      const { error } = await requestSignupOtp(email, {
+        first_name: firstName,
+        last_name: lastName,
+        avatar_data: avatarMetadataForSignup(),
+      })
       if (error) {
         setSignupError(mapSignupError(error.message))
       } else {
+        if (invitation) {
+          storePendingSignup({
+            invitationId: invitation.id,
+            tripId: invitation.trip_id,
+            firstName,
+            lastName,
+            avatarData: (avatarMetadataForSignup() as AnyAvatarData | undefined) ?? null,
+          })
+        }
         setStep('otp-verify')
       }
     } catch {
@@ -411,6 +459,30 @@ export function Signup() {
     setOtpError(null)
     setLoading(true)
     try {
+      // Re-validate the invitation before creating the account: minutes may
+      // have passed since the invitation step, and another invitee could
+      // have consumed the same code in the meantime. Failing here (before
+      // verifyOtp) avoids creating an orphan auth user with no invitation.
+      const { data: revalidateData, error: revalidateError } = await supabase.rpc('validate_invitation_code', {
+        p_code: invitationCode.trim(),
+      })
+      const revalidated = Array.isArray(revalidateData) ? revalidateData[0] : revalidateData
+      if (revalidateError || !revalidated) {
+        setOtpError('Error checking your invitation. Please try again.')
+        return
+      }
+      if (!revalidated.is_valid) {
+        clearPendingSignup()
+        setOtpError(
+          revalidated.reason === 'already_used'
+            ? 'This invitation code has already been used by someone else. Ask your organizer for a new invitation.'
+            : revalidated.reason === 'expired'
+              ? 'This invitation code has expired. Ask your organizer for a new invitation.'
+              : 'This invitation code is no longer valid. Ask your organizer for a new invitation.'
+        )
+        return
+      }
+
       const { user, error } = await verifyEmailOtp(email, otpCode.trim())
       if (error) {
         setOtpError(error.message)
@@ -514,8 +586,13 @@ export function Signup() {
           <Card.Content>
             <form onSubmit={accountMode === 'otp' ? handleSendOtp : handlePasswordSignup} className="space-y-5" noValidate>
               {signupError && (
-                <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
-                  {signupError}
+                <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm space-y-2" role="alert">
+                  <p>{signupError}</p>
+                  {finalizeRetryUserId && (
+                    <Button type="button" variant="outline" size="sm" onClick={handleRetryFinalize} isLoading={loading}>
+                      Try again
+                    </Button>
+                  )}
                 </div>
               )}
 
@@ -703,8 +780,13 @@ export function Signup() {
           <Card.Content>
             <form onSubmit={handleVerifySignupOtp} className="space-y-4" noValidate>
               {otpError && (
-                <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm">
-                  {otpError}
+                <div className="bg-danger-50 border border-danger-200 text-danger-800 rounded-[var(--radius-md)] p-3 text-sm space-y-2" role="alert">
+                  <p>{otpError}</p>
+                  {finalizeRetryUserId && (
+                    <Button type="button" variant="outline" size="sm" onClick={handleRetryFinalize} isLoading={loading}>
+                      Try again
+                    </Button>
+                  )}
                 </div>
               )}
               <Input

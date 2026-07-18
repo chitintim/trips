@@ -6,6 +6,7 @@ import { parseReceipt } from '../../../lib/receiptParsing'
 import { useCreateExpense } from '../../../lib/queries/useExpenses'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
+import { resolveExpenseFxFields, splitBaseCurrencyAmount } from '../../../lib/fx/resolveExpenseFxFields'
 import { ALL_CATEGORIES, categoryIcon, categoryLabel } from '../lib/categoryStyle'
 import { defaultTaggedParticipantIds } from '../lib/participantDefaults'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
@@ -126,6 +127,16 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
       const totalMinor = toMinorUnits(totalMajor, state.currency)
       const shares = largestRemainderDistribute(totalMinor, participantIds.map(() => 1))
 
+      // Foreign-currency receipts: persist an auto-fetched FX rate so the
+      // expense counts in balances (best-effort; null fields on failure --
+      // the balances screen flags the missing rate).
+      const fx = await resolveExpenseFxFields({
+        amountMajor: totalMajor,
+        currency: state.currency,
+        baseCurrency: trip.base_currency,
+        paymentDate: state.date,
+      })
+
       const created = await createExpense.mutateAsync({
         expense: {
           description: state.vendor || 'Receipt',
@@ -138,11 +149,16 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
           participant_ids: participantIds,
           receipt_url: state.receiptPath,
           ai_parsed: !!state.parsed,
+          fx_rate: fx.fx_rate,
+          fx_rate_date: fx.fx_rate_date,
+          base_currency_amount: fx.base_currency_amount,
+          rate_source: fx.rate_source,
         },
         splits: participantIds.map((userId, i) => ({
           user_id: userId,
           amount: fromMinorUnits(shares[i], state.currency),
           split_type: 'equal' as const,
+          base_currency_amount: splitBaseCurrencyAmount(fromMinorUnits(shares[i], state.currency), fx),
         })),
       })
       logActivity({ verb: 'expense_added', entity: { type: 'expense', id: created.id, label: created.description } })

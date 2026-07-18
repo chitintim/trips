@@ -12,6 +12,7 @@ import {
 } from '../../../lib/queries/useExpenses'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import { uploadReceipt, getReceiptUrl } from '../../../lib/receiptUpload'
+import { resolveExpenseFxFields, splitBaseCurrencyAmount } from '../../../lib/fx/resolveExpenseFxFields'
 import { generateLinkCode } from '../../../lib/receiptParsing'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
@@ -235,8 +236,19 @@ export function ExpenseEditorWizard({
         receiptUrl = uploaded.path
       }
 
-      const fxRateOverride = draft.fxRateOverride ? parseFloat(draft.fxRateOverride) : null
-      const rateSource = fxRateOverride != null ? 'manual' : null
+      // Persist the FX rate the ReviewStep previewed (bug fix: the preview's
+      // auto-fetched rate lived only in ReviewStep local state, so fx_rate
+      // saved as null for foreign-currency expenses and computeBalances
+      // excluded them entirely). fetchRate's memory cache makes this an
+      // instant re-read of the rate the preview just fetched; on fetch
+      // failure the fields stay null (previous behavior, warning stays).
+      const fx = await resolveExpenseFxFields({
+        amountMajor,
+        currency: draft.currency,
+        baseCurrency: trip.base_currency,
+        paymentDate: draft.paymentDate,
+        manualRate: draft.fxRateOverride ? parseFloat(draft.fxRateOverride) || null : null,
+      })
 
       const splits = computeSplits({
         mode: draft.splitMode,
@@ -252,6 +264,7 @@ export function ExpenseEditorWizard({
         split_type: draft.splitMode === 'shares' ? 'shares' : draft.splitMode === 'percentage' ? 'percentage' : draft.splitMode === 'custom' ? 'custom' : 'equal',
         percentage: s.percentage,
         shares: s.shares,
+        base_currency_amount: splitBaseCurrencyAmount(s.amountMajor, fx),
       }))
 
       const expensePayload = {
@@ -264,8 +277,10 @@ export function ExpenseEditorWizard({
         paid_by: draft.paidBy,
         participant_ids: draft.participantIds,
         receipt_url: receiptUrl,
-        fx_rate: fxRateOverride,
-        rate_source: rateSource,
+        fx_rate: fx.fx_rate,
+        fx_rate_date: fx.fx_rate_date,
+        base_currency_amount: fx.base_currency_amount,
+        rate_source: fx.rate_source,
       }
 
       if (isEditMode && editingExpense) {
@@ -349,6 +364,17 @@ export function ExpenseEditorWizard({
         total_amount: li.total_amount,
       }))
 
+      // Same FX persistence as the regular save path -- itemized claims are
+      // converted via the expense's fx_rate at balance time, so a missing
+      // rate excludes the whole expense there too.
+      const fx = await resolveExpenseFxFields({
+        amountMajor: params.totalMajor,
+        currency: draft.currency,
+        baseCurrency: trip.base_currency,
+        paymentDate: draft.paymentDate,
+        manualRate: draft.fxRateOverride ? parseFloat(draft.fxRateOverride) || null : null,
+      })
+
       const itemizedExpensePayload = {
         description: draft.description.trim() || draft.vendorName || 'Itemized receipt',
         amount: params.totalMajor,
@@ -361,6 +387,10 @@ export function ExpenseEditorWizard({
         receipt_url: draft.receiptPath,
         ai_parsed: true,
         status: 'unallocated' as const,
+        fx_rate: fx.fx_rate,
+        fx_rate_date: fx.fx_rate_date,
+        base_currency_amount: fx.base_currency_amount,
+        rate_source: fx.rate_source,
       }
 
       if (isEditMode && editingExpense) {

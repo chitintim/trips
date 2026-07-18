@@ -85,7 +85,10 @@ export function useToggleActionDone(tripId: string) {
         if (done) {
           const { error } = await supabase
             .from('trip_action_completions')
-            .upsert({ action_id: actionId, trip_id: tripId, user_id: userId, completed_at: new Date().toISOString() })
+            .upsert(
+              { action_id: actionId, trip_id: tripId, user_id: userId, completed_at: new Date().toISOString() },
+              { ignoreDuplicates: true }
+            )
           if (error) throw error
         } else {
           const { error } = await supabase

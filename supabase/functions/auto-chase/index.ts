@@ -444,6 +444,7 @@ Deno.serve(async (req) => {
 
           // deno-lint-ignore no-explicit-any
           const completedBy = new Set((a.trip_action_completions ?? []).map((c: any) => c.user_id))
+          if (a.assigned_to && !participantIds.includes(a.assigned_to)) continue
           const targets: string[] = a.assigned_to ? [a.assigned_to] : participantIds
 
           for (const uid of targets) {

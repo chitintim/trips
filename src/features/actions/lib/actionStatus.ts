@@ -65,6 +65,7 @@ export function isActionCompleteForUser(action: ActionWithCompletions, userId: s
  * active (removed/left) never block completeness even without a row.
  */
 export function isGroupComplete(action: ActionWithCompletions, activeParticipantIds: string[]): boolean {
+  if (activeParticipantIds.length === 0) return false
   const completions = action.trip_action_completions ?? []
   const completedIds = new Set(completions.map((c) => c.user_id))
   return activeParticipantIds.every((id) => completedIds.has(id))

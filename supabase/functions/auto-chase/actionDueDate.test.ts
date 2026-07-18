@@ -44,3 +44,18 @@ Deno.test('isActionOverdue: future date is not overdue', () => {
   const now = new Date('2026-07-19T12:00:00Z')
   assert(!isActionOverdue('2026-07-21', now))
 })
+
+Deno.test('isActionOverdue: due today is not overdue', () => {
+  const now = new Date('2026-07-19T12:00:00Z')
+  assert(!isActionOverdue('2026-07-19', now))
+})
+
+Deno.test('isActionOverdue: due today becomes overdue once the day fully elapses', () => {
+  const now = new Date('2026-07-20T00:00:00Z')
+  assert(isActionOverdue('2026-07-19', now))
+})
+
+Deno.test('isActionOverdue: due today just before day end is not yet overdue', () => {
+  const now = new Date('2026-07-19T23:59:59Z')
+  assert(!isActionOverdue('2026-07-19', now))
+})

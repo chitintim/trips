@@ -30,8 +30,13 @@ export function isActionDueOrOverdue(dueDateStr: string, now: Date, lookaheadHou
   return due.getTime() - now.getTime() < lookaheadMs
 }
 
-/** True when the effective due date is strictly in the past relative to `now`. */
+/**
+ * True when the effective due date's day has fully elapsed relative to `now`
+ * -- i.e. now is at or past 24h after the start of the due date (UTC). Due
+ * "today" is not overdue; it only becomes overdue once the day is over,
+ * matching the client's local-day semantics in actionStatus.ts#isOverdue.
+ */
 export function isActionOverdue(dueDateStr: string, now: Date): boolean {
   const due = new Date(dueDateStr + 'T00:00:00Z')
-  return due.getTime() < now.getTime()
+  return due.getTime() + 24 * 3600_000 <= now.getTime()
 }

@@ -103,11 +103,15 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer }: ActionsSh
       showToast({ type: 'error', message: 'Please enter a title' })
       return
     }
+    if (!values.beforeTrip && !values.dueDate) {
+      showToast({ type: 'error', message: 'Please choose a deadline' })
+      return
+    }
     const payload: TablesUpdate<'trip_actions'> = {
       title: trimmed,
       notes: values.notes.trim() || null,
       assigned_to: values.assignee || null,
-      deadline_kind: values.beforeTrip ? 'before_trip' : 'fixed_date',
+      deadline_kind: values.beforeTrip ? 'before_trip' : 'fixed',
       due_date: values.beforeTrip ? null : values.dueDate || null,
     }
     try {
@@ -118,7 +122,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer }: ActionsSh
           title: trimmed,
           notes: values.notes.trim() || null,
           assigned_to: values.assignee || null,
-          deadline_kind: values.beforeTrip ? 'before_trip' : 'fixed_date',
+          deadline_kind: values.beforeTrip ? 'before_trip' : 'fixed',
           due_date: values.beforeTrip ? null : values.dueDate || null,
           created_by: user.id,
         })

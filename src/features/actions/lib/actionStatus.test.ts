@@ -157,9 +157,9 @@ describe('isGroupComplete', () => {
     expect(isGroupComplete(action, ['u1'])).toBe(true)
   })
 
-  it('true for an empty active-participant list (vacuously complete)', () => {
+  it('false for an empty active-participant list (participants still loading, not vacuously complete)', () => {
     const action: ActionWithCompletions = makeAction({ assigned_to: null })
-    expect(isGroupComplete(action, [])).toBe(true)
+    expect(isGroupComplete(action, [])).toBe(false)
   })
 })
 

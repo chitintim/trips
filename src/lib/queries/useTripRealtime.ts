@@ -39,6 +39,16 @@ const TABLE_TO_KEY: Record<string, (tripId: string) => readonly unknown[]> = {
   trip_chat_messages: (id) => queryKeys.chatMessages(id),
   trip_actions: (id) => queryKeys.actions(id),
   trip_action_completions: (id) => queryKeys.actions(id),
+  // users has no trip_id and is embedded (`user:user_id (*)`) into several
+  // trip-scoped queries (participants, sections/options, settlements,
+  // expenses, notes). Rather than enumerate each of those keys, invalidate
+  // the whole `trip(tripId)` prefix -- it cascades to every key nested
+  // under it (see queryKeys.ts doc comment). This is a deliberate app-wide
+  // fan-out: any user's profile edit (e.g. a new avatar) re-fetches every
+  // trip currently open, not just trips that user participates in, since
+  // we have no cheap way to filter postgres_changes on `users` by trip
+  // membership. Acceptable given how infrequently profiles change.
+  users: (id) => queryKeys.trip(id),
 }
 
 // Tables filterable directly by trip_id in the postgres_changes subscription.
@@ -77,6 +87,9 @@ const INDIRECT_TABLES = [
   'expense_line_items',
   'expense_item_claims',
   'expense_allocation_links',
+  // No trip_id column and not trip-scoped at all -- any user's row can be
+  // embedded into this trip's cached queries, so we subscribe unfiltered.
+  'users',
 ]
 
 const DEBOUNCE_MS = 200

@@ -4,10 +4,11 @@ import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useActions, useCreateAction, useUpdateAction, useDeleteAction, useToggleActionDone } from '../../../lib/queries/useActions'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
+import { useChecklists } from '../../../lib/queries/useChecklists'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
-import { ChecklistTab } from '../../checklists'
+import { ChecklistTab, openBringCountForUser } from '../../checklists'
 import { ActionRow } from './ActionRow'
-import { isOverdue } from '../lib/actionStatus'
+import { isOverdue, openActionCountForUser } from '../lib/actionStatus'
 import type { TablesUpdate } from '../../../types/database.types'
 
 export interface ActionsSheetProps {
@@ -43,6 +44,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
   const { data: trip } = useTrip(tripId)
   const { data: participants } = useParticipants(tripId)
   const { data: actions, isLoading } = useActions(tripId)
+  const { data: bringItems } = useChecklists(tripId)
   const createAction = useCreateAction(tripId)
   const updateAction = useUpdateAction(tripId)
   const deleteAction = useDeleteAction(tripId)
@@ -165,8 +167,10 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           value={segment}
           onChange={(v) => setSegment(v as Segment)}
           options={[
-            { value: 'actions', label: 'Actions' },
-            { value: 'bring', label: 'Bring list' },
+            // Badges: open items relevant to the CURRENT user (their own /
+            // whole-group actions; unclaimed or their unpacked bring items).
+            { value: 'actions', label: 'Actions', badge: openActionCountForUser(actions, user?.id) },
+            { value: 'bring', label: 'Bring list', badge: openBringCountForUser(bringItems, user?.id) },
           ]}
         />
 

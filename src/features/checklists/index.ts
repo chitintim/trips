@@ -6,3 +6,5 @@
  */
 export { ChecklistTab } from './components/ChecklistTab'
 export type { ChecklistTabProps } from './components/ChecklistTab'
+export { isBringItemOpenForUser, openBringCountForUser } from './lib/checklistStatus'
+export type { ChecklistItemStatusRef } from './lib/checklistStatus'

@@ -1,4 +1,5 @@
-import { daysUntil } from '../../../lib/dates'
+import { daysUntil, deadlineUrgency } from '../../../lib/dates'
+import type { DeadlineUrgency } from '../../../lib/dates'
 import type { Database } from '../../../types/database.types'
 
 export type ActionRow = Database['public']['Tables']['trip_actions']['Row']
@@ -47,6 +48,29 @@ export function isOverdue(action: ActionRow, trip: TripForActionStatus | null | 
 }
 
 /**
+ * Urgency bucket for the action's countdown chip (shared ≤2-days-red /
+ * ≤7-days-amber thresholds from lib/dates), or null when the action has no
+ * resolvable due date (no chip color to derive).
+ */
+export function actionUrgency(action: ActionRow, trip: TripForActionStatus | null | undefined): DeadlineUrgency | null {
+  const days = daysUntilDue(action, trip)
+  if (days === null) return null
+  return deadlineUrgency(days)
+}
+
+/**
+ * Badge variant for the action's countdown chip: red (error) when overdue
+ * or ≤2 days out, amber (warning) when ≤7 days out, neutral otherwise —
+ * one mapping shared by ActionRow and Today's ActionsSection.
+ */
+export function countdownBadgeVariant(action: ActionRow, trip: TripForActionStatus | null | undefined): 'error' | 'warning' | 'neutral' {
+  const urgency = actionUrgency(action, trip)
+  if (urgency === 'overdue' || urgency === 'urgent') return 'error'
+  if (urgency === 'soon') return 'warning'
+  return 'neutral'
+}
+
+/**
  * Whether `userId` has completed this action.
  * - Individual actions (assigned_to set): driven by `completed_at`.
  * - Group actions (assigned_to null): driven by a matching completion row.
@@ -81,6 +105,26 @@ export function countdownLabel(action: ActionRow, trip: TripForActionStatus | nu
 
   if (days === null) return prefix ? 'Before trip' : 'No due date'
   if (days === 0) return `${prefix}Due today`
-  if (days < 0) return `${prefix}${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'} overdue`
+  if (days < 0) return `${prefix}Overdue by ${Math.abs(days)} day${Math.abs(days) === 1 ? '' : 's'}`
   return `${prefix}${days} day${days === 1 ? '' : 's'} left`
+}
+
+/**
+ * Whether this action is OPEN and relevant to `userId` — assigned to them
+ * and not completed, or a whole-group action they haven't confirmed yet.
+ * Actions assigned to someone else are never "theirs". This is the one
+ * relevance predicate behind Today's ActionsSection list and every
+ * user-facing open-action count (segment badges, section header).
+ */
+export function isActionOpenForUser(action: ActionWithCompletions, userId: string): boolean {
+  if (action.assigned_to) {
+    return action.assigned_to === userId && action.completed_at == null
+  }
+  return !isActionCompleteForUser(action, userId)
+}
+
+/** Count of open actions relevant to `userId` (see isActionOpenForUser). */
+export function openActionCountForUser(actions: ActionWithCompletions[] | null | undefined, userId: string | undefined): number {
+  if (!userId) return 0
+  return (actions ?? []).filter((a) => isActionOpenForUser(a, userId)).length
 }

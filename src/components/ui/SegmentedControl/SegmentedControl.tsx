@@ -9,6 +9,11 @@ export interface SegmentedControlOption<T extends string = string> {
   label: string
   icon?: React.ReactNode
   disabled?: boolean
+  /**
+   * Small count bubble after the label (e.g. open items in that segment).
+   * Hidden when undefined or 0 — a zero-count bubble is just noise.
+   */
+  badge?: number
 }
 
 export interface SegmentedControlProps<T extends string = string>
@@ -73,6 +78,14 @@ export function SegmentedControl<T extends string = string>({
           >
             {option.icon && <span aria-hidden="true">{option.icon}</span>}
             <span className="whitespace-nowrap">{option.label}</span>
+            {option.badge != null && option.badge > 0 && (
+              <span
+                aria-label={`${option.badge} open`}
+                className="inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-danger-500 text-white text-[10px] font-bold leading-none"
+              >
+                {option.badge > 99 ? '99+' : option.badge}
+              </span>
+            )}
           </button>
         )
       })}

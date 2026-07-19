@@ -3,7 +3,11 @@ import {
   resolveDueDate,
   daysUntilDue,
   isOverdue,
+  actionUrgency,
+  countdownBadgeVariant,
   isActionCompleteForUser,
+  isActionOpenForUser,
+  openActionCountForUser,
   isGroupComplete,
   countdownLabel,
   type ActionRow,
@@ -101,6 +105,84 @@ describe('isOverdue', () => {
   })
 })
 
+describe('actionUrgency / countdownBadgeVariant', () => {
+  it('is null / neutral when the due date is unresolvable', () => {
+    const action = makeAction({ deadline_kind: 'before_trip' })
+    expect(actionUrgency(action, null)).toBeNull()
+    expect(countdownBadgeVariant(action, null)).toBe('neutral')
+  })
+
+  it('is red (error) when overdue', () => {
+    const action = makeAction({ deadline_kind: 'fixed', due_date: localDateOffset(-1) })
+    expect(actionUrgency(action, undefined)).toBe('overdue')
+    expect(countdownBadgeVariant(action, undefined)).toBe('error')
+  })
+
+  it('is red (error) at ≤2 days, including due today', () => {
+    for (const offset of [0, 1, 2]) {
+      const action = makeAction({ deadline_kind: 'fixed', due_date: localDateOffset(offset) })
+      expect(actionUrgency(action, undefined)).toBe('urgent')
+      expect(countdownBadgeVariant(action, undefined)).toBe('error')
+    }
+  })
+
+  it('is amber (warning) at 3–7 days', () => {
+    for (const offset of [3, 7]) {
+      const action = makeAction({ deadline_kind: 'fixed', due_date: localDateOffset(offset) })
+      expect(actionUrgency(action, undefined)).toBe('soon')
+      expect(countdownBadgeVariant(action, undefined)).toBe('warning')
+    }
+  })
+
+  it('is neutral beyond 7 days', () => {
+    const action = makeAction({ deadline_kind: 'fixed', due_date: localDateOffset(8) })
+    expect(actionUrgency(action, undefined)).toBe('normal')
+    expect(countdownBadgeVariant(action, undefined)).toBe('neutral')
+  })
+
+  it('counts a before_trip action down to the trip start date', () => {
+    const action = makeAction({ deadline_kind: 'before_trip', due_date: null })
+    expect(countdownBadgeVariant(action, { start_date: localDateOffset(5) })).toBe('warning')
+    expect(countdownBadgeVariant(action, { start_date: localDateOffset(30) })).toBe('neutral')
+  })
+})
+
+describe('isActionOpenForUser / openActionCountForUser', () => {
+  const completions = (ids: string[]) => ids.map((user_id) => ({ user_id, completed_at: '2026-01-05T00:00:00Z' }))
+
+  it('individual action assigned to me: open until completed', () => {
+    const open = makeAction({ assigned_to: 'me', completed_at: null }) as ActionWithCompletions
+    const done = makeAction({ assigned_to: 'me', completed_at: '2026-01-05T00:00:00Z' }) as ActionWithCompletions
+    expect(isActionOpenForUser(open, 'me')).toBe(true)
+    expect(isActionOpenForUser(done, 'me')).toBe(false)
+  })
+
+  it('individual action assigned to someone else is never mine', () => {
+    const theirs = makeAction({ assigned_to: 'them', completed_at: null }) as ActionWithCompletions
+    expect(isActionOpenForUser(theirs, 'me')).toBe(false)
+  })
+
+  it('group action: open while I have not confirmed it, regardless of others', () => {
+    const unconfirmed: ActionWithCompletions = { ...makeAction({ assigned_to: null }), trip_action_completions: completions(['them']) }
+    const confirmed: ActionWithCompletions = { ...makeAction({ assigned_to: null }), trip_action_completions: completions(['me']) }
+    expect(isActionOpenForUser(unconfirmed, 'me')).toBe(true)
+    expect(isActionOpenForUser(confirmed, 'me')).toBe(false)
+  })
+
+  it('openActionCountForUser counts only my open actions and is 0 without a user', () => {
+    const actions: ActionWithCompletions[] = [
+      { ...makeAction({ id: 'a1', assigned_to: 'me', completed_at: null }), trip_action_completions: [] },
+      { ...makeAction({ id: 'a2', assigned_to: 'me', completed_at: '2026-01-05T00:00:00Z' }), trip_action_completions: [] },
+      { ...makeAction({ id: 'a3', assigned_to: 'them', completed_at: null }), trip_action_completions: [] },
+      { ...makeAction({ id: 'a4', assigned_to: null }), trip_action_completions: completions(['them']) },
+      { ...makeAction({ id: 'a5', assigned_to: null }), trip_action_completions: completions(['me', 'them']) },
+    ]
+    expect(openActionCountForUser(actions, 'me')).toBe(2) // a1 + a4
+    expect(openActionCountForUser(actions, undefined)).toBe(0)
+    expect(openActionCountForUser(undefined, 'me')).toBe(0)
+  })
+})
+
 describe('isActionCompleteForUser', () => {
   it('individual action: complete iff completed_at is set', () => {
     const done = makeAction({ assigned_to: 'u2', completed_at: '2026-01-05T00:00:00Z' }) as ActionWithCompletions
@@ -179,7 +261,12 @@ describe('countdownLabel', () => {
   it('formats overdue', () => {
     const yesterday = localDateOffset(-1)
     const action = makeAction({ deadline_kind: 'fixed', due_date: yesterday })
-    expect(countdownLabel(action, undefined)).toBe('1 day overdue')
+    expect(countdownLabel(action, undefined)).toBe('Overdue by 1 day')
+  })
+
+  it('pluralizes overdue days', () => {
+    const action = makeAction({ deadline_kind: 'fixed', due_date: localDateOffset(-3) })
+    expect(countdownLabel(action, undefined)).toBe('Overdue by 3 days')
   })
 
   it('prefixes before_trip deadlines', () => {

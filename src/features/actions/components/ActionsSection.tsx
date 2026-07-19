@@ -4,7 +4,7 @@ import { useAuth } from '../../../hooks/useAuth'
 import { useTrip } from '../../../lib/queries/useTrip'
 import { useActions } from '../../../lib/queries/useActions'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
-import { countdownLabel, isActionCompleteForUser, isOverdue } from '../lib/actionStatus'
+import { countdownBadgeVariant, countdownLabel, isActionOpenForUser, isOverdue } from '../lib/actionStatus'
 
 export interface ActionsSectionProps {
   tripId: string
@@ -28,12 +28,9 @@ export function ActionsSection({ tripId, isOrganizer, onOpenActions }: ActionsSe
 
   const relevant = useMemo(() => {
     if (!user) return []
-    const mine = (actions || []).filter((a) => {
-      if (a.completed_at != null && a.assigned_to) return false // individual, already done
-      if (a.assigned_to) return a.assigned_to === user.id
-      // Group action: relevant while the current user hasn't confirmed it.
-      return !isActionCompleteForUser(a, user.id)
-    })
+    // Same predicate as the sheet's segment badge — assigned to me and
+    // open, or a whole-group action I haven't confirmed yet.
+    const mine = (actions || []).filter((a) => isActionOpenForUser(a, user.id))
     return [...mine].sort((a, b) => {
       const aOverdue = isOverdue(a, trip)
       const bOverdue = isOverdue(b, trip)
@@ -60,7 +57,15 @@ export function ActionsSection({ tripId, isOrganizer, onOpenActions }: ActionsSe
   return (
     <section aria-label="Actions" className="space-y-2">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-[var(--text-muted)] uppercase tracking-wide">Actions</h2>
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-[var(--text-muted)] uppercase tracking-wide">
+          Actions
+          <span
+            aria-label={`${relevant.length} open for you`}
+            className="inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full bg-danger-500 text-white text-[10px] font-bold leading-none normal-case tracking-normal"
+          >
+            {relevant.length > 99 ? '99+' : relevant.length}
+          </span>
+        </h2>
         <Button variant="ghost" size="sm" onClick={onOpenActions}>
           View all
         </Button>
@@ -85,14 +90,13 @@ function ActionSectionRow({
   trip: { start_date?: string | null } | null | undefined
   onOpenActions: () => void
 }) {
-  const overdue = isOverdue(action, trip)
   return (
     <button
       onClick={onOpenActions}
       className="w-full flex items-center justify-between gap-3 text-left rounded-[var(--radius-md)] hover:bg-[var(--surface-sunken)] px-1 py-1 -mx-1 transition-colors"
     >
       <span className="text-sm text-[var(--text-primary)] truncate">{action.title}</span>
-      <Badge variant={overdue ? 'error' : 'neutral'} size="sm">
+      <Badge variant={countdownBadgeVariant(action, trip)} size="sm">
         {countdownLabel(action, trip)}
       </Badge>
     </button>

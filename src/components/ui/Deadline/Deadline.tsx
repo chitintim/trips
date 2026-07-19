@@ -1,4 +1,5 @@
 import { HTMLAttributes, forwardRef } from 'react'
+import { deadlineUrgency } from '../../../lib/dates'
 
 // ============================================================================
 // TYPES
@@ -39,14 +40,20 @@ const PASSED_LABEL: Record<NonNullable<DeadlineProps['kind']>, string> = {
   cancellation: 'Window closed',
 }
 
-/** Urgency bucket driving color: danger (<24h or passed), warn (<3 days), neutral otherwise. */
+/**
+ * Urgency bucket driving color: passed (gray), danger (≤2 days), warn
+ * (≤7 days), neutral otherwise. Thresholds come from the shared
+ * deadlineUrgency helper in lib/dates so every countdown chip (this
+ * component, action-row badges, Today chips) agrees on when things turn
+ * amber/red.
+ */
 export function getDeadlineUrgency(date: string, now: number = Date.now()): 'passed' | 'urgent' | 'soon' | 'normal' {
   const target = new Date(date).getTime()
   const diffMs = target - now
   if (diffMs <= 0) return 'passed'
-  if (diffMs <= 24 * 60 * 60 * 1000) return 'urgent'
-  if (diffMs <= 3 * 24 * 60 * 60 * 1000) return 'soon'
-  return 'normal'
+  const daysLeft = Math.floor(diffMs / (24 * 60 * 60 * 1000))
+  const urgency = deadlineUrgency(daysLeft)
+  return urgency === 'overdue' ? 'passed' : urgency
 }
 
 /** Human "3d left" / "6h left" / "Ended 2d ago" style label. */

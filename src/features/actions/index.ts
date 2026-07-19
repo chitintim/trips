@@ -15,7 +15,11 @@ export {
   resolveDueDate,
   daysUntilDue,
   isOverdue,
+  actionUrgency,
+  countdownBadgeVariant,
   isActionCompleteForUser,
+  isActionOpenForUser,
+  openActionCountForUser,
   isGroupComplete,
   countdownLabel,
 } from './lib/actionStatus'

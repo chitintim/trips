@@ -14,7 +14,7 @@ import type { Expense, User } from '../../../types'
 export interface ClaimLinkResolution {
   expense: Expense
   lineItems: ExpenseLineItem[]
-  claims: Array<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_data'> }>
+  claims: Array<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_url' | 'avatar_data'> }>
   tripId: string
   code: string
   expiresAt: string | null
@@ -39,7 +39,7 @@ export function useClaimLink(code: string | undefined) {
           supabase.from('expense_line_items').select('*').eq('expense_id', link.expense_id).order('line_number'),
           supabase
             .from('expense_item_claims')
-            .select('*, user:user_id (id, full_name, avatar_data)')
+            .select('*, user:user_id (id, full_name, avatar_url, avatar_data)')
             .eq('expense_id', link.expense_id),
         ])
 

@@ -18,6 +18,7 @@ export function useNotes(tripId: string | undefined) {
             id,
             full_name,
             email,
+            avatar_url,
             avatar_data
           )
         `

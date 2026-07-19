@@ -123,7 +123,7 @@ export function WhosInRow({ participants, max = 8 }: { participants: Participant
         <div className="flex items-center gap-1.5 flex-wrap">
           {shown.map((p) => (
             <div key={p.user_id} title={p.user?.full_name ?? undefined}>
-              <UserAvatar avatarData={p.user?.avatar_data} size="sm" />
+              <UserAvatar avatarData={p.user} size="sm" />
             </div>
           ))}
           {overflow > 0 && <span className="text-sm text-[var(--text-muted)] ml-1">+{overflow}</span>}

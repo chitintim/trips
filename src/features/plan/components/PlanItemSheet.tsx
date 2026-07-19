@@ -287,7 +287,7 @@ export function PlanItemSheet({
                     const author = byUserId.get(c.user_id)
                     return (
                       <div key={c.id} className="flex items-start gap-2">
-                        <UserAvatar avatarData={author?.user?.avatar_data} size="xs" />
+                        <UserAvatar avatarData={author?.user} size="xs" />
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-medium text-[var(--text-secondary)]">
                             {author?.user?.full_name || author?.user?.email || 'Someone'}

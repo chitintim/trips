@@ -13,7 +13,7 @@ export interface ExpenseWithDetails extends Expense {
   payer: User
   splits: Array<ExpenseSplit & { user: User }>
   line_items: ExpenseLineItem[]
-  claims: Array<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_data'> }>
+  claims: Array<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_url' | 'avatar_data'> }>
   allocation_link: ExpenseAllocationLink | null
   expected_participants: string[]
 }
@@ -61,9 +61,9 @@ export function useExpenses(tripId: string | undefined) {
         itemizedExpenseIds.length > 0
           ? supabase
               .from('expense_item_claims')
-              .select('*, user:user_id (id, full_name, avatar_data)')
+              .select('*, user:user_id (id, full_name, avatar_url, avatar_data)')
               .in('expense_id', itemizedExpenseIds)
-          : emptyResult<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_data'> }>(),
+          : emptyResult<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_url' | 'avatar_data'> }>(),
         itemizedExpenseIds.length > 0
           ? supabase.from('expense_allocation_links').select('*').in('expense_id', itemizedExpenseIds)
           : emptyResult<ExpenseAllocationLink>(),
@@ -80,7 +80,7 @@ export function useExpenses(tripId: string | undefined) {
         lineItemsByExpense.set(item.expense_id, list)
       }
 
-      type ClaimWithUser = ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_data'> }
+      type ClaimWithUser = ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_url' | 'avatar_data'> }
       const claimsByExpense = new Map<string, ClaimWithUser[]>()
       for (const claim of (claimsRes.data || []) as ClaimWithUser[]) {
         const list = claimsByExpense.get(claim.expense_id) || []

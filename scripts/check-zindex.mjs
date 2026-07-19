@@ -52,6 +52,10 @@ const ALLOWLIST = [
   'components/ui/SelectionAvatars',
   'features/decisions/components/MatrixView.tsx',
   'components/InstallPrompt.tsx',
+  // Smart-landing redirect countdown banner: fixed, viewport-anchored,
+  // toast-class overlay (same pattern as InstallPrompt) — must sit above
+  // content and chrome while it counts down.
+  'features/dashboard/components/LandingRedirectPrompt.tsx',
   // Local absolute-positioned popovers anchored within their own
   // `position:relative` wrapper (not fixed/portal, but bounded and never
   // competing with page-scroll chrome) — dropdown-scale is appropriate.

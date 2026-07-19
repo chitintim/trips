@@ -145,8 +145,12 @@ export function BlockersBoard({ trip }: BlockersBoardProps) {
             <ul className="space-y-2">
               {board.bookingDeadlines.map((b) => (
                 <li key={`${b.entityId}`} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="text-[var(--text-primary)]">{b.label}</span>
-                  {b.deadline && <Deadline date={b.deadline} kind="cancellation" compact />}
+                  <span className="min-w-0 break-words text-[var(--text-primary)]">{b.label}</span>
+                  {b.deadline && (
+                    <span className="shrink-0">
+                      <Deadline date={b.deadline} kind="cancellation" compact />
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
@@ -180,18 +184,22 @@ export function BlockersBoard({ trip }: BlockersBoardProps) {
                 </Button>
               </div>
 
+              {/* min-w-0/max-w-full + Badge wrap: blocker labels quote
+                  section/expense titles and previously spilled outside the
+                  card on 375px-wide viewports (nowrap chips in a flex row).
+                  Long labels now wrap inside their own chip instead. */}
               <ul className="mt-3 flex flex-wrap gap-2">
                 {sorted.map((blocker, i) => {
                   const style = KIND_BADGE[blocker.kind]
                   return (
-                    <li key={`${blocker.kind}:${blocker.entityId ?? i}`}>
+                    <li key={`${blocker.kind}:${blocker.entityId ?? i}`} className="min-w-0 max-w-full">
                       <button
                         type="button"
                         onClick={() => setNudge({ userId: person.userId, name: person.name, blocker })}
                         title={`${blocker.detail ?? blocker.label} — tap to nudge about this`}
-                        className="cursor-pointer"
+                        className="cursor-pointer max-w-full text-left"
                       >
-                        <Badge variant={style.variant} size="md">
+                        <Badge variant={style.variant} size="md" wrap>
                           {style.icon} {blocker.label}
                         </Badge>
                       </button>

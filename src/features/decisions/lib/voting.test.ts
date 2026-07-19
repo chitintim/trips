@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tallyVotes, getWinner, checkAutoClose, areVotesVisible } from './voting'
+import { tallyVotes, getWinner, checkAutoClose, areVotesVisible, votingInstruction, replaceableSiblingVoteIds } from './voting'
 import type { OptionVote } from '../../../lib/queries/usePlanning'
 
 function vote(overrides: Partial<OptionVote> & { option_id: string; user_id: string }): OptionVote {
@@ -82,5 +82,36 @@ describe('areVotesVisible', () => {
 
   it('is hidden with no deadline set and hide_votes_until_close true', () => {
     expect(areVotesVisible({ vote_deadline: null, hide_votes_until_close: true }, now)).toBe(false)
+  })
+})
+
+describe('votingInstruction', () => {
+  it('spells out pick-one vs pick-multiple semantics per method', () => {
+    expect(votingInstruction('single')).toBe('Choose one')
+    expect(votingInstruction('approval')).toBe('Choose all that apply')
+    expect(votingInstruction('ranked')).toContain('Rank')
+  })
+})
+
+describe('replaceableSiblingVoteIds', () => {
+  const votes = [
+    vote({ option_id: 'a', user_id: 'me' }),
+    vote({ option_id: 'b', user_id: 'me' }),
+    vote({ option_id: 'a', user_id: 'other' }),
+    vote({ option_id: 'z', user_id: 'me' }), // different section
+  ]
+
+  it("returns my votes on the section's other options for single-choice casts", () => {
+    expect(replaceableSiblingVoteIds(['a', 'b', 'c'], votes, 'me', 'c', 'single')).toEqual(['a-me', 'b-me'])
+  })
+
+  it('never touches other voters or other sections', () => {
+    const ids = replaceableSiblingVoteIds(['a', 'b'], votes, 'me', 'b', 'single')
+    expect(ids).toEqual(['a-me'])
+  })
+
+  it('returns nothing for approval/ranked methods', () => {
+    expect(replaceableSiblingVoteIds(['a', 'b'], votes, 'me', 'b', 'approval')).toEqual([])
+    expect(replaceableSiblingVoteIds(['a', 'b'], votes, 'me', 'b', 'ranked')).toEqual([])
   })
 })

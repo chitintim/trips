@@ -3,7 +3,7 @@ import { Modal, Button, Badge, Stepper } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { formatCostImpact, getTierSensitivityLine } from '../../decisions/lib/costImpact'
-import type { VotingMethod } from '../../decisions/lib/voting'
+import { votingInstruction, replaceableSiblingVoteIds, type VotingMethod } from '../../decisions/lib/voting'
 import { useOrderForm } from '../lib/useOrderForm'
 import { OrderFormFields } from './OrderFormFields'
 import type { SectionWithOptions, OptionVote } from '../../../lib/queries/usePlanning'
@@ -187,7 +187,10 @@ function VoteStep({
     if (myVote) {
       toggleVote.mutate({ optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onSettled: () => setVotingOptionId(null) })
     } else {
-      toggleVote.mutate({ optionId, userId: user.id, action: 'add' }, { onSettled: () => setVotingOptionId(null) })
+      // Radio semantics for single-choice polls: a new choice replaces any
+      // vote I already have on a sibling option (see useToggleVote).
+      const replaceVoteIds = replaceableSiblingVoteIds(optionIds, sectionVotes, user.id, optionId, votingMethod)
+      toggleVote.mutate({ optionId, userId: user.id, action: 'add', replaceVoteIds }, { onSettled: () => setVotingOptionId(null) })
     }
   }
 
@@ -195,7 +198,15 @@ function VoteStep({
 
   return (
     <div className="space-y-4">
-      <div className="space-y-2">
+      {/* Pick-one vs pick-multiple, spelled out (voting-clarity ask). */}
+      <p className="text-xs font-medium text-[var(--text-secondary)]">
+        {votingMethod === 'approval' ? '☑️' : '🔘'} {votingInstruction(votingMethod)}
+      </p>
+      <div
+        role={votingMethod === 'single' ? 'radiogroup' : 'group'}
+        aria-label={votingInstruction(votingMethod)}
+        className="space-y-2"
+      >
         {section.options
           .filter((o) => o.status !== 'cancelled')
           .map((option) => {
@@ -204,18 +215,29 @@ function VoteStep({
             const costImpact = formatCostImpact(costImpactInput)
             const sensitivityLine = getTierSensitivityLine(costImpactInput)
             return (
-              <div key={option.id} className="rounded-[var(--radius-lg)] border border-[var(--border-default)] p-3 flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-medium text-[var(--text-primary)]">{option.title}</p>
-                  {option.description && <p className="text-xs text-[var(--text-secondary)] mt-0.5">{option.description}</p>}
-                  <div className="flex items-center gap-2 mt-1 flex-wrap">
-                    {costImpact && (
-                      <Badge variant="info" size="sm">
-                        {costImpact}
-                      </Badge>
-                    )}
+              <div
+                key={option.id}
+                className={`rounded-[var(--radius-lg)] border p-3 flex items-start justify-between gap-3 transition-colors ${
+                  myVote ? 'border-accent-400 bg-accent-50 dark:bg-accent-950/30' : 'border-[var(--border-default)]'
+                }`}
+              >
+                <div className="min-w-0 flex items-start gap-2.5">
+                  {/* Control semantics made visible: radio dot for
+                      single-choice, checkbox square for approval, rank number
+                      for ranked. */}
+                  <SelectionIndicator method={votingMethod} selected={!!myVote} rank={myVote?.rank ?? null} />
+                  <div className="min-w-0">
+                    <p className="font-medium text-[var(--text-primary)] break-words">{option.title}</p>
+                    {option.description && <p className="text-xs text-[var(--text-secondary)] mt-0.5 break-words">{option.description}</p>}
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      {costImpact && (
+                        <Badge variant="info" size="sm">
+                          {costImpact}
+                        </Badge>
+                      )}
+                    </div>
+                    {sensitivityLine && <p className="mt-1 text-xs text-[var(--text-muted)]">{sensitivityLine}</p>}
                   </div>
-                  {sensitivityLine && <p className="mt-1 text-xs text-[var(--text-muted)]">{sensitivityLine}</p>}
                 </div>
                 <Button
                   variant={myVote ? 'primary' : 'outline'}
@@ -224,6 +246,8 @@ function VoteStep({
                   disabled={option.locked}
                   isLoading={votingOptionId === option.id}
                   className="shrink-0"
+                  role={votingMethod === 'single' ? 'radio' : votingMethod === 'approval' ? 'checkbox' : undefined}
+                  aria-checked={votingMethod === 'ranked' ? undefined : !!myVote}
                 >
                   {/* Ranked-vote wording matches PlanItemSheet's VoteStep
                       equivalent (UPGRADE_MASTER_PLAN.md audit item 4) — a
@@ -232,12 +256,14 @@ function VoteStep({
                   {myVote
                     ? votingMethod === 'ranked'
                       ? `Ranked #${myVote.rank ?? 1}`
-                      : '✓ Voted'
+                      : votingMethod === 'approval'
+                        ? '✓ Approved'
+                        : '✓ Your choice'
                     : votingMethod === 'approval'
                       ? 'Approve'
                       : votingMethod === 'ranked'
                         ? 'Tap to rank next'
-                        : 'Vote'}
+                        : 'Choose'}
                 </Button>
               </div>
             )
@@ -253,5 +279,46 @@ function VoteStep({
         </Button>
       </div>
     </div>
+  )
+}
+
+/**
+ * Visual control-semantics marker for a vote option row: radio dot
+ * (single), checkbox square (approval), rank number (ranked). Purely
+ * presentational — the adjacent Button is the interactive control and
+ * carries the aria state.
+ */
+function SelectionIndicator({ method, selected, rank }: { method: VotingMethod; selected: boolean; rank: number | null }) {
+  if (method === 'ranked') {
+    return (
+      <span
+        aria-hidden="true"
+        className={`mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center ${
+          selected ? 'border-accent-600 bg-accent-600 text-white' : 'border-[var(--border-default)] text-transparent'
+        }`}
+      >
+        {selected ? rank ?? 1 : ''}
+      </span>
+    )
+  }
+  if (method === 'approval') {
+    return (
+      <span
+        aria-hidden="true"
+        className={`mt-0.5 h-5 w-5 shrink-0 rounded-[var(--radius-sm)] border-2 text-xs text-white flex items-center justify-center ${
+          selected ? 'border-accent-600 bg-accent-600' : 'border-[var(--border-default)]'
+        }`}
+      >
+        {selected ? '✓' : ''}
+      </span>
+    )
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={`mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 ${
+        selected ? 'border-accent-600 bg-accent-600 shadow-[inset_0_0_0_3px_var(--surface-raised)]' : 'border-[var(--border-default)]'
+      }`}
+    />
   )
 }

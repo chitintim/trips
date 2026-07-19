@@ -31,9 +31,17 @@ export function useActions(tripId: string | undefined) {
 export function useCreateAction(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: Omit<TablesInsert<'trip_actions'>, 'trip_id'>) => {
-      const { error } = await supabase.from('trip_actions').insert({ trip_id: tripId, ...input })
+    mutationFn: async (input: Omit<TablesInsert<'trip_actions'>, 'trip_id'>): Promise<Tables<'trip_actions'>> => {
+      // Returns the created row so callers that link the action elsewhere
+      // (e.g. a closed decision stamping followup_action_id into its
+      // section metadata) have its id.
+      const { data, error } = await supabase
+        .from('trip_actions')
+        .insert({ trip_id: tripId, ...input })
+        .select()
+        .single()
       if (error) throw error
+      return data
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) }),
   })

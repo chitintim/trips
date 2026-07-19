@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { Modal, Button, Input, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useCreateTimelineEvent } from '../../../lib/queries/useTimeline'
+import { useSections, useUpdateSection } from '../../../lib/queries/usePlanning'
+import { buildDecisionMetadata } from '../../decisions/lib/closeDecision'
+import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import type { Trip } from '../../../types'
 import type { PlanItem } from '../lib/planItems'
@@ -26,6 +29,8 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
   const { user } = useAuth()
   const { showToast } = useToast()
   const createEvent = useCreateTimelineEvent(trip.id)
+  const { data: sections } = useSections(trip.id)
+  const updateSection = useUpdateSection(trip.id)
   const logActivity = useTripActivityLog(trip.id)
 
   const [date, setDate] = useState(trip.start_date)
@@ -60,6 +65,25 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
         source_option_id: item.optionId,
       })
       void created
+      // Scheduling an option IS deciding its question: mark the section
+      // completed and stamp the decided option (closeDecision.ts), so the
+      // tray/Decide lens render the outcome banner instead of a live ballot.
+      // Previously only the poll_closed activity row implied closure while
+      // the section stayed in_progress and losing options kept their vote UI.
+      if (item.optionId && item.sectionId) {
+        const section = (sections || []).find((s) => s.id === item.sectionId)
+        // Personal-order (shape 2) sections are never "won" by one option —
+        // scheduling one catalog item must not close the whole question.
+        if (section && section.status !== 'completed' && getDecisionShape(section.metadata) !== 'personal') {
+          await updateSection.mutateAsync({
+            id: section.id,
+            update: {
+              status: 'completed',
+              metadata: buildDecisionMetadata(section.metadata, { decided_option_id: item.optionId }),
+            },
+          })
+        }
+      }
       logActivity({ verb: 'poll_closed', entity: { type: 'option', id: item.optionId ?? undefined, label: item.title } })
       logActivity({ verb: 'event_added', entity: { type: 'timeline_event', label: item.title } })
       showToast({ type: 'success', message: `"${item.title}" is on the plan` })

@@ -57,6 +57,41 @@ export function tallyVotes(optionIds: string[], votes: OptionVote[], method: Vot
   })
 }
 
+/**
+ * One-line instruction for a vote question, making the pick-ONE vs
+ * pick-MULTIPLE semantics explicit on every voting surface (mobile-first
+ * clarity ask): 'single' is radio-style (one choice, a new vote replaces
+ * the old), 'approval' is checkbox-style (vote for as many as you like),
+ * 'ranked' orders preferences.
+ */
+export function votingInstruction(method: VotingMethod): string {
+  switch (method) {
+    case 'approval':
+      return 'Choose all that apply'
+    case 'ranked':
+      return 'Rank your favourites — tap in order of preference'
+    default:
+      return 'Choose one'
+  }
+}
+
+/**
+ * The caller's existing vote ids on OTHER options in the same section —
+ * what a 'single' (radio-style) cast must replace. Empty for approval/
+ * ranked, where stacking votes across options is the point.
+ */
+export function replaceableSiblingVoteIds(
+  sectionOptionIds: string[],
+  votes: OptionVote[],
+  userId: string,
+  castOptionId: string,
+  method: VotingMethod
+): string[] {
+  if (method !== 'single') return []
+  const optionIds = new Set(sectionOptionIds)
+  return votes.filter((v) => v.user_id === userId && v.option_id !== castOptionId && optionIds.has(v.option_id)).map((v) => v.id)
+}
+
 export function getWinner(tallies: OptionTally[]): OptionTally | null {
   if (tallies.length === 0) return null
   const sorted = [...tallies].sort((a, b) => b.score - a.score)

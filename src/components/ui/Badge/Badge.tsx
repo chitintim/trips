@@ -26,6 +26,15 @@ export interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
    * Add a dot indicator before the text
    */
   dot?: boolean
+
+  /**
+   * Allow the badge text to wrap onto multiple lines instead of the default
+   * single-line nowrap. Use for badges carrying free-form labels (e.g. the
+   * organizer blockers board's per-person loop chips, which quote section/
+   * expense titles) so long content wraps inside its card on narrow
+   * viewports rather than spilling out of it.
+   */
+  wrap?: boolean
 }
 
 // ============================================================================
@@ -38,6 +47,7 @@ export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
       variant = 'primary',
       size = 'md',
       dot = false,
+      wrap = false,
       className = '',
       children,
       ...props
@@ -50,7 +60,7 @@ export const Badge = forwardRef<HTMLSpanElement, BadgeProps>(
       font-medium
       rounded-[var(--radius-full)]
       border
-      whitespace-nowrap
+      ${wrap ? 'whitespace-normal break-words text-left max-w-full' : 'whitespace-nowrap'}
     `
 
     const sizeStyles = {

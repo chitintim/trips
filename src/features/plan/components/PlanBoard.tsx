@@ -12,7 +12,10 @@ import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
 import { MatrixView } from '../../decisions/components/MatrixView'
 import { SectionEditorSheet } from '../../decisions/components/SectionEditorSheet'
+import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcomePanel'
 import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
+import { votingInstruction, replaceableSiblingVoteIds, type VotingMethod } from '../../decisions/lib/voting'
+import { resolveDecidedOptionId } from '../../decisions/lib/closeDecision'
 import { computeQuestionState } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
@@ -283,8 +286,20 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
       return
     }
     setVotingId(item.id)
+    // Radio semantics for single-choice polls: casting on this option
+    // replaces any vote I already have on a sibling option in the section
+    // (see useToggleVote's replaceVoteIds).
+    const replaceVoteIds = optionSection
+      ? replaceableSiblingVoteIds(
+          optionSection.options.map((o) => o.id),
+          votes || [],
+          user.id,
+          item.optionId,
+          (optionSection.voting_method as VotingMethod) || 'single'
+        )
+      : []
     toggleVote.mutate(
-      { optionId: item.optionId, userId: user.id, action: 'add' },
+      { optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds },
       { onSettled: () => setVotingId(null) }
     )
   }
@@ -375,9 +390,15 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                         <p className="text-xs text-[var(--text-muted)]">
                           {isPersonalOrder
                             ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ${hasCatalogPricing ? 'ordered' : 'have picked'}`
-                            : `${section.options.length} option${section.options.length === 1 ? '' : 's'}`}
+                            : /* Pick-one vs pick-multiple made explicit on the
+                                 question itself (voting-clarity ask). */
+                              `${section.options.length} option${section.options.length === 1 ? '' : 's'} · ${votingInstruction(
+                                (section.voting_method as VotingMethod) || 'single'
+                              )}`}
                         </p>
-                        {section.vote_deadline && <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />}
+                        {section.vote_deadline && section.status !== 'completed' && (
+                          <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />
+                        )}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
@@ -464,22 +485,55 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                     )}
                   </div>
                 ) : (
-                  <div className="space-y-2">
-                    {sectionItems.map((item) => (
-                      <PlanItemCard
-                        key={item.id}
-                        item={item}
-                        place={item.placeId ? placesById.get(item.placeId) : undefined}
-                        onOpen={onOpenItem}
-                        onVote={item.vote ? handleVote : undefined}
-                        isVoting={votingId === item.id}
-                        myVoted={item.vote?.myVote.voted}
-                        compact
-                      />
-                    ))}
-                  </div>
+                  (() => {
+                    // A closed question stops presenting the full ballot: only
+                    // the decided option's card remains (no vote affordance),
+                    // with the outcome banner underneath carrying the
+                    // consequences (schedule/follow-up).
+                    const isClosedVote = !!section && section.status === 'completed'
+                    const decidedId = isClosedVote && section ? resolveDecidedOptionId(section, votes || []) : null
+                    const visibleItems = isClosedVote ? sectionItems.filter((i) => i.optionId === decidedId) : sectionItems
+                    return (
+                      <div className="space-y-2">
+                        {visibleItems.map((item) => (
+                          <PlanItemCard
+                            key={item.id}
+                            item={item}
+                            place={item.placeId ? placesById.get(item.placeId) : undefined}
+                            onOpen={onOpenItem}
+                            onVote={!isClosedVote && item.vote ? handleVote : undefined}
+                            isVoting={votingId === item.id}
+                            myVoted={item.vote?.myVote.voted}
+                            compact
+                          />
+                        ))}
+                      </div>
+                    )
+                  })()
                 )}
-                <ScheduleWinnerAffordance items={sectionItems} onScheduleIt={onScheduleIt} />
+                {/* Options → outcome separation (voting-clarity ask): the
+                    choices above, then one clearly-delineated box for "what
+                    happens once this is decided". Replaces the old bare
+                    "Schedule ..." button, which also overflowed its container
+                    on 375px screens for long option titles. */}
+                {section ? (
+                  !isPersonalOrder && (
+                    <DecisionOutcomePanel
+                      tripId={trip.id}
+                      section={section}
+                      votes={votes || []}
+                      participants={participants || []}
+                      isOrganizer={isOrganizer}
+                      events={events || []}
+                      onScheduleOption={(optionId) => {
+                        const target = items.find((i) => i.optionId === optionId)
+                        if (target) onScheduleIt(target)
+                      }}
+                    />
+                  )
+                ) : (
+                  <ScheduleWinnerAffordance items={sectionItems} onScheduleIt={onScheduleIt} />
+                )}
               </div>
             )
           })}
@@ -727,8 +781,10 @@ function ScheduleWinnerAffordance({ items, onScheduleIt }: { items: PlanItem[]; 
   const schedulable = items.find((i) => i.isUnscheduledWinner)
   if (!schedulable) return null
   return (
-    <Button variant="secondary" size="sm" onClick={() => onScheduleIt(schedulable)}>
-      📅 Schedule "{schedulable.title}"
+    // max-w-full on the button + truncate on the label: long item titles
+    // used to push this button wider than its container on mobile.
+    <Button variant="secondary" size="sm" onClick={() => onScheduleIt(schedulable)} className="max-w-full">
+      <span className="min-w-0 truncate">📅 Schedule "{schedulable.title}"</span>
     </Button>
   )
 }

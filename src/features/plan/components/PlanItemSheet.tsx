@@ -19,7 +19,7 @@ import { PlaceMapThumb } from '../../places/components/PlaceMapThumb'
 import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
 import { BookingEditorSheet } from '../../organizer/components/BookingEditorSheet'
 import { useBookings } from '../../../lib/queries/useBookings'
-import { areVotesVisible } from '../../decisions/lib/voting'
+import { areVotesVisible, votingInstruction, replaceableSiblingVoteIds } from '../../decisions/lib/voting'
 import { formatCostImpact } from '../../decisions/lib/costImpact'
 import { OptionEditorSheet } from '../../decisions/components/OptionEditorSheet'
 import { getDecisionShape } from '../../decisions/lib/decisionShapes'
@@ -119,7 +119,18 @@ export function PlanItemSheet({
     if (myVote) {
       toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'remove', voteId: myVote.id })
     } else {
-      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'add' })
+      // Radio semantics for single-choice polls: casting here replaces any
+      // vote I already have on a sibling option (see useToggleVote).
+      const replaceVoteIds = section
+        ? replaceableSiblingVoteIds(
+            section.options.map((o) => o.id),
+            votes || [],
+            user.id,
+            item.optionId,
+            item.vote?.votingMethod ?? 'single'
+          )
+        : []
+      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds })
     }
   }
 
@@ -218,6 +229,10 @@ export function PlanItemSheet({
           {/* Voting (option-backed items only) */}
           {item.vote && option && (
             <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+              {/* Pick-one vs pick-multiple, spelled out (voting-clarity ask). */}
+              <p className="text-xs font-medium text-[var(--text-secondary)]">
+                {item.vote.votingMethod === 'approval' ? '☑️' : '🔘'} {votingInstruction(item.vote.votingMethod)}
+              </p>
               <div className="flex items-center gap-3 flex-wrap">
                 <Button
                   variant={myVote ? 'primary' : 'secondary'}
@@ -229,12 +244,14 @@ export function PlanItemSheet({
                   {myVote
                     ? item.vote.votingMethod === 'ranked'
                       ? `Ranked #${myVote.rank ?? 1}`
-                      : '✓ Voted'
+                      : item.vote.votingMethod === 'approval'
+                        ? '✓ Approved'
+                        : '✓ Your choice'
                     : item.vote.votingMethod === 'approval'
                       ? 'Approve'
                       : item.vote.votingMethod === 'ranked'
                         ? 'Tap to rank next'
-                        : 'Vote'}
+                        : 'Choose'}
                 </Button>
                 {votesVisible ? (
                   <span className="text-sm text-[var(--text-secondary)]">

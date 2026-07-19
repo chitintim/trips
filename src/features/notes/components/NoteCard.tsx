@@ -1,7 +1,4 @@
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import remarkBreaks from 'remark-breaks'
-import { Card, UserAvatar } from '../../../components/ui'
+import { Card, Markdown, UserAvatar } from '../../../components/ui'
 import { NOTE_TYPE_CONFIG, formatRelativeTime } from '../lib/noteSorting'
 import type { TripNoteWithUser } from '../../../types'
 
@@ -45,9 +42,10 @@ export function NoteCard({ note, canDelete, onDelete }: NoteCardProps) {
           )}
         </div>
 
-        <div className="prose prose-sm max-w-none break-words text-[var(--text-secondary)] prose-p:my-1 prose-headings:my-1.5 prose-ul:my-1 prose-ol:my-1">
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>{note.content}</ReactMarkdown>
-        </div>
+        {/* Shared Markdown component: the previous `prose`-classed
+            ReactMarkdown relied on the (uninstalled) typography plugin, so
+            lists/headings/links rendered visually as raw text. */}
+        <Markdown className="text-sm text-[var(--text-secondary)]">{note.content}</Markdown>
       </Card.Content>
     </Card>
   )

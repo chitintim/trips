@@ -283,19 +283,33 @@ export function useToggleSelection(tripId: string) {
   })
 }
 
-/** Vote toggle (poll mechanics, option_votes table) — optimistic. */
+/**
+ * Vote toggle (poll mechanics, option_votes table) — optimistic.
+ *
+ * `replaceVoteIds`: for 'single' voting_method sections the UI passes the
+ * caller's existing vote ids on SIBLING options so casting behaves like a
+ * radio group (new choice replaces the old) instead of silently letting one
+ * voter stack votes across options. Optimistic vote ids (a cast still in
+ * flight) are filtered out of the server delete — the row doesn't exist
+ * under that id — but are still removed from the cache.
+ */
 export function useToggleVote(tripId: string) {
   const logActivity = useTripActivityLog(tripId)
   return useOptimisticMutation<
     void,
-    { optionId: string; userId: string; action: 'add' | 'remove'; voteId?: string; rank?: number | null },
+    { optionId: string; userId: string; action: 'add' | 'remove'; voteId?: string; rank?: number | null; replaceVoteIds?: string[] },
     OptionVote[]
   >({
-    mutationFn: async ({ optionId, userId, action, voteId, rank }) => {
+    mutationFn: async ({ optionId, userId, action, voteId, rank, replaceVoteIds }) => {
       if (action === 'remove' && voteId) {
         const { error } = await supabase.from('option_votes').delete().eq('id', voteId)
         if (error) throw error
       } else {
+        const persistedReplaceIds = (replaceVoteIds || []).filter((id) => !id.startsWith('optimistic-'))
+        if (persistedReplaceIds.length > 0) {
+          const { error } = await supabase.from('option_votes').delete().in('id', persistedReplaceIds).eq('user_id', userId)
+          if (error) throw error
+        }
         const { error } = await supabase
           .from('option_votes')
           .upsert({ option_id: optionId, user_id: userId, rank: rank ?? null }, { onConflict: 'option_id,user_id' })
@@ -303,11 +317,12 @@ export function useToggleVote(tripId: string) {
       }
     },
     queryKey: () => queryKeys.votes(tripId),
-    updater: (votes, { optionId, userId, action, voteId, rank }) => {
+    updater: (votes, { optionId, userId, action, voteId, rank, replaceVoteIds }) => {
       const list = votes || []
       if (action === 'remove') return list.filter((v) => v.id !== voteId)
+      const replaced = new Set(replaceVoteIds || [])
       return [
-        ...list.filter((v) => !(v.option_id === optionId && v.user_id === userId)),
+        ...list.filter((v) => !(v.option_id === optionId && v.user_id === userId) && !replaced.has(v.id)),
         { id: `optimistic-${optionId}-${userId}`, option_id: optionId, user_id: userId, rank: rank ?? null, created_at: new Date().toISOString() },
       ]
     },

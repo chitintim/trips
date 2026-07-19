@@ -2,13 +2,16 @@ import { useCallback, useState } from 'react'
 import { EmptyState } from '../../../components/ui'
 import { NoExpenses } from '../../../components/ui/illustrations'
 import { ExpenseCard } from './ExpenseCard'
+import { SettlementFeedRow } from './SettlementFeedRow'
 import { formatMoneyMinor } from '../lib/formatMoney'
 import { classifyDayLabel, computeDayGroupSummary, isPastDate, todayDateOnly } from '../lib/expenseRowInsights'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
+import type { Settlement } from '../../../lib/queries/useSettlements'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 
 export interface ExpenseFeedProps {
-  grouped: Array<{ date: string; expenses: ExpenseWithDetails[] }>
+  /** Day groups carrying both spending AND transfers (settlementFeed.groupMoneyFeedByDay) -- a day can exist purely because payments happened on it. */
+  grouped: Array<{ date: string; expenses: ExpenseWithDetails[]; settlements: Settlement[] }>
   /** Every trip participant keyed by user_id (payer + liable-avatar resolution, plan point 1). */
   participantsByUserId: Record<string, ParticipantWithUser>
   baseCurrency: string
@@ -120,9 +123,19 @@ export function ExpenseFeed({
 
   return (
     <div className="space-y-6">
-      {grouped.map(({ date, expenses: dayExpenses }) => {
+      {grouped.map(({ date, expenses: dayExpenses, settlements: daySettlements }) => {
         const summary = computeDayGroupSummary(dayExpenses, baseCurrency)
         const expanded = isExpanded(date)
+        // Header copy stays spending-first ("2 expenses · £340"); transfers
+        // are appended as a count only ("· 3 payments") -- they move money
+        // between people, not the group's spend, so they never inflate the
+        // day total. Payment-only days (e.g. pre-trip pre-payments) drop the
+        // "0 expenses" noise entirely.
+        const expensePart =
+          summary.count > 0 || daySettlements.length === 0
+            ? `${summary.count} expense${summary.count === 1 ? '' : 's'} · ${formatMoneyMinor(summary.totalMinor, summary.currency)}`
+            : null
+        const paymentPart = daySettlements.length > 0 ? `${daySettlements.length} payment${daySettlements.length === 1 ? '' : 's'}` : null
         return (
           <div key={date}>
             <button
@@ -132,8 +145,9 @@ export function ExpenseFeed({
               className="w-full flex items-center justify-between gap-2 mb-2 text-left press-scale"
             >
               <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)] truncate">
-                {dayHeaderLabel(date, tripStartDate, tripEndDate)} · {summary.count} expense{summary.count === 1 ? '' : 's'} ·{' '}
-                {formatMoneyMinor(summary.totalMinor, summary.currency)}
+                {dayHeaderLabel(date, tripStartDate, tripEndDate)}
+                {expensePart && <> · {expensePart}</>}
+                {paymentPart && <> · 💸 {paymentPart}</>}
                 {summary.hasMissingRate && <span className="text-danger-600 normal-case font-normal"> · missing FX rate</span>}
               </h3>
               <span className="text-[var(--text-muted)] text-[10px] shrink-0" aria-hidden="true">
@@ -153,6 +167,16 @@ export function ExpenseFeed({
                       onEdit={() => onEdit(expense)}
                       onOpenClaim={onOpenClaim}
                       editDisabled={editDisabled}
+                    />
+                  </div>
+                ))}
+                {daySettlements.map((settlement) => (
+                  <div key={settlement.id} className="stagger-item">
+                    <SettlementFeedRow
+                      settlement={settlement}
+                      participantsByUserId={participantsByUserId}
+                      baseCurrency={baseCurrency}
+                      currentUserId={currentUserId}
                     />
                   </div>
                 ))}

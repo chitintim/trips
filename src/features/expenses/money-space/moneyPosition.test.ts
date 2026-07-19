@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { computeMoneyPosition, computePairwiseBreakdown } from './moneyPosition'
+import {
+  computeMoneyPosition,
+  computePairwiseBreakdown,
+  computePairwiseLedger,
+  mergeSettlementsWithUsableCarryovers,
+} from './moneyPosition'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
@@ -295,5 +300,85 @@ describe('computePairwiseBreakdown', () => {
     // Bob is correctly DEBITED £100 against Alice -- not left at 0 the way
     // the pre-fix stubbed-claims path would (payer credited, nobody debited).
     expect(bob.netMinor).toBe(10000)
+  })
+})
+
+describe('computePairwiseLedger', () => {
+  it('lists the expense shares composing a pairwise balance, one signed entry per expense', () => {
+    const expenses = [
+      // Alice paid dinner: Bob's share raises what Bob owes Alice (+£30).
+      makeExpense({ id: 'e1', description: 'Dinner', amount: 60, payment_date: '2026-08-02', paid_by: 'alice', splits: [makeSplit('alice', 30), makeSplit('bob', 30)] }),
+      // Bob paid the taxi: Alice's share lowers it (−£10).
+      makeExpense({ id: 'e2', description: 'Taxi', amount: 20, payment_date: '2026-08-03', paid_by: 'bob', splits: [makeSplit('alice', 10), makeSplit('bob', 10)] }),
+      // Carol paid something -- not between the pair, never appears.
+      makeExpense({ id: 'e3', description: 'Gelato', amount: 15, payment_date: '2026-08-03', paid_by: 'carol', splits: [makeSplit('alice', 5), makeSplit('bob', 5), makeSplit('carol', 5)] }),
+    ]
+    const ledger = computePairwiseLedger(expenses, [], 'alice', 'bob', 'GBP')
+    expect(ledger.map((e) => e.id)).toEqual(['e2', 'e1']) // newest first
+    expect(ledger.find((e) => e.id === 'e1')).toMatchObject({ kind: 'expense', label: 'Dinner', amountMinor: 3000, pending: false })
+    expect(ledger.find((e) => e.id === 'e2')).toMatchObject({ kind: 'expense', label: 'Taxi', amountMinor: -1000, pending: false })
+  })
+
+  it('includes P2P payments between the pair with the note, signed from the current user\'s perspective', () => {
+    const settlements = [
+      makeSettlement({ id: 's1', from_user_id: 'bob', to_user_id: 'alice', amount: 1000, notes: 'Pre-payment', settled_at: '2026-07-01T00:00:00Z' }),
+      makeSettlement({ id: 's2', from_user_id: 'alice', to_user_id: 'bob', amount: 40, settled_at: '2026-08-11T00:00:00Z' }),
+      makeSettlement({ id: 's3', from_user_id: 'bob', to_user_id: 'carol', amount: 5 }), // not this pair
+    ]
+    const ledger = computePairwiseLedger([], settlements, 'alice', 'bob', 'GBP')
+    expect(ledger.map((e) => e.id)).toEqual(['s2', 's1'])
+    // Bob paid Alice £1000 -> lowers what Bob owes Alice (Alice received).
+    expect(ledger.find((e) => e.id === 's1')).toMatchObject({ kind: 'payment', amountMinor: -100000, note: 'Pre-payment', date: '2026-07-01' })
+    // Alice paid Bob £40 -> raises Alice's net vs Bob.
+    expect(ledger.find((e) => e.id === 's2')).toMatchObject({ kind: 'payment', amountMinor: 4000, note: null })
+  })
+
+  it('shows marked_paid payments as PENDING and excludes suggested rows entirely', () => {
+    const settlements = [
+      makeSettlement({ id: 's1', from_user_id: 'bob', to_user_id: 'alice', amount: 20, status: 'marked_paid' }),
+      makeSettlement({ id: 's2', from_user_id: 'bob', to_user_id: 'alice', amount: 20, status: 'suggested' }),
+    ]
+    const ledger = computePairwiseLedger([], settlements, 'alice', 'bob', 'GBP')
+    expect(ledger.map((e) => e.id)).toEqual(['s1'])
+    expect(ledger[0].pending).toBe(true)
+  })
+
+  it('INVARIANT: non-pending entries sum exactly to the pair\'s computePairwiseBreakdown net', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 90, paid_by: 'alice', splits: [makeSplit('alice', 30), makeSplit('bob', 30), makeSplit('carol', 30)] }),
+      makeExpense({ id: 'e2', amount: 40, paid_by: 'bob', splits: [makeSplit('alice', 20), makeSplit('bob', 20)] }),
+    ]
+    const settlements = [
+      makeSettlement({ id: 's1', from_user_id: 'bob', to_user_id: 'alice', amount: 5, status: 'confirmed' }),
+      makeSettlement({ id: 's2', from_user_id: 'bob', to_user_id: 'alice', amount: 3, status: 'marked_paid' }), // pending: in neither sum
+    ]
+    const breakdown = computePairwiseBreakdown(expenses, settlements, ['alice', 'bob', 'carol'], 'alice', 'GBP')
+    const bobNet = breakdown.find((r) => r.userId === 'bob')!.netMinor
+    const ledger = computePairwiseLedger(expenses, settlements, 'alice', 'bob', 'GBP')
+    const ledgerSum = ledger.filter((e) => !e.pending).reduce((sum, e) => sum + e.amountMinor, 0)
+    expect(ledgerSum).toBe(bobNet)
+    expect(bobNet).toBe(3000 - 2000 - 500) // Bob's dinner share − Alice's taxi share − Bob's £5 payment
+  })
+
+  it('labels folded carryover pseudo-settlements as kind "carryover"', () => {
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'alice', amount: 25 })]
+    const merged = mergeSettlementsWithUsableCarryovers([], carryovers, 'GBP', ['alice', 'bob'])
+    const ledger = computePairwiseLedger([], merged, 'alice', 'bob', 'GBP')
+    expect(ledger).toHaveLength(1)
+    expect(ledger[0].kind).toBe('carryover')
+    // Bob owed Alice £25 from the previous trip -> raises Bob's debt to Alice.
+    expect(ledger[0].amountMinor).toBe(2500)
+    expect(ledger[0].pending).toBe(false)
+  })
+
+  it('skips expenses missing an FX rate (excluded from balances, so excluded from the composition too)', () => {
+    const expenses = [
+      makeExpense({ id: 'e1', amount: 5000, currency: 'JPY', fx_rate: null, paid_by: 'alice', splits: [makeSplit('bob', 5000)] }),
+    ]
+    expect(computePairwiseLedger(expenses, [], 'alice', 'bob', 'GBP')).toEqual([])
+  })
+
+  it('returns [] with no current user', () => {
+    expect(computePairwiseLedger([], [makeSettlement({ from_user_id: 'a', to_user_id: 'b', amount: 1 })], undefined, 'b', 'GBP')).toEqual([])
   })
 })

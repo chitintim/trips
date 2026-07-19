@@ -36,15 +36,6 @@ export function applyExpenseFilters(expenses: ExpenseWithDetails[], filters: Exp
   })
 }
 
-/** Groups expenses by payment_date (descending), for the day-grouped card list (plan §10 #5). */
-export function groupExpensesByDay(expenses: ExpenseWithDetails[]): Array<{ date: string; expenses: ExpenseWithDetails[] }> {
-  const byDate = new Map<string, ExpenseWithDetails[]>()
-  for (const e of expenses) {
-    const list = byDate.get(e.payment_date) || []
-    list.push(e)
-    byDate.set(e.payment_date, list)
-  }
-  return Array.from(byDate.entries())
-    .sort(([a], [b]) => (a < b ? 1 : a > b ? -1 : 0))
-    .map(([date, exps]) => ({ date, expenses: exps }))
-}
+// Day-grouping for the feed lives in lib/settlementFeed.ts
+// (groupMoneyFeedByDay), which supersedes the old expense-only
+// groupExpensesByDay now that settlements interleave into the same feed.

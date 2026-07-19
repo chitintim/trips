@@ -12,7 +12,8 @@ import { ExpenseFeed } from '../expenses-tab/ExpenseFeed'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
 import { SettleUpTab } from '../settle-up/SettleUpTab'
 import { MySpendingTab } from '../my-spending/MySpendingTab'
-import { EMPTY_FILTERS, applyExpenseFilters, groupExpensesByDay } from '../expenses-tab/ExpenseFilters'
+import { EMPTY_FILTERS, applyExpenseFilters } from '../expenses-tab/ExpenseFilters'
+import { applySettlementFilters, groupMoneyFeedByDay, isFeedSettlement } from '../lib/settlementFeed'
 import { ExpenseFetchErrorState } from '../components/ExpenseFetchErrorState'
 import type { Trip } from '../../../types'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -54,8 +55,8 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
   const [settleUpOpen, setSettleUpOpen] = useState(initialScreen === 'settle-up')
   const [mySpendingOpen, setMySpendingOpen] = useState(initialScreen === 'my-spending')
 
-  const expenses = data?.expenses ?? []
-  const settlements = data?.settlements ?? []
+  const expenses = useMemo(() => data?.expenses ?? [], [data])
+  const settlements = useMemo(() => data?.settlements ?? [], [data])
   const isFrozen = !!trip.settlement_snapshot
   const effectiveStage = effectiveTripStage(trip)
   // Settle-up as a STATE (plan §4 #4): the card is prominent whenever
@@ -66,7 +67,14 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
   const settleUpIsProminent = isFrozen || effectiveStage === 'trip_completed'
 
   const filtered = useMemo(() => applyExpenseFilters(expenses, filters), [expenses, filters])
-  const grouped = useMemo(() => groupExpensesByDay(filtered), [filtered])
+  // Settlements interleave into the feed as first-class P2P transactions
+  // ('suggested' proposals excluded; 'marked_paid' shown as pending), so
+  // mid-trip payments are visible where they happened, not only in Settle up.
+  const filteredSettlements = useMemo(
+    () => applySettlementFilters(settlements.filter(isFeedSettlement), filters, trip.base_currency),
+    [settlements, filters, trip.base_currency]
+  )
+  const grouped = useMemo(() => groupMoneyFeedByDay(filtered, filteredSettlements), [filtered, filteredSettlements])
   const participantsByUserId = useMemo(() => Object.fromEntries(participants.map((p) => [p.user_id, p])), [participants])
 
   const openAdd = () => {

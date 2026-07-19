@@ -40,8 +40,8 @@ export interface TodayTabProps {
   onQuickCapture: () => void
   /** Organizer "invite people" affordance (Add participant sheet). */
   onInvite: () => void
-  /** Opens the Actions sheet (trip to-dos + bring list). */
-  onOpenActions: () => void
+  /** Opens the Actions sheet (trip to-dos + bring list); pass 'bring' to land on the packing segment. */
+  onOpenActions: (segment?: 'actions' | 'bring') => void
 }
 
 /**
@@ -147,7 +147,7 @@ export function TodayTab({
           <TravelDetailsPromptCard tripId={trip.id} />
           {organizerCards}
           <KeyBookingsCard tripId={trip.id} />
-          <ChecklistNudgeCard onNavigate={onNavigate} />
+          <ChecklistNudgeCard onOpen={() => onOpenActions('bring')} />
           {announcements}
           {activity}
         </>
@@ -258,14 +258,16 @@ function TodayItemsList({ trip }: { trip: Trip }) {
   )
 }
 
-function ChecklistNudgeCard({ onNavigate }: { onNavigate: (spaceId: string) => void }) {
+// v2.2: the bring list lives in the Actions sheet ('bring' segment), not
+// under People — the nudge opens the sheet there directly.
+function ChecklistNudgeCard({ onOpen }: { onOpen: () => void }) {
   return (
     <button
-      onClick={() => onNavigate('people')}
+      onClick={onOpen}
       className="w-full text-left rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-4 py-2.5 flex items-center justify-between gap-3 hover:border-[var(--border-default)] transition-colors"
     >
       <span className="text-sm text-[var(--text-primary)]">🎒 Check the packing & bring-list</span>
-      <span className="text-sm text-[var(--text-muted)]">People →</span>
+      <span className="text-sm text-[var(--text-muted)]">Actions →</span>
     </button>
   )
 }

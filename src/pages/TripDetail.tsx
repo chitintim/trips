@@ -109,6 +109,7 @@ export function TripDetail() {
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [recapOpen, setRecapOpen] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
+  const [actionsInitialSegment, setActionsInitialSegment] = useState<'actions' | 'bring'>('actions')
   const [overflowOpen, setOverflowOpen] = useState(false)
   const [rsvpOpen, setRsvpOpen] = useState(false)
   const [travelDetailsOpen, setTravelDetailsOpen] = useState(false)
@@ -424,7 +425,10 @@ export function TripDetail() {
                 onOpenRecap={() => setRecapOpen(true)}
                 onQuickCapture={openQuickCapture}
                 onInvite={() => setAddParticipantModalOpen(true)}
-                onOpenActions={() => setActionsOpen(true)}
+                onOpenActions={(segment) => {
+                  setActionsInitialSegment(segment ?? 'actions')
+                  setActionsOpen(true)
+                }}
               />
             </ErrorBoundary>
           )}
@@ -482,7 +486,7 @@ export function TripDetail() {
       {/* Actions sheet — trip to-dos + the packing/bring list, launched from
           Today's ActionsSection card ("View all" / "Add an action"). */}
       {actionsOpen && (
-        <ActionsSheet isOpen={actionsOpen} onClose={() => setActionsOpen(false)} tripId={trip.id} isOrganizer={isOrganizer} />
+        <ActionsSheet isOpen={actionsOpen} onClose={() => setActionsOpen(false)} tripId={trip.id} isOrganizer={isOrganizer} initialSegment={actionsInitialSegment} />
       )}
 
       {/* FAB targets */}

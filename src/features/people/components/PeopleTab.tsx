@@ -230,45 +230,52 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
         </Card>
       )}
 
-      <Tabs value={view} onChange={(v) => setView(v as typeof view)}>
-        <Tabs.List>
-          <Tabs.Tab value="list">List</Tabs.Tab>
-          {confirmationEnabled && <Tabs.Tab value="graph">Dependencies</Tabs.Tab>}
-          {confirmationEnabled && (
+      {confirmationEnabled ? (
+        <Tabs value={view} onChange={(v) => setView(v as typeof view)}>
+          <Tabs.List>
+            <Tabs.Tab value="list">List</Tabs.Tab>
+            <Tabs.Tab value="graph">Dependencies</Tabs.Tab>
             <Tabs.Tab value="waitlist">Waitlist{counts.waitlist > 0 ? ` (${counts.waitlist})` : ''}</Tabs.Tab>
-          )}
-        </Tabs.List>
+          </Tabs.List>
 
-        <div className="mt-4">
-          <Tabs.Panel value="list">
-            <ParticipantList
-              participants={participants || []}
-              currentUserId={user?.id}
-              groupByStatus={confirmationEnabled}
-              onSelect={(p) => {
-                // Only the current user can edit their own status --
-                // ParticipantList only renders a self row as a tappable
-                // button (grouped view) or nothing at all (flat view when
-                // confirmation tracking is off), so onSelect is only ever
-                // invoked for `user`'s own row.
-                setStatusModalParticipant(p)
-              }}
-              canManage={isOrganizer}
-              onManage={(p) => setManageParticipant(p)}
-            />
-          </Tabs.Panel>
-          {confirmationEnabled && (
+          <div className="mt-4">
+            <Tabs.Panel value="list">
+              <ParticipantList
+                participants={participants || []}
+                currentUserId={user?.id}
+                groupByStatus
+                onSelect={(p) => {
+                  // Only the current user can edit their own status --
+                  // ParticipantList only renders a self row as a tappable
+                  // button (grouped view) or nothing at all (flat view when
+                  // confirmation tracking is off), so onSelect is only ever
+                  // invoked for `user`'s own row.
+                  setStatusModalParticipant(p)
+                }}
+                canManage={isOrganizer}
+                onManage={(p) => setManageParticipant(p)}
+              />
+            </Tabs.Panel>
             <Tabs.Panel value="graph">
               <DependencyGraph participants={participants || []} />
             </Tabs.Panel>
-          )}
-          {confirmationEnabled && (
             <Tabs.Panel value="waitlist">
               <WaitlistPanel tripId={tripId} participants={participants || []} isOrganizer={isOrganizer} />
             </Tabs.Panel>
-          )}
-        </div>
-      </Tabs>
+          </div>
+        </Tabs>
+      ) : (
+        // Confirmation tracking off → only the roster view exists, so a
+        // one-tab "List" strip is pure chrome; render the list directly.
+        <ParticipantList
+          participants={participants || []}
+          currentUserId={user?.id}
+          groupByStatus={false}
+          onSelect={(p) => setStatusModalParticipant(p)}
+          canManage={isOrganizer}
+          onManage={(p) => setManageParticipant(p)}
+        />
+      )}
 
       {confirmationEnabled && (
         <StatusModal

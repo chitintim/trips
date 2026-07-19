@@ -15,6 +15,8 @@ export interface ActionsSheetProps {
   onClose: () => void
   tripId: string
   isOrganizer: boolean
+  /** Segment to show on open — Today's packing nudge lands on 'bring' directly. */
+  initialSegment?: 'actions' | 'bring'
 }
 
 type Segment = 'actions' | 'bring'
@@ -35,7 +37,7 @@ const EMPTY_FORM: ActionFormValues = { title: '', notes: '', assignee: '', befor
  * QuickCaptureSheet/AddToPlanSheet chrome — a `Modal` — so z-index and
  * mobile/desktop framing are identical, no bespoke overlay classes).
  */
-export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer }: ActionsSheetProps) {
+export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegment }: ActionsSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const { data: trip } = useTrip(tripId)
@@ -46,7 +48,9 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer }: ActionsSh
   const deleteAction = useDeleteAction(tripId)
   const toggleDone = useToggleActionDone(tripId)
 
-  const [segment, setSegment] = useState<Segment>('actions')
+  // The sheet is conditionally mounted by TripDetail ({actionsOpen && ...}),
+  // so the initializer runs fresh on every open — no reset effect needed.
+  const [segment, setSegment] = useState<Segment>(initialSegment ?? 'actions')
   const [formOpen, setFormOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [showDone, setShowDone] = useState(false)

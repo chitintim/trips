@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { Button, Card, EmptyState, Skeleton } from '../../../components/ui'
 import { useTrips } from '../../../lib/queries/useTrip'
 import { TripCard } from './TripCard'
 import { CreateTripWizard } from './CreateTripWizard'
-import { isMyTrip, orderDashboardTrips, resolveSingleActiveTripRedirect } from '../lib/landing'
+import { LandingRedirectPrompt } from './LandingRedirectPrompt'
+import { isMyTrip, orderDashboardTrips } from '../lib/landing'
 
 /**
  * Non-admin "my trips" dashboard with the v2.1 landing rules
@@ -19,7 +19,6 @@ import { isMyTrip, orderDashboardTrips, resolveSingleActiveTripRedirect } from '
 export function MemberDashboard() {
   const { user } = useAuth()
   const { data: trips, isLoading } = useTrips()
-  const navigate = useNavigate()
   const [createOpen, setCreateOpen] = useState(false)
   const [showPast, setShowPast] = useState(false)
   const [attentionCounts, setAttentionCounts] = useState<Record<string, number>>({})
@@ -36,22 +35,9 @@ export function MemberDashboard() {
     }
   }, [trips, user])
 
-  // Landing rule (UX_REDESIGN Part 2): the FIRST dashboard landing of a
-  // session (app open or right after login) with exactly one active trip
-  // jumps straight into it. The sessionStorage guard means a deliberate
-  // "Back to Dashboard" later in the session never bounces the user again.
-  useEffect(() => {
-    if (isLoading || !trips || !user) return
-    const LANDING_KEY = 'trips.landing.handled'
-    try {
-      if (sessionStorage.getItem(LANDING_KEY)) return
-      sessionStorage.setItem(LANDING_KEY, '1')
-    } catch {
-      return // storage unavailable → never auto-redirect rather than loop
-    }
-    const target = resolveSingleActiveTripRedirect(trips, user.id)
-    if (target) navigate(`/${target}`, { replace: true })
-  }, [isLoading, trips, user, navigate])
+  // Landing rule (revised): the old instant single-active-trip redirect is
+  // superseded by the countdown prompt below (LandingRedirectPrompt), which
+  // handles the once-per-session guard and announcement sequencing itself.
 
   const ordered = useMemo(() => orderDashboardTrips(myTrips, attentionCounts), [myTrips, attentionCounts])
 
@@ -139,6 +125,7 @@ export function MemberDashboard() {
       )}
 
       <CreateTripWizard isOpen={createOpen} onClose={() => setCreateOpen(false)} />
+      <LandingRedirectPrompt />
     </div>
   )
 }

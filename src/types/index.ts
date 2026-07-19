@@ -15,6 +15,8 @@ export type InvitationAttempt = Tables<'invitation_attempts'>
 export type TripNote = Tables<'trip_notes'>
 export type TimelineEvent = Tables<'trip_timeline_events'>
 export type ChatMessage = Tables<'trip_chat_messages'>
+export type SiteAnnouncement = Tables<'site_announcements'>
+export type AnnouncementDismissal = Tables<'announcement_dismissals'>
 
 // Insert types (for creating new records)
 export type UserInsert = TablesInsert<'users'>
@@ -32,6 +34,8 @@ export type TripNoteInsert = TablesInsert<'trip_notes'>
 export type TimelineEventInsert = TablesInsert<'trip_timeline_events'>
 export type TimelineEventUpdate = TablesUpdate<'trip_timeline_events'>
 export type ChatMessageInsert = TablesInsert<'trip_chat_messages'>
+export type SiteAnnouncementInsert = TablesInsert<'site_announcements'>
+export type AnnouncementDismissalInsert = TablesInsert<'announcement_dismissals'>
 
 // Update types (for updating records)
 export type UserUpdate = TablesUpdate<'users'>
@@ -46,6 +50,7 @@ export type ExpenseSplitUpdate = TablesUpdate<'expense_splits'>
 export type InvitationUpdate = TablesUpdate<'invitations'>
 export type InvitationAttemptUpdate = TablesUpdate<'invitation_attempts'>
 export type TripNoteUpdate = TablesUpdate<'trip_notes'>
+export type SiteAnnouncementUpdate = TablesUpdate<'site_announcements'>
 
 // Enum types
 export type UserRole = Enums<'user_role'>

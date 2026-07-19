@@ -23,6 +23,7 @@ import {
 import { ProfileModal } from '../components/ProfileModal'
 import { ViewUserTripsModal } from '../components/ViewUserTripsModal'
 import { MemberDashboard, CreateTripWizard } from '../features/dashboard'
+import { AdminAnnouncementsTab } from '../features/announcements'
 import { useTrips, useCurrentUserRow, type TripWithCount } from '../lib/queries/useTrip'
 import { useInvitations, useCreateInvitation, useDeleteInvitation } from '../lib/queries/useInvitations'
 import { queryKeys } from '../lib/queries/queryKeys'
@@ -30,7 +31,7 @@ import { useFormDraft, useUnsavedChangesGuard } from '../lib/forms'
 import { User, Trip, Invitation } from '../types'
 import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming, isConfirmationEnabled } from '../lib/tripStatus'
 
-type AdminTab = 'trips' | 'users' | 'invitations'
+type AdminTab = 'trips' | 'users' | 'invitations' | 'announcements'
 
 /**
  * Dashboard page (workstream G rebuild): non-admins get the new
@@ -129,6 +130,7 @@ export function Dashboard() {
                   <Tabs.Tab value="trips">🏔️ Trips</Tabs.Tab>
                   <Tabs.Tab value="users">👥 Users</Tabs.Tab>
                   <Tabs.Tab value="invitations">🎫 Invitations</Tabs.Tab>
+                  <Tabs.Tab value="announcements">📢 Announcements</Tabs.Tab>
                 </Tabs.List>
               </Tabs>
             </div>
@@ -143,6 +145,7 @@ export function Dashboard() {
             {activeTab === 'trips' && <AdminTripsTab />}
             {activeTab === 'users' && <AdminUsersTab />}
             {activeTab === 'invitations' && <AdminInvitationsTab />}
+            {activeTab === 'announcements' && <AdminAnnouncementsTab />}
           </>
         ) : (
           <MemberDashboard />

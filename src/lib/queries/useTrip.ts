@@ -10,6 +10,8 @@ export interface ParticipantWithUser extends TripParticipant {
 
 export interface TripWithCount extends Trip {
   confirmed_count: number
+  /** Active roster size — what "confirmed" means when confirmation tracking is off. */
+  participant_count: number
 }
 
 /**
@@ -32,13 +34,20 @@ export function useTrips() {
 
       const tripsWithCounts = await Promise.all(
         tripsData.map(async (trip) => {
-          const { count } = await supabase
-            .from('trip_participants')
-            .select('*', { count: 'exact', head: true })
-            .eq('trip_id', trip.id)
-            .eq('confirmation_status', 'confirmed')
+          const [{ count: confirmedCount }, { count: participantCount }] = await Promise.all([
+            supabase
+              .from('trip_participants')
+              .select('*', { count: 'exact', head: true })
+              .eq('trip_id', trip.id)
+              .eq('confirmation_status', 'confirmed'),
+            supabase
+              .from('trip_participants')
+              .select('*', { count: 'exact', head: true })
+              .eq('trip_id', trip.id)
+              .eq('active', true),
+          ])
 
-          return { ...trip, confirmed_count: count || 0 }
+          return { ...trip, confirmed_count: confirmedCount || 0, participant_count: participantCount || 0 }
         })
       )
 

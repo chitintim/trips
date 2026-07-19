@@ -1,11 +1,14 @@
-import { effectiveTripStage } from '../../../lib/tripStage'
+import { dateDerivedStage, effectiveTripStage } from '../../../lib/tripStage'
 import type { Trip } from '../../../types'
 
 /**
- * Landing rules + dashboard card ordering (UX_REDESIGN.md Part 2):
- * - Exactly ONE non-completed trip → land straight in it.
- * - Otherwise dashboard, cards ordered: active-with-your-actions →
- *   active/ongoing → upcoming → past (collapsed).
+ * Landing rules + dashboard card ordering (UX_REDESIGN.md Part 2, revised):
+ * - First dashboard landing of a session → a 5s countdown prompt offering
+ *   to jump into the "closest" trip (ongoing beats upcoming, nearest start
+ *   wins), once per session. Supersedes the old instant
+ *   single-active-trip redirect.
+ * - Cards ordered: active-with-your-actions → active/ongoing → upcoming →
+ *   past (collapsed).
  * Pure functions — unit-testable without React.
  */
 
@@ -20,18 +23,65 @@ export function isMyTrip(trip: Pick<TripLike, 'is_public' | 'created_by'>, userI
   return !trip.is_public || trip.created_by === userId
 }
 
+type LandingTripLike = TripLike & Pick<Trip, 'name'>
+
 /**
- * If the user has exactly one trip whose EFFECTIVE stage isn't completed,
- * return its id — '/' should land there directly. Null otherwise.
+ * The trip the landing-redirect prompt should offer: an ONGOING trip first
+ * (today inside its dates; soonest to end wins a tie), else the trip with
+ * the nearest future start_date. Null when the user has no ongoing or
+ * upcoming trips — then there's no prompt at all. Trips whose effective
+ * stage is completed never qualify.
  */
-export function resolveSingleActiveTripRedirect<T extends TripLike>(
+export function selectLandingTrip<T extends LandingTripLike>(
   trips: T[],
   userId: string,
   today: Date | string = new Date()
-): string | null {
-  const mine = trips.filter((t) => isMyTrip(t, userId))
-  const active = mine.filter((t) => effectiveTripStage(t, today) !== 'trip_completed')
-  return active.length === 1 ? active[0].id : null
+): T | null {
+  const candidates = trips.filter((t) => isMyTrip(t, userId) && effectiveTripStage(t, today) !== 'trip_completed')
+  const ongoing = candidates
+    .filter((t) => dateDerivedStage(t, today) === 'trip_ongoing')
+    .sort((a, b) => a.end_date.localeCompare(b.end_date))
+  if (ongoing.length > 0) return ongoing[0]
+  const upcoming = candidates
+    .filter((t) => dateDerivedStage(t, today) === null) // dates fully in the future
+    .sort((a, b) => a.start_date.localeCompare(b.start_date))
+  return upcoming[0] ?? null
+}
+
+// ---------------------------------------------------------------------------
+// Once-per-session guard for the landing-redirect prompt. The redirect is a
+// landing convenience, not a trap: navigating back to the dashboard later in
+// the session must never re-trigger it. Storage failures degrade to "never
+// prompt" rather than prompting on every visit.
+// ---------------------------------------------------------------------------
+
+const REDIRECT_PROMPT_KEY = 'trips.landing.redirect-prompted'
+
+type PromptStorage = Pick<Storage, 'getItem' | 'setItem'>
+
+function sessionStore(): PromptStorage | null {
+  try {
+    return typeof window !== 'undefined' ? window.sessionStorage : null
+  } catch {
+    return null
+  }
+}
+
+export function hasSeenLandingRedirectPrompt(storage: PromptStorage | null = sessionStore()): boolean {
+  if (!storage) return true
+  try {
+    return storage.getItem(REDIRECT_PROMPT_KEY) === '1'
+  } catch {
+    return true
+  }
+}
+
+export function markLandingRedirectPromptSeen(storage: PromptStorage | null = sessionStore()): void {
+  try {
+    storage?.setItem(REDIRECT_PROMPT_KEY, '1')
+  } catch {
+    // Ignore: hasSeenLandingRedirectPrompt already fails closed.
+  }
 }
 
 export interface OrderedDashboardTrips<T> {

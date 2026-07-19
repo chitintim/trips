@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { resolveSingleActiveTripRedirect, orderDashboardTrips, isMyTrip } from './landing'
+import {
+  selectLandingTrip,
+  hasSeenLandingRedirectPrompt,
+  markLandingRedirectPromptSeen,
+  orderDashboardTrips,
+  isMyTrip,
+} from './landing'
 import type { TripStatus } from '../../../types'
 
 const ME = 'user-1'
@@ -9,6 +15,7 @@ const TODAY = '2026-07-07'
 let seq = 0
 const trip = (overrides: Partial<{ id: string; status: TripStatus; start_date: string; end_date: string; is_public: boolean; created_by: string }> = {}) => ({
   id: overrides.id ?? `trip-${++seq}`,
+  name: overrides.id ?? `Trip ${seq}`,
   status: overrides.status ?? ('booking_details' as TripStatus),
   start_date: overrides.start_date ?? '2026-09-01',
   end_date: overrides.end_date ?? '2026-09-05',
@@ -24,34 +31,67 @@ describe('isMyTrip', () => {
   })
 })
 
-describe('resolveSingleActiveTripRedirect', () => {
-  it('redirects into the single non-completed trip', () => {
-    const only = trip({ id: 'the-one' })
-    expect(resolveSingleActiveTripRedirect([only], ME, TODAY)).toBe('the-one')
+describe('selectLandingTrip', () => {
+  it('picks an ongoing trip (today within its dates) over any upcoming trip', () => {
+    const ongoing = trip({ id: 'ongoing', start_date: '2026-07-05', end_date: '2026-07-10' })
+    const upcoming = trip({ id: 'upcoming', start_date: '2026-07-08', end_date: '2026-07-12' })
+    expect(selectLandingTrip([upcoming, ongoing], ME, TODAY)?.id).toBe('ongoing')
   })
 
-  it('ignores completed trips (stored status)', () => {
-    const done = trip({ status: 'trip_completed' })
-    const active = trip({ id: 'active' })
-    expect(resolveSingleActiveTripRedirect([done, active], ME, TODAY)).toBe('active')
+  it('breaks an ongoing tie by soonest end date', () => {
+    const endsLater = trip({ id: 'later', start_date: '2026-07-01', end_date: '2026-07-20' })
+    const endsSooner = trip({ id: 'sooner', start_date: '2026-07-06', end_date: '2026-07-09' })
+    expect(selectLandingTrip([endsLater, endsSooner], ME, TODAY)?.id).toBe('sooner')
   })
 
-  it('treats date-past trips as completed (effective stage)', () => {
-    const datePast = trip({ start_date: '2026-01-01', end_date: '2026-01-05', status: 'trip_ongoing' })
-    const active = trip({ id: 'active' })
-    expect(resolveSingleActiveTripRedirect([datePast, active], ME, TODAY)).toBe('active')
+  it('otherwise picks the nearest future start_date', () => {
+    const far = trip({ id: 'far', start_date: '2026-12-01', end_date: '2026-12-05' })
+    const near = trip({ id: 'near', start_date: '2026-08-01', end_date: '2026-08-05' })
+    expect(selectLandingTrip([far, near], ME, TODAY)?.id).toBe('near')
   })
 
-  it('returns null with zero or multiple active trips', () => {
-    expect(resolveSingleActiveTripRedirect([], ME, TODAY)).toBeNull()
-    expect(resolveSingleActiveTripRedirect([trip(), trip()], ME, TODAY)).toBeNull()
-    expect(resolveSingleActiveTripRedirect([trip({ status: 'trip_completed' })], ME, TODAY)).toBeNull()
+  it('returns null when there are no ongoing or upcoming trips → no prompt at all', () => {
+    expect(selectLandingTrip([], ME, TODAY)).toBeNull()
+    const past = trip({ start_date: '2026-01-01', end_date: '2026-01-05' })
+    const storedCompleted = trip({ status: 'trip_completed', start_date: '2026-08-01', end_date: '2026-08-05' })
+    expect(selectLandingTrip([past, storedCompleted], ME, TODAY)).toBeNull()
   })
 
   it("ignores other people's public trips", () => {
-    const foreign = trip({ is_public: true, created_by: OTHER })
-    const mine = trip({ id: 'mine' })
-    expect(resolveSingleActiveTripRedirect([foreign, mine], ME, TODAY)).toBe('mine')
+    const foreign = trip({ id: 'foreign', is_public: true, created_by: OTHER, start_date: '2026-07-08', end_date: '2026-07-12' })
+    const mine = trip({ id: 'mine', start_date: '2026-09-01', end_date: '2026-09-05' })
+    expect(selectLandingTrip([foreign, mine], ME, TODAY)?.id).toBe('mine')
+  })
+})
+
+describe('landing redirect prompt session guard', () => {
+  const fakeStorage = () => {
+    const map = new Map<string, string>()
+    return {
+      getItem: (k: string) => map.get(k) ?? null,
+      setItem: (k: string, v: string) => void map.set(k, v),
+    }
+  }
+
+  it('prompts once per session: unseen until marked, then seen', () => {
+    const storage = fakeStorage()
+    expect(hasSeenLandingRedirectPrompt(storage)).toBe(false)
+    markLandingRedirectPromptSeen(storage)
+    expect(hasSeenLandingRedirectPrompt(storage)).toBe(true)
+  })
+
+  it('fails closed (never prompts) when session storage is unavailable or throwing', () => {
+    expect(hasSeenLandingRedirectPrompt(null)).toBe(true)
+    const throwing = {
+      getItem: () => {
+        throw new Error('denied')
+      },
+      setItem: () => {
+        throw new Error('denied')
+      },
+    }
+    expect(hasSeenLandingRedirectPrompt(throwing)).toBe(true)
+    expect(() => markLandingRedirectPromptSeen(throwing)).not.toThrow()
   })
 })
 

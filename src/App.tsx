@@ -5,6 +5,7 @@ import { InstallPrompt } from './components/InstallPrompt'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ToastProvider } from './components/ui'
 import { authRoutes } from './features/auth/routes'
+import { AnnouncementGate } from './features/announcements'
 import { ClaimPage } from './features/expenses'
 import { Dashboard } from './pages/Dashboard'
 import { TripDetail } from './pages/TripDetail'
@@ -16,6 +17,10 @@ function App() {
       <Router basename={import.meta.env.BASE_URL.replace(/\/$/, '') || '/'}>
         <AuthCallback />
         <InstallPrompt />
+        {/* Site-wide one-time announcement popup — app-shell level so it
+            shows on the dashboard and trip pages alike (renders nothing
+            when signed out or nothing is due). */}
+        <AnnouncementGate />
         <ErrorBoundary label="the app">
           <Routes>
             {/* Public Routes (owned by the auth feature, see features/auth/routes.tsx) */}

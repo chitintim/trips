@@ -202,6 +202,39 @@ export type Database = {
           },
         ]
       }
+      announcement_dismissals: {
+        Row: {
+          announcement_id: string
+          dismissed_at: string
+          user_id: string
+        }
+        Insert: {
+          announcement_id: string
+          dismissed_at?: string
+          user_id: string
+        }
+        Update: {
+          announcement_id?: string
+          dismissed_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "announcement_dismissals_announcement_id_fkey"
+            columns: ["announcement_id"]
+            isOneToOne: false
+            referencedRelation: "site_announcements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "announcement_dismissals_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       bookings: {
         Row: {
           amount: number | null
@@ -1400,6 +1433,44 @@ export type Database = {
             columns: ["trip_id"]
             isOneToOne: false
             referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      site_announcements: {
+        Row: {
+          body_md: string
+          created_at: string
+          created_by: string
+          ends_at: string
+          id: string
+          starts_at: string
+          title: string
+        }
+        Insert: {
+          body_md: string
+          created_at?: string
+          created_by: string
+          ends_at: string
+          id?: string
+          starts_at?: string
+          title: string
+        }
+        Update: {
+          body_md?: string
+          created_at?: string
+          created_by?: string
+          ends_at?: string
+          id?: string
+          starts_at?: string
+          title?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "site_announcements_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]

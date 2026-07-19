@@ -4,6 +4,7 @@ import { Badge, Card, Deadline } from '../../../components/ui'
 import { StageRail, getTripAccentStyle } from '../../../components/layout'
 import { useNeedsAttention } from '../../../lib/queries/useNeedsAttention'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
+import { confirmedCountLabel } from '../lib/confirmedLabel'
 import { effectiveTripStage } from '../../../lib/tripStage'
 import { daysUntilClamped } from '../../../lib/dates'
 import type { TripWithCount } from '../../../lib/queries/useTrip'
@@ -89,7 +90,7 @@ export function TripCard({ trip, onAttentionCount }: TripCardProps) {
               </Badge>
             )}
             {isUpcoming && trip.confirmation_deadline && <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />}
-            <span className="text-xs text-[var(--text-muted)]">{trip.confirmed_count} confirmed</span>
+            <span className="text-xs text-[var(--text-muted)]">{confirmedCountLabel(trip)}</span>
           </div>
         </Card.Content>
       </Card>

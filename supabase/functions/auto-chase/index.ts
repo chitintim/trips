@@ -795,6 +795,12 @@ Deno.serve(async (req) => {
         appUrl: APP_BASE_URL,
       })
 
+      // Never send an empty digest. Structurally every user in byUser has
+      // >=1 item so this shouldn't fire, but it is the hard guarantee that
+      // no "0 things need your attention" email can ever go out; skipping
+      // BEFORE any send/log also means nothing is burned for next run.
+      if (rendered.itemCount === 0) continue
+
       let channel: string
       if (canEmail) {
         try {
@@ -955,6 +961,19 @@ async function handleTestDigest(
     })
   }
   rows.sort((x, y) => x.dueDate.localeCompare(y.dueDate))
+
+  // Same guarantee as the sweep: an empty digest is never sent -- not even
+  // from the test entrypoint (this exact gap produced the 2026-07-19
+  // "Japan 2026: 0 things need your attention" incident email).
+  if (rows.length === 0) {
+    return jsonResponse({
+      success: true,
+      test: true,
+      sent: false,
+      action_count: 0,
+      reason: `no open dated actions for this user on "${trip.name}" -- empty digests are not sent`,
+    })
+  }
 
   const rendered = renderDigestEmail({
     greetingName: userRow?.first_name || userRow?.full_name?.split(' ')[0] || 'there',

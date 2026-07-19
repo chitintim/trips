@@ -6,6 +6,8 @@
  * drafts to the blockers board instead.
  */
 
+import { BRAND_NAME } from './emailTemplate.ts'
+
 export interface EmailMessage {
   toEmail: string
   toName?: string
@@ -30,6 +32,32 @@ export interface EmailSender {
   send(message: EmailMessage): Promise<EmailSendReceipt>
 }
 
+/**
+ * Sender display name is a PRODUCT decision, enforced here in code: every
+ * outgoing email shows BRAND_NAME ("Tim's Trip Planner") regardless of what
+ * the RESEND_FROM / BREVO_SENDER_NAME secrets say -- a stale secret set
+ * before the branding landed was silently overriding the name (verified in
+ * the inbox on 2026-07-19: delivered From carried no "Tim's Trip Planner").
+ * Env secrets still control the ADDRESS (it must stay domain-verified with
+ * the provider); only the display name is pinned.
+ *
+ * Accepts a raw env value of either `Some Name <addr@host>` or `addr@host`,
+ * extracts the address, and re-wraps it with the brand name.
+ */
+export function brandedFrom(envValue: string | undefined, fallbackAddress: string): { name: string; address: string; from: string } {
+  let address = fallbackAddress
+  if (envValue) {
+    const bracketed = envValue.match(/<([^<>\s]+@[^<>\s]+)>/)
+    if (bracketed) {
+      address = bracketed[1]
+    } else if (/^[^<>\s]+@[^<>\s]+$/.test(envValue.trim())) {
+      address = envValue.trim()
+    }
+    // Anything unparseable falls back to the known-verified default address.
+  }
+  return { name: BRAND_NAME, address, from: `${BRAND_NAME} <${address}>` }
+}
+
 class BrevoEmailSender implements EmailSender {
   readonly channel = 'email'
   readonly available = true
@@ -39,8 +67,11 @@ class BrevoEmailSender implements EmailSender {
 
   constructor(apiKey: string) {
     this.#apiKey = apiKey
-    this.#senderEmail = Deno.env.get('BREVO_SENDER_EMAIL') ?? 'tim.chiutin.lam@gmail.com'
-    this.#senderName = Deno.env.get('BREVO_SENDER_NAME') ?? "Tim's Trip Planner"
+    // Address from env (must match the Brevo-verified sender); name pinned
+    // to the brand -- see brandedFrom() for why the env name is ignored.
+    const branded = brandedFrom(Deno.env.get('BREVO_SENDER_EMAIL'), 'tim.chiutin.lam@gmail.com')
+    this.#senderEmail = branded.address
+    this.#senderName = branded.name
   }
 
   async send(message: EmailMessage): Promise<EmailSendReceipt> {
@@ -76,8 +107,10 @@ class ResendEmailSender implements EmailSender {
 
   constructor(apiKey: string) {
     this.#apiKey = apiKey
-    // Tim's Resend account has mail.fontem.ai verified.
-    this.#from = Deno.env.get('RESEND_FROM') ?? "Tim's Trip Planner <trips@mail.fontem.ai>"
+    // Tim's Resend account has mail.fontem.ai verified: RESEND_FROM may
+    // override the ADDRESS, but the display name is always the brand
+    // (a pre-branding RESEND_FROM secret was stripping the name).
+    this.#from = brandedFrom(Deno.env.get('RESEND_FROM'), 'trips@mail.fontem.ai').from
   }
 
   async send(message: EmailMessage): Promise<EmailSendReceipt> {

@@ -62,6 +62,12 @@ export interface RenderedEmail {
   subject: string
   html: string
   text: string
+  /**
+   * Total actionable items (action rows + other lines) across the rendered
+   * sections. Callers MUST NOT send the email when this is 0 -- an empty
+   * "0 things need your attention" digest is noise, not a nudge.
+   */
+  itemCount: number
 }
 
 export function escapeHtml(s: string): string {
@@ -150,7 +156,18 @@ function digestSubject(input: DigestEmailInput): string {
  * The one digest email per user per day: per-trip sections with an actions
  * table (deadline'd trip actions) and a plain list for other open loops.
  */
-export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
+export function renderDigestEmail(rawInput: DigestEmailInput): RenderedEmail {
+  // Guard (a): a trip section with zero items must not render -- an empty
+  // heading with a headers-only table tells the reader nothing. Guard (b)
+  // lives in `itemCount` on the return value: when every section is empty
+  // the whole email must not be SENT either (enforced by both the sweep
+  // and test_digest paths in auto-chase).
+  const input: DigestEmailInput = {
+    ...rawInput,
+    sections: rawInput.sections.filter((s) => s.actionRows.length + s.otherLines.length > 0),
+  }
+  const itemCount = input.sections.reduce((n, s) => n + s.actionRows.length + s.otherLines.length, 0)
+
   const sectionsHtml = input.sections
     .map((s) => {
       const others =
@@ -197,5 +214,5 @@ export function renderDigestEmail(input: DigestEmailInput): RenderedEmail {
     .join('\n\n')
   const text = `Hi ${input.greetingName},\n\nA few things on your trips are waiting on you:\n\n${textSections}\n\nOpen ${BRAND_NAME}: ${input.appUrl}\n\n${footerLine}\nYou can turn these emails off in your profile settings.`
 
-  return { subject: digestSubject(input), html, text }
+  return { subject: digestSubject(input), html, text, itemCount }
 }

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '../hooks/useAuth'
 import { useScrollDirection } from '../hooks/useScrollDirection'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { supabase } from '../lib/supabase'
 import {
   Badge,
@@ -39,6 +40,7 @@ type AdminTab = 'trips' | 'users' | 'invitations'
  * create_invitation RPC, trips + confirmed counts via useTrips).
  */
 export function Dashboard() {
+  useDocumentTitle()
   const { user, signOut } = useAuth()
   const queryClient = useQueryClient()
   const scrollDirection = useScrollDirection()
@@ -95,7 +97,10 @@ export function Dashboard() {
                 T
               </span>
               <div>
-                <h1 className="text-xl font-bold text-[var(--text-primary)]">Trips</h1>
+                <h1 className="text-xl font-bold text-[var(--text-primary)]">
+                  <span className="sm:hidden">Trips</span>
+                  <span className="hidden sm:inline">Tim's Trip Planner</span>
+                </h1>
                 {isAdmin && <span className="text-xs font-medium text-accent-600 dark:text-accent-400">Admin</span>}
               </div>
             </div>

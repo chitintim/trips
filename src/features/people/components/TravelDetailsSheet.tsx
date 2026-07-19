@@ -136,7 +136,7 @@ export function TravelDetailsSheet({ isOpen, onClose, tripId }: TravelDetailsShe
 
         <fieldset className="space-y-3">
           <legend className="text-sm font-semibold text-[var(--text-primary)]">Arrival flight details</legend>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
             <Input
               label="Date"
               type="date"
@@ -170,7 +170,7 @@ export function TravelDetailsSheet({ isOpen, onClose, tripId }: TravelDetailsShe
 
         <fieldset className="space-y-3">
           <legend className="text-sm font-semibold text-[var(--text-primary)]">Departure flight details</legend>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
             <Input
               label="Date"
               type="date"

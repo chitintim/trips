@@ -236,7 +236,7 @@ export function SharePage() {
         <EmptyState
           icon="📤"
           title="Nothing was shared"
-          description="Share a link, photo, or text into Trips from another app, or use Paste a link/Scan a receipt inside a trip instead."
+          description="Share a link, photo, or text into Tim's Trip Planner from another app, or use Paste a link/Scan a receipt inside a trip instead."
           action={
             <Button variant="secondary" onClick={() => navigate('/')}>
               Back to your trips

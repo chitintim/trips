@@ -46,7 +46,7 @@ export function ActivityFeedPanel({ tripId }: ActivityFeedPanelProps) {
     <ul className="divide-y divide-[var(--border-subtle)]">
       {entries.map((entry) => {
         const actor = entry.actor ? usersById.get(entry.actor) : undefined
-        const actorName = actor?.name ?? (entry.actor ? 'Someone' : 'Trips')
+        const actorName = actor?.name ?? (entry.actor ? 'Someone' : 'Trip Planner')
         const rendered = renderActivity(entry, actorName)
         return (
           <li key={entry.id} className="flex items-start gap-3 py-2.5">

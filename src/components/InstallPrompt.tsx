@@ -92,7 +92,7 @@ export function InstallPrompt() {
             T
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-[var(--text-primary)]">Install Trips</p>
+            <p className="text-sm font-semibold text-[var(--text-primary)]">Install Tim's Trip Planner</p>
             <p className="text-xs text-[var(--text-secondary)]">Add to your home screen for quick access</p>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -109,7 +109,7 @@ export function InstallPrompt() {
       <Modal
         isOpen={showIosSheet}
         onClose={() => setShowIosSheet(false)}
-        title="Add Trips to your Home Screen"
+        title="Add Tim's Trip Planner to your Home Screen"
         size="sm"
       >
         <ol className="space-y-4 text-sm text-[var(--text-secondary)]">
@@ -129,8 +129,8 @@ export function InstallPrompt() {
           <li className="flex gap-3">
             <span className="shrink-0 w-6 h-6 rounded-full bg-accent-100 text-accent-700 dark:bg-accent-900 dark:text-accent-300 flex items-center justify-center text-xs font-semibold">3</span>
             <span>
-              Tap <strong className="text-[var(--text-primary)]">Add</strong> in the top-right corner. Trips will
-              appear on your home screen like a native app.
+              Tap <strong className="text-[var(--text-primary)]">Add</strong> in the top-right corner. Tim's Trip
+              Planner will appear on your home screen like a native app.
             </span>
           </li>
         </ol>

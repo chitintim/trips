@@ -78,7 +78,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <Card.Content className="py-10">
               <EmptyState
                 icon={<ErrorState className="w-24 h-24 text-danger-500" />}
-                title="A new version of Trips was deployed"
+                title="A new version of Tim's Trip Planner was deployed"
                 description="Reload the page to pick up the update."
                 action={
                   <Button variant="primary" onClick={() => window.location.reload()}>

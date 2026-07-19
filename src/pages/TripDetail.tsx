@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { Button, Card, Spinner, EmptyState, Skeleton, Modal } from '../components/ui'
 import { AddParticipantModal } from '../components'
 import { ErrorBoundary } from '../components/ErrorBoundary'
@@ -75,6 +76,7 @@ export function TripDetail() {
   const queryClient = useQueryClient()
 
   const { data: trip = null, isLoading: tripLoading } = useTrip(tripId)
+  useDocumentTitle(trip?.name)
   const { data: participants = [], isLoading: participantsLoading } = useParticipants(tripId)
   const { data: currentUserRow } = useCurrentUserRow(user?.id)
   const { data: expensesData } = useExpenses(tripId)

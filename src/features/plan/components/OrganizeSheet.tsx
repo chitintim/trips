@@ -103,7 +103,7 @@ export function OrganizeSheet({ isOpen, onClose, trip }: OrganizeSheetProps) {
             <p className="text-sm text-[var(--text-secondary)]">
               Let AI tidy up your plan — turning messy rental/pricing lists into clean order forms, pulling suggested
               days/times/prices out of prose descriptions, and phrasing questions clearly. Nothing changes until you
-              review and approve each suggestion, same as everywhere else in Trips.
+              review and approve each suggestion, same as everywhere else in Tim's Trip Planner.
             </p>
 
             <div>

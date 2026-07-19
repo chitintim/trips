@@ -1,6 +1,6 @@
 {
-  "name": "Trips",
-  "short_name": "Trips",
+  "name": "Tim's Trip Planner",
+  "short_name": "Trip Planner",
   "description": "Plan group trips together — RSVP, split expenses, and settle up without the chasing.",
   "start_url": "/trips/",
   "scope": "/trips/",

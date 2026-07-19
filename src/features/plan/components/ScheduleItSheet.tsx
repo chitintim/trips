@@ -97,7 +97,11 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
     <Modal isOpen={isOpen} onClose={onClose} size="sm" title={`Schedule "${item.title}"`}>
       <div className="space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">Pick a day (and optionally a time) to put this on the plan.</p>
-        <div className="grid grid-cols-2 gap-3">
+        {/* [&>*]:min-w-0 — grid items default to min-width:auto, and native
+            date/time inputs have a large intrinsic min-content width, so
+            without this the row overflows the sheet at 375px (same fix as
+            TravelDetailsSheet). */}
+        <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
           <Input label="Day" type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
           <Input label="Time (optional)" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
         </div>

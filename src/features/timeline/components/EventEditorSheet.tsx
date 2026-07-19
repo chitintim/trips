@@ -202,7 +202,11 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
           autoFocus
         />
 
-        <div className="grid grid-cols-2 gap-3">
+        {/* [&>*]:min-w-0 — native date/time inputs have a large intrinsic
+            min-content width and grid items default to min-width:auto, so
+            these rows overflow at 375px without it (same fix as
+            TravelDetailsSheet). */}
+        <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
           <Input
             label="Date"
             type="date"
@@ -228,7 +232,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
         </label>
 
         {!values.allDay && (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
             <Input label="Start time" type="time" value={values.startTime} onChange={(e) => updateField('startTime', e.target.value)} />
             <Input label="End time" type="time" value={values.endTime} onChange={(e) => updateField('endTime', e.target.value)} />
           </div>

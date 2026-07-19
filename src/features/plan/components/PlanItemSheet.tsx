@@ -346,8 +346,11 @@ export function PlanItemSheet({
 
           {/* Schedule it — decided-but-undated items (also booked-but-undated: a
               legacy option can be status='booked' directly, with no dated
-              timeline event yet, per planItems.ts rule 6). */}
-          {!item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && onScheduleIt && (
+              timeline event yet, per planItems.ts rule 6). Organizer-gated to
+              match RLS: trip_timeline_events INSERT is organizer-only
+              server-side, so showing this to everyone just produced an error
+              toast for non-organizers. */}
+          {isOrganizer && !item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && onScheduleIt && (
             <Button variant="secondary" fullWidth onClick={() => onScheduleIt(item)}>
               📅 Schedule it
             </Button>

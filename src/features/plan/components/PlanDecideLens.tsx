@@ -147,8 +147,10 @@ export function PlanDecideLens({ trip, items, isOrganizer, onScheduleIt }: PlanD
       )}
 
       {openQuestions.length > 0 && (
-        <section aria-label="Open questions" className="space-y-2">
-          <h3 className="text-sm font-semibold text-[var(--text-primary)]">❔ Open questions</h3>
+        <section aria-label={`Open questions (${openQuestions.length})`} className="space-y-2">
+          {/* Explicit count ("two open questions" clarity ask) so N cards can
+              never read as one undifferentiated block. */}
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">❔ Open questions ({openQuestions.length})</h3>
           {openQuestions.map((section) => (
             <QuestionCard
               key={section.id}

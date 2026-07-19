@@ -281,7 +281,11 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
             placeholder={baseCurrency}
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        {/* [&>*]:min-w-0 — date/datetime inputs have a large intrinsic
+            min-content width and grid items default to min-width:auto, so
+            this row overflows at 375px without it (same fix as
+            TravelDetailsSheet). */}
+        <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
           <Input
             label="Booking date"
             type="date"

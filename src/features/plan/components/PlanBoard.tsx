@@ -343,9 +343,16 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   return (
     <div className="relative space-y-4">
       {hasUndated && (
-        <div className="rounded-[var(--radius-lg)] border border-accent-200 bg-accent-50/60 dark:bg-accent-950/20 p-3 space-y-3">
+        /* Readability pass (principal feedback): the tray used to be one
+           accent-tinted block with every question inside it — two questions
+           read as one crowded pile on the trip color. Now the accent stays on
+           the section HEADER only (with an explicit count), and each question
+           renders as its own raised card on the neutral surface below. */
+        <section aria-label={`Open questions (${undatedBySection.size})`} className="space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">❔ Open questions</h3>
+            <h3 className="text-sm font-semibold text-accent-700 dark:text-accent-400">
+              ❔ Open questions ({undatedBySection.size})
+            </h3>
             {isOrganizer && onNewQuestion && (
               <Button variant="ghost" size="sm" onClick={onNewQuestion}>
                 + New question
@@ -374,27 +381,37 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
             // badge/chrome, no uppercase label treatment. Sections remain
             // the storage grouping only.
             return (
-              <div key={sectionId ?? 'none'} className="space-y-2">
+              /* One raised card per question: neutral surface + real border +
+                 shadow so adjacent questions can never read as one block. */
+              <div
+                key={sectionId ?? 'none'}
+                className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--surface-raised)] shadow-[var(--shadow-sm)] p-3.5 space-y-2.5"
+              >
                 {section && (
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className="text-sm font-medium text-[var(--text-primary)]">{section.title}</h4>
+                        <h4 className="min-w-0 break-words text-sm font-semibold leading-snug text-[var(--text-primary)]">
+                          {section.title}
+                        </h4>
                         {questionState && (
                           <Badge variant={questionState.state === 'done' ? 'success' : 'warning'} size="sm">
                             {questionState.label}
                           </Badge>
                         )}
                       </div>
-                      <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
-                        <p className="text-xs text-[var(--text-muted)]">
+                      <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                        <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                           {isPersonalOrder
                             ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ${hasCatalogPricing ? 'ordered' : 'have picked'}`
-                            : /* Pick-one vs pick-multiple made explicit on the
-                                 question itself (voting-clarity ask). */
-                              `${section.options.length} option${section.options.length === 1 ? '' : 's'} · ${votingInstruction(
-                                (section.voting_method as VotingMethod) || 'single'
-                              )}`}
+                            : section.status === 'completed'
+                              ? `${section.options.length} option${section.options.length === 1 ? '' : 's'}`
+                              : /* Pick-one vs pick-multiple + response progress made
+                                   explicit on the question itself (voting-clarity +
+                                   "two questions" clarity asks). */
+                                `${section.options.length} option${section.options.length === 1 ? '' : 's'} · ${votingInstruction(
+                                  (section.voting_method as VotingMethod) || 'single'
+                                )} · ${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} voted`}
                         </p>
                         {section.vote_deadline && section.status !== 'completed' && (
                           <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />
@@ -452,7 +469,10 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       )}
                     </div>
                     {picksExpanded && (
-                      <div className="space-y-1.5 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-2.5">
+                      /* Sunken (not raised) now that the question card itself
+                         is the raised surface — keeps the expansion visually
+                         nested inside its own card. */
+                      <div className="space-y-1.5 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5">
                         {optionsWithPicks.map((option) => (
                           <div key={option.id} className="flex items-center justify-between gap-2">
                             <span className="min-w-0 truncate text-xs text-[var(--text-secondary)]">
@@ -532,12 +552,16 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                     />
                   )
                 ) : (
-                  <ScheduleWinnerAffordance items={sectionItems} onScheduleIt={onScheduleIt} />
+                  /* Organizer-gated to match RLS: creating the timeline event
+                     behind "Schedule it" is organizer-only server-side
+                     (trip_timeline_events INSERT policy), so non-organizers
+                     must not see a button that would only error. */
+                  isOrganizer && <ScheduleWinnerAffordance items={sectionItems} onScheduleIt={onScheduleIt} />
                 )}
               </div>
             )
           })}
-        </div>
+        </section>
       )}
 
       {/* Span banners (multi-day accommodation etc.) render ONCE, above the

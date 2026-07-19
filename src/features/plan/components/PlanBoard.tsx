@@ -18,12 +18,19 @@ import { votingInstruction, replaceableSiblingVoteIds, type VotingMethod } from 
 import { resolveDecidedOptionId } from '../../decisions/lib/closeDecision'
 import { computeQuestionState } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
+import { ConsolidatedTravelRow } from './ConsolidatedTravelRow'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
 import { CompanionSuggestionCard } from './CompanionSuggestionCard'
 import { OrderFormSheet } from './OrderFormSheet'
 import { ConsolidatedOrdersSheet } from './ConsolidatedOrdersSheet'
 import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
 import { groupPlanItemsByDate, groupUndatedBySection } from '../lib/planItems'
+import {
+  groupTravelForDay,
+  mergeDayEntries,
+  type DayTravelGrouping,
+  type TravelUserLike,
+} from '../lib/travelGrouping'
 import { useDaySwipe } from '../lib/useDaySwipe'
 import {
   deriveMilestones,
@@ -153,6 +160,23 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const byDate = useMemo(() => groupPlanItemsByDate(items), [items])
   const undatedBySection = useMemo(() => groupUndatedBySection(items), [items])
   const hasUndated = undatedBySection.size > 0
+
+  // Same-flight/same-minute travel consolidation (travelGrouping.ts):
+  // display-level only — the per-person DB rows are untouched, each day
+  // just swaps N near-identical "X arrives" cards for one grouped row.
+  const eventsById = useMemo(() => new Map((events || []).map((e) => [e.id, e])), [events])
+  const travelUsersById = useMemo<Map<string, TravelUserLike>>(
+    () =>
+      new Map(
+        (participants || []).map((p) => [p.user_id, { full_name: p.user?.full_name ?? null, email: p.user?.email ?? null }])
+      ),
+    [participants]
+  )
+  const travelByDate = useMemo(() => {
+    const map = new Map<string, DayTravelGrouping>()
+    for (const [date, dateItems] of byDate) map.set(date, groupTravelForDay(dateItems, eventsById))
+    return map
+  }, [byDate, eventsById])
 
   // Date-derived presets (UX_REDESIGN.md Part 3): rendered, never stored.
   // Recomputed from trip + bookings + already-materialized events every
@@ -605,6 +629,12 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
           {dayDates.map((date) => {
             const dayItems = byDate.get(date) || []
             const dense = shouldDensifyDay(dayItems.length, date, today)
+            const grouping = travelByDate.get(date)
+            const groupedIds = grouping?.groupedItemIds
+            const entries = mergeDayEntries(
+              groupedIds ? dayItems.filter((i) => !groupedIds.has(i.id)) : dayItems,
+              grouping?.groups ?? []
+            )
             return (
               <div key={date} className="space-y-2">
                 {(milestonesByDate.get(date) || []).map((m) => (
@@ -616,21 +646,27 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                     canMaterialize={isOrganizer}
                   />
                 ))}
-                {dayItems.map((item) => (
-                  <div key={item.id} className="stagger-item">
-                    <PlanItemCard
-                      item={item}
-                      place={item.placeId ? placesById.get(item.placeId) : undefined}
-                      onOpen={onOpenItem}
-                      onVote={item.vote ? handleVote : undefined}
-                      isVoting={votingId === item.id}
-                      myVoted={item.vote?.myVote.voted}
-                      outsideTripDates={isOutsideTripDates(item, trip.start_date, trip.end_date)}
-                      timeClash={clashedIds.has(item.id)}
-                      dense={dense && isDensifiableStage(item.stage)}
-                    />
-                  </div>
-                ))}
+                {entries.map((entry) =>
+                  entry.kind === 'group' ? (
+                    <div key={entry.group.key} className="stagger-item">
+                      <ConsolidatedTravelRow group={entry.group} usersById={travelUsersById} onOpenMember={onOpenItem} />
+                    </div>
+                  ) : (
+                    <div key={entry.item.id} className="stagger-item">
+                      <PlanItemCard
+                        item={entry.item}
+                        place={entry.item.placeId ? placesById.get(entry.item.placeId) : undefined}
+                        onOpen={onOpenItem}
+                        onVote={entry.item.vote ? handleVote : undefined}
+                        isVoting={votingId === entry.item.id}
+                        myVoted={entry.item.vote?.myVote.voted}
+                        outsideTripDates={isOutsideTripDates(entry.item, trip.start_date, trip.end_date)}
+                        timeClash={clashedIds.has(entry.item.id)}
+                        dense={dense && isDensifiableStage(entry.item.stage)}
+                      />
+                    </div>
+                  )
+                )}
               </div>
             )
           })}
@@ -672,6 +708,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       today={today}
                       expanded={expandedDenseDays.has(date)}
                       onToggleExpand={() => toggleExpandedDenseDay(date)}
+                      travelGrouping={travelByDate.get(date)}
+                      travelUsersById={travelUsersById}
                     />
                   )
                 })}
@@ -704,6 +742,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
               today={today}
               expanded={expandedDenseDays.has(date)}
               onToggleExpand={() => toggleExpandedDenseDay(date)}
+              travelGrouping={travelByDate.get(date)}
+              travelUsersById={travelUsersById}
             />
           ))}
         </div>
@@ -838,6 +878,10 @@ interface PlanDaySectionProps {
   /** Whether this day's collapsed dense summary has been expanded (persisted in sessionStorage by the caller — see PlanBoard's expandedDenseDays state). */
   expanded: boolean
   onToggleExpand: () => void
+  /** Same-flight/same-minute travel consolidation for this day (travelGrouping.ts) — undefined when the day has no travel-details items at all. */
+  travelGrouping?: DayTravelGrouping
+  /** user_id -> name/email lookup for the consolidated rows' traveller names. */
+  travelUsersById: Map<string, TravelUserLike>
 }
 
 /**
@@ -871,6 +915,8 @@ function PlanDaySection({
   today,
   expanded,
   onToggleExpand,
+  travelGrouping,
+  travelUsersById,
 }: PlanDaySectionProps) {
   const swipe = useDaySwipe(
     () => nextDate && scrollToDay(nextDate),
@@ -883,8 +929,16 @@ function PlanDaySection({
   // full cards — they still need the reviewer's attention — so they're
   // pulled out first and never counted into the collapsed summary.
   const dense = shouldDensifyDay(dayItems.length, date, today)
-  const attentionItems = dayItems.filter((i) => !isDensifiableStage(i.stage))
+  const groupedTravelIds = travelGrouping?.groupedItemIds
+  const attentionItems = dayItems.filter((i) => !isDensifiableStage(i.stage) && !groupedTravelIds?.has(i.id))
+  // Includes grouped travel members so the collapsed summary line still
+  // counts every underlying item ("8 items · 6 flights ..."), while the
+  // expanded render below swaps the grouped ones for consolidated rows.
   const settledItems = dayItems.filter((i) => isDensifiableStage(i.stage))
+  const settledEntries = mergeDayEntries(
+    groupedTravelIds ? settledItems.filter((i) => !groupedTravelIds.has(i.id)) : settledItems,
+    travelGrouping?.groups ?? []
+  )
   const collapsed = dense && !expanded && settledItems.length > 0
 
   return (
@@ -943,21 +997,27 @@ function PlanDaySection({
               </button>
             ) : (
               <>
-                {settledItems.map((item) => (
-                  <div key={item.id} className="stagger-item">
-                    <PlanItemCard
-                      item={item}
-                      place={item.placeId ? placesById.get(item.placeId) : undefined}
-                      onOpen={onOpenItem}
-                      onVote={item.vote ? onVote : undefined}
-                      isVoting={votingId === item.id}
-                      myVoted={item.vote?.myVote.voted}
-                      outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
-                      timeClash={clashedIds.has(item.id)}
-                      dense={dense}
-                    />
-                  </div>
-                ))}
+                {settledEntries.map((entry) =>
+                  entry.kind === 'group' ? (
+                    <div key={entry.group.key} className="stagger-item">
+                      <ConsolidatedTravelRow group={entry.group} usersById={travelUsersById} onOpenMember={onOpenItem} />
+                    </div>
+                  ) : (
+                    <div key={entry.item.id} className="stagger-item">
+                      <PlanItemCard
+                        item={entry.item}
+                        place={entry.item.placeId ? placesById.get(entry.item.placeId) : undefined}
+                        onOpen={onOpenItem}
+                        onVote={entry.item.vote ? onVote : undefined}
+                        isVoting={votingId === entry.item.id}
+                        myVoted={entry.item.vote?.myVote.voted}
+                        outsideTripDates={isOutsideTripDates(entry.item, tripStartDate, tripEndDate)}
+                        timeClash={clashedIds.has(entry.item.id)}
+                        dense={dense}
+                      />
+                    </div>
+                  )
+                )}
                 {dense && settledItems.length > 0 && (
                   <button
                     type="button"

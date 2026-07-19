@@ -19,14 +19,20 @@
 //   - waitlist lifecycle: freed spots -> claim offer to first in line
 //     (feature-detected -- skipped if trip_participants.waitlist_offer_
 //     expires_at doesn't exist yet, it ships in a later feature migration);
-//   - settlements 'suggested'/'marked_paid' older than N days;
-//   - trip_actions (Task D) that are open (not completed) and overdue or
-//     due within 48h -> 'overdue_action', targeting assigned_to if set (skip
-//     if they already completed it via trip_action_completions), else every
-//     active participant without a completion row. Effective due date is
-//     due_date for 'fixed' deadline_kind, trip.start_date for
-//     'before_trip' (skipped when start_date is null). Date math lives in
-//     ./actionDueDate.ts so it's unit-testable without the service client.
+//   - settlements 'suggested'/'marked_paid' older than N days.
+//
+// Action-deadline reminders (Task D, staged ladder -- section 1b below):
+// open trip_actions earn per-user reminders at three stages -- ~7 days
+// before the effective due date ('action_due_7d'), ~1 day before
+// ('action_due_1d'), and once overdue ('overdue_action') -- each fired at
+// most ONCE per (action, user, stage), tracked in trip_action_reminders.
+// Unlike the opt-in chase kinds above these run for EVERY trip: creating an
+// action with a deadline is itself the opt-in. Targeting: assigned_to if
+// set (skip if completed via trip_action_completions), else every active
+// participant without a completion row. Effective due date is due_date for
+// 'fixed' deadline_kind, trip.start_date for 'before_trip' (skipped when
+// start_date is null). Date math lives in ./actionDueDate.ts so it's
+// unit-testable without the service client.
 //
 // T-minus date-intelligence kinds (UX_REDESIGN.md Part 3 "T-minus nudges
 // feed the existing chaser"), all respecting the same chase_settings
@@ -51,19 +57,32 @@
 // end}, max_reminders}). Every send logged to notifications; dedupe_key
 // (kind:entity:user:seq) enforces the caps at the DB level.
 //
-// Email channel: Brevo REST if BREVO_API_KEY is set; otherwise sends are
-// skipped, logged with channel='skipped', and returned as WhatsApp-ready
-// chase_drafts for the blockers board (plan: degrade gracefully).
+// Email channel: Resend if RESEND_API_KEY is set, Brevo if BREVO_API_KEY;
+// otherwise sends are skipped, logged with channel='skipped', and returned
+// as WhatsApp-ready chase_drafts for the blockers board (plan: degrade
+// gracefully). All emails render through the shared "Tim's Trip Planner"
+// template in _shared/emailTemplate.ts -- one digest per user per day.
+//
+// Test entrypoint: POST {"test_digest": {"trip_id", "user_id", "to_email"}}
+// (same cron/service-role auth) composes that user's action digest for one
+// trip and sends it to to_email ONLY -- no notification/reminder state is
+// written, so a test can never fan out or consume a real reminder stage.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { handleCorsPreflight } from '../_shared/cors.ts'
 import { errorResponse, jsonResponse, UnauthorizedError } from '../_shared/errors.ts'
 import { serviceClient } from '../_shared/supabaseClients.ts'
-import { getEmailSender } from '../_shared/emailSender.ts'
-import { effectiveActionDueDate, isActionDueOrOverdue, isActionOverdue } from './actionDueDate.ts'
+import { type EmailSender, getEmailSender } from '../_shared/emailSender.ts'
+import { type DigestActionRow, type DigestTripSection, renderDigestEmail, type StatusChipTone } from '../_shared/emailTemplate.ts'
+import {
+  actionDueChipLabel,
+  actionReminderStage,
+  type ActionReminderStage,
+  effectiveActionDueDate,
+} from './actionDueDate.ts'
 
-const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://chitintim.github.io/trips'
+const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
 
 interface ChaseSettings {
   enabled: boolean
@@ -118,11 +137,45 @@ interface ChaseItem {
     | 't30_no_transport'
     | 't14_missing_arrival'
     | 't1_checkin'
+    | 'action_due_7d'
+    | 'action_due_1d'
     | 'overdue_action'
   entityType: string
   entityId: string
   description: string
   deepLink: string
+  /** Present on staged action-deadline reminders (section 1b): drives the
+   * digest's actions table + the once-per-stage sent-state marking. */
+  actionReminder?: {
+    actionId: string
+    stage: ActionReminderStage
+    title: string
+    deadlineLabel: string
+    chipLabel: string
+    chipTone: StatusChipTone
+  }
+}
+
+/** "Fri 1 Aug" (UTC calendar date); before_trip deadlines say so explicitly. */
+function formatDueDate(dueDateStr: string, deadlineKind: 'fixed' | 'before_trip'): string {
+  const label = new Date(dueDateStr + 'T00:00:00Z').toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  })
+  return deadlineKind === 'before_trip' ? `Trip start (${label})` : label
+}
+
+function stageChipTone(stage: ActionReminderStage | null): StatusChipTone {
+  if (stage === 'overdue') return 'overdue'
+  if (stage === 'd1') return 'due-soon'
+  return 'upcoming'
+}
+
+function stageKind(stage: ActionReminderStage): 'action_due_7d' | 'action_due_1d' | 'overdue_action' {
+  if (stage === 'overdue') return 'overdue_action'
+  return stage === 'd1' ? 'action_due_1d' : 'action_due_7d'
 }
 
 /** hoursAgo helper: ISO string for now - h hours. */
@@ -148,19 +201,56 @@ Deno.serve(async (req) => {
   if (preflight) return preflight
 
   try {
-    // Cron-only: require the service-role key as the bearer token. (The
-    // platform's verify_jwt already rejects unsigned calls; this check
-    // additionally rejects ordinary user JWTs -- no user may trigger a
-    // chase sweep.)
+    // Cron/service-role only -- no ordinary user may trigger a sweep. Two
+    // accepted credentials (the platform's verify_jwt already rejects
+    // unsigned calls before we get here):
+    //  - the service-role key as the bearer token (manual ops), OR
+    //  - an x-cron-secret header matching app_secrets.'auto_chase_cron_secret'.
+    //    The pg_cron job sends the anon key as its bearer (satisfies
+    //    verify_jwt; storing the service-role key in the job body was ruled
+    //    out in 20260718150500_cron_fx_rates_auth_header.sql) plus this
+    //    secret, which it reads from app_secrets at fire time. The secret is
+    //    generated by gen_random_bytes() inside the migration that schedules
+    //    the job, so it lives only in the database -- never in the repo --
+    //    and app_secrets is RLS-locked with anon/authenticated revoked.
     const authHeader = req.headers.get('Authorization') ?? ''
     const token = authHeader.replace(/^Bearer\s+/i, '')
-    if (!token || token !== Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')) {
-      throw new UnauthorizedError('auto-chase is cron/service-role only')
-    }
+    const isServiceRole = !!token && token === Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
 
     const admin = serviceClient()
+
+    if (!isServiceRole) {
+      const cronSecret = req.headers.get('x-cron-secret')
+      let cronOk = false
+      if (cronSecret) {
+        const { data: secretRow } = await admin
+          .from('app_secrets')
+          .select('value')
+          .eq('name', 'auto_chase_cron_secret')
+          .maybeSingle()
+        cronOk = !!secretRow?.value && secretRow.value === cronSecret
+      }
+      if (!cronOk) throw new UnauthorizedError('auto-chase is cron/service-role only')
+    }
+
     const emailSender = getEmailSender()
     const now = new Date()
+
+    // Test entrypoint (see header comment): single-recipient, zero writes.
+    let body: Record<string, unknown> = {}
+    try {
+      body = await req.json()
+    } catch {
+      body = {}
+    }
+    if (body && typeof body === 'object' && body.test_digest) {
+      return await handleTestDigest(
+        admin,
+        emailSender,
+        now,
+        body.test_digest as { trip_id?: string; user_id?: string; to_email?: string }
+      )
+    }
     const todayStartIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString()
 
     const hasWaitlistColumn = await waitlistColumnExists(admin)
@@ -418,50 +508,9 @@ Deno.serve(async (req) => {
         }
       }
 
-      // ---- g. Open trip_actions: overdue, or due within 48h. Effective due
-      // date is due_date for 'fixed', trip.start_date for 'before_trip'
-      // (skipped when start_date is null -- nothing to chase against yet).
-      // Targets: assigned_to if set (skip if they already completed it);
-      // otherwise every active participant without a completion row. ----
-      {
-        const { data: actions } = await admin
-          .from('trip_actions')
-          .select('id, title, notes, assigned_to, deadline_kind, due_date, completed_at, trip_action_completions(user_id)')
-          .eq('trip_id', trip.id)
-          .is('completed_at', null)
-        for (const a of actions ?? []) {
-          const dueDate = effectiveActionDueDate({
-            deadline_kind: a.deadline_kind,
-            due_date: a.due_date,
-            tripStartDate: trip.start_date,
-          })
-          if (!dueDate) continue
-          if (!isActionDueOrOverdue(dueDate, now)) continue
-
-          const overdue = isActionOverdue(dueDate, now)
-          const dueLabel = overdue ? `overdue since ${dueDate}` : `due ${dueDate}`
-          const description = `${overdue ? 'Overdue' : 'Due soon'}: "${a.title}" for "${trip.name}" (${dueLabel})`
-
-          // deno-lint-ignore no-explicit-any
-          const completedBy = new Set((a.trip_action_completions ?? []).map((c: any) => c.user_id))
-          if (a.assigned_to && !participantIds.includes(a.assigned_to)) continue
-          const targets: string[] = a.assigned_to ? [a.assigned_to] : participantIds
-
-          for (const uid of targets) {
-            if (completedBy.has(uid)) continue
-            items.push({
-              tripId: trip.id,
-              tripName: trip.name,
-              userId: uid,
-              kind: 'overdue_action',
-              entityType: 'trip_action',
-              entityId: a.id,
-              description,
-              deepLink: tripLink,
-            })
-          }
-        }
-      }
+      // (Action-deadline reminders moved to section 1b below -- they run
+      // for ALL trips, not just chase-enabled ones, on a staged
+      // once-per-stage ladder instead of this loop's daily re-nag.)
 
       // ---- Date-intelligence T-minus kinds (UX_REDESIGN.md Part 3) ----
       // Shared "days until start" for the trip, used by both t30 and t14.
@@ -563,6 +612,90 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ---- 1b. Action-deadline reminders: staged ladder across ALL trips ----
+    // Unlike the opt-in chase kinds above, deadline reminders run for every
+    // trip -- creating an action with a deadline is itself the opt-in. Each
+    // (action, user, stage) fires at most once: trip_action_reminders rows
+    // (written only after a successful email send) record what went out.
+    // The per-user one-digest-per-day cap, the global email opt-out, and
+    // the notifications log all still apply downstream.
+    {
+      const { data: actionTrips, error: actionTripsError } = await admin
+        .from('trips')
+        .select(
+          'id, name, start_date, chase_settings, trip_actions!inner(id, title, assigned_to, deadline_kind, due_date, completed_at, trip_action_completions(user_id))'
+        )
+        .is('trip_actions.completed_at', null)
+      if (actionTripsError) throw actionTripsError
+
+      for (const trip of actionTrips ?? []) {
+        // Respect configured quiet hours even when the chase engine is off.
+        if (inQuietHours(parseChaseSettings(trip.chase_settings), now)) continue
+        const tripLink = `${APP_BASE_URL}/${trip.id}`
+
+        // deno-lint-ignore no-explicit-any
+        const openActions = (trip.trip_actions ?? []) as any[]
+        const staged = openActions.flatMap((a) => {
+          const dueDate = effectiveActionDueDate({
+            deadline_kind: a.deadline_kind,
+            due_date: a.due_date,
+            tripStartDate: trip.start_date,
+          })
+          if (!dueDate) return []
+          const stage = actionReminderStage(dueDate, now)
+          return stage ? [{ action: a, dueDate, stage }] : []
+        })
+        if (staged.length === 0) continue
+
+        const { data: actionParticipants } = await admin
+          .from('trip_participants')
+          .select('user_id')
+          .eq('trip_id', trip.id)
+          .eq('active', true)
+        const actionParticipantIds = (actionParticipants ?? []).map((p) => p.user_id)
+
+        // Everything already sent for these actions, in one query per trip.
+        const { data: sentRows } = await admin
+          .from('trip_action_reminders')
+          .select('action_id, user_id, stage')
+          .in('action_id', staged.map((s) => s.action.id))
+        const alreadySent = new Set((sentRows ?? []).map((r) => `${r.action_id}:${r.user_id}:${r.stage}`))
+
+        for (const { action: a, dueDate, stage } of staged) {
+          // deno-lint-ignore no-explicit-any
+          const completedBy = new Set((a.trip_action_completions ?? []).map((c: any) => c.user_id))
+          if (a.assigned_to && !actionParticipantIds.includes(a.assigned_to)) continue
+          const targets: string[] = a.assigned_to ? [a.assigned_to] : actionParticipantIds
+
+          const chipLabel = actionDueChipLabel(dueDate, now)
+          const deadlineLabel = formatDueDate(dueDate, a.deadline_kind)
+
+          for (const uid of targets) {
+            if (completedBy.has(uid)) continue
+            if (alreadySent.has(`${a.id}:${uid}:${stage}`)) continue
+            items.push({
+              tripId: trip.id,
+              tripName: trip.name,
+              userId: uid,
+              kind: stageKind(stage),
+              entityType: 'trip_action',
+              entityId: a.id,
+              description: `${chipLabel}: "${a.title}" for "${trip.name}" (${deadlineLabel})`,
+              deepLink: tripLink,
+              actionReminder: {
+                actionId: a.id,
+                stage,
+                title: a.title,
+                deadlineLabel,
+                chipLabel,
+                chipTone: stageChipTone(stage),
+              },
+            })
+          }
+        }
+      }
+    }
+
     // ---- 2. Apply per-item reminder caps (max 3 then escalate) ----
     // Load prior notification counts for all candidate items in one query.
     const escalations: Array<{ trip_id: string; user_id: string; kind: string; entity_id: string; description: string }> = []
@@ -634,13 +767,33 @@ Deno.serve(async (req) => {
       const optedOut = userRow?.email_notifications_enabled === false
       const canEmail = emailSender.available && !optedOut && !!userRow?.email
 
-      // Compose the digest (used for the email AND the WhatsApp-ready draft).
+      // Compose the digest via the shared "Tim's Trip Planner" template:
+      // one section per trip -- deadline'd actions as a table, every other
+      // open loop as a list. (The WhatsApp-ready draft keeps the raw items.)
       const greetingName = userRow?.first_name || userRow?.full_name?.split(' ')[0] || 'there'
-      const lines = userItems.map((i) => `• ${i.description}\n  ${i.deepLink}`)
-      const text = `Hi ${greetingName},\n\nA few things on your trips are waiting on you:\n\n${lines.join('\n\n')}\n\nThanks!\n(You can turn these emails off in your profile settings.)`
-      const subject = userItems.length === 1
-        ? `Action needed: ${userItems[0].tripName}`
-        : `${userItems.length} things waiting on you across your trips`
+      const sectionsByTrip = new Map<string, DigestTripSection>()
+      for (const i of userItems) {
+        let section = sectionsByTrip.get(i.tripId)
+        if (!section) {
+          section = { tripName: i.tripName, tripLink: `${APP_BASE_URL}/${i.tripId}`, actionRows: [], otherLines: [] }
+          sectionsByTrip.set(i.tripId, section)
+        }
+        if (i.actionReminder) {
+          section.actionRows.push({
+            title: i.actionReminder.title,
+            deadlineLabel: i.actionReminder.deadlineLabel,
+            chipLabel: i.actionReminder.chipLabel,
+            chipTone: i.actionReminder.chipTone,
+          })
+        } else {
+          section.otherLines.push({ description: i.description, link: i.deepLink })
+        }
+      }
+      const rendered = renderDigestEmail({
+        greetingName,
+        sections: [...sectionsByTrip.values()],
+        appUrl: APP_BASE_URL,
+      })
 
       let channel: string
       if (canEmail) {
@@ -648,8 +801,9 @@ Deno.serve(async (req) => {
           await emailSender.send({
             toEmail: userRow!.email,
             toName: userRow?.full_name ?? undefined,
-            subject,
-            text,
+            subject: rendered.subject,
+            text: rendered.text,
+            html: rendered.html,
           })
           channel = 'email'
           emailsSent++
@@ -660,6 +814,28 @@ Deno.serve(async (req) => {
       } else {
         channel = 'skipped'
         if (optedOut) usersSkippedOptOut++
+      }
+
+      // Mark action-reminder stages as sent -- ONLY on a real email send, so
+      // a skipped/failed digest retries on the next daily run instead of
+      // silently burning the once-per-stage budget.
+      if (channel === 'email') {
+        const reminderRows = userItems
+          .filter((i) => i.actionReminder)
+          .map((i) => ({
+            action_id: i.actionReminder!.actionId,
+            trip_id: i.tripId,
+            user_id: userId,
+            stage: i.actionReminder!.stage,
+          }))
+        if (reminderRows.length > 0) {
+          const { error: reminderError } = await admin
+            .from('trip_action_reminders')
+            .upsert(reminderRows, { onConflict: 'action_id,user_id,stage', ignoreDuplicates: true })
+          if (reminderError) {
+            console.error('[auto-chase] trip_action_reminders upsert failed:', reminderError)
+          }
+        }
       }
 
       if (channel === 'skipped') {
@@ -714,3 +890,107 @@ Deno.serve(async (req) => {
     return errorResponse(error)
   }
 })
+
+/**
+ * Test entrypoint: compose ONE user's action digest for ONE trip and send it
+ * to a single explicitly-supplied address. Guarded so it cannot fan out:
+ *  - same cron/service-role auth as the sweep (checked before we get here);
+ *  - sends to exactly `to_email` -- never to participants' real addresses;
+ *  - writes nothing: no notifications rows, no trip_action_reminders rows,
+ *    so the real once-per-stage ladder is untouched by testing.
+ * Includes EVERY open action relevant to the user (assigned to them, or
+ * whole-group without their completion) regardless of reminder window, so
+ * the email demonstrates the full table with live status chips.
+ */
+async function handleTestDigest(
+  admin: SupabaseClient,
+  emailSender: EmailSender,
+  now: Date,
+  params: { trip_id?: string; user_id?: string; to_email?: string }
+): Promise<Response> {
+  const { trip_id, user_id, to_email } = params
+  if (!trip_id || !user_id || !to_email) {
+    return jsonResponse({ success: false, error: 'test_digest requires trip_id, user_id and to_email' }, 400)
+  }
+
+  const { data: trip } = await admin.from('trips').select('id, name, start_date').eq('id', trip_id).single()
+  if (!trip) return jsonResponse({ success: false, error: 'trip not found' }, 404)
+
+  const { data: userRow } = await admin.from('users').select('first_name, full_name').eq('id', user_id).single()
+  const { data: participants } = await admin
+    .from('trip_participants')
+    .select('user_id')
+    .eq('trip_id', trip_id)
+    .eq('active', true)
+  if (!(participants ?? []).some((p) => p.user_id === user_id)) {
+    return jsonResponse({ success: false, error: 'user is not an active participant of the trip' }, 400)
+  }
+
+  const { data: actions } = await admin
+    .from('trip_actions')
+    .select('id, title, assigned_to, deadline_kind, due_date, trip_action_completions(user_id)')
+    .eq('trip_id', trip_id)
+    .is('completed_at', null)
+
+  const rows: Array<{ dueDate: string; row: DigestActionRow }> = []
+  for (const a of actions ?? []) {
+    if (a.assigned_to && a.assigned_to !== user_id) continue
+    // deno-lint-ignore no-explicit-any
+    const completedBy = new Set((a.trip_action_completions ?? []).map((c: any) => c.user_id))
+    if (completedBy.has(user_id)) continue
+    const dueDate = effectiveActionDueDate({
+      deadline_kind: a.deadline_kind,
+      due_date: a.due_date,
+      tripStartDate: trip.start_date,
+    })
+    if (!dueDate) continue
+    rows.push({
+      dueDate,
+      row: {
+        title: a.title,
+        deadlineLabel: formatDueDate(dueDate, a.deadline_kind),
+        chipLabel: actionDueChipLabel(dueDate, now),
+        chipTone: stageChipTone(actionReminderStage(dueDate, now)),
+      },
+    })
+  }
+  rows.sort((x, y) => x.dueDate.localeCompare(y.dueDate))
+
+  const rendered = renderDigestEmail({
+    greetingName: userRow?.first_name || userRow?.full_name?.split(' ')[0] || 'there',
+    sections: [
+      {
+        tripName: trip.name,
+        tripLink: `${APP_BASE_URL}/${trip.id}`,
+        actionRows: rows.map((r) => r.row),
+        otherLines: [],
+      },
+    ],
+    appUrl: APP_BASE_URL,
+  })
+
+  if (!emailSender.available) {
+    return jsonResponse({
+      success: false,
+      error: 'no email provider configured (RESEND_API_KEY / BREVO_API_KEY unset)',
+      subject: rendered.subject,
+      text_preview: rendered.text,
+    })
+  }
+
+  const receipt = await emailSender.send({
+    toEmail: to_email,
+    subject: rendered.subject,
+    text: rendered.text,
+    html: rendered.html,
+  })
+
+  return jsonResponse({
+    success: true,
+    test: true,
+    sent_to: to_email,
+    subject: rendered.subject,
+    action_count: rows.length,
+    receipt,
+  })
+}

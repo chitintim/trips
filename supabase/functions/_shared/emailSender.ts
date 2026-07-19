@@ -16,11 +16,18 @@ export interface EmailMessage {
   html?: string
 }
 
+/** Provider acknowledgement returned by send() -- proves the API accepted the message. */
+export interface EmailSendReceipt {
+  provider: string
+  /** Provider-assigned message id, when the API returns one. */
+  providerMessageId: string | null
+}
+
 export interface EmailSender {
   /** Human-readable channel name recorded in notifications.channel. */
   readonly channel: string
   readonly available: boolean
-  send(message: EmailMessage): Promise<void>
+  send(message: EmailMessage): Promise<EmailSendReceipt>
 }
 
 class BrevoEmailSender implements EmailSender {
@@ -33,10 +40,10 @@ class BrevoEmailSender implements EmailSender {
   constructor(apiKey: string) {
     this.#apiKey = apiKey
     this.#senderEmail = Deno.env.get('BREVO_SENDER_EMAIL') ?? 'tim.chiutin.lam@gmail.com'
-    this.#senderName = Deno.env.get('BREVO_SENDER_NAME') ?? 'Trips'
+    this.#senderName = Deno.env.get('BREVO_SENDER_NAME') ?? "Tim's Trip Planner"
   }
 
-  async send(message: EmailMessage): Promise<void> {
+  async send(message: EmailMessage): Promise<EmailSendReceipt> {
     const response = await fetch('https://api.brevo.com/v3/smtp/email', {
       method: 'POST',
       headers: {
@@ -56,6 +63,8 @@ class BrevoEmailSender implements EmailSender {
       const body = await response.text()
       throw new Error(`Brevo send failed (${response.status}): ${body}`)
     }
+    const body = (await response.json().catch(() => ({}))) as { messageId?: string }
+    return { provider: 'brevo', providerMessageId: body.messageId ?? null }
   }
 }
 
@@ -68,10 +77,10 @@ class ResendEmailSender implements EmailSender {
   constructor(apiKey: string) {
     this.#apiKey = apiKey
     // Tim's Resend account has mail.fontem.ai verified.
-    this.#from = Deno.env.get('RESEND_FROM') ?? 'Trips <trips@mail.fontem.ai>'
+    this.#from = Deno.env.get('RESEND_FROM') ?? "Tim's Trip Planner <trips@mail.fontem.ai>"
   }
 
-  async send(message: EmailMessage): Promise<void> {
+  async send(message: EmailMessage): Promise<EmailSendReceipt> {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
@@ -90,6 +99,8 @@ class ResendEmailSender implements EmailSender {
       const body = await response.text()
       throw new Error(`Resend send failed (${response.status}): ${body}`)
     }
+    const body = (await response.json().catch(() => ({}))) as { id?: string }
+    return { provider: 'resend', providerMessageId: body.id ?? null }
   }
 }
 
@@ -97,8 +108,8 @@ class NullEmailSender implements EmailSender {
   readonly channel = 'skipped'
   readonly available = false
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature required by EmailSender interface
-  send(_message: EmailMessage): Promise<void> {
-    return Promise.resolve()
+  send(_message: EmailMessage): Promise<EmailSendReceipt> {
+    return Promise.resolve({ provider: 'none', providerMessageId: null })
   }
 }
 

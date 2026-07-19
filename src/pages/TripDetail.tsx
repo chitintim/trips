@@ -23,6 +23,7 @@ import { planTabConfig, AddToPlanSheet } from '../features/plan'
 import { peopleTabConfig, StatusModal, TravelDetailsSheet } from '../features/people'
 import { OPEN_QUICK_CAPTURE_EVENT } from '../features/timeline'
 import { OrganizerConsole } from '../features/organizer'
+import { ActionsSheet } from '../features/actions'
 import { retroConfig } from '../features/retrospective'
 import { chatEntryConfig, LazyChatSheet } from '../features/chat'
 import { MoneySpace, QuickCaptureSheet } from '../features/expenses'
@@ -60,7 +61,10 @@ const LEGACY_TAB_TO_SPACE: Record<string, SpaceId> = {
   'my-spending': 'money',
   'settle-up': 'money',
   people: 'people',
-  checklist: 'people',
+  // The standalone Checklist sub-tab is gone (v2.2: it's now the "Bring
+  // list" segment of the Actions sheet) — old links land on Today rather
+  // than a People tab strip position that no longer exists.
+  checklist: 'today',
 }
 
 export function TripDetail() {
@@ -104,6 +108,7 @@ export function TripDetail() {
   const [chatOpen, setChatOpen] = useState(false)
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [recapOpen, setRecapOpen] = useState(false)
+  const [actionsOpen, setActionsOpen] = useState(false)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const [rsvpOpen, setRsvpOpen] = useState(false)
   const [travelDetailsOpen, setTravelDetailsOpen] = useState(false)
@@ -419,6 +424,7 @@ export function TripDetail() {
                 onOpenRecap={() => setRecapOpen(true)}
                 onQuickCapture={openQuickCapture}
                 onInvite={() => setAddParticipantModalOpen(true)}
+                onOpenActions={() => setActionsOpen(true)}
               />
             </ErrorBoundary>
           )}
@@ -471,6 +477,12 @@ export function TripDetail() {
             </Suspense>
           </ErrorBoundary>
         </Modal>
+      )}
+
+      {/* Actions sheet — trip to-dos + the packing/bring list, launched from
+          Today's ActionsSection card ("View all" / "Add an action"). */}
+      {actionsOpen && (
+        <ActionsSheet isOpen={actionsOpen} onClose={() => setActionsOpen(false)} tripId={trip.id} isOrganizer={isOrganizer} />
       )}
 
       {/* FAB targets */}

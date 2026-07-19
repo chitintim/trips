@@ -11,6 +11,10 @@ export interface ChecklistTabProps {
   tripId: string
   /** Lets the organizer mark/unmark on behalf of someone else's assigned item, de-emphasized vs. the assignee's own control. */
   isOrganizer?: boolean
+  /** Empty-state title override — lets callers (e.g. ActionsSheet's Bring list segment) rephrase for their context. */
+  emptyStateTitle?: string
+  /** Empty-state description override, paired with emptyStateTitle. */
+  emptyStateDescription?: string
 }
 
 interface AddItemFormValues {
@@ -29,7 +33,12 @@ const EMPTY_ADD_ITEM_VALUES: AddItemFormValues = { title: '', assignee: '' }
  * everyone else, with a de-emphasized organizer-override link). Unassigned
  * items keep the plain shared checkbox.
  */
-export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps) {
+export function ChecklistTab({
+  tripId,
+  isOrganizer = false,
+  emptyStateTitle = 'Nothing on the list yet',
+  emptyStateDescription = "Shared things the group needs — speaker, board games, first-aid kit — and who's bringing them.",
+}: ChecklistTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const { data: items, isLoading, isError, refetch, isRefetching } = useChecklists(tripId)
@@ -161,11 +170,7 @@ export function ChecklistTab({ tripId, isOrganizer = false }: ChecklistTabProps)
       </Card>
 
       {(items ?? []).length === 0 ? (
-        <EmptyState
-          icon="🎒"
-          title="Nothing on the list yet"
-          description="Shared things the group needs — speaker, board games, first-aid kit — and who's bringing them."
-        />
+        <EmptyState icon="🎒" title={emptyStateTitle} description={emptyStateDescription} />
       ) : (
         <>
           <ul className="space-y-1.5">

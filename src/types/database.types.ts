@@ -1404,6 +1404,120 @@ export type Database = {
           },
         ]
       }
+      trip_action_completions: {
+        Row: {
+          action_id: string
+          completed_at: string
+          trip_id: string
+          user_id: string
+        }
+        Insert: {
+          action_id: string
+          completed_at?: string
+          trip_id: string
+          user_id: string
+        }
+        Update: {
+          action_id?: string
+          completed_at?: string
+          trip_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_action_completions_action_id_fkey"
+            columns: ["action_id"]
+            isOneToOne: false
+            referencedRelation: "trip_actions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_action_completions_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_action_completions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trip_actions: {
+        Row: {
+          assigned_to: string | null
+          completed_at: string | null
+          completed_by: string | null
+          created_at: string
+          created_by: string
+          deadline_kind: string
+          due_date: string | null
+          id: string
+          notes: string | null
+          title: string
+          trip_id: string
+        }
+        Insert: {
+          assigned_to?: string | null
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by: string
+          deadline_kind?: string
+          due_date?: string | null
+          id?: string
+          notes?: string | null
+          title: string
+          trip_id: string
+        }
+        Update: {
+          assigned_to?: string | null
+          completed_at?: string | null
+          completed_by?: string | null
+          created_at?: string
+          created_by?: string
+          deadline_kind?: string
+          due_date?: string | null
+          id?: string
+          notes?: string | null
+          title?: string
+          trip_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_actions_assigned_to_fkey"
+            columns: ["assigned_to"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_actions_completed_by_fkey"
+            columns: ["completed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_actions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_actions_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       trip_chat_messages: {
         Row: {
           actions_executed: Json | null

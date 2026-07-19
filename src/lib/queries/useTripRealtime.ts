@@ -37,6 +37,8 @@ const TABLE_TO_KEY: Record<string, (tripId: string) => readonly unknown[]> = {
   trip_checklists: (id) => queryKeys.checklists(id),
   notifications: (id) => queryKeys.notifications(id),
   trip_chat_messages: (id) => queryKeys.chatMessages(id),
+  trip_actions: (id) => queryKeys.actions(id),
+  trip_action_completions: (id) => queryKeys.actions(id),
 }
 
 // Tables filterable directly by trip_id in the postgres_changes subscription.
@@ -57,6 +59,8 @@ const DIRECT_TRIP_TABLES = [
   'notifications',
   'trip_chat_messages',
   'reactions',
+  'trip_actions',
+  'trip_action_completions',
 ]
 
 // Tables with no trip_id column — scoped to the trip only via a join

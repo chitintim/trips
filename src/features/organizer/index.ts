@@ -7,6 +7,7 @@
 export { OrganizerConsole } from './components/OrganizerConsole'
 export type { OrganizerConsoleProps } from './components/OrganizerConsole'
 export { BlockersBoard } from './components/BlockersBoard'
+export { OrganizerActionsPanel } from './components/OrganizerActionsPanel'
 export { BookingsTracker } from './components/BookingsTracker'
 export { BookingEditorSheet } from './components/BookingEditorSheet'
 export type { BookingEditorSheetProps } from './components/BookingEditorSheet'

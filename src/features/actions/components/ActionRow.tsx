@@ -1,4 +1,4 @@
-import { Badge, Button, SelectionAvatars, UserAvatar } from '../../../components/ui'
+import { Badge, Button, LinkifiedText, SelectionAvatars, UserAvatar } from '../../../components/ui'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
 import { countdownBadgeVariant, countdownLabel, isActionCompleteForUser, isGroupComplete } from '../lib/actionStatus'
@@ -72,7 +72,9 @@ export function ActionRow({ action, trip, participants, currentUserId, isOrganiz
             {countdownLabel(action, trip)}
           </Badge>
         </div>
-        {action.notes && <p className="text-xs text-[var(--text-secondary)]">{action.notes}</p>}
+        {action.notes && (
+          <LinkifiedText as="p" text={action.notes} className="min-w-0 break-words text-xs text-[var(--text-secondary)]" />
+        )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
           {isGroupAction ? (
             <span className="flex items-center gap-1.5">

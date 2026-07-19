@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Button, Card, EmptyState, Input, Select, Skeleton, UserAvatar, useToast } from '../../../components/ui'
+import { Button, Card, EmptyState, Input, LinkifiedText, Select, Skeleton, UserAvatar, useToast } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
 import { useChecklists, useCreateChecklistItem, useToggleChecklistItem, useDeleteChecklistItem } from '../../../lib/queries/useChecklists'
@@ -213,13 +213,12 @@ export function ChecklistTab({
                       {item.done ? '✓' : '○'}
                     </span>
                   )}
-                  <span
-                    className={`min-w-0 flex-1 text-sm ${
+                  <LinkifiedText
+                    text={item.title}
+                    className={`min-w-0 flex-1 break-words text-sm ${
                       item.done ? 'text-[var(--text-muted)] line-through' : 'text-[var(--text-primary)]'
                     }`}
-                  >
-                    {item.title}
-                  </span>
+                  />
                   {isAssigned && !isAssignee && assigneeInfo && (
                     <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-muted)]">
                       <UserAvatar avatarData={assigneeInfo} size="xs" />

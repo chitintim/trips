@@ -27,6 +27,8 @@ export { ProgressBar } from './ProgressBar'
 export { StatCard } from './StatCard'
 export { Markdown } from './Markdown'
 export type { MarkdownProps } from './Markdown'
+export { LinkifiedText } from './LinkifiedText'
+export type { LinkifiedTextProps } from './LinkifiedText'
 
 // Social Components
 export { SelectionAvatars } from './SelectionAvatars'

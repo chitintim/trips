@@ -18,6 +18,7 @@ import { queryKeys } from '../lib/queries/queryKeys'
 import { getTripStatusLabel } from '../lib/tripStatus'
 import { effectiveTripStage } from '../lib/tripStage'
 import { daysUntil } from '../lib/dates'
+import { resolveOpenParam } from './tripDeepLinks'
 
 import { todayTabConfig } from '../features/today'
 import { planTabConfig, AddToPlanSheet } from '../features/plan'
@@ -132,18 +133,33 @@ export function TripDetail() {
   // console/recap sheets are directly linkable too. Money's old sub-tab ids
   // ('my-spending', 'settle-up') additionally open the matching pushed
   // screen inside MoneySpace instead of just landing on the feed.
+  //
+  // ?open= is a sibling for links that need to land on a specific SHEET
+  // rather than just a space (e.g. an action note's "fill in your flights"
+  // link opening travel details directly) — see tripDeepLinks.ts.
   useEffect(() => {
     const tabParam = searchParams.get('tab')
-    if (!tabParam) return
+    const openParam = searchParams.get('open')
+    if (!tabParam && !openParam) return
+
     if (tabParam === 'organizer' || tabParam === 'console') setConsoleOpen(true)
     else if (tabParam === 'retro') setRecapOpen(true)
-    else if (LEGACY_TAB_TO_SPACE[tabParam]) {
+    else if (tabParam && LEGACY_TAB_TO_SPACE[tabParam]) {
       setActiveSpace(LEGACY_TAB_TO_SPACE[tabParam])
       if (tabParam === 'my-spending' || tabParam === 'settle-up') {
         setMoneyInitialScreen((prev) => ({ screen: tabParam, nonce: prev.nonce + 1 }))
       }
     }
-    searchParams.delete('tab')
+
+    const openTarget = resolveOpenParam(openParam)
+    if (openTarget?.kind === 'travel-details') setTravelDetailsOpen(true)
+    else if (openTarget?.kind === 'actions') {
+      setActionsInitialSegment(openTarget.segment)
+      setActionsOpen(true)
+    }
+
+    if (tabParam) searchParams.delete('tab')
+    if (openParam) searchParams.delete('open')
     setSearchParams(searchParams, { replace: true })
   }, [searchParams, setSearchParams])
 

@@ -2,12 +2,12 @@ import { useMemo, useState } from 'react'
 import { Badge, Button, Deadline, EmptyState, Skeleton } from '../../../components/ui'
 import { NothingToDecide, ErrorState } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
-import { useSections, useVotes } from '../../../lib/queries/usePlanning'
+import { useSections, useVotes, useToggleVote } from '../../../lib/queries/usePlanning'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcomePanel'
 import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
-import { votingInstruction, type VotingMethod } from '../../decisions/lib/voting'
+import { replaceableSiblingVoteIds, votingInstruction, type VotingMethod } from '../../decisions/lib/voting'
 import { computeQuestionState, formatEntryCardLabel, type QuestionState } from '../lib/responseState'
 import { AnswerFlow } from './AnswerFlow'
 import { OrderFormSheet } from './OrderFormSheet'
@@ -298,16 +298,97 @@ function QuestionCard({
           </div>
         )
       ) : (
-        <DecisionOutcomePanel
-          tripId={trip.id}
-          section={section}
-          votes={votes}
-          participants={participants}
-          isOrganizer={isOrganizer}
-          events={events}
-          onScheduleOption={onScheduleOption}
-        />
+        <>
+          {/* Fix ("voting in the Plan section has no obvious button"): the
+              Decide lens previously showed no vote control at all for a
+              standard poll question — DecisionOutcomePanel's open-section
+              branch is a status line + organizer close button, not a way to
+              cast or change a vote. This mirrors PlanItemCard's inline
+              Vote/Approve/Rank button and useToggleVote, so casting/changing
+              a vote works identically everywhere it appears. */}
+          {!isClosed && <VoteOptionsList trip={trip} section={section} votes={votes} method={method} />}
+          <DecisionOutcomePanel
+            tripId={trip.id}
+            section={section}
+            votes={votes}
+            participants={participants}
+            isOrganizer={isOrganizer}
+            events={events}
+            onScheduleOption={onScheduleOption}
+          />
+        </>
       )}
+    </div>
+  )
+}
+
+interface VoteOptionsListProps {
+  trip: Trip
+  section: SectionWithOptions
+  votes: NonNullable<ReturnType<typeof useVotes>['data']>
+  method: VotingMethod
+}
+
+/**
+ * Per-option Vote/Approve/Rank control for an OPEN group-vote question,
+ * reusing PlanItemCard's button copy ("Vote"/"Approve"/"Rank" ->
+ * "✓ Voted") and useToggleVote's radio-replace semantics — this is the
+ * lens's only always-present way to cast AND change a vote (the "Start →"
+ * entry card only appears while something still needs the viewer). Voter
+ * identity for OTHERS stays behind DecisionOutcomePanel's own
+ * hide_votes_until_close-gated leader display; this list only ever shows
+ * the viewer their OWN vote state, so it never needs that gate itself.
+ */
+function VoteOptionsList({ trip, section, votes, method }: VoteOptionsListProps) {
+  const { user } = useAuth()
+  const toggleVote = useToggleVote(trip.id)
+  const [votingOptionId, setVotingOptionId] = useState<string | null>(null)
+  const activeOptions = section.options.filter((o) => o.status !== 'cancelled')
+  const optionIds = activeOptions.map((o) => o.id)
+
+  const handleVote = (optionId: string, locked: boolean | null | undefined) => {
+    if (!user || locked) return
+    const myVote = votes.find((v) => v.option_id === optionId && v.user_id === user.id)
+    setVotingOptionId(optionId)
+    if (myVote) {
+      toggleVote.mutate({ optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onSettled: () => setVotingOptionId(null) })
+    } else {
+      const replaceVoteIds = replaceableSiblingVoteIds(optionIds, votes, user.id, optionId, method)
+      const optionTitle = activeOptions.find((o) => o.id === optionId)?.title
+      toggleVote.mutate(
+        { optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle },
+        { onSettled: () => setVotingOptionId(null) }
+      )
+    }
+  }
+
+  return (
+    <div role={method === 'single' ? 'radiogroup' : 'group'} aria-label={votingInstruction(method)} className="space-y-1.5">
+      {activeOptions.map((option) => {
+        const myVote = votes.find((v) => v.option_id === option.id && v.user_id === user?.id)
+        return (
+          <div
+            key={option.id}
+            className={`min-w-0 flex items-center justify-between gap-2 rounded-[var(--radius-md)] border px-2.5 py-1.5 transition-colors ${
+              myVote ? 'border-accent-400 bg-accent-50 dark:bg-accent-950/30' : 'border-[var(--border-subtle)]'
+            }`}
+          >
+            <p className="min-w-0 flex-1 break-words text-sm text-[var(--text-primary)]">{option.title}</p>
+            <Button
+              variant={myVote ? 'primary' : 'secondary'}
+              size="sm"
+              isLoading={votingOptionId === option.id}
+              disabled={!!option.locked}
+              onClick={() => handleVote(option.id, option.locked)}
+              className="shrink-0"
+              role={method === 'single' ? 'radio' : method === 'approval' ? 'checkbox' : undefined}
+              aria-checked={method === 'ranked' ? undefined : !!myVote}
+            >
+              {myVote ? '✓ Voted' : method === 'approval' ? 'Approve' : method === 'ranked' ? 'Rank' : 'Vote'}
+            </Button>
+          </div>
+        )
+      })}
     </div>
   )
 }

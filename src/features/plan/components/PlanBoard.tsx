@@ -337,7 +337,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
         )
       : []
     toggleVote.mutate(
-      { optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds },
+      { optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title },
       { onSettled: () => setVotingId(null) }
     )
   }

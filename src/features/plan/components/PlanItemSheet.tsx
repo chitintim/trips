@@ -130,7 +130,7 @@ export function PlanItemSheet({
             item.vote?.votingMethod ?? 'single'
           )
         : []
-      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds })
+      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title })
     }
   }
 

@@ -316,7 +316,16 @@ export function useToggleVote(tripId: string) {
   const logActivity = useTripActivityLog(tripId)
   return useOptimisticMutation<
     void,
-    { optionId: string; userId: string; action: 'add' | 'remove'; voteId?: string; rank?: number | null; replaceVoteIds?: string[] },
+    {
+      optionId: string
+      userId: string
+      action: 'add' | 'remove'
+      voteId?: string
+      rank?: number | null
+      replaceVoteIds?: string[]
+      /** Option title, threaded through to the activity feed entry (`voted on "X"`) — optional/defensive so a missing title can never block the vote itself. */
+      optionTitle?: string
+    },
     OptionVote[]
   >({
     mutationFn: async ({ optionId, userId, action, voteId, rank, replaceVoteIds }) => {
@@ -348,7 +357,7 @@ export function useToggleVote(tripId: string) {
     options: {
       onSuccess: (_data, vars) => {
         if (vars.action === 'add') {
-          logActivity({ verb: 'vote_cast', entity: { type: 'option', id: vars.optionId } })
+          logActivity({ verb: 'vote_cast', entity: { type: 'option', id: vars.optionId, label: vars.optionTitle } })
         }
       },
     },

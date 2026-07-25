@@ -16,12 +16,16 @@ export interface ActionsSectionProps {
  * Today-tab card: up to 3 most-urgent OPEN actions relevant to the current
  * user — assigned to them directly, or a whole-group action they haven't
  * confirmed yet — overdue first. Mirrors YourTurnStack's card idiom.
- * Renders nothing when there's nothing relevant and the user isn't an
- * organizer (no reason to show an empty actions card to a participant);
- * an organizer instead gets a slim "Add an action" affordance so the
- * feature stays discoverable even before anything's been created.
+ *
+ * `ActionsSection` is the ONLY entry point into `ActionsSheet` (no
+ * bottom-nav slot) — it used to return null for non-organizers whenever
+ * nothing was open for them, which made the actions/bring list completely
+ * unreachable for a participant with a clean plate. Every participant now
+ * always gets a slim, visually quiet card that still opens the sheet: an
+ * empty-state row when nothing's open trip-wide, "You're all caught up"
+ * when something's open for someone else, or the full top-3 list.
  */
-export function ActionsSection({ tripId, isOrganizer, onOpenActions }: ActionsSectionProps) {
+export function ActionsSection({ tripId, onOpenActions }: ActionsSectionProps) {
   const { user } = useAuth()
   const { data: trip } = useTrip(tripId)
   const { data: actions } = useActions(tripId)
@@ -42,14 +46,19 @@ export function ActionsSection({ tripId, isOrganizer, onOpenActions }: ActionsSe
   const topThree = relevant.slice(0, 3)
 
   if (topThree.length === 0) {
-    if (!isOrganizer) return null
+    // Two quiet flavors of the same slim entry-point row, neither gated by
+    // isOrganizer: a genuinely empty trip still invites creating the first
+    // action (any participant can, per ActionsSheet's un-gated "+ New
+    // action"); a trip with actions open for OTHER people reads as "caught
+    // up" rather than falsely implying nothing exists yet.
+    const hasAnyActions = (actions || []).length > 0
     return (
       <button
         onClick={onOpenActions}
         className="w-full text-left rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-4 py-2.5 flex items-center justify-between gap-3 hover:border-[var(--border-default)] transition-colors"
       >
-        <span className="text-sm text-[var(--text-primary)]">✅ Add an action</span>
-        <span className="text-sm text-[var(--text-muted)]">Actions →</span>
+        <span className="text-sm text-[var(--text-primary)]">{hasAnyActions ? "✅ You're all caught up" : '✅ Add an action'}</span>
+        <span className="text-sm text-[var(--text-muted)]">{hasAnyActions ? 'View all →' : 'Actions →'}</span>
       </button>
     )
   }

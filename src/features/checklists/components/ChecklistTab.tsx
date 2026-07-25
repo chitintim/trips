@@ -2,7 +2,14 @@ import { useMemo, useState } from 'react'
 import { Button, Card, EmptyState, Input, LinkifiedText, Select, Skeleton, UserAvatar, useToast } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
-import { useChecklists, useCreateChecklistItem, useToggleChecklistItem, useDeleteChecklistItem } from '../../../lib/queries/useChecklists'
+import {
+  useChecklists,
+  useCreateChecklistItem,
+  useToggleChecklistItem,
+  useDeleteChecklistItem,
+  useChecklistTogglePendingIds,
+  shouldLogChecklistCompletion,
+} from '../../../lib/queries/useChecklists'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
@@ -45,6 +52,7 @@ export function ChecklistTab({
   const { data: participants } = useParticipants(tripId)
   const createItem = useCreateChecklistItem(tripId)
   const toggleItem = useToggleChecklistItem(tripId)
+  const pendingToggleIds = useChecklistTogglePendingIds(tripId)
   const deleteItem = useDeleteChecklistItem(tripId)
   const logActivity = useTripActivityLog(tripId)
 
@@ -101,12 +109,18 @@ export function ChecklistTab({
   }
 
   const handleToggle = (id: string, done: boolean, itemTitle: string) => {
+    // Belt-and-braces: the checkbox/button is disabled while this item's
+    // toggle is in flight (see pendingToggleIds below), but guard here too
+    // in case a caller ever fires handleToggle programmatically.
+    if (pendingToggleIds.has(id)) return
     toggleItem.mutate(
       { id, done, doneBy: user?.id ?? null },
       {
         onError: (err) => showToast({ type: 'error', message: 'Could not update item', description: (err as Error).message }),
         onSuccess: () => {
-          if (done) logActivity({ verb: 'checklist_completed', entity: { type: 'checklist_item', id, label: itemTitle } })
+          if (done && shouldLogChecklistCompletion(tripId, id, Date.now())) {
+            logActivity({ verb: 'checklist_completed', entity: { type: 'checklist_item', id, label: itemTitle } })
+          }
         },
       }
     )
@@ -180,6 +194,10 @@ export function ChecklistTab({
               const isAssigned = !!item.assigned_to
               const isAssignee = isAssigned && item.assigned_to === user?.id
               const canOverride = isAssigned && !isAssignee && isOrganizer
+              // Scoped to THIS row only (Map lookup by item id) -- other
+              // rows stay fully interactive while one item's toggle is
+              // in flight, guarding only against a double-tap on itself.
+              const isToggling = pendingToggleIds.has(item.id)
               return (
                 <li
                   key={item.id}
@@ -190,14 +208,16 @@ export function ChecklistTab({
                       type="checkbox"
                       checked={item.done}
                       onChange={(e) => handleToggle(item.id, e.target.checked, item.title)}
-                      className="h-5 w-5 shrink-0 accent-accent-600 cursor-pointer"
+                      disabled={isToggling}
+                      className="h-5 w-5 shrink-0 accent-accent-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-60"
                       aria-label={`Mark "${item.title}" ${item.done ? 'not done' : 'done'}`}
                     />
                   ) : isAssignee ? (
                     <button
                       type="button"
                       onClick={() => handleToggle(item.id, !item.done, item.title)}
-                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                      disabled={isToggling}
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                         item.done
                           ? 'bg-success-100 text-success-800 dark:bg-success-900 dark:text-success-300'
                           : 'bg-accent-600 text-white hover:bg-accent-700'
@@ -237,7 +257,8 @@ export function ChecklistTab({
                     <button
                       type="button"
                       onClick={() => handleToggle(item.id, !item.done, item.title)}
-                      className="shrink-0 text-[10px] text-[var(--text-muted)] underline opacity-0 transition-opacity hover:text-[var(--text-secondary)] group-hover:opacity-100 focus:opacity-100"
+                      disabled={isToggling}
+                      className="shrink-0 text-[10px] text-[var(--text-muted)] underline opacity-0 transition-opacity hover:text-[var(--text-secondary)] group-hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-60"
                       title="Organizer override"
                     >
                       {item.done ? 'Unmark' : 'Mark for them'}

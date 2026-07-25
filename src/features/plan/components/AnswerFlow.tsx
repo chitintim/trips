@@ -194,7 +194,8 @@ function VoteStep({
       // Radio semantics for single-choice polls: a new choice replaces any
       // vote I already have on a sibling option (see useToggleVote).
       const replaceVoteIds = replaceableSiblingVoteIds(optionIds, sectionVotes, user.id, optionId, votingMethod)
-      toggleVote.mutate({ optionId, userId: user.id, action: 'add', replaceVoteIds }, { onSettled: () => setVotingOptionId(null) })
+      const optionTitle = section.options.find((o) => o.id === optionId)?.title
+      toggleVote.mutate({ optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle }, { onSettled: () => setVotingOptionId(null) })
     }
   }
 

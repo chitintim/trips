@@ -2,7 +2,9 @@ import { Badge, Button, Deadline, SelectionAvatars } from '../../../components/u
 import { PlaceChip } from '../../places/components/PlaceChip'
 import { CATEGORY_CONFIG, formatTimeRange } from '../../timeline/lib/categoryConfig'
 import { formatMoney } from '../../decisions/lib/costImpact'
+import { areVotesVisible } from '../../decisions/lib/voting'
 import type { PlanItem } from '../lib/planItems'
+import type { OptionVoteWithUser } from '../../../lib/queries/usePlanning'
 import type { Tables } from '../../../types/database.types'
 
 /** "Chosen by Alex & Sarah" / "Chosen by Alex, Sarah +3" — a compact summary of who committed to this option (planItems.ts rule 7's `selections`), used for both legacy pre-v3 picks and any new-era option that happens to carry selections. */
@@ -27,6 +29,30 @@ function toAvatarSelections(selections: PlanItem['selections']) {
   }))
 }
 
+/** "Alex & Sarah voted" / "Alex, Sarah +3 voted" — same compact-summary shape as formatChosenBy above, but for `option_votes` rather than `selections`, so the two mechanisms read as clearly distinct affordances when a card happens to carry both. */
+function formatVotedBy(voters: OptionVoteWithUser[]): string {
+  const names = voters.map((v) => v.user?.full_name || v.user?.email || 'Someone')
+  if (names.length <= 2) return `${names.join(' & ')} voted`
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2} voted`
+}
+
+function toAvatarVotes(voters: OptionVoteWithUser[]) {
+  return voters
+    .filter((v) => v.user)
+    .map((v) => ({
+      id: v.id,
+      selected_at: v.created_at ?? undefined,
+      user: v.user
+        ? {
+            full_name: v.user.full_name ?? undefined,
+            email: v.user.email ?? undefined,
+            avatar_url: v.user.avatar_url ?? undefined,
+            avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+          }
+        : undefined,
+    }))
+}
+
 export interface PlanItemCardProps {
   item: PlanItem
   place?: Tables<'places'>
@@ -34,6 +60,15 @@ export interface PlanItemCardProps {
   onVote?: (item: PlanItem) => void
   isVoting?: boolean
   myVoted?: boolean
+  /**
+   * `option_votes` rows (with the voting user embedded) cast for THIS
+   * item's option — the "voted for this" affordance, distinct from
+   * `item.selections`' "Chosen by" affordance above. Gated by
+   * `areVotesVisible` below (hide_votes_until_close), never by
+   * isOrganizer/isAdmin: any participant who can see the vote button can
+   * see who else voted, once votes are visible at all.
+   */
+  voters?: OptionVoteWithUser[]
   /** Compact rendering for dense contexts (Undecided tray, Decide lens list). */
   compact?: boolean
   /**
@@ -70,6 +105,7 @@ export function PlanItemCard({
   onVote,
   isVoting,
   myVoted,
+  voters = [],
   compact = false,
   dense = false,
   outsideTripDates = false,
@@ -81,6 +117,13 @@ export function PlanItemCard({
   const isSolid = item.stage === 'decided' || item.stage === 'booked'
   const isProposal = item.stage === 'proposal'
   const isIdea = item.stage === 'idea'
+  // Same hide_votes_until_close gate the item sheet uses (voting.ts's
+  // areVotesVisible) — before that, nobody (organizer included) sees the
+  // breakdown, only their own vote + total, so the card must stay silent
+  // about voter identity too.
+  const votesVisible = item.vote
+    ? areVotesVisible({ vote_deadline: item.vote.voteDeadline, hide_votes_until_close: item.vote.hideVotesUntilClose })
+    : false
 
   if (dense && isSolid) {
     return (
@@ -216,6 +259,19 @@ export function PlanItemCard({
             <div className="mt-1.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
               <SelectionAvatars selections={toAvatarSelections(item.selections)} maxAvatars={4} size="sm" />
               <span className="text-xs text-[var(--text-muted)]">{formatChosenBy(item.selections)}</span>
+            </div>
+          )}
+
+          {/* Who's voted for this option — right where the vote is cast
+              (feedback: "when I vote for something I can't see others
+              voted what as well"), not just in the detail sheet. Uses
+              entityLabel="voted for this" (vs. the default "selected
+              this" above) so the popover header never reads as the same
+              affordance as "Chosen by" if a card somehow carries both. */}
+          {isProposal && item.vote && votesVisible && voters.length > 0 && (
+            <div className="mt-1.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+              <SelectionAvatars selections={toAvatarVotes(voters)} maxAvatars={4} size="sm" entityLabel="voted for this" />
+              <span className="text-xs text-[var(--text-muted)]">{formatVotedBy(voters)}</span>
             </div>
           )}
         </div>

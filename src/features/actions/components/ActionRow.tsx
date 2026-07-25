@@ -44,8 +44,8 @@ export function ActionRow({ action, trip, participants, currentUserId, isOrganiz
         ? {
             full_name: p.user.full_name ?? undefined,
             email: p.user.email ?? undefined,
-            avatar_url: p.user.avatar_url ?? null,
-            avatar_data: undefined,
+            avatar_url: p.user.avatar_url ?? undefined,
+            avatar_data: (p.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
           }
         : undefined,
     }
@@ -78,13 +78,32 @@ export function ActionRow({ action, trip, participants, currentUserId, isOrganiz
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
           {isGroupAction ? (
             <span className="flex items-center gap-1.5">
-              👥 Everyone
+              <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                Completed by ({completionSelections.length}/{participants.length})
+              </span>
               {myDone && !groupDone && <span className="text-success-600 dark:text-success-400">· yours done</span>}
-              {completionSelections.length > 0 && <SelectionAvatars selections={completionSelections} size="sm" maxAvatars={4} />}
+              {completionSelections.length > 0 && (
+                <SelectionAvatars selections={completionSelections} size="sm" maxAvatars={4} entityLabel="completed this" />
+              )}
             </span>
           ) : (
             <span className="flex items-center gap-1.5">
-              {assignee?.user && <UserAvatar avatarData={assignee.user} size="xs" />}
+              <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">Assigned to</span>
+              {assignee?.user && (
+                <span className="relative inline-flex shrink-0">
+                  <UserAvatar avatarData={assignee.user} size="xs" className={done ? 'opacity-60 grayscale' : undefined} />
+                  {done && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute -bottom-0.5 -right-0.5 flex h-3 w-3 items-center justify-center rounded-full bg-success-500 text-white ring-1 ring-[var(--surface-raised)]"
+                    >
+                      <svg viewBox="0 0 12 12" className="h-2 w-2" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M2 6.5 4.7 9 10 3.5" />
+                      </svg>
+                    </span>
+                  )}
+                </span>
+              )}
               {assigneeName}
             </span>
           )}

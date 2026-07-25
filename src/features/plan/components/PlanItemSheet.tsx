@@ -254,9 +254,30 @@ export function PlanItemSheet({
                         : 'Choose'}
                 </Button>
                 {votesVisible ? (
-                  <span className="text-sm text-[var(--text-secondary)]">
-                    {item.vote.totalVotes} vote{item.vote.totalVotes === 1 ? '' : 's'}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <SelectionAvatars
+                      selections={optionVotes
+                        .filter((v) => v.user)
+                        .map((v) => ({
+                          id: v.id,
+                          selected_at: v.created_at ?? undefined,
+                          user: v.user
+                            ? {
+                                full_name: v.user.full_name ?? undefined,
+                                email: v.user.email ?? undefined,
+                                avatar_url: v.user.avatar_url ?? undefined,
+                                avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+                              }
+                            : undefined,
+                        }))}
+                      maxAvatars={4}
+                      size="sm"
+                      entityLabel="voted for this"
+                    />
+                    <span className="text-sm text-[var(--text-secondary)]">
+                      {item.vote.totalVotes} vote{item.vote.totalVotes === 1 ? '' : 's'}
+                    </span>
+                  </div>
                 ) : (
                   <span className="text-xs text-[var(--text-muted)]">Votes hidden until close</span>
                 )}

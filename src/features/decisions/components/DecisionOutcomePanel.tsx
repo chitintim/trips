@@ -1,19 +1,19 @@
 import { useMemo, useState } from 'react'
-import { Badge, Button, Input, Modal, Select, useToast } from '../../../components/ui'
+import { Badge, Button, Input, Modal, Select, SelectionAvatars, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useUpdateSection } from '../../../lib/queries/usePlanning'
 import { useActions, useCreateAction } from '../../../lib/queries/useActions'
 import { areVotesVisible, checkAutoClose, tallyVotes, getWinner, type VotingMethod } from '../lib/voting'
 import { buildDecisionMetadata, followupActionTitle, readFollowupActionId, resolveDecidedOptionId } from '../lib/closeDecision'
 import { CloseDecisionSheet } from './CloseDecisionSheet'
-import type { OptionVote, SectionWithOptions } from '../../../lib/queries/usePlanning'
+import type { OptionVoteWithUser, SectionWithOptions } from '../../../lib/queries/usePlanning'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { TimelineEvent } from '../../../types'
 
 export interface DecisionOutcomePanelProps {
   tripId: string
   section: SectionWithOptions
-  votes: OptionVote[]
+  votes: OptionVoteWithUser[]
   participants: ParticipantWithUser[]
   isOrganizer: boolean
   /** Timeline events — used to detect that the decided option is already scheduled (source_option_id absorption). */
@@ -129,6 +129,7 @@ export function DecisionOutcomePanel({
   const votesVisible = areVotesVisible(section)
   const leader = votesVisible ? getWinner(tallyVotes(activeOptions.map((o) => o.id), sectionVotes, method)) : null
   const leaderOption = leader ? activeOptions.find((o) => o.id === leader.optionId) ?? null : null
+  const leaderVotes = leaderOption ? sectionVotes.filter((v) => v.option_id === leaderOption.id && v.user) : []
   const autoClose = checkAutoClose(section, distinctVoters)
 
   return (
@@ -143,6 +144,25 @@ export function DecisionOutcomePanel({
             ? 'Close the vote to lock in the winner — it can then be scheduled and given a follow-up action.'
             : 'The organizer closes the vote, then the winner goes on the plan.'}
         </p>
+        {leaderOption && leaderVotes.length > 0 && (
+          <SelectionAvatars
+            selections={leaderVotes.map((v) => ({
+              id: v.id,
+              selected_at: v.created_at ?? undefined,
+              user: v.user
+                ? {
+                    full_name: v.user.full_name ?? undefined,
+                    email: v.user.email ?? undefined,
+                    avatar_url: v.user.avatar_url ?? undefined,
+                    avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+                  }
+                : undefined,
+            }))}
+            maxAvatars={4}
+            size="sm"
+            entityLabel="voted for this"
+          />
+        )}
         {autoClose.shouldClose && isOrganizer && (
           <p className="text-xs font-medium text-warn-700 dark:text-warn-300">
             {autoClose.reason === 'deadline_passed' ? '⏰ The deadline has passed' : '🙌 Quorum reached'} — ready to close.

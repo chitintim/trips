@@ -23,6 +23,11 @@ export interface SelectionWithUser extends Selection {
   user: User
 }
 
+/** An option_votes row with the voting user embedded — who voted for what (audit: RLS already allows this, the frontend just wasn't fetching it). */
+export interface OptionVoteWithUser extends OptionVote {
+  user: User
+}
+
 export interface OptionWithSelections extends Option {
   selections: SelectionWithUser[]
 }
@@ -113,11 +118,17 @@ export function useSelections(optionIds: string[]) {
   })
 }
 
-/** option_votes for every option under this trip (poll voting substrate, separate from selections). */
+/**
+ * option_votes for every option under this trip (poll voting substrate,
+ * separate from selections), with the voting user embedded so the UI can
+ * show WHO voted (option_votes/users RLS already allow reading this for any
+ * trip co-participant — see areVotesVisible for the hide-until-close gate
+ * that still applies on top).
+ */
 export function useVotes(tripId: string | undefined) {
   return useQuery({
     queryKey: queryKeys.votes(tripId || ''),
-    queryFn: async (): Promise<OptionVote[]> => {
+    queryFn: async (): Promise<OptionVoteWithUser[]> => {
       const { data: sections, error: sectionsErr } = await supabase
         .from('planning_sections')
         .select('id, options(id)')
@@ -128,9 +139,17 @@ export function useVotes(tripId: string | undefined) {
       const optionIds = sectionsWithOptions.flatMap((s) => (s.options || []).map((o) => o.id))
       if (optionIds.length === 0) return []
 
-      const { data, error } = await supabase.from('option_votes').select('*').in('option_id', optionIds)
+      const { data, error } = await supabase
+        .from('option_votes')
+        .select(
+          `
+          *,
+          user:user_id (*)
+        `
+        )
+        .in('option_id', optionIds)
       if (error) throw error
-      return data || []
+      return (data as unknown as OptionVoteWithUser[]) || []
     },
     enabled: !!tripId,
   })

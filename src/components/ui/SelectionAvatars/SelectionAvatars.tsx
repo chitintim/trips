@@ -41,6 +41,14 @@ export interface SelectionAvatarsProps extends HTMLAttributes<HTMLDivElement> {
    * @default false
    */
   showLabels?: boolean
+
+  /**
+   * Noun phrase describing what selecting means in this context, used in
+   * the popover header as "Who {entityLabel} (n)" -- e.g. "completed this"
+   * for a completions list vs. the default "selected this".
+   * @default 'selected this'
+   */
+  entityLabel?: string
 }
 
 // ============================================================================
@@ -52,6 +60,7 @@ export function SelectionAvatars({
   maxAvatars = 3,
   size = 'md',
   showLabels = false,
+  entityLabel = 'selected this',
   className = '',
   ...props
 }: SelectionAvatarsProps) {
@@ -249,7 +258,7 @@ export function SelectionAvatars({
           {/* Header */}
           <div className="sticky top-0 bg-[var(--surface-raised)] border-b border-[var(--border-subtle)] px-4 py-3 flex items-center justify-between rounded-t-lg">
             <h3 className="text-sm font-semibold text-[var(--text-primary)]">
-              Who selected this ({selections.length})
+              Who {entityLabel} ({selections.length})
             </h3>
             <button
               onClick={() => setShowPopover(false)}

@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Badge, Button, Modal, useToast } from '../../../components/ui'
+import { Badge, Button, Modal, SelectionAvatars, useToast } from '../../../components/ui'
 import { useUpdateSection } from '../../../lib/queries/usePlanning'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { tallyVotes, votingInstruction, type VotingMethod } from '../lib/voting'
 import { buildDecisionMetadata, resolveTallyLeaderId } from '../lib/closeDecision'
-import type { OptionVote, SectionWithOptions } from '../../../lib/queries/usePlanning'
+import type { OptionVoteWithUser, SectionWithOptions } from '../../../lib/queries/usePlanning'
 
 export interface CloseDecisionSheetProps {
   isOpen: boolean
   onClose: () => void
   tripId: string
   section: SectionWithOptions
-  votes: OptionVote[]
+  votes: OptionVoteWithUser[]
   /** Called after the section is successfully closed, with the winning option id. */
   onClosed?: (decidedOptionId: string) => void
 }
@@ -39,6 +39,18 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
     const byOption = new Map(tallyVotes(optionIds, sectionVotes, method).map((t) => [t.optionId, t]))
     return byOption
   }, [activeOptions, votes, method])
+
+  /** Voters (with user embedded) per option, for the avatar row below each tally — same source as `tallies`, just not collapsed to a score. */
+  const votersByOption = useMemo(() => {
+    const byOption = new Map<string, OptionVoteWithUser[]>()
+    for (const v of votes) {
+      if (!v.user) continue
+      const list = byOption.get(v.option_id)
+      if (list) list.push(v)
+      else byOption.set(v.option_id, [v])
+    }
+    return byOption
+  }, [votes])
 
   const leaderId = useMemo(() => resolveTallyLeaderId(section, votes), [section, votes])
   const [selectedId, setSelectedId] = useState<string | null>(leaderId)
@@ -116,6 +128,25 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
                       <Badge variant="info" size="sm">
                         Leading
                       </Badge>
+                    )}
+                    {(votersByOption.get(option.id) || []).length > 0 && (
+                      <SelectionAvatars
+                        selections={(votersByOption.get(option.id) || []).map((v) => ({
+                          id: v.id,
+                          selected_at: v.created_at ?? undefined,
+                          user: v.user
+                            ? {
+                                full_name: v.user.full_name ?? undefined,
+                                email: v.user.email ?? undefined,
+                                avatar_url: v.user.avatar_url ?? undefined,
+                                avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+                              }
+                            : undefined,
+                        }))}
+                        maxAvatars={4}
+                        size="sm"
+                        entityLabel="voted for this"
+                      />
                     )}
                   </span>
                 </span>

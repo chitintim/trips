@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
-import { Badge, Card, EmptyState, Skeleton, UserAvatar } from '../../../components/ui'
+import { Badge, Card, EmptyState, Skeleton, SelectionAvatars, UserAvatar } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
+import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { useActions } from '../../../lib/queries/useActions'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
 import { countdownLabel, isOverdue } from '../../actions/lib/actionStatus'
@@ -77,7 +78,7 @@ function OrganizerActionRow({
 }: {
   action: ActionWithCompletions
   trip: { start_date?: string | null } | null | undefined
-  activeParticipants: { user_id: string; active?: boolean | null; user?: { full_name?: string | null; email?: string | null } }[]
+  activeParticipants: ParticipantWithUser[]
 }) {
   const overdue = isOverdue(action, trip)
   const isGroupAction = !action.assigned_to
@@ -86,23 +87,57 @@ function OrganizerActionRow({
   const doneCount = activeIds.filter((id) => completedIds.has(id)).length
   const assignee = action.assigned_to ? activeParticipants.find((p) => p.user_id === action.assigned_to) : null
 
+  // The organizer's actual need for a group action isn't "how many are
+  // done" -- it's who to go chase. Surface the outstanding (active, not
+  // yet completed) participants as an avatar stack.
+  const outstandingSelections = activeIds
+    .filter((id) => !completedIds.has(id))
+    .map((id) => {
+      const p = activeParticipants.find((pp) => pp.user_id === id)
+      return {
+        id,
+        user: p?.user
+          ? {
+              full_name: p.user.full_name ?? undefined,
+              email: p.user.email ?? undefined,
+              avatar_url: p.user.avatar_url ?? undefined,
+              avatar_data: (p.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+            }
+          : undefined,
+      }
+    })
+
   return (
     <Card variant="flat">
       <Card.Content className="flex items-center justify-between gap-3 py-2.5">
         <div className="min-w-0">
           <p className="text-sm font-medium text-[var(--text-primary)] truncate">{action.title}</p>
-          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--text-muted)]">
+          <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--text-muted)]">
             {isGroupAction ? (
               <>
-                👥 {doneCount}/{activeIds.length} done
+                <span>
+                  👥 {doneCount}/{activeIds.length} done
+                </span>
+                {outstandingSelections.length > 0 && (
+                  <span className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">Waiting on</span>
+                    <SelectionAvatars
+                      selections={outstandingSelections}
+                      size="sm"
+                      maxAvatars={4}
+                      entityLabel="hasn't done this yet"
+                    />
+                  </span>
+                )}
               </>
             ) : (
               <>
+                <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">Assigned to</span>
                 {assignee?.user && <UserAvatar avatarData={assignee.user} size="xs" />}
                 {assignee?.user?.full_name || assignee?.user?.email || 'Someone'}
               </>
             )}
-          </p>
+          </div>
         </div>
         <Badge variant={overdue ? 'error' : 'neutral'} size="sm">
           {countdownLabel(action, trip)}

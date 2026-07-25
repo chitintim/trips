@@ -3,6 +3,7 @@ import { Button, Badge, Deadline, EmptyState, Modal, useToast, SelectionAvatars 
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useCreateSection, useVotes } from '../../../lib/queries/usePlanning'
+import type { OptionVoteWithUser } from '../../../lib/queries/usePlanning'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { useBookings } from '../../../lib/queries/useBookings'
@@ -148,6 +149,19 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   }
 
   const placesById = useMemo(() => new Map((places || []).map((p) => [p.id, p])), [places])
+
+  // option_id -> its voters (with user embedded), for the "voted for this"
+  // avatar row on each proposal card — computed once here rather than
+  // filtering the whole trip's votes on every PlanItemCard render.
+  const votesByOptionId = useMemo(() => {
+    const map = new Map<string, OptionVoteWithUser[]>()
+    for (const v of votes || []) {
+      const arr = map.get(v.option_id)
+      if (arr) arr.push(v)
+      else map.set(v.option_id, [v])
+    }
+    return map
+  }, [votes])
 
   const dayDates = useMemo(() => {
     const eventDates = items.filter((i) => i.date).map((i) => i.date as string)
@@ -548,6 +562,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                             onVote={!isClosedVote && item.vote ? handleVote : undefined}
                             isVoting={votingId === item.id}
                             myVoted={item.vote?.myVote.voted}
+                            voters={item.optionId ? votesByOptionId.get(item.optionId) : undefined}
                             compact
                           />
                         ))}
@@ -660,6 +675,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                         onVote={entry.item.vote ? handleVote : undefined}
                         isVoting={votingId === entry.item.id}
                         myVoted={entry.item.vote?.myVote.voted}
+                        voters={entry.item.optionId ? votesByOptionId.get(entry.item.optionId) : undefined}
                         outsideTripDates={isOutsideTripDates(entry.item, trip.start_date, trip.end_date)}
                         timeClash={clashedIds.has(entry.item.id)}
                         dense={dense && isDensifiableStage(entry.item.stage)}
@@ -698,6 +714,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       onOpenItem={onOpenItem}
                       onVote={handleVote}
                       votingId={votingId}
+                      votesByOptionId={votesByOptionId}
                       isLast={globalIndex === dayDates.length - 1}
                       tripStartDate={trip.start_date}
                       tripEndDate={trip.end_date}
@@ -732,6 +749,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
               onOpenItem={onOpenItem}
               onVote={handleVote}
               votingId={votingId}
+              votesByOptionId={votesByOptionId}
               isLast={i === dayDates.length - 1}
               tripStartDate={trip.start_date}
               tripEndDate={trip.end_date}
@@ -865,6 +883,8 @@ interface PlanDaySectionProps {
   onOpenItem: (item: PlanItem) => void
   onVote: (item: PlanItem) => void
   votingId: string | null
+  /** option_id -> voters (with user embedded), for each PlanItemCard's "voted for this" row — see PlanBoard's own votesByOptionId. */
+  votesByOptionId: Map<string, OptionVoteWithUser[]>
   isLast: boolean
   tripStartDate: string
   tripEndDate: string
@@ -905,6 +925,7 @@ function PlanDaySection({
   onOpenItem,
   onVote,
   votingId,
+  votesByOptionId,
   isLast,
   tripStartDate,
   tripEndDate,
@@ -980,6 +1001,7 @@ function PlanDaySection({
                   onVote={item.vote ? onVote : undefined}
                   isVoting={votingId === item.id}
                   myVoted={item.vote?.myVote.voted}
+                  voters={item.optionId ? votesByOptionId.get(item.optionId) : undefined}
                   outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
                   timeClash={clashedIds.has(item.id)}
                 />
@@ -1011,6 +1033,7 @@ function PlanDaySection({
                         onVote={entry.item.vote ? onVote : undefined}
                         isVoting={votingId === entry.item.id}
                         myVoted={entry.item.vote?.myVote.voted}
+                        voters={entry.item.optionId ? votesByOptionId.get(entry.item.optionId) : undefined}
                         outsideTripDates={isOutsideTripDates(entry.item, tripStartDate, tripEndDate)}
                         timeClash={clashedIds.has(entry.item.id)}
                         dense={dense}

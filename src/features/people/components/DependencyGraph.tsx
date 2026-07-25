@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import { UserAvatar, Badge, EmptyState } from '../../../components/ui'
+import { resolveAvatar, ICON_REGISTRY } from '../../../components/ui/Avatar'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { buildDependencyGraph, getTopKeystone } from '../lib/dependencyGraph'
 
@@ -14,13 +15,69 @@ function displayName(p: ParticipantWithUser): string {
   return p.user?.full_name || p.user?.email || 'Unknown'
 }
 
-/** avatar_data is a raw Json column — pull the emoji out defensively. */
-function avatarEmoji(avatarData: unknown): string {
-  if (avatarData && typeof avatarData === 'object' && 'emoji' in avatarData) {
-    const emoji = (avatarData as { emoji?: unknown }).emoji
-    if (typeof emoji === 'string' && emoji) return emoji
+/**
+ * Node glyph for a participant, sharing the same avatar resolution as
+ * everywhere else in the app (`resolveAvatar`) so uploaded photos and v2
+ * icon avatars show up here too, not just the legacy emoji shape. SVG can't
+ * host the `Avatar`/`UserAvatar` components directly, so this replicates
+ * their per-kind rendering (photo via clipped `<image>`, icon via a nested
+ * `<svg>` from the shared icon registry, initials via a plain circle+text)
+ * inside the graph's own inner circle, layered on top of the existing
+ * state ring (cycle/keystone) drawn by the caller.
+ */
+function AvatarGlyph({ participant, cx, cy, idPrefix }: { participant: ParticipantWithUser; cx: number; cy: number; idPrefix: string }) {
+  const resolved = resolveAvatar({ avatarData: participant.user })
+  const innerR = NODE_RADIUS - 4
+
+  if (resolved.kind === 'photo') {
+    const clipId = `dep-avatar-clip-${idPrefix}-${participant.user_id}`
+    return (
+      <>
+        <clipPath id={clipId}>
+          <circle cx={cx} cy={cy} r={innerR} />
+        </clipPath>
+        <image
+          href={resolved.url}
+          x={cx - innerR}
+          y={cy - innerR}
+          width={innerR * 2}
+          height={innerR * 2}
+          preserveAspectRatio="xMidYMid slice"
+          clipPath={`url(#${clipId})`}
+        />
+      </>
+    )
   }
-  return '🙂'
+
+  if (resolved.kind === 'icon') {
+    const Icon = ICON_REGISTRY[resolved.icon]
+    const iconSize = innerR * 1.2
+    return (
+      <>
+        <circle cx={cx} cy={cy} r={innerR} fill={resolved.bgColor} />
+        <Icon x={cx - iconSize / 2} y={cy - iconSize / 2} width={iconSize} height={iconSize} style={{ color: '#fff' }} />
+      </>
+    )
+  }
+
+  if (resolved.kind === 'emoji') {
+    return (
+      <text x={cx} y={cy + 5} textAnchor="middle" fontSize="16">
+        {resolved.emoji}
+      </text>
+    )
+  }
+
+  // Initials fallback -- no avatar data at all.
+  const initial = (displayName(participant).charAt(0) || '?').toUpperCase()
+  return (
+    <>
+      <circle cx={cx} cy={cy} r={innerR} fill="var(--color-accent-500, #1f9d90)" />
+      <text x={cx} y={cy + 5} textAnchor="middle" fontSize="14" fontWeight="600" fill="#fff">
+        {initial}
+      </text>
+    </>
+  )
 }
 
 /**
@@ -135,9 +192,7 @@ export function DependencyGraph({ participants }: DependencyGraphProps) {
                   strokeWidth={node?.inCycle ? 2.5 : 1.5}
                   strokeDasharray={node?.inCycle ? '4 3' : undefined}
                 />
-                <text x={leftX} y={y + 5} textAnchor="middle" fontSize="16">
-{avatarEmoji(p.user?.avatar_data)}
-                </text>
+                <AvatarGlyph participant={p} cx={leftX} cy={y} idPrefix="w" />
                 <text x={leftX} y={y + NODE_RADIUS + 16} textAnchor="middle" fontSize="11" fill="var(--color-neutral-600, #4b5563)">
                   {displayName(p).split(' ')[0]}
                 </text>
@@ -159,9 +214,7 @@ export function DependencyGraph({ participants }: DependencyGraphProps) {
                   stroke={isKeystone ? 'var(--color-accent-500, #1f9d90)' : 'var(--color-neutral-300, #d1d5db)'}
                   strokeWidth={isKeystone ? 3 : 1.5}
                 />
-                <text x={rightX} y={y + 5} textAnchor="middle" fontSize="16">
-{avatarEmoji(p.user?.avatar_data)}
-                </text>
+                <AvatarGlyph participant={p} cx={rightX} cy={y} idPrefix="t" />
                 <text x={rightX} y={y + NODE_RADIUS + 16} textAnchor="middle" fontSize="11" fill="var(--color-neutral-600, #4b5563)">
                   {displayName(p).split(' ')[0]}
                 </text>

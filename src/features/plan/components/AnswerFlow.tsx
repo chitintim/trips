@@ -1,12 +1,12 @@
 import { useState } from 'react'
-import { Modal, Button, Badge, Stepper } from '../../../components/ui'
+import { Modal, Button, Badge, Stepper, SelectionAvatars } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { formatCostImpact, getTierSensitivityLine } from '../../decisions/lib/costImpact'
-import { votingInstruction, replaceableSiblingVoteIds, type VotingMethod } from '../../decisions/lib/voting'
+import { votingInstruction, replaceableSiblingVoteIds, areVotesVisible, type VotingMethod } from '../../decisions/lib/voting'
 import { useOrderForm } from '../lib/useOrderForm'
 import { OrderFormFields } from './OrderFormFields'
-import type { SectionWithOptions, OptionVote } from '../../../lib/queries/usePlanning'
+import type { SectionWithOptions, OptionVoteWithUser } from '../../../lib/queries/usePlanning'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Trip } from '../../../types'
 
@@ -16,7 +16,7 @@ export interface AnswerFlowProps {
   trip: Trip
   /** Open questions (already filtered/sorted by the caller — PlanDecideLens), one screen each. */
   sections: SectionWithOptions[]
-  votes: OptionVote[]
+  votes: OptionVoteWithUser[]
   participants: ParticipantWithUser[]
   confirmedCount: number
 }
@@ -90,7 +90,7 @@ export function AnswerFlow({ isOpen, onClose, trip, sections, votes, participant
 interface QuestionStepProps {
   trip: Trip
   section: SectionWithOptions
-  votes: OptionVote[]
+  votes: OptionVoteWithUser[]
   participants: ParticipantWithUser[]
   confirmedCount: number
   onSkip: () => void
@@ -166,7 +166,7 @@ function VoteStep({
   isLast,
 }: {
   section: SectionWithOptions
-  votes: OptionVote[]
+  votes: OptionVoteWithUser[]
   confirmedCount: number
   onSkip: () => void
   onNext: () => void
@@ -179,6 +179,10 @@ function VoteStep({
   const votingMethod = (section.voting_method as VotingMethod) || 'single'
   const optionIds = section.options.map((o) => o.id)
   const sectionVotes = votes.filter((v) => optionIds.includes(v.option_id))
+  // Same hide_votes_until_close gate every other voting surface uses
+  // (voting.ts's areVotesVisible) — before that, nobody sees the
+  // per-option breakdown, only their own vote.
+  const votesVisible = areVotesVisible({ vote_deadline: section.vote_deadline, hide_votes_until_close: section.hide_votes_until_close })
 
   const handleVote = (optionId: string) => {
     if (!user) return
@@ -214,6 +218,7 @@ function VoteStep({
             const costImpactInput = { price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount, metadata: option.metadata }
             const costImpact = formatCostImpact(costImpactInput)
             const sensitivityLine = getTierSensitivityLine(costImpactInput)
+            const optionVoters = votesVisible ? sectionVotes.filter((v) => v.option_id === option.id && v.user) : []
             return (
               <div
                 key={option.id}
@@ -237,6 +242,32 @@ function VoteStep({
                       )}
                     </div>
                     {sensitivityLine && <p className="mt-1 text-xs text-[var(--text-muted)]">{sensitivityLine}</p>}
+                    {/* Who's voted for this option, right where the vote is
+                        cast (feedback: "when I vote for something I can't
+                        see others voted what as well") — entityLabel
+                        distinguishes this from any "Chosen by" selections
+                        affordance elsewhere. */}
+                    {optionVoters.length > 0 && (
+                      <div className="mt-1.5">
+                        <SelectionAvatars
+                          selections={optionVoters.map((v) => ({
+                            id: v.id,
+                            selected_at: v.created_at ?? undefined,
+                            user: v.user
+                              ? {
+                                  full_name: v.user.full_name ?? undefined,
+                                  email: v.user.email ?? undefined,
+                                  avatar_url: v.user.avatar_url ?? undefined,
+                                  avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+                                }
+                              : undefined,
+                          }))}
+                          maxAvatars={4}
+                          size="sm"
+                          entityLabel="voted for this"
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
                 <Button

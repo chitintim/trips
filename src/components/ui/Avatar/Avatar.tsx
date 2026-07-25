@@ -230,24 +230,37 @@ export function UserAvatar({ avatarData, size = 'md', alt = 'Avatar', className 
     )
   }
 
-  const bgColor = resolved.kind === 'emoji' ? resolved.bgColor : '#1f9d90'
-  const emoji = resolved.kind === 'emoji' ? resolved.emoji : '🙂'
-  const accessory = resolved.kind === 'emoji' ? resolved.accessory : null
+  if (resolved.kind === 'emoji') {
+    return (
+      <div
+        className={`${sizeAndShape} flex-col items-center justify-center`}
+        style={{ backgroundColor: resolved.bgColor }}
+        role="img"
+        aria-label={alt}
+        {...props}
+      >
+        {resolved.accessory && (
+          <span className="text-[0.6em] leading-none -mb-1" aria-hidden="true">
+            {resolved.accessory}
+          </span>
+        )}
+        <span>{resolved.emoji}</span>
+      </div>
+    )
+  }
 
+  // resolved.kind === 'initials' -- same fallback rendering as `Avatar`'s
+  // initials branch (gradient background, uppercase first letter) so the
+  // two components never disagree on what a user with no avatar data looks
+  // like.
   return (
     <div
-      className={`${sizeAndShape} flex-col items-center justify-center`}
-      style={{ backgroundColor: bgColor }}
+      className={`${sizeAndShape} items-center justify-center bg-gradient-to-br from-accent-400 to-accent-600 text-white font-semibold select-none`}
       role="img"
       aria-label={alt}
       {...props}
     >
-      {accessory && (
-        <span className="text-[0.6em] leading-none -mb-1" aria-hidden="true">
-          {accessory}
-        </span>
-      )}
-      <span>{emoji}</span>
+      <span className="uppercase">{alt.charAt(0) || '?'}</span>
     </div>
   )
 }

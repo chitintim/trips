@@ -10,6 +10,7 @@ import type { Json } from '../../../types/database.types'
 
 interface ChaseFormValues {
   enabled: boolean
+  actionReminders: boolean
   delayHours: string
   quietEnabled: boolean
   quietStart: string
@@ -21,6 +22,7 @@ interface ChaseFormValues {
 function fromSettings(s: ChaseSettings, aiAutonomy: AiAutonomy): ChaseFormValues {
   return {
     enabled: s.enabled,
+    actionReminders: s.action_reminders,
     delayHours: String(s.delay_hours),
     quietEnabled: s.quiet_hours != null,
     quietStart: String(s.quiet_hours?.start ?? 22),
@@ -40,8 +42,12 @@ export interface ChaseSettingsSheetProps {
 
 /**
  * Per-trip auto-chase settings (plan §14) — writes trips.chase_settings
- * jsonb {enabled, delay_hours, quiet_hours, max_reminders}. Chase is
- * opt-IN: the toggle defaults to off for every trip.
+ * jsonb {enabled, action_reminders, delay_hours, quiet_hours,
+ * max_reminders}. Two independent toggles live here: `enabled` (the
+ * bundled chase kinds — unclaimed items, unvoted polls, RSVPs, waitlist,
+ * settlements) is opt-IN and defaults to off; `action_reminders` (the
+ * action-deadline email ladder) is opt-OUT and defaults to on, because
+ * giving an action a deadline is itself the opt-in for its reminders.
  */
 export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheetProps) {
   const { showToast } = useToast()
@@ -81,6 +87,7 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
     }
     const settings: ChaseSettings = {
       enabled: values.enabled,
+      action_reminders: values.actionReminders,
       delay_hours: delay,
       quiet_hours: values.quietEnabled
         ? { start: parseInt(values.quietStart, 10), end: parseInt(values.quietEnd, 10) }
@@ -129,7 +136,25 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
             <span className="block text-sm font-medium text-[var(--text-primary)]">Enable auto-chase for this trip</span>
             <span className="block text-xs text-[var(--text-muted)] mt-0.5">
               A daily job emails each laggard a deep link to their exact action — unvoted polls, unclaimed items,
-              pending RSVPs, unpaid settlements. Off by default; nobody is emailed until you turn it on.
+              pending RSVPs, unpaid settlements. Off by default; nobody is emailed about these until you turn it on.
+              This does not cover action deadline reminders — see below, those run separately and are on by default.
+            </span>
+          </span>
+        </label>
+
+        <label className="flex items-start gap-3 cursor-pointer rounded-[var(--radius-md)] border border-[var(--border-default)] p-3">
+          <input
+            type="checkbox"
+            checked={values.actionReminders}
+            onChange={(e) => updateField('actionReminders', e.target.checked)}
+            className="mt-1 w-5 h-5 accent-accent-600"
+          />
+          <span>
+            <span className="block text-sm font-medium text-[var(--text-primary)]">Action deadline reminders (on by default)</span>
+            <span className="block text-xs text-[var(--text-muted)] mt-0.5">
+              Any action with a deadline already emails whoever it's assigned to (or the whole group) — 7 days
+              before, 1 day before, and once overdue. This runs for every trip regardless of the toggle above,
+              because giving an action a deadline is itself the opt-in. Turn this off to silence those emails too.
             </span>
           </span>
         </label>

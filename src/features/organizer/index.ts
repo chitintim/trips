@@ -12,6 +12,7 @@ export { BookingsTracker } from './components/BookingsTracker'
 export { BookingEditorSheet } from './components/BookingEditorSheet'
 export type { BookingEditorSheetProps } from './components/BookingEditorSheet'
 export { ActivityFeedPanel } from './components/ActivityFeedPanel'
+export { EmailsPanel } from './components/EmailsPanel'
 export { ChaseSettingsSheet } from './components/ChaseSettingsSheet'
 export type { ChaseSettingsSheetProps } from './components/ChaseSettingsSheet'
 export { NudgeDraftSheet } from './components/NudgeDraftSheet'
@@ -19,8 +20,8 @@ export type { NudgeDraftSheetProps } from './components/NudgeDraftSheet'
 
 // Activity logging helper — usable by every feature (typed verbs), see
 // lib/activity.ts header for the coordinator's wiring list.
-export { useTripActivityLog, renderActivity } from './lib/activity'
-export type { ActivityVerb, ActivityEntity, LogActivityInput, RenderedActivity } from './lib/activity'
+export { useTripActivityLog, renderActivity, describeNotificationKind } from './lib/activity'
+export type { ActivityVerb, ActivityEntity, LogActivityInput, RenderedActivity, NotificationKindInfo } from './lib/activity'
 
 // Pure libs (blockers computation, chase settings contract).
 export { computeBlockers } from './lib/blockers'

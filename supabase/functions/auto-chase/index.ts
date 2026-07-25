@@ -26,13 +26,16 @@
 // before the effective due date ('action_due_7d'), ~1 day before
 // ('action_due_1d'), and once overdue ('overdue_action') -- each fired at
 // most ONCE per (action, user, stage), tracked in trip_action_reminders.
-// Unlike the opt-in chase kinds above these run for EVERY trip: creating an
-// action with a deadline is itself the opt-in. Targeting: assigned_to if
-// set (skip if completed via trip_action_completions), else every active
-// participant without a completion row. Effective due date is due_date for
-// 'fixed' deadline_kind, trip.start_date for 'before_trip' (skipped when
-// start_date is null). Date math lives in ./actionDueDate.ts so it's
-// unit-testable without the service client.
+// Unlike the opt-in chase kinds above these run for EVERY trip by default:
+// creating an action with a deadline is itself the opt-in. Gated by
+// chase_settings.action_reminders (opt-OUT, defaults to true -- see
+// ./chaseSettings.ts) and quiet hours, but NOT by chase_settings.enabled.
+// Targeting: assigned_to if set (skip if completed via
+// trip_action_completions), else every active participant without a
+// completion row. Effective due date is due_date for 'fixed' deadline_kind,
+// trip.start_date for 'before_trip' (skipped when start_date is null). Date
+// math lives in ./actionDueDate.ts so it's unit-testable without the
+// service client.
 //
 // T-minus date-intelligence kinds (UX_REDESIGN.md Part 3 "T-minus nudges
 // feed the existing chaser"), all respecting the same chase_settings
@@ -53,9 +56,11 @@
 // bundle into one digest), max 3 reminders per item then escalate to the
 // blockers board ("needs a personal nudge"), per-user opt-out
 // (users.email_notifications_enabled), per-trip opt-IN + settings
-// (trips.chase_settings jsonb: {enabled, delay_hours, quiet_hours:{start,
-// end}, max_reminders}). Every send logged to notifications; dedupe_key
-// (kind:entity:user:seq) enforces the caps at the DB level.
+// (trips.chase_settings jsonb: {enabled, action_reminders, delay_hours,
+// quiet_hours:{start, end}, max_reminders} -- see ./chaseSettings.ts for the
+// two independent enabled/action_reminders defaults). Every send logged to
+// notifications; dedupe_key (kind:entity:user:seq) enforces the caps at the
+// DB level.
 //
 // Email channel: Resend if RESEND_API_KEY is set, Brevo if BREVO_API_KEY;
 // otherwise sends are skipped, logged with channel='skipped', and returned
@@ -88,44 +93,9 @@ import {
   type VoteForSectionVoters,
 } from '../_shared/actionCompletion/sectionVoters.ts'
 import { outstandingTargets } from './outstandingTargets.ts'
+import { actionRemindersGateOpen, DEFAULT_SETTINGS, inQuietHours, parseChaseSettings } from './chaseSettings.ts'
 
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
-
-interface ChaseSettings {
-  enabled: boolean
-  delay_hours: number
-  quiet_hours: { start: number; end: number } | null
-  max_reminders: number
-}
-
-const DEFAULT_SETTINGS: ChaseSettings = {
-  enabled: false, // opt-IN per trip: never auto-email trips that haven't turned it on
-  delay_hours: 48,
-  quiet_hours: null,
-  max_reminders: 3,
-}
-
-function parseChaseSettings(raw: unknown): ChaseSettings {
-  if (!raw || typeof raw !== 'object') return DEFAULT_SETTINGS
-  const r = raw as Record<string, unknown>
-  return {
-    enabled: r.enabled === true,
-    delay_hours: typeof r.delay_hours === 'number' ? r.delay_hours : DEFAULT_SETTINGS.delay_hours,
-    quiet_hours:
-      r.quiet_hours && typeof r.quiet_hours === 'object'
-        ? (r.quiet_hours as { start: number; end: number })
-        : null,
-    max_reminders: typeof r.max_reminders === 'number' ? r.max_reminders : DEFAULT_SETTINGS.max_reminders,
-  }
-}
-
-function inQuietHours(settings: ChaseSettings, now: Date): boolean {
-  if (!settings.quiet_hours) return false
-  const hour = now.getUTCHours()
-  const { start, end } = settings.quiet_hours
-  // Quiet window may wrap midnight (e.g. 22 -> 8).
-  return start <= end ? hour >= start && hour < end : hour >= start || hour < end
-}
 
 /** One open loop targeting one user. */
 interface ChaseItem {
@@ -648,7 +618,9 @@ Deno.serve(async (req) => {
 
     // ---- 1b. Action-deadline reminders: staged ladder across ALL trips ----
     // Unlike the opt-in chase kinds above, deadline reminders run for every
-    // trip -- creating an action with a deadline is itself the opt-in. Each
+    // trip by default -- creating an action with a deadline is itself the
+    // opt-in -- gated only by chase_settings.action_reminders (opt-OUT,
+    // defaults to true; see ./chaseSettings.ts) and quiet hours. Each
     // (action, user, stage) fires at most once: trip_action_reminders rows
     // (written only after a successful email send) record what went out.
     // The per-user one-digest-per-day cap, the global email opt-out, and
@@ -663,8 +635,10 @@ Deno.serve(async (req) => {
       if (actionTripsError) throw actionTripsError
 
       for (const trip of actionTrips ?? []) {
-        // Respect configured quiet hours even when the chase engine is off.
-        if (inQuietHours(parseChaseSettings(trip.chase_settings), now)) continue
+        // Skip when the organizer has explicitly turned off action
+        // reminders, or during configured quiet hours -- both apply even
+        // when the bundled chase engine (`enabled`) is off.
+        if (!actionRemindersGateOpen(parseChaseSettings(trip.chase_settings), now)) continue
         const tripLink = `${APP_BASE_URL}/${trip.id}`
 
         // deno-lint-ignore no-explicit-any

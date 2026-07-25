@@ -7,6 +7,7 @@ import { BlockersBoard } from './BlockersBoard'
 import { OrganizerActionsPanel } from './OrganizerActionsPanel'
 import { BookingsTracker } from './BookingsTracker'
 import { ActivityFeedPanel } from './ActivityFeedPanel'
+import { EmailsPanel } from './EmailsPanel'
 import { ChaseSettingsSheet } from './ChaseSettingsSheet'
 import { parseChaseSettings } from '../lib/chaseSettings'
 
@@ -14,7 +15,7 @@ export interface OrganizerConsoleProps {
   tripId: string
 }
 
-type ConsoleView = 'blockers' | 'actions' | 'bookings' | 'activity'
+type ConsoleView = 'blockers' | 'actions' | 'bookings' | 'activity' | 'emails'
 
 /**
  * Organizer console (plan §14): blockers board, bookings tracker and the
@@ -86,18 +87,21 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
-        <SegmentedControl
-          size="sm"
-          value={view}
-          onChange={(v) => setView(v as ConsoleView)}
-          options={[
-            { value: 'blockers', label: 'Blockers', icon: <span>🚧</span> },
-            { value: 'actions', label: 'Actions', icon: <span>✅</span> },
-            { value: 'bookings', label: 'Bookings', icon: <span>🧾</span> },
-            { value: 'activity', label: 'Activity', icon: <span>📰</span> },
-          ]}
-        />
-        <Button variant="ghost" size="sm" onClick={() => setChaseOpen(true)} title="Auto-chase settings">
+        <div className="min-w-0 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <SegmentedControl
+            size="sm"
+            value={view}
+            onChange={(v) => setView(v as ConsoleView)}
+            options={[
+              { value: 'blockers', label: 'Blockers', icon: <span>🚧</span> },
+              { value: 'actions', label: 'Actions', icon: <span>✅</span> },
+              { value: 'bookings', label: 'Bookings', icon: <span>🧾</span> },
+              { value: 'activity', label: 'Activity', icon: <span>📰</span> },
+              { value: 'emails', label: 'Emails', icon: <span>📧</span> },
+            ]}
+          />
+        </div>
+        <Button variant="ghost" size="sm" onClick={() => setChaseOpen(true)} title="Auto-chase settings" className="shrink-0">
           ⚙️ Chase{' '}
           <span className={chase.enabled ? 'text-success-600 font-medium' : 'text-[var(--text-muted)]'}>
             {chase.enabled ? 'on' : 'off'}
@@ -112,6 +116,13 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
         <Card variant="flat">
           <Card.Content>
             <ActivityFeedPanel tripId={tripId} />
+          </Card.Content>
+        </Card>
+      )}
+      {view === 'emails' && (
+        <Card variant="flat">
+          <Card.Content>
+            <EmailsPanel tripId={tripId} />
           </Card.Content>
         </Card>
       )}

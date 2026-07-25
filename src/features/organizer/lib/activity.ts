@@ -132,3 +132,44 @@ export function renderActivity(entry: ActivityFeedEntry, actorName: string): Ren
   }
   return { icon: template.icon, text: `${actorName} ${template.phrase(label)}`, actorName }
 }
+
+// ---------------------------------------------------------------------------
+// Notification kind vocabulary (organizer "Emails" panel — human-readable
+// labels for `notifications.kind`, the sent/skipped chase log written by
+// the auto-chase edge function). A different table/shape than activity_feed
+// above (no actor, recipient-centric instead), but the same "human-readable
+// vocabulary" concern, so it lives alongside VERB_TEMPLATES rather than in
+// a separate file.
+// ---------------------------------------------------------------------------
+
+export interface NotificationKindInfo {
+  icon: string
+  /** Human-readable label, e.g. "Overdue action". */
+  label: string
+}
+
+const NOTIFICATION_KIND_LABELS: Record<string, NotificationKindInfo> = {
+  action_due_7d: { icon: '📅', label: 'Action due in 7 days' },
+  action_due_1d: { icon: '⏰', label: 'Action due tomorrow' },
+  overdue_action: { icon: '🚨', label: 'Overdue action' },
+  unclaimed_items: { icon: '🧾', label: 'Unclaimed expense items' },
+  unfilled_order: { icon: '🎿', label: 'Picks not filled in' },
+  unvoted_poll: { icon: '🗳️', label: 'Poll not voted on' },
+  pending_rsvp: { icon: '📝', label: 'RSVP reminder' },
+  conditional_date_arrived: { icon: '⏳', label: 'Conditional RSVP follow-up' },
+  waitlist_offer: { icon: '🎟️', label: 'Waitlist spot offered' },
+  unpaid_settlement: { icon: '💸', label: 'Settlement payment reminder' },
+  unconfirmed_settlement: { icon: '🤝', label: 'Settlement confirmation reminder' },
+  t30_no_transport: { icon: '✈️', label: 'No transport booked yet' },
+  t14_missing_arrival: { icon: '🛬', label: 'Missing arrival details' },
+  t1_checkin: { icon: '🛫', label: 'Flight check-in reminder' },
+}
+
+/**
+ * Human-readable label for a `notifications.kind` value. Unknown kinds
+ * (e.g. a new kind a future auto-chase change starts writing) degrade to a
+ * humanized version of the raw string rather than disappearing silently.
+ */
+export function describeNotificationKind(kind: string): NotificationKindInfo {
+  return NOTIFICATION_KIND_LABELS[kind] ?? { icon: '✉️', label: kind.replace(/_/g, ' ') }
+}

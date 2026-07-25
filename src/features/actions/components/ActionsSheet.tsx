@@ -314,6 +314,13 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           {!values.beforeTrip && (
             <Input label="Deadline" type="date" value={values.dueDate} onChange={(e) => updateField('dueDate', e.target.value)} />
           )}
+          {(values.beforeTrip || values.dueDate) && (
+            <p className="text-xs text-[var(--text-muted)]">
+              Giving this a deadline means whoever it's assigned to (or everyone, if unassigned) gets reminder
+              emails — 7 days before, 1 day before, and once overdue. The organizer can turn this off for the whole
+              trip in Auto-chase settings.
+            </p>
+          )}
           <Select
             label="Linked open question (optional)"
             value={values.sectionId}

@@ -2,11 +2,24 @@ import type { Json } from '../../../types/database.types'
 
 /**
  * trips.chase_settings jsonb contract, mirrored from the auto-chase edge
- * function (supabase/functions/auto-chase/index.ts). Chase is per-trip
- * OPT-IN: enabled defaults to false.
+ * function (supabase/functions/auto-chase/chaseSettings.ts -- NOT covered
+ * by scripts/check-contract-drift.mjs's MIRROR_PAIRS, so keep the two
+ * copies in sync by hand when this shape changes).
+ *
+ * Two independent knobs:
+ *   - `enabled` -- the bundled chase kinds (unclaimed items, unvoted polls,
+ *     pending RSVPs, waitlist offers, unpaid settlements). OPT-IN, defaults
+ *     to false: nobody is emailed about these until the organizer turns
+ *     this on.
+ *   - `action_reminders` -- the staged action-deadline ladder (7 days
+ *     before / 1 day before / overdue, for any action with a deadline).
+ *     OPT-OUT, defaults to true: creating an action with a deadline is
+ *     itself the opt-in, so this runs on every trip -- independent of
+ *     `enabled` -- unless the organizer explicitly turns it off.
  */
 export interface ChaseSettings {
   enabled: boolean
+  action_reminders: boolean
   delay_hours: number
   quiet_hours: { start: number; end: number } | null
   max_reminders: number
@@ -14,6 +27,7 @@ export interface ChaseSettings {
 
 export const DEFAULT_CHASE_SETTINGS: ChaseSettings = {
   enabled: false,
+  action_reminders: true,
   delay_hours: 48,
   quiet_hours: null,
   max_reminders: 3,
@@ -25,6 +39,7 @@ export function parseChaseSettings(raw: Json | null | undefined): ChaseSettings 
   const quiet = r.quiet_hours
   return {
     enabled: r.enabled === true,
+    action_reminders: r.action_reminders === false ? false : DEFAULT_CHASE_SETTINGS.action_reminders,
     delay_hours: typeof r.delay_hours === 'number' ? r.delay_hours : DEFAULT_CHASE_SETTINGS.delay_hours,
     quiet_hours:
       quiet && typeof quiet === 'object' && !Array.isArray(quiet) &&

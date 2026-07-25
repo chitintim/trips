@@ -1,6 +1,6 @@
 import { HTMLAttributes, useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { UserAvatar } from '../Avatar'
+import { UserAvatar, type AvatarProps } from '../Avatar'
 
 // ============================================================================
 // TYPES
@@ -55,6 +55,28 @@ export interface SelectionAvatarsProps extends HTMLAttributes<HTMLDivElement> {
 // COMPONENT
 // ============================================================================
 
+// `UserAvatar` (via `Avatar`'s `sizeStyles`) already owns the canonical w/h/
+// text-size classes per size token, defaulting to 'md' (w-10 h-10) when no
+// `size` prop is given. This component used to override that default purely
+// via `className` (e.g. appending `w-6 h-6` after `w-10 h-10`), but Tailwind
+// resolves same-specificity utility conflicts by generated-stylesheet order,
+// not className string order -- so the "md" default silently won every time
+// and the `size` prop below had no visible effect (every stack rendered at
+// 40px regardless of sm/md/lg). Passing an explicit mapped `size` prop
+// instead makes `UserAvatar` apply the right classes itself, which also
+// keeps inner content (icon %, emoji em-sizing) correctly proportioned
+// since that scaling is relative to the size token, not just the circle's
+// className.
+//
+// Mapped one token below Avatar's own scale so existing call sites (e.g.
+// the Actions sheet) that already use SelectionAvatars size="sm" next to a
+// single UserAvatar size="xs" line up at the same 24px circle.
+const AVATAR_SIZE_MAP: Record<'sm' | 'md' | 'lg', AvatarProps['size']> = {
+  sm: 'xs',
+  md: 'sm',
+  lg: 'md',
+}
+
 export function SelectionAvatars({
   selections,
   maxAvatars = 3,
@@ -73,26 +95,27 @@ export function SelectionAvatars({
   const visibleSelections = selections.slice(0, maxAvatars)
   const overflowCount = Math.max(0, selections.length - maxAvatars)
 
-  // Size classes
+  // Sizing for the pieces that are NOT `UserAvatar` (the overflow "+N"
+  // badge is a plain div, and labels are plain text) -- these apply their
+  // own classes directly, so no cascade conflict, no need to route through
+  // a component default.
   const sizeClasses = {
     sm: {
-      avatar: 'w-6 h-6 text-xs',
       overflow: 'w-6 h-6 text-xs',
       label: 'text-xs',
     },
     md: {
-      avatar: 'w-8 h-8 text-sm',
       overflow: 'w-8 h-8 text-xs',
       label: 'text-sm',
     },
     lg: {
-      avatar: 'w-10 h-10 text-base',
       overflow: 'w-10 h-10 text-sm',
       label: 'text-base',
     },
   }
 
   const classes = sizeClasses[size]
+  const avatarSize = AVATAR_SIZE_MAP[size]
 
   // Calculate popover position to avoid going off-screen
   useEffect(() => {
@@ -218,7 +241,8 @@ export function SelectionAvatars({
               key={selection.id}
               avatarData={user}
               alt={displayName}
-              className={`${classes.avatar} ring-2 ring-white`}
+              size={avatarSize}
+              className="ring-2 ring-white"
               title={displayName}
             />
           )

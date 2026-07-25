@@ -81,6 +81,13 @@ import {
   type ActionReminderStage,
   effectiveActionDueDate,
 } from './actionDueDate.ts'
+import {
+  buildSectionVoters,
+  type OptionForSectionVoters,
+  type SectionVoterIds,
+  type VoteForSectionVoters,
+} from '../_shared/actionCompletion/sectionVoters.ts'
+import { outstandingTargets } from './outstandingTargets.ts'
 
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
 
@@ -194,6 +201,33 @@ async function waitlistColumnExists(admin: SupabaseClient): Promise<boolean> {
     .select('waitlist_offer_expires_at')
     .limit(1)
   return !error
+}
+
+/** Shape of an `options` row selected with its embedded `option_votes`. */
+interface SectionOptionRow {
+  id: string
+  section_id: string
+  option_votes: { user_id: string }[] | null
+}
+
+/**
+ * DERIVED completion substrate (see src/features/actions/lib/actionStatus.ts
+ * and _shared/actionCompletion/sectionVoters.ts): fetch every option +
+ * option_votes row under `sectionIds` and join them into a SectionVoterIds
+ * map, so `outstandingTargets` can tell a section-linked action is complete
+ * for anyone who's voted, even without a trip_action_completions row.
+ * Shared by the staged-reminder sweep and the test-digest entrypoint below.
+ */
+async function fetchSectionVoters(admin: SupabaseClient, sectionIds: string[]): Promise<SectionVoterIds> {
+  if (sectionIds.length === 0) return new Map()
+  const { data } = await admin
+    .from('options')
+    .select('id, section_id, option_votes(user_id)')
+    .in('section_id', sectionIds)
+  const rows = (data ?? []) as SectionOptionRow[]
+  const options: OptionForSectionVoters[] = rows.map((o) => ({ id: o.id, section_id: o.section_id }))
+  const votes: VoteForSectionVoters[] = rows.flatMap((o) => (o.option_votes ?? []).map((v) => ({ option_id: o.id, user_id: v.user_id })))
+  return buildSectionVoters(options, votes)
 }
 
 Deno.serve(async (req) => {
@@ -623,7 +657,7 @@ Deno.serve(async (req) => {
       const { data: actionTrips, error: actionTripsError } = await admin
         .from('trips')
         .select(
-          'id, name, start_date, chase_settings, trip_actions!inner(id, title, assigned_to, deadline_kind, due_date, completed_at, trip_action_completions(user_id))'
+          'id, name, start_date, chase_settings, trip_actions!inner(id, title, assigned_to, deadline_kind, due_date, completed_at, section_id, trip_action_completions(user_id))'
         )
         .is('trip_actions.completed_at', null)
       if (actionTripsError) throw actionTripsError
@@ -661,17 +695,25 @@ Deno.serve(async (req) => {
           .in('action_id', staged.map((s) => s.action.id))
         const alreadySent = new Set((sentRows ?? []).map((r) => `${r.action_id}:${r.user_id}:${r.stage}`))
 
+        // DERIVED completion: an action linked to a decision section counts
+        // as complete for a user once they've voted in that section (see
+        // src/features/actions/lib/actionStatus.ts -- derived-vote OR
+        // manual-tick = complete). Without this, a section-linked action
+        // keeps chasing someone who's already voted. One query per trip for
+        // the sections any staged action here links to.
+        const sectionIds = [...new Set(staged.map((s) => s.action.section_id as string | null).filter((id): id is string => !!id))]
+        const sectionVoters = await fetchSectionVoters(admin, sectionIds)
+
         for (const { action: a, dueDate, stage } of staged) {
           // deno-lint-ignore no-explicit-any
-          const completedBy = new Set((a.trip_action_completions ?? []).map((c: any) => c.user_id))
+          const completedBy = new Set<string>((a.trip_action_completions ?? []).map((c: any) => c.user_id))
           if (a.assigned_to && !actionParticipantIds.includes(a.assigned_to)) continue
           const targets: string[] = a.assigned_to ? [a.assigned_to] : actionParticipantIds
 
           const chipLabel = actionDueChipLabel(dueDate, now)
           const deadlineLabel = formatDueDate(dueDate, a.deadline_kind)
 
-          for (const uid of targets) {
-            if (completedBy.has(uid)) continue
+          for (const uid of outstandingTargets(targets, a.section_id, completedBy, sectionVoters)) {
             if (alreadySent.has(`${a.id}:${uid}:${stage}`)) continue
             items.push({
               tripId: trip.id,
@@ -934,16 +976,22 @@ async function handleTestDigest(
 
   const { data: actions } = await admin
     .from('trip_actions')
-    .select('id, title, assigned_to, deadline_kind, due_date, trip_action_completions(user_id)')
+    .select('id, title, assigned_to, deadline_kind, due_date, section_id, trip_action_completions(user_id)')
     .eq('trip_id', trip_id)
     .is('completed_at', null)
+
+  // DERIVED completion (see the same block in the main sweep above): a
+  // section-linked action is complete for this user once they've voted in
+  // that section, even without a trip_action_completions row.
+  const sectionIds = [...new Set((actions ?? []).map((a) => a.section_id).filter((id): id is string => !!id))]
+  const sectionVoters = await fetchSectionVoters(admin, sectionIds)
 
   const rows: Array<{ dueDate: string; row: DigestActionRow }> = []
   for (const a of actions ?? []) {
     if (a.assigned_to && a.assigned_to !== user_id) continue
     // deno-lint-ignore no-explicit-any
-    const completedBy = new Set((a.trip_action_completions ?? []).map((c: any) => c.user_id))
-    if (completedBy.has(user_id)) continue
+    const completedBy = new Set<string>((a.trip_action_completions ?? []).map((c: any) => c.user_id))
+    if (outstandingTargets([user_id], a.section_id, completedBy, sectionVoters).length === 0) continue
     const dueDate = effectiveActionDueDate({
       deadline_kind: a.deadline_kind,
       due_date: a.due_date,

@@ -32,6 +32,7 @@ const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const MIRROR_PAIRS = [
   ['src/shared/contracts', 'supabase/functions/_shared/contracts', 'contracts'],
   ['src/lib/money', 'supabase/functions/_shared/money', 'money'],
+  ['src/lib/actionCompletion', 'supabase/functions/_shared/actionCompletion', 'actionCompletion'],
 ]
 
 /**

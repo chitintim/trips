@@ -3,9 +3,10 @@ import { Badge, Card, EmptyState, Skeleton, SelectionAvatars, UserAvatar } from 
 import { ErrorState } from '../../../components/ui/illustrations'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
-import { useActions } from '../../../lib/queries/useActions'
+import { useActions, useSectionVoters } from '../../../lib/queries/useActions'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
-import { countdownLabel, isOverdue } from '../../actions/lib/actionStatus'
+import { countdownLabel, groupCompletedUserIds, isActionCompleteForUser, isOverdue } from '../../actions/lib/actionStatus'
+import type { SectionVoterIds } from '../../actions/lib/actionStatus'
 
 export interface OrganizerActionsPanelProps {
   tripId: string
@@ -21,12 +22,13 @@ export function OrganizerActionsPanel({ tripId }: OrganizerActionsPanelProps) {
   const { data: trip, isLoading: tripLoading, isError: tripError } = useTrip(tripId)
   const { data: participants, isLoading: participantsLoading } = useParticipants(tripId)
   const { data: actions, isLoading: actionsLoading, isError: actionsError } = useActions(tripId)
+  const sectionVoters = useSectionVoters(tripId)
 
   const openSorted = useMemo(() => {
     const activeIds = (participants ?? []).filter((p) => p.active !== false).map((p) => p.user_id)
     const open = (actions ?? []).filter((a) => {
-      if (a.assigned_to) return a.completed_at == null
-      const completedIds = new Set((a.trip_action_completions || []).map((c) => c.user_id))
+      if (a.assigned_to) return !isActionCompleteForUser(a, a.assigned_to, sectionVoters)
+      const completedIds = groupCompletedUserIds(a, sectionVoters)
       return !(activeIds.length > 0 && activeIds.every((id) => completedIds.has(id)))
     })
     return [...open].sort((a, b) => {
@@ -35,7 +37,7 @@ export function OrganizerActionsPanel({ tripId }: OrganizerActionsPanelProps) {
       if (aOverdue !== bOverdue) return aOverdue ? -1 : 1
       return (a.due_date || '').localeCompare(b.due_date || '')
     })
-  }, [actions, participants, trip])
+  }, [actions, participants, trip, sectionVoters])
 
   if (tripLoading || actionsLoading || participantsLoading) {
     return (
@@ -65,7 +67,7 @@ export function OrganizerActionsPanel({ tripId }: OrganizerActionsPanelProps) {
   return (
     <ul className="space-y-2">
       {openSorted.map((action) => (
-        <OrganizerActionRow key={action.id} action={action} trip={trip} activeParticipants={participants ?? []} />
+        <OrganizerActionRow key={action.id} action={action} trip={trip} activeParticipants={participants ?? []} sectionVoters={sectionVoters} />
       ))}
     </ul>
   )
@@ -75,15 +77,17 @@ function OrganizerActionRow({
   action,
   trip,
   activeParticipants,
+  sectionVoters,
 }: {
   action: ActionWithCompletions
   trip: { start_date?: string | null } | null | undefined
   activeParticipants: ParticipantWithUser[]
+  sectionVoters: SectionVoterIds
 }) {
   const overdue = isOverdue(action, trip)
   const isGroupAction = !action.assigned_to
   const activeIds = activeParticipants.filter((p) => p.active !== false).map((p) => p.user_id)
-  const completedIds = new Set((action.trip_action_completions || []).map((c) => c.user_id))
+  const completedIds = groupCompletedUserIds(action, sectionVoters)
   const doneCount = activeIds.filter((id) => completedIds.has(id)).length
   const assignee = action.assigned_to ? activeParticipants.find((p) => p.user_id === action.assigned_to) : null
 

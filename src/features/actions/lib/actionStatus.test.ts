@@ -9,9 +9,12 @@ import {
   isActionOpenForUser,
   openActionCountForUser,
   isGroupComplete,
+  groupCompletedUserIds,
+  buildSectionVoters,
   countdownLabel,
   type ActionRow,
   type ActionWithCompletions,
+  type SectionVoterIds,
 } from './actionStatus'
 
 /** Local-date `YYYY-MM-DD` string N days from now, matching daysUntil's local-midnight semantics. */
@@ -34,6 +37,7 @@ function makeAction(overrides: Partial<ActionRow> = {}): ActionRow {
     due_date: null,
     completed_at: null,
     completed_by: null,
+    section_id: null,
     created_at: '2026-01-01T00:00:00Z',
     ...overrides,
   }
@@ -283,5 +287,111 @@ describe('countdownLabel', () => {
   it('has sensible copy for a fixed action with no due date', () => {
     const action = makeAction({ deadline_kind: 'fixed', due_date: null })
     expect(countdownLabel(action, undefined)).toBe('No due date')
+  })
+})
+
+describe('buildSectionVoters', () => {
+  it('maps section ids to the users who voted on any of that section option', () => {
+    const options = [
+      { id: 'opt1', section_id: 'sec1' },
+      { id: 'opt2', section_id: 'sec1' },
+      { id: 'opt3', section_id: 'sec2' },
+    ]
+    const votes = [
+      { option_id: 'opt1', user_id: 'u1' },
+      { option_id: 'opt2', user_id: 'u2' },
+      { option_id: 'opt3', user_id: 'u1' },
+    ]
+    const voters = buildSectionVoters(options, votes)
+    expect(voters.get('sec1')).toEqual(new Set(['u1', 'u2']))
+    expect(voters.get('sec2')).toEqual(new Set(['u1']))
+  })
+
+  it('ignores votes for options with no known section (stale/deleted option)', () => {
+    const voters = buildSectionVoters([], [{ option_id: 'ghost', user_id: 'u1' }])
+    expect(voters.size).toBe(0)
+  })
+})
+
+describe('derived (vote-based) completion', () => {
+  const votersFor = (sectionId: string, userIds: string[]): SectionVoterIds => new Map([[sectionId, new Set(userIds)]])
+
+  describe('isActionCompleteForUser', () => {
+    it('individual action linked to a section: complete once the assignee has voted, even with completed_at unset', () => {
+      const action = makeAction({ assigned_to: 'u1', completed_at: null, section_id: 'sec1' }) as ActionWithCompletions
+      expect(isActionCompleteForUser(action, 'u1', votersFor('sec1', ['u1']))).toBe(true)
+    })
+
+    it('individual action linked to a section: still incomplete when the assignee has not voted', () => {
+      const action = makeAction({ assigned_to: 'u1', completed_at: null, section_id: 'sec1' }) as ActionWithCompletions
+      expect(isActionCompleteForUser(action, 'u1', votersFor('sec1', ['someoneElse']))).toBe(false)
+    })
+
+    it('group action linked to a section: complete for a user the moment they vote, without a completion row', () => {
+      const action: ActionWithCompletions = { ...makeAction({ assigned_to: null, section_id: 'sec1' }), trip_action_completions: [] }
+      expect(isActionCompleteForUser(action, 'u2', votersFor('sec1', ['u2']))).toBe(true)
+    })
+
+    it('a retracted vote (no longer in sectionVoters) reverts a section-linked action to incomplete', () => {
+      const action: ActionWithCompletions = { ...makeAction({ assigned_to: null, section_id: 'sec1' }), trip_action_completions: [] }
+      // Freshly rebuilt sectionVoters (as it would be after the vote row is deleted) no longer lists u2.
+      const afterRetraction = votersFor('sec1', [])
+      expect(isActionCompleteForUser(action, 'u2', afterRetraction)).toBe(false)
+    })
+
+    it('manual completion still wins even without a matching vote (derived OR manual = complete)', () => {
+      const action: ActionWithCompletions = {
+        ...makeAction({ assigned_to: null, section_id: 'sec1' }),
+        trip_action_completions: [{ user_id: 'u2', completed_at: '2026-01-05T00:00:00Z' }],
+      }
+      expect(isActionCompleteForUser(action, 'u2', votersFor('sec1', []))).toBe(true)
+    })
+
+    it('an action with no section_id is unaffected by votes (unchanged manual-only behaviour)', () => {
+      const action: ActionWithCompletions = { ...makeAction({ assigned_to: null, section_id: null }), trip_action_completions: [] }
+      expect(isActionCompleteForUser(action, 'u2', votersFor('sec1', ['u2']))).toBe(false)
+    })
+
+    it('is unaffected by votes when no sectionVoters map is supplied at all', () => {
+      const action = makeAction({ assigned_to: 'u1', completed_at: null, section_id: 'sec1' }) as ActionWithCompletions
+      expect(isActionCompleteForUser(action, 'u1')).toBe(false)
+    })
+  })
+
+  describe('groupCompletedUserIds / isGroupComplete', () => {
+    it('folds voters for the linked section into the completed-ids set alongside explicit completion rows', () => {
+      const action: ActionWithCompletions = {
+        ...makeAction({ assigned_to: null, section_id: 'sec1' }),
+        trip_action_completions: [{ user_id: 'u1', completed_at: '2026-01-01T00:00:00Z' }],
+      }
+      const ids = groupCompletedUserIds(action, votersFor('sec1', ['u2']))
+      expect(ids).toEqual(new Set(['u1', 'u2']))
+    })
+
+    it('isGroupComplete is satisfied once every active participant has either voted or ticked manually', () => {
+      const action: ActionWithCompletions = {
+        ...makeAction({ assigned_to: null, section_id: 'sec1' }),
+        trip_action_completions: [{ user_id: 'u1', completed_at: '2026-01-01T00:00:00Z' }],
+      }
+      expect(isGroupComplete(action, ['u1', 'u2'], votersFor('sec1', ['u2']))).toBe(true)
+      expect(isGroupComplete(action, ['u1', 'u2'], votersFor('sec1', []))).toBe(false)
+    })
+  })
+
+  describe('isActionOpenForUser', () => {
+    it('a section-linked individual action drops out of "open" once the assignee votes', () => {
+      const action = makeAction({ assigned_to: 'me', completed_at: null, section_id: 'sec1' }) as ActionWithCompletions
+      expect(isActionOpenForUser(action, 'me', votersFor('sec1', []))).toBe(true)
+      expect(isActionOpenForUser(action, 'me', votersFor('sec1', ['me']))).toBe(false)
+    })
+
+    it('openActionCountForUser reflects derived completion too', () => {
+      const actions: ActionWithCompletions[] = [
+        { ...makeAction({ id: 'a1', assigned_to: null, section_id: 'sec1' }), trip_action_completions: [] },
+        { ...makeAction({ id: 'a2', assigned_to: 'me', completed_at: '2026-01-05T00:00:00Z' }), trip_action_completions: [] },
+      ]
+      expect(openActionCountForUser(actions, 'me', votersFor('sec1', []))).toBe(1)
+      expect(openActionCountForUser(actions, 'me', votersFor('sec1', ['me']))).toBe(0)
+    })
   })
 })

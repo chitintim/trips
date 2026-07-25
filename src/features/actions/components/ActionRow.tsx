@@ -1,8 +1,8 @@
 import { Badge, Button, LinkifiedText, SelectionAvatars, UserAvatar } from '../../../components/ui'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
-import { countdownBadgeVariant, countdownLabel, isActionCompleteForUser, isGroupComplete } from '../lib/actionStatus'
-import type { TripForActionStatus } from '../lib/actionStatus'
+import { countdownBadgeVariant, countdownLabel, groupCompletedUserIds, isActionCompleteForUser, isGroupComplete } from '../lib/actionStatus'
+import type { SectionVoterIds, TripForActionStatus } from '../lib/actionStatus'
 
 export interface ActionRowProps {
   action: ActionWithCompletions
@@ -11,6 +11,8 @@ export interface ActionRowProps {
   currentUserId: string | undefined
   /** Trip creator/organizer — gates the delete affordance alongside the action's own creator. */
   isOrganizer: boolean
+  /** section_id -> voter ids, for actions linked to an open question (see actionStatus.ts). */
+  sectionVoters?: SectionVoterIds
   onToggle: (done: boolean) => void
   onEdit: () => void
   onDelete: () => void
@@ -24,22 +26,43 @@ export interface ActionRowProps {
  * whole-group action it reflects the current user's own confirmation, with
  * per-member avatars showing the rest of the group's progress.
  */
-export function ActionRow({ action, trip, participants, currentUserId, isOrganizer, onToggle, onEdit, onDelete }: ActionRowProps) {
+export function ActionRow({
+  action,
+  trip,
+  participants,
+  currentUserId,
+  isOrganizer,
+  sectionVoters,
+  onToggle,
+  onEdit,
+  onDelete,
+}: ActionRowProps) {
   const isGroupAction = !action.assigned_to
   const assignee = action.assigned_to ? participants.find((p) => p.user_id === action.assigned_to) : null
   const assigneeName = isGroupAction ? 'Everyone' : assignee?.user?.full_name || assignee?.user?.email || 'Someone'
 
-  const myDone = currentUserId ? isActionCompleteForUser(action, currentUserId) : false
-  const groupDone = isGroupAction ? isGroupComplete(action, participants.map((p) => p.user_id)) : false
+  const myDone = currentUserId ? isActionCompleteForUser(action, currentUserId, sectionVoters) : false
+  const groupDone = isGroupAction
+    ? isGroupComplete(
+        action,
+        participants.map((p) => p.user_id),
+        sectionVoters
+      )
+    : false
   const done = isGroupAction ? groupDone : myDone
 
   const canDelete = isOrganizer || action.created_by === currentUserId
 
-  const completionSelections = (action.trip_action_completions || []).map((c) => {
-    const p = participants.find((pp) => pp.user_id === c.user_id)
+  // "Completed by" includes derived (voted) completions alongside explicit
+  // rows (groupCompletedUserIds), so a voter shows up here even without a
+  // manual tick — a completion timestamp is only available for the manual
+  // rows (voter-only entries fall back to "Unknown" in the avatars popover).
+  const completionTimestamps = new Map((action.trip_action_completions || []).map((c) => [c.user_id, c.completed_at]))
+  const completionSelections = Array.from(groupCompletedUserIds(action, sectionVoters)).map((userId) => {
+    const p = participants.find((pp) => pp.user_id === userId)
     return {
-      id: c.user_id,
-      selected_at: c.completed_at,
+      id: userId,
+      selected_at: completionTimestamps.get(userId),
       user: p?.user
         ? {
             full_name: p.user.full_name ?? undefined,
@@ -75,6 +98,7 @@ export function ActionRow({ action, trip, participants, currentUserId, isOrganiz
         {action.notes && (
           <LinkifiedText as="p" text={action.notes} className="min-w-0 break-words text-xs text-[var(--text-secondary)]" />
         )}
+        {action.section_id && <p className="text-xs italic text-[var(--text-muted)]">🗳️ Ticks off when you vote</p>}
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
           {isGroupAction ? (
             <span className="flex items-center gap-1.5">

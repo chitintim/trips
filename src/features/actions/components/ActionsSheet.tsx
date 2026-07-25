@@ -2,13 +2,16 @@ import { useMemo, useState } from 'react'
 import { Button, EmptyState, Input, Modal, Select, SegmentedControl, TextArea, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
-import { useActions, useCreateAction, useUpdateAction, useDeleteAction, useToggleActionDone } from '../../../lib/queries/useActions'
+import { useActions, useCreateAction, useUpdateAction, useDeleteAction, useToggleActionDone, useSectionVoters } from '../../../lib/queries/useActions'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
+import { useSections } from '../../../lib/queries/usePlanning'
 import { useChecklists } from '../../../lib/queries/useChecklists'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { ChecklistTab, openBringCountForUser } from '../../checklists'
 import { ActionRow } from './ActionRow'
-import { isOverdue, openActionCountForUser } from '../lib/actionStatus'
+import { isActionCompleteForUser, isGroupComplete, isOverdue, openActionCountForUser } from '../lib/actionStatus'
+import type { SectionVoterIds } from '../lib/actionStatus'
+import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import type { TablesUpdate } from '../../../types/database.types'
 
 export interface ActionsSheetProps {
@@ -28,9 +31,11 @@ interface ActionFormValues {
   assignee: string
   beforeTrip: boolean
   dueDate: string
+  /** Linked open question (planning_sections.id), or '' for none — see actionStatus.ts's derived completion. */
+  sectionId: string
 }
 
-const EMPTY_FORM: ActionFormValues = { title: '', notes: '', assignee: '', beforeTrip: false, dueDate: '' }
+const EMPTY_FORM: ActionFormValues = { title: '', notes: '', assignee: '', beforeTrip: false, dueDate: '', sectionId: '' }
 
 /**
  * Launched "Actions" sheet — trip actions/to-dos (book it, send it, sort
@@ -45,6 +50,8 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
   const { data: participants } = useParticipants(tripId)
   const { data: actions, isLoading } = useActions(tripId)
   const { data: bringItems } = useChecklists(tripId)
+  const { data: sections } = useSections(tripId)
+  const sectionVoters = useSectionVoters(tripId)
   const createAction = useCreateAction(tripId)
   const updateAction = useUpdateAction(tripId)
   const deleteAction = useDeleteAction(tripId)
@@ -70,10 +77,24 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
     [participants]
   )
 
+  // Open, non-personal (group-vote) decision sections a new/edited action
+  // can link to — "personal order" sections (getDecisionShape) have no
+  // single group vote to derive completion from, and a closed section has
+  // nothing left to vote on.
+  const sectionOptions = useMemo(
+    () => [
+      { value: '', label: 'None' },
+      ...(sections ?? [])
+        .filter((s) => s.status !== 'completed' && getDecisionShape(s.metadata) !== 'personal')
+        .map((s) => ({ value: s.id, label: s.title })),
+    ],
+    [sections]
+  )
+
   const sorted = useMemo(() => {
     const list = [...(actions || [])]
-    const openList = list.filter((a) => !isActionFullyDone(a, trip, participants ?? []))
-    const doneList = list.filter((a) => isActionFullyDone(a, trip, participants ?? []))
+    const openList = list.filter((a) => !isActionFullyDone(a, trip, participants ?? [], sectionVoters))
+    const doneList = list.filter((a) => isActionFullyDone(a, trip, participants ?? [], sectionVoters))
     const byUrgency = (a: ActionWithCompletions, b: ActionWithCompletions) => {
       const aOverdue = isOverdue(a, trip)
       const bOverdue = isOverdue(b, trip)
@@ -82,7 +103,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
     }
     openList.sort(byUrgency)
     return { openList, doneList }
-  }, [actions, trip, participants])
+  }, [actions, trip, participants, sectionVoters])
 
   const openForCreate = () => {
     setEditingId(null)
@@ -98,6 +119,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
       assignee: action.assigned_to || '',
       beforeTrip: action.deadline_kind === 'before_trip',
       dueDate: action.due_date || '',
+      sectionId: action.section_id || '',
     })
     setFormOpen(true)
   }
@@ -119,6 +141,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
       assigned_to: values.assignee || null,
       deadline_kind: values.beforeTrip ? 'before_trip' : 'fixed',
       due_date: values.beforeTrip ? null : values.dueDate || null,
+      section_id: values.sectionId || null,
     }
     try {
       if (editingId) {
@@ -130,6 +153,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           assigned_to: values.assignee || null,
           deadline_kind: values.beforeTrip ? 'before_trip' : 'fixed',
           due_date: values.beforeTrip ? null : values.dueDate || null,
+          section_id: values.sectionId || null,
           created_by: user.id,
         })
       }
@@ -169,7 +193,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           options={[
             // Badges: open items relevant to the CURRENT user (their own /
             // whole-group actions; unclaimed or their unpacked bring items).
-            { value: 'actions', label: 'Actions', badge: openActionCountForUser(actions, user?.id) },
+            { value: 'actions', label: 'Actions', badge: openActionCountForUser(actions, user?.id, sectionVoters) },
             { value: 'bring', label: 'Bring list', badge: openBringCountForUser(bringItems, user?.id) },
           ]}
         />
@@ -206,6 +230,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
                       participants={participants ?? []}
                       currentUserId={user?.id}
                       isOrganizer={isOrganizer}
+                      sectionVoters={sectionVoters}
                       onToggle={(done) => handleToggle(action, done)}
                       onEdit={() => openForEdit(action)}
                       onDelete={() =>
@@ -234,6 +259,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
                             participants={participants ?? []}
                             currentUserId={user?.id}
                             isOrganizer={isOrganizer}
+                            sectionVoters={sectionVoters}
                             onToggle={(done) => handleToggle(action, done)}
                             onEdit={() => openForEdit(action)}
                             onDelete={() =>
@@ -288,6 +314,13 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           {!values.beforeTrip && (
             <Input label="Deadline" type="date" value={values.dueDate} onChange={(e) => updateField('dueDate', e.target.value)} />
           )}
+          <Select
+            label="Linked open question (optional)"
+            value={values.sectionId}
+            onChange={(e) => updateField('sectionId', e.target.value)}
+            options={sectionOptions}
+            helperText="Ticks off automatically once someone votes — no need to also tick it by hand."
+          />
 
           <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
             <Button variant="ghost" onClick={() => setFormOpen(false)} disabled={createAction.isPending || updateAction.isPending}>
@@ -303,15 +336,21 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
   )
 }
 
-/** Whether an action is "done" for sorting purposes: individual → completed_at set; group → every active participant confirmed. */
+/**
+ * Whether an action is "done" for sorting purposes: individual → complete
+ * for the assignee (manual tick OR a vote in the linked section); group →
+ * every active participant complete the same way. Delegates to the shared
+ * actionStatus predicates so this stays in lockstep with ActionRow's own
+ * done state.
+ */
 function isActionFullyDone(
   action: ActionWithCompletions,
   trip: { start_date?: string | null } | null | undefined,
-  participants: { user_id: string; active?: boolean | null }[]
+  participants: { user_id: string; active?: boolean | null }[],
+  sectionVoters: SectionVoterIds
 ): boolean {
   void trip
-  if (action.assigned_to) return action.completed_at != null
+  if (action.assigned_to) return isActionCompleteForUser(action, action.assigned_to, sectionVoters)
   const activeIds = participants.filter((p) => p.active !== false).map((p) => p.user_id)
-  const completedIds = new Set((action.trip_action_completions || []).map((c) => c.user_id))
-  return activeIds.length > 0 && activeIds.every((id) => completedIds.has(id))
+  return isGroupComplete(action, activeIds, sectionVoters)
 }

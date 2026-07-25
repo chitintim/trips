@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Badge, Button, Card } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useTrip } from '../../../lib/queries/useTrip'
-import { useActions } from '../../../lib/queries/useActions'
+import { useActions, useSectionVoters } from '../../../lib/queries/useActions'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
 import { countdownBadgeVariant, countdownLabel, isActionOpenForUser, isOverdue } from '../lib/actionStatus'
 
@@ -29,19 +29,22 @@ export function ActionsSection({ tripId, onOpenActions }: ActionsSectionProps) {
   const { user } = useAuth()
   const { data: trip } = useTrip(tripId)
   const { data: actions } = useActions(tripId)
+  const sectionVoters = useSectionVoters(tripId)
 
   const relevant = useMemo(() => {
     if (!user) return []
     // Same predicate as the sheet's segment badge — assigned to me and
-    // open, or a whole-group action I haven't confirmed yet.
-    const mine = (actions || []).filter((a) => isActionOpenForUser(a, user.id))
+    // open, or a whole-group action I haven't confirmed yet. A
+    // section-linked action drops out here the moment I cast my vote
+    // (isActionOpenForUser is derived from sectionVoters, see actionStatus.ts).
+    const mine = (actions || []).filter((a) => isActionOpenForUser(a, user.id, sectionVoters))
     return [...mine].sort((a, b) => {
       const aOverdue = isOverdue(a, trip)
       const bOverdue = isOverdue(b, trip)
       if (aOverdue !== bOverdue) return aOverdue ? -1 : 1
       return (a.due_date || '').localeCompare(b.due_date || '')
     })
-  }, [actions, user, trip])
+  }, [actions, user, trip, sectionVoters])
 
   const topThree = relevant.slice(0, 3)
 

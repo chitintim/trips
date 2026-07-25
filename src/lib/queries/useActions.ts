@@ -1,8 +1,11 @@
+import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { Tables, TablesInsert, TablesUpdate } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
+import { useOptions, useVotes } from './usePlanning'
+import { buildSectionVoters, type SectionVoterIds } from '../../features/actions/lib/actionStatus'
 
 export type ActionCompletion = Pick<Tables<'trip_action_completions'>, 'user_id' | 'completed_at'>
 
@@ -26,6 +29,20 @@ export function useActions(tripId: string | undefined) {
     },
     enabled: !!tripId,
   })
+}
+
+/**
+ * Section-linked actions' derived-completion substrate: section_id -> the
+ * set of userIds who've voted in that section. Reuses the trip's already-
+ * fetched `useOptions`/`useVotes` caches (same query keys other planning
+ * surfaces already populate) rather than issuing a bespoke fetch — see
+ * `buildSectionVoters` for the pure join and actionStatus.ts for how it
+ * flows into completion.
+ */
+export function useSectionVoters(tripId: string | undefined): SectionVoterIds {
+  const { data: options } = useOptions(tripId)
+  const { data: votes } = useVotes(tripId)
+  return useMemo(() => buildSectionVoters(options ?? [], votes ?? []), [options, votes])
 }
 
 export function useCreateAction(tripId: string) {

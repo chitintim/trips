@@ -1529,6 +1529,7 @@ export type Database = {
           due_date: string | null
           id: string
           notes: string | null
+          section_id: string | null
           title: string
           trip_id: string
         }
@@ -1542,6 +1543,7 @@ export type Database = {
           due_date?: string | null
           id?: string
           notes?: string | null
+          section_id?: string | null
           title: string
           trip_id: string
         }
@@ -1555,6 +1557,7 @@ export type Database = {
           due_date?: string | null
           id?: string
           notes?: string | null
+          section_id?: string | null
           title?: string
           trip_id?: string
         }
@@ -1578,6 +1581,13 @@ export type Database = {
             columns: ["created_by"]
             isOneToOne: false
             referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_actions_section_id_fkey"
+            columns: ["section_id"]
+            isOneToOne: false
+            referencedRelation: "planning_sections"
             referencedColumns: ["id"]
           },
           {

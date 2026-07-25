@@ -1,6 +1,16 @@
 import { daysUntil, deadlineUrgency } from '../../../lib/dates'
 import type { DeadlineUrgency } from '../../../lib/dates'
 import type { Database } from '../../../types/database.types'
+import {
+  buildSectionVoters,
+  hasVotedInSection as hasVotedInSectionId,
+  type OptionForSectionVoters,
+  type SectionVoterIds,
+  type VoteForSectionVoters,
+} from '../../../lib/actionCompletion/sectionVoters'
+
+export { buildSectionVoters }
+export type { OptionForSectionVoters, SectionVoterIds, VoteForSectionVoters }
 
 export type ActionRow = Database['public']['Tables']['trip_actions']['Row']
 export type ActionCompletionRow = Database['public']['Tables']['trip_action_completions']['Row']
@@ -19,6 +29,21 @@ export type ActionWithCompletions = ActionRow & {
 /** Minimal trip shape needed to resolve a "before_trip" deadline. */
 export interface TripForActionStatus {
   start_date?: string | null
+}
+
+/**
+ * section_id -> the set of userIds who have cast an `option_votes` row for
+ * any option under that section. The substrate for section-linked actions'
+ * derived completion (see `buildSectionVoters`, `hasVotedInSection`).
+ * Definitions live in ../../../lib/actionCompletion/sectionVoters -- a
+ * dependency-free module mirrored into the auto-chase edge function so the
+ * "who still owes this action" query agrees with this file's derived
+ * completion (see scripts/check-contract-drift.mjs).
+ */
+
+/** Whether `userId` has cast a vote in the section an action is linked to (false when unlinked or no vote data was supplied). */
+function hasVotedInSection(action: ActionRow, userId: string, sectionVoters: SectionVoterIds | undefined): boolean {
+  return hasVotedInSectionId(action.section_id, userId, sectionVoters)
 }
 
 /**
@@ -72,26 +97,50 @@ export function countdownBadgeVariant(action: ActionRow, trip: TripForActionStat
 
 /**
  * Whether `userId` has completed this action.
- * - Individual actions (assigned_to set): driven by `completed_at`.
- * - Group actions (assigned_to null): driven by a matching completion row.
+ * - Individual actions (assigned_to set): the assignee's `completed_at`, OR
+ *   (precedence: derived-vote OR manual-tick = complete) the assignee has
+ *   voted in the action's linked section, when it has one.
+ * - Group actions (assigned_to null): a matching completion row for
+ *   `userId`, OR `userId` has voted in the linked section.
+ * A vote retraction naturally reverts this to incomplete — there is no
+ * separate "voted" flag stored anywhere, `sectionVoters` is rebuilt fresh
+ * from the current `option_votes` rows every time.
  */
-export function isActionCompleteForUser(action: ActionWithCompletions, userId: string): boolean {
+export function isActionCompleteForUser(action: ActionWithCompletions, userId: string, sectionVoters?: SectionVoterIds): boolean {
   if (action.assigned_to) {
-    return action.completed_at != null
+    if (action.completed_at != null) return true
+    return hasVotedInSection(action, action.assigned_to, sectionVoters)
   }
   const completions = action.trip_action_completions ?? []
-  return completions.some((c) => c.user_id === userId)
+  if (completions.some((c) => c.user_id === userId)) return true
+  return hasVotedInSection(action, userId, sectionVoters)
+}
+
+/**
+ * A group action's completed-user-ids set: an explicit completion row OR
+ * (derived) a vote in the action's linked section — same precedence as
+ * `isActionCompleteForUser`. Shared substrate for the "Completed by
+ * (n/total)" count + avatar stack (ActionRow) and the organizer's
+ * "Waiting on" outstanding stack (its complement, OrganizerActionsPanel).
+ */
+export function groupCompletedUserIds(action: ActionWithCompletions, sectionVoters?: SectionVoterIds): Set<string> {
+  const ids = new Set((action.trip_action_completions ?? []).map((c) => c.user_id))
+  if (action.section_id && sectionVoters) {
+    for (const id of sectionVoters.get(action.section_id) ?? []) ids.add(id)
+  }
+  return ids
 }
 
 /**
  * Whether a group action is complete for the whole group — every currently
- * active participant has a completion row. Participants who are no longer
- * active (removed/left) never block completeness even without a row.
+ * active participant has a completion row OR has voted in the action's
+ * linked section (same derived-OR-manual precedence as
+ * `isActionCompleteForUser`). Participants who are no longer active
+ * (removed/left) never block completeness even without a row.
  */
-export function isGroupComplete(action: ActionWithCompletions, activeParticipantIds: string[]): boolean {
+export function isGroupComplete(action: ActionWithCompletions, activeParticipantIds: string[], sectionVoters?: SectionVoterIds): boolean {
   if (activeParticipantIds.length === 0) return false
-  const completions = action.trip_action_completions ?? []
-  const completedIds = new Set(completions.map((c) => c.user_id))
+  const completedIds = groupCompletedUserIds(action, sectionVoters)
   return activeParticipantIds.every((id) => completedIds.has(id))
 }
 
@@ -116,15 +165,19 @@ export function countdownLabel(action: ActionRow, trip: TripForActionStatus | nu
  * relevance predicate behind Today's ActionsSection list and every
  * user-facing open-action count (segment badges, section header).
  */
-export function isActionOpenForUser(action: ActionWithCompletions, userId: string): boolean {
+export function isActionOpenForUser(action: ActionWithCompletions, userId: string, sectionVoters?: SectionVoterIds): boolean {
   if (action.assigned_to) {
-    return action.assigned_to === userId && action.completed_at == null
+    return action.assigned_to === userId && !isActionCompleteForUser(action, userId, sectionVoters)
   }
-  return !isActionCompleteForUser(action, userId)
+  return !isActionCompleteForUser(action, userId, sectionVoters)
 }
 
 /** Count of open actions relevant to `userId` (see isActionOpenForUser). */
-export function openActionCountForUser(actions: ActionWithCompletions[] | null | undefined, userId: string | undefined): number {
+export function openActionCountForUser(
+  actions: ActionWithCompletions[] | null | undefined,
+  userId: string | undefined,
+  sectionVoters?: SectionVoterIds
+): number {
   if (!userId) return 0
-  return (actions ?? []).filter((a) => isActionOpenForUser(a, userId)).length
+  return (actions ?? []).filter((a) => isActionOpenForUser(a, userId, sectionVoters)).length
 }

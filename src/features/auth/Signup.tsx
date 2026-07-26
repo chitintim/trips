@@ -14,7 +14,7 @@ import { processAndUploadAvatar } from '../../lib/avatarUpload'
 import { type AvatarIconName } from '../../components/ui/Avatar'
 import { AvatarData, AnyAvatarData } from '../../types'
 import { AuthLayout } from './AuthLayout'
-import { validateEmail, validatePassword, validateRequired } from './lib/validation'
+import { validateEmail, validateEmailConfirmation, validatePassword, validateRequired } from './lib/validation'
 import { finalizeSignup, storePendingSignup, clearPendingSignup } from './lib/finalizeSignup'
 import { reportError } from '../../lib/reportError'
 
@@ -70,6 +70,7 @@ function mapSignupError(message: string): string {
  */
 interface SignupDraftValues {
   email: string
+  confirmEmail: string
   firstName: string
   lastName: string
   avatarTab: AvatarTab
@@ -79,6 +80,7 @@ interface SignupDraftValues {
 
 const EMPTY_DRAFT: SignupDraftValues = {
   email: '',
+  confirmEmail: '',
   firstName: '',
   lastName: '',
   avatarTab: 'icons',
@@ -118,6 +120,7 @@ export function Signup() {
   // Account mode + profile form
   const [accountMode, setAccountMode] = useState<AccountMode>('otp')
   const [email, setEmail] = useState('')
+  const [confirmEmail, setConfirmEmail] = useState('')
   const [password, setPassword] = useState('')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
@@ -126,6 +129,11 @@ export function Signup() {
   // input must show inline, role="alert" text under the offending field --
   // never a silent no-op).
   const [emailError, setEmailError] = useState<string | null>(null)
+  // Real-incident guard (2026-07-26): a typo'd signup email with no working
+  // inbox means the confirmation mail never arrives and the account is
+  // unrecoverable -- the invite reads as "used" forever. The confirm field
+  // catches the typo before the account is ever created.
+  const [confirmEmailError, setConfirmEmailError] = useState<string | null>(null)
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [firstNameError, setFirstNameError] = useState<string | null>(null)
   const [lastNameError, setLastNameError] = useState<string | null>(null)
@@ -184,6 +192,7 @@ export function Signup() {
   useEffect(() => {
     if (!isRestored) return
     setEmail(draft.email)
+    setConfirmEmail(draft.confirmEmail)
     setFirstName(draft.firstName)
     setLastName(draft.lastName)
     setAvatarTab(draft.avatarTab)
@@ -366,14 +375,20 @@ export function Signup() {
    * password mode additionally needs a password. */
   const validateDetailsFields = (): boolean => {
     const emailErr = validateEmail(email)
+    // Only check the confirmation against the primary email once the
+    // primary is itself well-formed -- otherwise a malformed primary email
+    // would surface a confusing "don't match" error on the confirm field
+    // instead of pointing at the actual problem.
+    const confirmEmailErr = emailErr ? null : validateEmailConfirmation(email, confirmEmail)
     const firstNameErr = validateRequired(firstName, 'First name')
     const lastNameErr = validateRequired(lastName, 'Last name')
     const passwordErr = accountMode === 'password' ? validatePassword(password) : null
     setEmailError(emailErr)
+    setConfirmEmailError(confirmEmailErr)
     setFirstNameError(firstNameErr)
     setLastNameError(lastNameErr)
     setPasswordError(passwordErr)
-    return !emailErr && !firstNameErr && !lastNameErr && !passwordErr
+    return !emailErr && !confirmEmailErr && !firstNameErr && !lastNameErr && !passwordErr
   }
 
   // Password-mode signup: create the account and profile in one step.
@@ -606,13 +621,37 @@ export function Signup() {
                 ]}
               />
 
+              {/* Real-incident note (2026-07-26): two users have been
+                  permanently locked out after typo'ing this field -- the
+                  confirmation email never arrived and the invite then read
+                  as used/expired with no recovery path. Short and upfront
+                  rather than buried in helper text. */}
+              <div className="flex items-start gap-2.5 rounded-[var(--radius-md)] border border-dashed border-accent-300 bg-accent-50/50 dark:bg-accent-950/20 px-3 py-2.5">
+                <span aria-hidden="true" className="text-base leading-none mt-0.5">✉️</span>
+                <p className="text-sm text-[var(--text-secondary)]">
+                  Use an email you can actually check — we'll send a confirmation there, and you'll need it to log back in later.
+                </p>
+              </div>
+
               <Input
+                id="signup-email"
+                name="email"
                 label="Email"
                 type="email"
+                inputMode="email"
+                autoComplete="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={email}
                 onChange={(e) => {
                   setEmail(e.target.value)
                   setEmailError(null)
+                  // A confirm-field mismatch may no longer apply once the
+                  // primary email changes -- clear the stale error instead
+                  // of leaving it on screen; it's re-checked on the confirm
+                  // field's own blur and again on submit.
+                  setConfirmEmailError(null)
                   setDraft((prev) => ({ ...prev, email: e.target.value }))
                 }}
                 placeholder="you@example.com"
@@ -621,10 +660,46 @@ export function Signup() {
                 error={emailError ?? undefined}
               />
 
+              <Input
+                id="signup-confirm-email"
+                name="confirm-email"
+                label="Confirm email"
+                type="email"
+                inputMode="email"
+                // "email", not "off": letting the password manager fill this
+                // from the same saved value keeps the two fields consistent
+                // instead of fighting the very autofill that helps prevent
+                // typos in the first place.
+                autoComplete="email"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                value={confirmEmail}
+                onChange={(e) => {
+                  setConfirmEmail(e.target.value)
+                  setConfirmEmailError(null)
+                  setDraft((prev) => ({ ...prev, confirmEmail: e.target.value }))
+                }}
+                onBlur={() => {
+                  // Validate on blur, not on every keystroke -- flagging a
+                  // "mismatch" while the user is still mid-typing the second
+                  // copy is just noise until they've actually finished.
+                  if (!confirmEmail) return
+                  setConfirmEmailError(validateEmailConfirmation(email, confirmEmail))
+                }}
+                placeholder="you@example.com"
+                required
+                disabled={loading}
+                error={confirmEmailError ?? undefined}
+              />
+
               {accountMode === 'password' && (
                 <Input
+                  id="signup-password"
+                  name="new-password"
                   label="Password"
                   type="password"
+                  autoComplete="new-password"
                   value={password}
                   onChange={(e) => {
                     setPassword(e.target.value)
@@ -639,8 +714,11 @@ export function Signup() {
               )}
 
               <Input
+                id="signup-first-name"
+                name="given-name"
                 label="First name"
                 type="text"
+                autoComplete="given-name"
                 value={firstName}
                 onChange={(e) => {
                   setFirstName(e.target.value)
@@ -652,8 +730,11 @@ export function Signup() {
                 error={firstNameError ?? undefined}
               />
               <Input
+                id="signup-last-name"
+                name="family-name"
                 label="Last name"
                 type="text"
+                autoComplete="family-name"
                 value={lastName}
                 onChange={(e) => {
                   setLastName(e.target.value)

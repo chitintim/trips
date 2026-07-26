@@ -14,6 +14,7 @@ export const queryKeys = {
   // Dashboard / cross-trip
   trips: () => ['trips'] as const,
   currentUser: (userId: string | undefined) => ['currentUser', userId] as const,
+  invitationAdminDetails: () => ['invitationAdminDetails'] as const,
 
   // Whole-trip prefix — invalidate this to blow away everything for a trip
   trip: (tripId: string) => ['trip', tripId] as const,

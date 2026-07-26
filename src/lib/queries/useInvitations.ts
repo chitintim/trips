@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { Invitation } from '../../types'
+import { queryKeys } from './queryKeys'
 
 /** Admin invitations list (Dashboard's InvitationsTab). Not trip-scoped, so it lives outside the ['trip', tripId, ...] hierarchy. */
 export function useInvitations() {
@@ -30,7 +31,13 @@ export function useCreateInvitation() {
       if (error) throw error
       return data
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['invitations'] }),
+    // Also invalidates the site-admin Invitations page's account-joined view
+    // (useInvitationAdminDetails) -- it's a superset of this list, so a new
+    // invitation needs to show up there too, not just in this raw list.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invitations'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.invitationAdminDetails() })
+    },
   })
 }
 
@@ -41,6 +48,9 @@ export function useDeleteInvitation() {
       const { error } = await supabase.from('invitations').delete().eq('id', id)
       if (error) throw error
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['invitations'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['invitations'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.invitationAdminDetails() })
+    },
   })
 }

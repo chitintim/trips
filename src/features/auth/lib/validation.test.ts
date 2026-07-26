@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { validateEmail, validatePassword, validateRequired, MIN_PASSWORD_LENGTH } from './validation'
+import {
+  validateEmail,
+  validateEmailConfirmation,
+  validatePassword,
+  validateRequired,
+  MIN_PASSWORD_LENGTH,
+} from './validation'
 
 describe('validateRequired', () => {
   it('flags empty and whitespace-only values', () => {
@@ -26,6 +32,30 @@ describe('validateEmail', () => {
 
   it('accepts a valid email', () => {
     expect(validateEmail('you@example.com')).toBeNull()
+  })
+})
+
+describe('validateEmailConfirmation', () => {
+  it('flags an empty confirmation', () => {
+    expect(validateEmailConfirmation('you@example.com', '')).toBe('Please confirm your email')
+    expect(validateEmailConfirmation('you@example.com', '   ')).toBe('Please confirm your email')
+  })
+
+  it('flags a mismatched confirmation', () => {
+    expect(validateEmailConfirmation('you@example.com', 'chrisceungsc123@gmail.com')).toBe("Emails don't match")
+  })
+
+  it('accepts a matching confirmation', () => {
+    expect(validateEmailConfirmation('you@example.com', 'you@example.com')).toBeNull()
+  })
+
+  it('ignores case differences', () => {
+    expect(validateEmailConfirmation('You@Example.com', 'you@example.COM')).toBeNull()
+  })
+
+  it('ignores surrounding whitespace', () => {
+    expect(validateEmailConfirmation('you@example.com', '  you@example.com  ')).toBeNull()
+    expect(validateEmailConfirmation('  you@example.com  ', 'you@example.com')).toBeNull()
   })
 })
 

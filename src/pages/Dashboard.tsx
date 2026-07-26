@@ -22,13 +22,16 @@ import {
 } from '../components/ui'
 import { ProfileModal } from '../components/ProfileModal'
 import { ViewUserTripsModal } from '../components/ViewUserTripsModal'
+import { ManageInvitationAccountSheet } from '../components/ManageInvitationAccountSheet'
 import { MemberDashboard, CreateTripWizard } from '../features/dashboard'
 import { AdminAnnouncementsTab } from '../features/announcements'
 import { useTrips, useCurrentUserRow, type TripWithCount } from '../lib/queries/useTrip'
-import { useInvitations, useCreateInvitation, useDeleteInvitation } from '../lib/queries/useInvitations'
+import { useCreateInvitation, useDeleteInvitation } from '../lib/queries/useInvitations'
+import { useInvitationAdminDetails, type InvitationAdminDetail } from '../lib/queries/useInvitationAdminAccounts'
+import { accountStatusBadges } from '../lib/invitationAccountStatus'
 import { queryKeys } from '../lib/queries/queryKeys'
 import { useFormDraft, useUnsavedChangesGuard } from '../lib/forms'
-import { User, Trip, Invitation } from '../types'
+import { User, Trip } from '../types'
 import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming, isConfirmationEnabled } from '../lib/tripStatus'
 
 type AdminTab = 'trips' | 'users' | 'invitations' | 'announcements'
@@ -458,9 +461,9 @@ function AdminUsersTab() {
 // Invitations tab (admin)
 // ---------------------------------------------------------------------------
 
-function invitationStatus(inv: Invitation): 'active' | 'pending_verification' | 'completed' | 'expired' {
+function invitationStatus(inv: InvitationAdminDetail): 'active' | 'pending_verification' | 'completed' | 'expired' {
   if (inv.status) return inv.status
-  if (inv.used_by) return 'completed'
+  if (inv.account_user_id) return 'completed'
   if (inv.expires_at && new Date(inv.expires_at) < new Date()) return 'expired'
   return 'active'
 }
@@ -480,18 +483,24 @@ function invitationLink(code: string): string {
 
 function AdminInvitationsTab() {
   const { showToast } = useToast()
-  const { data: invitations, isLoading } = useInvitations()
+  // The admin-details RPC is a superset of the plain `invitations` table
+  // (same columns plus the account it produced), so it's the sole data
+  // source for this table -- see useInvitationAdminAccounts.ts.
+  const { data: invitations, isLoading } = useInvitationAdminDetails()
   const { data: trips } = useTrips()
   const deleteInvitation = useDeleteInvitation()
   const [createOpen, setCreateOpen] = useState(false)
   const [createKey, setCreateKey] = useState(0)
-  const [pendingDelete, setPendingDelete] = useState<Invitation | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<InvitationAdminDetail | null>(null)
+  const [managingUserId, setManagingUserId] = useState<string | null>(null)
 
   const counts = useMemo(() => {
     const c = { active: 0, pending_verification: 0, completed: 0, expired: 0 }
     for (const inv of invitations ?? []) c[invitationStatus(inv)]++
     return c
   }, [invitations])
+
+  const managingDetail = (invitations ?? []).find((inv) => inv.account_user_id === managingUserId) ?? null
 
   const copyLink = async (code: string) => {
     try {
@@ -505,7 +514,7 @@ function AdminInvitationsTab() {
   const handleDelete = async () => {
     if (!pendingDelete) return
     try {
-      await deleteInvitation.mutateAsync(pendingDelete.id)
+      await deleteInvitation.mutateAsync(pendingDelete.invitation_id)
       showToast({ type: 'success', message: 'Invitation deleted' })
       setPendingDelete(null)
     } catch (err) {
@@ -561,7 +570,7 @@ function AdminInvitationsTab() {
             <table className="w-full">
               <thead className="border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)]">
                 <tr>
-                  {['Code', 'Status', 'Expires', 'Created', ''].map((h, i) => (
+                  {['Code', 'Status', 'Account', 'Expires', 'Created', ''].map((h, i) => (
                     <th
                       key={i}
                       className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]"
@@ -576,7 +585,7 @@ function AdminInvitationsTab() {
                   const status = invitationStatus(invitation)
                   const badge = INVITATION_BADGE[status]
                   return (
-                    <tr key={invitation.id} className="transition-colors hover:bg-[var(--surface-sunken)]">
+                    <tr key={invitation.invitation_id} className="transition-colors hover:bg-[var(--surface-sunken)]">
                       <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-[var(--text-primary)]">
                         {invitation.code}
                       </td>
@@ -585,14 +594,38 @@ function AdminInvitationsTab() {
                           {badge.label}
                         </Badge>
                       </td>
+                      <td className="px-4 py-3">
+                        {invitation.account_user_id ? (
+                          <div className="min-w-0 space-y-1">
+                            <p className="truncate font-medium text-[var(--text-primary)]">
+                              {invitation.account_full_name || 'Unnamed user'}
+                            </p>
+                            <p className="truncate text-xs text-[var(--text-muted)]">{invitation.account_email}</p>
+                            <div className="flex flex-wrap gap-1">
+                              {accountStatusBadges(invitation).map((b) => (
+                                <Badge key={b.label} variant={b.variant} size="sm">
+                                  {b.label}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-[var(--text-muted)]">No account yet</span>
+                        )}
+                      </td>
                       <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
                         {invitation.expires_at ? formatDate(invitation.expires_at) : 'Never'}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
-                        {formatDate(invitation.created_at)}
+                        {formatDate(invitation.invitation_created_at)}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">
-                        <div className="flex justify-end gap-1">
+                        <div className="flex flex-wrap justify-end gap-1">
+                          {invitation.account_user_id && (
+                            <Button variant="ghost" size="sm" onClick={() => setManagingUserId(invitation.account_user_id)}>
+                              Manage account
+                            </Button>
+                          )}
                           <Button variant="ghost" size="sm" onClick={() => copyLink(invitation.code)}>
                             Copy link
                           </Button>
@@ -630,6 +663,15 @@ function AdminInvitationsTab() {
             </div>
           </div>
         </Modal>
+      )}
+
+      {managingUserId && (
+        <ManageInvitationAccountSheet
+          key={managingUserId}
+          isOpen
+          onClose={() => setManagingUserId(null)}
+          detail={managingDetail}
+        />
       )}
     </div>
   )

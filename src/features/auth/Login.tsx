@@ -133,8 +133,20 @@ export function Login() {
                 </div>
               )}
               <Input
+                id="login-email"
+                name="username"
                 label="Email"
                 type="email"
+                inputMode="email"
+                // "username", not "email": this is the sign-in identifier
+                // paired with the password field below, and that's the
+                // token password managers key credential save/fill off —
+                // matches how the field is used even though it happens to
+                // be email-shaped.
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={email}
                 onChange={(e) => {
                   setEmail(e.target.value)
@@ -147,8 +159,11 @@ export function Login() {
                 error={emailError ?? undefined}
               />
               <Input
+                id="login-password"
+                name="current-password"
                 label="Password"
                 type="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => {
                   setPassword(e.target.value)
@@ -181,8 +196,15 @@ export function Login() {
                 We'll email you a 6-digit code — no password needed.
               </p>
               <Input
+                id="login-otp-email"
+                name="username"
                 label="Email"
                 type="email"
+                inputMode="email"
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
                 value={otpEmail}
                 onChange={(e) => {
                   setOtpEmail(e.target.value)

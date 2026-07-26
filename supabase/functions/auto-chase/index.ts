@@ -94,6 +94,7 @@ import {
 } from '../_shared/actionCompletion/sectionVoters.ts'
 import { outstandingTargets } from './outstandingTargets.ts'
 import { actionRemindersGateOpen, DEFAULT_SETTINGS, inQuietHours, parseChaseSettings } from './chaseSettings.ts'
+import { decideEmailSuppression } from './emailSuppression.ts'
 
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
 
@@ -780,8 +781,16 @@ Deno.serve(async (req) => {
         .eq('id', userId)
         .single()
 
-      const optedOut = userRow?.email_notifications_enabled === false
-      const canEmail = emailSender.available && !optedOut && !!userRow?.email
+      // Single funnel point for the suppression decision (see
+      // ./emailSuppression.ts) -- both the opt-in chase kinds and the
+      // opt-out action-deadline ladder built their items into this same
+      // per-user digest above, so this one check covers every email path.
+      const suppression = decideEmailSuppression({
+        emailChannelAvailable: emailSender.available,
+        hasEmailAddress: !!userRow?.email,
+        emailNotificationsEnabled: userRow?.email_notifications_enabled,
+      })
+      const canEmail = suppression.canSend
 
       // Compose the digest via the shared "Tim's Trip Planner" template:
       // one section per trip -- deadline'd actions as a table, every other
@@ -835,7 +844,7 @@ Deno.serve(async (req) => {
         }
       } else {
         channel = 'skipped'
-        if (optedOut) usersSkippedOptOut++
+        if (suppression.skipReason === 'opt_out') usersSkippedOptOut++
       }
 
       // Mark action-reminder stages as sent -- ONLY on a real email send, so

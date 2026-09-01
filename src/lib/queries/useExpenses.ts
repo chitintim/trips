@@ -172,6 +172,20 @@ export function useExpenseSplits(expenseId: string | undefined) {
 // Mutations
 // ---------------------------------------------------------------------------
 
+/**
+ * A bare `.update()`/`.delete()` with no `.select()` reports success even
+ * when RLS matches zero rows -- the request didn't error, it just silently
+ * didn't do anything. Chain `.select(cols)` on the mutation and pass the
+ * result here so a blocked/gone target surfaces as a real error instead of
+ * quietly discarding the user's change (this is exactly how one user's
+ * header edits vanished with no error while the splits upsert failed loudly).
+ */
+function assertRowsAffected<T>(rows: T[] | null | undefined, message: string): void {
+  if (!rows || rows.length === 0) {
+    throw new Error(message)
+  }
+}
+
 export interface SplitRow {
   user_id: string
   amount: number
@@ -235,8 +249,13 @@ export function useUpdateExpense(tripId: string) {
       /** true for itemized expenses, where line items/claims own the split, not this call */
       skipSplits?: boolean
     }) => {
-      const { error: updateError } = await supabase.from('expenses').update(expense).eq('id', expenseId)
+      const { data: updateRows, error: updateError } = await supabase
+        .from('expenses')
+        .update(expense)
+        .eq('id', expenseId)
+        .select('id')
       if (updateError) throw updateError
+      assertRowsAffected(updateRows, "You don't have permission to edit this expense, or it no longer exists.")
 
       if (skipSplits) return
 
@@ -273,8 +292,9 @@ export function useDeleteExpense(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (expenseId: string) => {
-      const { error } = await supabase.from('expenses').delete().eq('id', expenseId)
+      const { data, error } = await supabase.from('expenses').delete().eq('id', expenseId).select('id')
       if (error) throw error
+      assertRowsAffected(data, "You don't have permission to delete this expense, or it no longer exists.")
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
   })
@@ -296,8 +316,9 @@ export function useDeleteItemClaim(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (claimId: string) => {
-      const { error } = await supabase.from('expense_item_claims').delete().eq('id', claimId)
+      const { data, error } = await supabase.from('expense_item_claims').delete().eq('id', claimId).select('id')
       if (error) throw error
+      assertRowsAffected(data, "You don't have permission to remove this claim, or it no longer exists.")
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
   })
@@ -401,8 +422,13 @@ export function useConvertToItemizedExpense(tripId: string) {
       allocationCode: string
       createdBy: string
     }) => {
-      const { error: updateError } = await supabase.from('expenses').update(expense).eq('id', expenseId)
+      const { data: updateRows, error: updateError } = await supabase
+        .from('expenses')
+        .update(expense)
+        .eq('id', expenseId)
+        .select('id')
       if (updateError) throw updateError
+      assertRowsAffected(updateRows, "You don't have permission to edit this expense, or it no longer exists.")
 
       // Itemized expenses own their split via line items + claims, not
       // expense_splits -- clear any rows left from a prior equal/custom/
@@ -479,8 +505,13 @@ export function useConvertFromItemizedExpense(tripId: string) {
         throw new Error('Items on this expense have already been claimed — remove those claims before switching off itemized split.')
       }
 
-      const { error: updateError } = await supabase.from('expenses').update(expense).eq('id', expenseId)
+      const { data: updateRows, error: updateError } = await supabase
+        .from('expenses')
+        .update(expense)
+        .eq('id', expenseId)
+        .select('id')
       if (updateError) throw updateError
+      assertRowsAffected(updateRows, "You don't have permission to edit this expense, or it no longer exists.")
 
       const { error: linkDelError } = await supabase.from('expense_allocation_links').delete().eq('expense_id', expenseId)
       if (linkDelError) throw linkDelError
@@ -541,8 +572,13 @@ export function useSaveItemClaims() {
       const { data: allItemsClaimed } = await supabase.rpc('check_all_items_claimed', { p_expense_id: expenseId })
       const newStatus = allItemsClaimed ? 'allocated' : 'pending_allocation'
 
-      const { error: statusError } = await supabase.from('expenses').update({ status: newStatus }).eq('id', expenseId)
+      const { data: statusRows, error: statusError } = await supabase
+        .from('expenses')
+        .update({ status: newStatus })
+        .eq('id', expenseId)
+        .select('id')
       if (statusError) throw statusError
+      assertRowsAffected(statusRows, "You don't have permission to edit this expense, or it no longer exists.")
 
       return { allClaims, status: newStatus }
     },
@@ -576,18 +612,26 @@ export function useUpdateExpenseFxRate(tripId: string) {
       fxRate: number
       fxRateDate: string
     }) => {
-      const { error } = await supabase
+      const { data: updateRows, error } = await supabase
         .from('expenses')
         .update({ base_currency_amount: baseCurrencyAmount, fx_rate: fxRate, fx_rate_date: fxRateDate })
         .eq('id', expenseId)
+        .select('id')
       if (error) throw error
+      assertRowsAffected(updateRows, "You don't have permission to edit this expense, or it no longer exists.")
 
       const { data: splits } = await supabase.from('expense_splits').select('id, amount').eq('expense_id', expenseId)
       if (splits) {
         await Promise.all(
-          splits.map((split) =>
-            supabase.from('expense_splits').update({ base_currency_amount: split.amount * fxRate }).eq('id', split.id)
-          )
+          splits.map(async (split) => {
+            const { data: splitRows, error: splitError } = await supabase
+              .from('expense_splits')
+              .update({ base_currency_amount: split.amount * fxRate })
+              .eq('id', split.id)
+              .select('id')
+            if (splitError) throw splitError
+            assertRowsAffected(splitRows, "You don't have permission to update this expense's split, or it no longer exists.")
+          })
         )
       }
     },

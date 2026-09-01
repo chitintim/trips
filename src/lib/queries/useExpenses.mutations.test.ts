@@ -23,6 +23,9 @@ interface TableBehavior {
   updateError?: { message: string } | null
   deleteError?: { message: string } | null
   insertReturns?: unknown
+  /** Rows the update/delete's trailing `.select()` reports as affected; defaults to one row (a normal match). */
+  updateSelectReturns?: unknown[] | null
+  deleteSelectReturns?: unknown[] | null
 }
 
 const behaviors = new Map<string, TableBehavior>()
@@ -49,9 +52,15 @@ vi.mock('../supabase', () => ({
           return { error: b().upsertError ?? null }
         },
         update: (payload: unknown) => ({
-          eq: async () => {
+          eq: () => {
             calls.push({ table, op: 'update', payload })
-            return { error: b().updateError ?? null }
+            const result = { error: b().updateError ?? null }
+            return Object.assign(Promise.resolve(result), {
+              select: async () => ({
+                data: b().updateError ? null : (b().updateSelectReturns ?? [{ id: 'row-1' }]),
+                error: b().updateError ?? null,
+              }),
+            })
           },
         }),
         delete: () => ({
@@ -60,6 +69,10 @@ vi.mock('../supabase', () => ({
             const result = Promise.resolve({ error: b().deleteError ?? null })
             return Object.assign(result, {
               in: async () => ({ error: b().deleteError ?? null }),
+              select: async () => ({
+                data: b().deleteError ? null : (b().deleteSelectReturns ?? [{ id: 'row-1' }]),
+                error: b().deleteError ?? null,
+              }),
             })
           },
         }),
@@ -68,7 +81,7 @@ vi.mock('../supabase', () => ({
   },
 }))
 
-import { useCreateExpense, useUpdateExpense, type SplitRow } from './useExpenses'
+import { useCreateExpense, useUpdateExpense, useDeleteExpense, type SplitRow } from './useExpenses'
 import { reportError } from '../reportError'
 
 type MutationConfig<TVars> = { mutationFn: (vars: TVars) => Promise<unknown> }
@@ -143,5 +156,50 @@ describe('useUpdateExpense split write ordering', () => {
     const hook = useUpdateExpense('trip-1') as unknown as MutationConfig<{ expenseId: string; expense: object; skipSplits: boolean }>
     await hook.mutationFn({ expenseId: 'exp-1', expense: {}, skipSplits: true })
     expect(calls.filter((c) => c.table === 'expense_splits')).toEqual([])
+  })
+})
+
+describe('useUpdateExpense zero-row guard', () => {
+  // RLS reports an update matching zero rows as success, not an error -- this
+  // is the bug that silently discarded a user's header edits (splits upsert
+  // failed loudly, but the header update did not).
+  it('throws when the header update matches no rows (RLS-blocked or deleted expense)', async () => {
+    behaviors.set('expenses', { updateSelectReturns: [] })
+    const hook = useUpdateExpense('trip-1') as unknown as MutationConfig<{
+      expenseId: string
+      expense: object
+      skipSplits: boolean
+    }>
+    await expect(
+      hook.mutationFn({ expenseId: 'exp-1', expense: { description: 'Dinner v2' }, skipSplits: true })
+    ).rejects.toThrow("You don't have permission to edit this expense, or it no longer exists.")
+    // The header update never "happened", so splits must not be touched either.
+    expect(calls.some((c) => c.table === 'expense_splits')).toBe(false)
+  })
+
+  it('succeeds when the header update matches a row', async () => {
+    const hook = useUpdateExpense('trip-1') as unknown as MutationConfig<{
+      expenseId: string
+      expense: object
+      skipSplits: boolean
+    }>
+    await expect(
+      hook.mutationFn({ expenseId: 'exp-1', expense: { description: 'Dinner v2' }, skipSplits: true })
+    ).resolves.toBeUndefined()
+  })
+})
+
+describe('useDeleteExpense zero-row guard', () => {
+  it('throws when the delete matches no rows (RLS-blocked or already deleted)', async () => {
+    behaviors.set('expenses', { deleteSelectReturns: [] })
+    const hook = useDeleteExpense('trip-1') as unknown as MutationConfig<string>
+    await expect(hook.mutationFn('exp-1')).rejects.toThrow(
+      "You don't have permission to delete this expense, or it no longer exists."
+    )
+  })
+
+  it('succeeds when the delete matches a row', async () => {
+    const hook = useDeleteExpense('trip-1') as unknown as MutationConfig<string>
+    await expect(hook.mutationFn('exp-1')).resolves.toBeUndefined()
   })
 })

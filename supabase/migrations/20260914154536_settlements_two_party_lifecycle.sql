@@ -59,6 +59,17 @@ BEGIN
                     OR public.is_trip_organizer(OLD.trip_id, auth.uid());
   IF is_privileged THEN RETURN NEW; END IF;
 
+  -- A non-privileged payer/payee must never be able to rewrite who created
+  -- this row or when: doing so would make them "privileged" (creator-
+  -- within-24h) on their very next update, at which point this trigger
+  -- applies zero restrictions and the DELETE policy's creator-within-24h
+  -- bypass has no status scoping -- i.e. self-escalation into the power to
+  -- delete or arbitrarily rewrite their own (possibly already-confirmed)
+  -- settlement row. Block it for both branches below in one place.
+  IF NEW.created_by IS DISTINCT FROM OLD.created_by OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+    RAISE EXCEPTION 'May not change who created this settlement or when';
+  END IF;
+
   IF auth.uid() = OLD.from_user_id THEN
     IF OLD.status IS DISTINCT FROM 'suggested' OR NEW.status IS DISTINCT FROM 'marked_paid' THEN
       RAISE EXCEPTION 'Payer may only mark a suggested settlement as paid';

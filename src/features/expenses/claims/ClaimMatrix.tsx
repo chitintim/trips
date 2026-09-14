@@ -13,6 +13,8 @@ export interface ClaimMatrixProps {
   lineItems: ExpenseLineItem[]
   claims: Array<ExpenseItemClaim & { user: { id: string; full_name: string | null } }>
   participants: ParticipantWithUser[]
+  /** True while the trip's balances are frozen -- mirrors ClaimPage's isReadOnly gate (client-side only, same limitation as the existing expense-edit lock). */
+  disabled?: boolean
 }
 
 /**
@@ -20,7 +22,7 @@ export interface ClaimMatrixProps {
  * one-tap "split remainder equally among tagged non-claimants" for
  * whatever's left unclaimed once everyone's had a chance.
  */
-export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimMatrixProps) {
+export function ClaimMatrix({ expense, lineItems, claims, participants, disabled = false }: ClaimMatrixProps) {
   const { showToast } = useToast()
   const saveClaims = useSaveItemClaims()
   const [isSplitting, setIsSplitting] = useState(false)
@@ -159,11 +161,12 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
         variant="secondary"
         size="sm"
         onClick={handleSplitRemainder}
-        disabled={nonClaimantIds.length === 0 || isSplitting}
+        disabled={nonClaimantIds.length === 0 || isSplitting || disabled}
         isLoading={isSplitting}
       >
         Split remainder equally among non-claimants
       </Button>
+      {disabled && <p className="text-xs text-[var(--text-muted)]">Claiming is locked while balances are frozen.</p>}
 
       <p className="text-xs text-[var(--text-muted)]">
         Amounts shown are quantities claimed per item; totals owed reflect the line's price × claimed quantity, before tax/service proration.{' '}

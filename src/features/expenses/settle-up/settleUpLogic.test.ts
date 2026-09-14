@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { computeSuggestedPayments, isFullySettled, type SettleUpPerson } from './settleUpLogic'
+import {
+  computeSuggestedPayments,
+  isFullySettled,
+  balanceEpsilonMajor,
+  computePendingMismatches,
+  excludePendingPairs,
+  type SettleUpPerson,
+} from './settleUpLogic'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
-import type { SettlementCarryover } from '../../../lib/queries/useSettlements'
+import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
+import type { Transaction } from '../../../lib/debtMinimization'
 
 function makeExpense(overrides: Partial<ExpenseWithDetails> & { id: string }): ExpenseWithDetails {
   return {
@@ -209,6 +217,81 @@ describe('computeSuggestedPayments direct (simplify=false) mode', () => {
     ]
     const direct = computeSuggestedPayments(expenses, settlements, people, 'GBP', false)
     expect(direct).toEqual([{ from: 'bob', to: 'alice', fromName: 'Bob', toName: 'Alice', amount: 30 }])
+  })
+})
+
+function makeSettlement(overrides: Partial<Settlement> & { from_user_id: string; to_user_id: string; amount: number }): Settlement {
+  return {
+    id: `s-${Math.random()}`,
+    trip_id: 'trip-1',
+    currency: 'GBP',
+    status: 'suggested',
+    created_by: 'alice',
+    created_at: '2026-08-01T00:00:00Z',
+    settled_at: '2026-08-01T00:00:00Z',
+    notes: null,
+    payment_method: null,
+    ...overrides,
+  } as Settlement
+}
+
+function makeTransaction(from: string, to: string, amount: number): Transaction {
+  return { from, to, fromName: from, toName: to, amount }
+}
+
+describe('balanceEpsilonMajor', () => {
+  it('is currency-aware (0.01 for GBP, 1 for JPY)', () => {
+    expect(balanceEpsilonMajor('GBP')).toBeCloseTo(0.01)
+    expect(balanceEpsilonMajor('JPY')).toBe(1)
+  })
+})
+
+describe('computePendingMismatches', () => {
+  it('flags a marked_paid row whose recorded amount no longer matches the live suggestion for that pair', () => {
+    const settlements = [makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'marked_paid' })]
+    const live = [makeTransaction('bob', 'alice', 80)]
+    const mismatches = computePendingMismatches(settlements, live, 'GBP')
+    expect(mismatches.get(settlements[0].id)).toBe(80)
+  })
+
+  it('does not flag a marked_paid row whose amount still matches (within epsilon)', () => {
+    const settlements = [makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'marked_paid' })]
+    const live = [makeTransaction('bob', 'alice', 50.001)]
+    expect(computePendingMismatches(settlements, live, 'GBP').size).toBe(0)
+  })
+
+  it('flags a marked_paid row as recomputing to 0 when the pair no longer owes anything live', () => {
+    const settlements = [makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'marked_paid' })]
+    const mismatches = computePendingMismatches(settlements, [], 'GBP')
+    expect(mismatches.get(settlements[0].id)).toBe(0)
+  })
+
+  it('ignores suggested and confirmed rows -- only marked_paid (awaiting confirmation) is compared', () => {
+    const settlements = [
+      makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'suggested' }),
+      makeSettlement({ from_user_id: 'charlie', to_user_id: 'alice', amount: 20, status: 'confirmed' }),
+    ]
+    expect(computePendingMismatches(settlements, [], 'GBP').size).toBe(0)
+  })
+})
+
+describe('excludePendingPairs (refreeze dedup)', () => {
+  it('excludes a suggested pair that already has a pending marked_paid row for the same from/to', () => {
+    const suggested = [makeTransaction('bob', 'alice', 50), makeTransaction('charlie', 'alice', 20)]
+    const settlements = [makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'marked_paid' })]
+    const result = excludePendingPairs(suggested, settlements)
+    expect(result).toEqual([makeTransaction('charlie', 'alice', 20)])
+  })
+
+  it('does not exclude a pair whose only settlement rows are suggested or confirmed', () => {
+    const suggested = [makeTransaction('bob', 'alice', 50)]
+    const settlements = [makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'confirmed' })]
+    expect(excludePendingPairs(suggested, settlements)).toEqual(suggested)
+  })
+
+  it('is a no-op when there are no pending settlements at all', () => {
+    const suggested = [makeTransaction('bob', 'alice', 50)]
+    expect(excludePendingPairs(suggested, [])).toEqual(suggested)
   })
 })
 

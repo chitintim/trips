@@ -16,6 +16,7 @@ import type { Json } from '../../../types/database.types'
  *      poll_closed           -> the decisions feature's auto/manual close path
  *      expense_added         -> QuickCaptureSheet / ExpenseEditorWizard submit
  *      settlement_confirmed  -> useUpdateSettlementStatus (status -> 'confirmed')
+ *      settlement_marked_paid -> useUpdateSettlementStatus (status -> 'marked_paid'), via MarkPaidSheet
  *      option_added          -> useCreateOption / PasteALinkSheet
  *      participant_joined    -> useAddParticipant
  */
@@ -26,6 +27,7 @@ export type ActivityVerb =
   | 'option_added'
   | 'expense_added'
   | 'settlement_confirmed'
+  | 'settlement_marked_paid'
   | 'booking_added'
   | 'booking_updated'
   | 'event_added'
@@ -97,6 +99,7 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   option_added: { icon: '💡', phrase: (e) => `added the option${e ? ` "${e}"` : ''}` },
   expense_added: { icon: '💰', phrase: (e) => `added the expense${e ? ` "${e}"` : ''}` },
   settlement_confirmed: { icon: '🤝', phrase: (e) => `confirmed a settlement${e ? ` (${e})` : ''}` },
+  settlement_marked_paid: { icon: '💸', phrase: (e) => `marked a settlement as paid${e ? ` (${e})` : ''}` },
   booking_added: { icon: '🧾', phrase: (e) => `tracked the booking${e ? ` "${e}"` : ''}` },
   booking_updated: { icon: '🧾', phrase: (e) => `updated the booking${e ? ` "${e}"` : ''}` },
   event_added: { icon: '📅', phrase: (e) => `added${e ? ` "${e}"` : ' an event'} to the itinerary` },

@@ -130,16 +130,25 @@ export function useNeedsAttention(
     }
 
     // ---- Settlements involving the user, not yet confirmed -----------
-    const myOpenSettlements = (settlements || []).filter(
-      (s) =>
-        (s.from_user_id === user.id || s.to_user_id === user.id) &&
-        (s.status === 'suggested' || s.status === 'marked_paid')
-    )
-    if (myOpenSettlements.length > 0) {
+    // Split by direction (mirrors blockers.ts's Pay/Confirm split) --
+    // "you owe money" and "someone already paid you and is waiting on your
+    // confirmation" are different actions with different urgency, and a
+    // single "Unpaid settlements" count previously conflated them.
+    const myPendingPayments = (settlements || []).filter((s) => s.from_user_id === user.id && s.status === 'suggested')
+    const myPendingConfirmations = (settlements || []).filter((s) => s.to_user_id === user.id && s.status === 'marked_paid')
+    if (myPendingPayments.length > 0) {
       items.push({
         icon: '💸',
-        label: 'Unpaid settlements',
-        count: myOpenSettlements.length,
+        label: `You owe ${myPendingPayments.length} payment${myPendingPayments.length === 1 ? '' : 's'}`,
+        count: myPendingPayments.length,
+        onClick: () => (onNavigateTab ? onNavigateTab('money') : navigate(`/${tripId}?tab=money`)),
+      })
+    }
+    if (myPendingConfirmations.length > 0) {
+      items.push({
+        icon: '✅',
+        label: `${myPendingConfirmations.length} payment${myPendingConfirmations.length === 1 ? '' : 's'} awaiting your confirmation`,
+        count: myPendingConfirmations.length,
         onClick: () => (onNavigateTab ? onNavigateTab('money') : navigate(`/${tripId}?tab=money`)),
       })
     }

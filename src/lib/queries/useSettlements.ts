@@ -41,7 +41,13 @@ export interface SettlementWithUsers extends Settlement {
   creator: Tables<'users'>
 }
 
-/** Full settlement history with joined user rows, as used by SettlementHistoryModal. */
+/**
+ * Full settlement history with joined user rows. Not wired into a dedicated
+ * history screen today -- the per-row status/method/date/note now shown
+ * inline in SettleUpTab (see MarkPaidSheet) covers the "when/how did I
+ * settle" need this hook was originally built for. Left in place as ready
+ * infra if a full audit-trail modal is wanted later.
+ */
 export function useSettlementHistory(tripId: string | undefined) {
   return useQuery({
     queryKey: [...queryKeys.settlements(tripId || ''), 'history'] as const,
@@ -89,16 +95,56 @@ export function useRecordSettlement(tripId: string) {
   })
 }
 
-/** status: 'suggested' -> 'marked_paid' (by payer) -> 'confirmed' (by recipient). Optimistic for snappy taps. */
+export interface UpdateSettlementStatusVars {
+  settlementId: string
+  status: string
+  payment_method?: string | null
+  notes?: string | null
+  settled_at?: string
+}
+
+/**
+ * status: 'suggested' -> 'marked_paid' (by payer, optionally with
+ * payment_method/notes/settled_at) -> 'confirmed' (by recipient). Optimistic
+ * for snappy taps.
+ *
+ * RLS is the actual gate on who may do this (see the
+ * settlements_two_party_lifecycle migration): the payer may only move
+ * suggested -> marked_paid on their own row, the payee only marked_paid ->
+ * confirmed. When RLS (or the guard trigger) filters the row out,
+ * PostgREST returns success with zero rows affected -- no PostgrestError --
+ * so `.select().maybeSingle()` and an explicit throw on a null result are
+ * what make that failure visible instead of a silent optimistic-then-
+ * reverted "bounce".
+ */
 export function useUpdateSettlementStatus(tripId: string) {
-  return useOptimisticMutation<void, { settlementId: string; status: string }, Settlement[]>({
-    mutationFn: async ({ settlementId, status }) => {
-      const { error } = await supabase.from('settlements').update({ status }).eq('id', settlementId)
+  return useOptimisticMutation<Settlement, UpdateSettlementStatusVars, Settlement[]>({
+    mutationFn: async ({ settlementId, status, payment_method, notes, settled_at }) => {
+      const patch: Record<string, unknown> = { status }
+      if (payment_method !== undefined) patch.payment_method = payment_method
+      if (notes !== undefined) patch.notes = notes
+      if (settled_at !== undefined) patch.settled_at = settled_at
+
+      const { data, error } = await supabase.from('settlements').update(patch).eq('id', settlementId).select().maybeSingle()
       if (error) throw error
+      if (!data) {
+        throw new Error("This settlement couldn't be updated — it may have changed, or you don't have permission.")
+      }
+      return data
     },
     queryKey: () => queryKeys.settlements(tripId),
-    updater: (settlements, { settlementId, status }) =>
-      (settlements || []).map((s) => (s.id === settlementId ? { ...s, status } : s)),
+    updater: (settlements, { settlementId, status, payment_method, notes, settled_at }) =>
+      (settlements || []).map((s) =>
+        s.id === settlementId
+          ? {
+              ...s,
+              status,
+              ...(payment_method !== undefined ? { payment_method } : {}),
+              ...(notes !== undefined ? { notes } : {}),
+              ...(settled_at !== undefined ? { settled_at } : {}),
+            }
+          : s
+      ),
   })
 }
 
@@ -106,8 +152,11 @@ export function useDeleteSettlement(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (settlementId: string) => {
-      const { error } = await supabase.from('settlements').delete().eq('id', settlementId)
+      const { data, error } = await supabase.from('settlements').delete().eq('id', settlementId).select('id')
       if (error) throw error
+      if (!data || data.length === 0) {
+        throw new Error('Could not delete this settlement — it may already be gone, or you don\'t have permission.')
+      }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.settlements(tripId) }),
   })
@@ -118,7 +167,7 @@ export function useFinalizeSettlementSnapshot(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ snapshotData, snapshotBy }: { snapshotData: unknown; snapshotBy: string }) => {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('trips')
         .update({
           settlement_snapshot: snapshotData as Json,
@@ -126,26 +175,20 @@ export function useFinalizeSettlementSnapshot(tripId: string) {
           settlement_snapshot_by: snapshotBy,
         })
         .eq('id', tripId)
+        .select('id')
+        .maybeSingle()
       if (error) throw error
+      // A non-organizer/non-creator's click is filtered to 0 rows by RLS
+      // with no PostgrestError -- surface that explicitly rather than let
+      // the caller believe the freeze/unfreeze actually applied.
+      if (!data) {
+        throw new Error("Couldn't update this trip's settlement state — you may not have permission.")
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.tripDetail(tripId) })
       queryClient.invalidateQueries({ queryKey: queryKeys.settlements(tripId) })
     },
-  })
-}
-
-export function useToggleSnapshotTransactionSettled(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async ({ snapshot, index }: { snapshot: SettlementSnapshot; index: number }) => {
-      const updated: SettlementSnapshot = { ...snapshot, transactions: [...snapshot.transactions] }
-      updated.transactions[index] = { ...updated.transactions[index], settled: !updated.transactions[index].settled }
-      const { error } = await supabase.from('trips').update({ settlement_snapshot: updated as unknown as Json }).eq('id', tripId)
-      if (error) throw error
-      return updated
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.tripDetail(tripId) }),
   })
 }
 

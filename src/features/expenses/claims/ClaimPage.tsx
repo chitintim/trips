@@ -3,7 +3,7 @@ import { useParams } from 'react-router-dom'
 import { Card, Button, Badge, Spinner, EmptyState, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useSaveItemClaims } from '../../../lib/queries/useExpenses'
-import { useParticipants } from '../../../lib/queries/useTrip'
+import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { formatMoney } from '../lib/formatMoney'
 import { useClaimLink, useClaimRealtime } from './useClaimData'
@@ -23,6 +23,12 @@ export function ClaimPage() {
   const { user } = useAuth()
   const { data: resolution, isLoading, error, refetch } = useClaimLink(code)
   const { data: participants = [] } = useParticipants(resolution?.tripId)
+  // ClaimPage is a standalone route (/claim/:code, public or embedded), not
+  // a child of MoneySpace, so it fetches the trip's freeze state directly
+  // rather than being threaded a prop -- same isFrozen source
+  // (trip.settlement_snapshot) MoneySpace/SettleUpTab already use.
+  const { data: trip } = useTrip(resolution?.tripId)
+  const isFrozen = !!trip?.settlement_snapshot
   const saveClaims = useSaveItemClaims()
   const { showToast } = useToast()
 
@@ -123,7 +129,12 @@ export function ClaimPage() {
   const { expense, lineItems } = resolution
   const isPayer = user?.id === expense.paid_by
   const overallProgress = summarizeOverallProgress(lineItems, resolution.claims)
-  const isReadOnly = expense.status === 'allocated'
+  // Mirrors the client-side editDisabled={isFrozen} gate MoneySpace.tsx
+  // already applies to expense edits (same mechanism, same pre-existing
+  // limitation -- see settle-up review notes: a determined user hitting the
+  // API directly can still desync claims from a frozen snapshot; a true fix
+  // needs server-side RLS on item_claims, out of scope for this pass).
+  const isReadOnly = expense.status === 'allocated' || isFrozen
 
   const updateQuantity = (lineItemId: string, quantity: number) => {
     const next = { ...localSelections, [lineItemId]: quantity }
@@ -177,6 +188,10 @@ export function ClaimPage() {
           <Badge variant="success">✓ Fully claimed</Badge>
         )}
 
+        {isFrozen && expense.status !== 'allocated' && (
+          <Badge variant="neutral">🔒 Claiming is locked while balances are frozen</Badge>
+        )}
+
         {isPayer && (
           <Button variant="secondary" size="sm" onClick={() => setOrganizerView((v) => !v)}>
             {organizerView ? 'Back to my claims' : 'View claim matrix'}
@@ -184,7 +199,7 @@ export function ClaimPage() {
         )}
 
         {organizerView && isPayer ? (
-          <ClaimMatrix expense={expense} lineItems={lineItems} claims={resolution.claims} participants={participants} />
+          <ClaimMatrix expense={expense} lineItems={lineItems} claims={resolution.claims} participants={participants} disabled={isFrozen} />
         ) : (
           <>
             <div className="space-y-2">

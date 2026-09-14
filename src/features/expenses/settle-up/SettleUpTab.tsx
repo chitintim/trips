@@ -17,12 +17,20 @@ import {
 import { useLogActivity } from '../../../lib/queries/useActivityFeed'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { formatMoney } from '../lib/formatMoney'
-import { computeSuggestedPayments, readLegacySnapshot, buildSnapshot } from './settleUpLogic'
+import {
+  computeSuggestedPayments,
+  readLegacySnapshot,
+  buildSnapshot,
+  computePendingMismatches,
+  excludePendingPairs,
+} from './settleUpLogic'
 import { computeBalances, partitionCarryovers } from '../lib/balances'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
 import { PaymentDetailsSheet } from './PaymentDetailsSheet'
+import { MarkPaidSheet } from './MarkPaidSheet'
 import { parsePaymentDetails, formatPaymentDetailsForCopy } from './paymentDetails'
 import { buildExpenseLedgerCsv, buildSettlementSummaryCsv, downloadCsv } from '../lib/csvExport'
+import type { Settlement } from '../../../lib/queries/useSettlements'
 import type { Trip } from '../../../types'
 
 export interface SettleUpTabProps {
@@ -69,6 +77,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
 
   const [simplify, setSimplify] = useState(true)
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false)
+  const [markPaidTarget, setMarkPaidTarget] = useState<Settlement | null>(null)
   const [isFreezing, setIsFreezing] = useState(false)
   const [isUnfreezing, setIsUnfreezing] = useState(false)
   const { data: carryoverCandidates = [] } = useCarryoverCandidates(trip.id, user?.id)
@@ -76,13 +85,39 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const expenses = expensesData?.expenses ?? []
   const people = participants.map((p) => ({ userId: p.user_id, name: p.user.full_name || p.user.email }))
 
+  // Freeze/unfreeze gated to organizers (mirrors the derived-milestone
+  // "Make it real" gating, commit a814b5e): a non-organizer's click used to
+  // insert a full batch of settlement rows via the (organizer-unrestricted)
+  // INSERT policy while the trips-row snapshot write silently no-op'd under
+  // RLS, leaving the trip showing "not frozen" with duplicate-looking rows
+  // underneath.
+  const myParticipant = participants.find((p) => p.user_id === user?.id)
+  const isOrganizer = myParticipant?.role === 'organizer'
+
   const isFrozen = !!trip.settlement_snapshot
   const legacySnapshot = useMemo(() => readLegacySnapshot(trip.settlement_snapshot), [trip.settlement_snapshot])
 
   const suggested = useMemo(
     () => (isFrozen ? [] : computeSuggestedPayments(expenses, settlements, people, trip.base_currency, simplify, carryovers)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [expenses, settlements, people, trip.base_currency, simplify, isFrozen, carryovers]
+  )
+
+  // Always computed (not gated by isFrozen, unlike `suggested` above) so a
+  // 'marked_paid' row can be compared against what balances look like RIGHT
+  // NOW, even while frozen -- expenses can still change pre-freeze and a
+  // stale mark-paid amount needs to be caught either way.
+  const liveSuggestedForComparison = useMemo(
+    () => computeSuggestedPayments(expenses, settlements, people, trip.base_currency, simplify, carryovers),
+    [expenses, settlements, people, trip.base_currency, simplify, carryovers]
+  )
+
+  // Pending (marked_paid) rows whose recorded amount no longer matches what
+  // the live balances would suggest today -- e.g. an expense was edited
+  // after the payer marked their payment paid. Never auto-corrected; just
+  // surfaced so an organizer can review before the payee confirms.
+  const pendingMismatchByPair = useMemo(
+    () => computePendingMismatches(settlements, liveSuggestedForComparison, trip.base_currency),
+    [settlements, liveSuggestedForComparison, trip.base_currency]
   )
 
   const nameById = Object.fromEntries(people.map((p) => [p.userId, p.name]))
@@ -114,13 +149,32 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
       // second batch of 'suggested' rows alongside the stale first batch,
       // both rendered in the list below with no way to tell them apart.
       // marked_paid/confirmed rows are real payment history and are never
-      // touched here.
+      // touched here. A delete can now fail loudly under RLS (see
+      // useDeleteSettlement) instead of silently no-op'ing -- collect
+      // failures and warn rather than proceeding as if cleanup succeeded.
       const staleSuggested = settlements.filter((s) => s.status === 'suggested')
+      const deleteFailures: string[] = []
       for (const s of staleSuggested) {
-        await deleteSettlement.mutateAsync(s.id)
+        try {
+          await deleteSettlement.mutateAsync(s.id)
+        } catch {
+          deleteFailures.push(s.id)
+        }
+      }
+      if (deleteFailures.length > 0) {
+        showToast({
+          type: 'error',
+          message: 'Could not clear some old suggested payments',
+          description: 'They may still show below — try freezing again.',
+        })
       }
 
-      for (const t of suggested) {
+      // Never re-suggest a pair that already has a pending 'marked_paid'
+      // row -- that payment is real history awaiting confirmation, not
+      // something to duplicate. pendingMismatchByPair (rendered per-card
+      // below) surfaces it instead if the live amount has since drifted.
+      const toInsert = excludePendingPairs(suggested, settlements)
+      for (const t of toInsert) {
         await recordSettlement.mutateAsync({
           from_user_id: t.from,
           to_user_id: t.to,
@@ -238,9 +292,13 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
         <Card noPadding className="p-4 space-y-3">
           <div className="flex items-center justify-between">
             <Badge variant="info">🔒 Balances frozen</Badge>
-            <Button variant="ghost" size="sm" onClick={handleUnfreeze} disabled={isUnfreezing} isLoading={isUnfreezing}>
-              Unfreeze
-            </Button>
+            {isOrganizer ? (
+              <Button variant="ghost" size="sm" onClick={handleUnfreeze} disabled={isUnfreezing} isLoading={isUnfreezing}>
+                Unfreeze
+              </Button>
+            ) : (
+              <span className="text-xs text-[var(--text-muted)]">Ask an organizer to unfreeze</span>
+            )}
           </div>
           <p className="text-sm text-[var(--text-secondary)]">
             Expense edits are blocked while frozen. Unfreezing is audit-logged to the activity feed.
@@ -260,9 +318,13 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
               ]}
             />
           </div>
-          <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing} isLoading={isFreezing}>
-            Freeze balances & suggest payments
-          </Button>
+          {isOrganizer ? (
+            <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing} isLoading={isFreezing}>
+              Freeze balances & suggest payments
+            </Button>
+          ) : (
+            <p className="text-sm text-center text-[var(--text-muted)] py-2">Ask an organizer to freeze balances</p>
+          )}
         </Card>
       )}
 
@@ -297,14 +359,34 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
           const isMeReceiving = s.to_user_id === user?.id
           const recipient = participants.find((p) => p.user_id === s.to_user_id)
           const recipientDetails = recipient ? parsePaymentDetails(recipient.user.payment_details) : { rails: [] }
+          const fromName = nameById[s.from_user_id] ?? 'Someone'
+          const toName = nameById[s.to_user_id] ?? 'someone'
+          const paidDate = new Date(s.settled_at).toLocaleDateString()
+          const mismatchAmount = pendingMismatchByPair.get(s.id)
+
+          // Bug #14: a bare status badge told nobody what it meant or whose
+          // turn it was next. One caption per status/viewer, mirroring the
+          // payment-details line's placement.
+          let caption: string | null = null
+          if (s.status === 'suggested') {
+            caption = isMePaying ? "Still owed — mark it paid once you've sent the money." : isMeReceiving ? `Waiting for ${fromName} to pay.` : null
+          } else if (s.status === 'marked_paid') {
+            caption = isMePaying
+              ? `You marked this paid on ${paidDate}${s.payment_method ? ` via ${s.payment_method}` : ''} — waiting for ${toName} to confirm.`
+              : isMeReceiving
+              ? `${fromName} marked this paid on ${paidDate}${s.payment_method ? ` via ${s.payment_method}` : ''} — confirm once you've received it.`
+              : null
+          } else if (s.status === 'confirmed') {
+            caption = 'Confirmed — payment complete.'
+          }
 
           return (
             <Card key={s.id} noPadding className="p-3.5 space-y-2">
               <div className="flex items-center gap-3">
-                <UserAvatar avatarData={recipient?.user} size="xs" alt={nameById[s.to_user_id] ?? ''} />
+                <UserAvatar avatarData={recipient?.user} size="xs" alt={toName} />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-[var(--text-primary)]">
-                    {nameById[s.from_user_id] ?? 'Someone'} → {nameById[s.to_user_id] ?? 'someone'}
+                    {fromName} → {toName}
                   </p>
                   <p className="text-xs text-[var(--text-muted)]">{formatMoney(s.amount, s.currency ?? trip.base_currency)}</p>
                 </div>
@@ -314,19 +396,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
                 </Badge>
 
                 {isMePaying && s.status === 'suggested' && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() =>
-                      updateStatus.mutate(
-                        { settlementId: s.id, status: 'marked_paid' },
-                        {
-                          onError: (err) =>
-                            showToast({ type: 'error', message: 'Failed to mark as paid', description: err instanceof Error ? err.message : undefined }),
-                        }
-                      )
-                    }
-                  >
+                  <Button variant="secondary" size="sm" onClick={() => setMarkPaidTarget(s)}>
                     Mark paid
                   </Button>
                 )}
@@ -334,24 +404,48 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={() => {
+                    onClick={() =>
                       updateStatus.mutate(
                         { settlementId: s.id, status: 'confirmed' },
                         {
+                          // Bug #8: this used to fire unconditionally
+                          // alongside the mutate call instead of gated on
+                          // its success, so the activity feed could record
+                          // "confirmed" even when the write was silently
+                          // rejected by RLS. Matches the onSuccess-gated
+                          // convention already used in useConfirmations.ts.
+                          onSuccess: () =>
+                            logTypedActivity({
+                              verb: 'settlement_confirmed',
+                              entity: { type: 'settlement', id: s.id, label: `${fromName} → ${toName}` },
+                            }),
                           onError: (err) =>
                             showToast({ type: 'error', message: 'Failed to confirm payment', description: err instanceof Error ? err.message : undefined }),
                         }
                       )
-                      logTypedActivity({
-                        verb: 'settlement_confirmed',
-                        entity: { type: 'settlement', id: s.id, label: `${nameById[s.from_user_id] ?? 'Someone'} → ${nameById[s.to_user_id] ?? 'you'}` },
-                      })
-                    }}
+                    }
                   >
                     Confirm received
                   </Button>
                 )}
               </div>
+
+              {(s.payment_method || s.notes) && s.status !== 'suggested' && (
+                <p className="text-xs text-[var(--text-muted)] pl-9">
+                  Paid via {s.payment_method ?? 'an unspecified method'} on {paidDate}
+                  {s.notes ? ` — "${s.notes}"` : ''}
+                </p>
+              )}
+
+              {caption && <p className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">{caption}</p>}
+
+              {s.status === 'marked_paid' && mismatchAmount !== undefined && (
+                <p className="text-xs text-warn-700 dark:text-warn-300 pl-9 pt-0.5">
+                  ⚠️ Expenses changed since this was marked paid — the current balance suggests{' '}
+                  {formatMoney(mismatchAmount, s.currency ?? trip.base_currency)} instead of {formatMoney(s.amount, s.currency ?? trip.base_currency)}.
+                  This record is kept — an organizer should review before confirming.
+                </p>
+              )}
 
               {isMePaying && s.status !== 'confirmed' && recipientDetails.rails.length > 0 && (
                 <div className="pl-9 flex items-center gap-2 flex-wrap">
@@ -462,6 +556,14 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
         isOpen={paymentDetailsOpen}
         onClose={() => setPaymentDetailsOpen(false)}
         currentPaymentDetails={currentUserRow?.payment_details}
+      />
+
+      <MarkPaidSheet
+        isOpen={!!markPaidTarget}
+        onClose={() => setMarkPaidTarget(null)}
+        settlement={markPaidTarget}
+        tripId={trip.id}
+        toName={markPaidTarget ? nameById[markPaidTarget.to_user_id] ?? 'them' : ''}
       />
     </div>
   )

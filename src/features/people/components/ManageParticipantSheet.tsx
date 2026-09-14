@@ -6,6 +6,8 @@ import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { computeBalances } from '../../expenses/lib/balances'
 import { formatMoneyMinor } from '../../expenses/lib/formatMoney'
+import { balanceEpsilonMajor } from '../../expenses/settle-up/settleUpLogic'
+import { fromMinorUnits } from '../../../lib/money'
 
 interface ManageParticipantSheetProps {
   tripId: string
@@ -74,10 +76,35 @@ export function ManageParticipantSheet({
       ).balances.find((b) => b.userId === participant.user_id)
     : undefined
 
+  // computeBalances only seeds paid/owed/settled sums for ACTIVE
+  // participants (balances.ts, frozen -- not touched here), so removing
+  // someone with a non-zero balance silently drops their share from
+  // everyone else's totals going forward. Block removal at the point of
+  // action instead: require the leaving participant's own balance to be
+  // ~0, and require no settlement row of theirs still in flight (a
+  // 'suggested' or 'marked_paid' row disappearing mid-flow would orphan
+  // that payment). This doesn't repair a trip where this already happened
+  // in the past, and it only checks the removed participant's own
+  // exposure, not every other participant's exposure to them -- see the
+  // settle-up review notes.
+  const hasOpenSettlement = (expensesData?.settlements ?? []).some(
+    (s) => (s.from_user_id === participant.user_id || s.to_user_id === participant.user_id) && s.status !== 'confirmed'
+  )
+  const blockingBalance = !!balance && Math.abs(fromMinorUnits(balance.netBalanceMinor, baseCurrency)) > balanceEpsilonMajor(baseCurrency)
+  const blockRemoval = blockingBalance || hasOpenSettlement
+
   const handleRemove = async () => {
+    if (blockRemoval) {
+      showToast({
+        type: 'error',
+        message: `${name} still has an open balance`,
+        description: 'Settle up before removing them, or their contributions will be dropped from everyone else\'s totals.',
+      })
+      return
+    }
     try {
       await setActive.mutateAsync({ userId: participant.user_id, active: false })
-      showToast({ type: 'success', message: `${name} removed from the trip`, description: 'Their expense history and balance are unchanged -- you can re-add them any time.' })
+      showToast({ type: 'success', message: `${name} removed from the trip.`, description: 'Their past expenses stay in the ledger; add them back any time.' })
       onClose()
     } catch (err) {
       showToast({ type: 'error', message: 'Could not remove participant', description: err instanceof Error ? err.message : undefined })
@@ -103,12 +130,18 @@ export function ManageParticipantSheet({
           </div>
         </div>
 
-        {balance && !balance.isBalanced && (
-          <div className="bg-[var(--surface-sunken)] rounded-[var(--radius-md)] p-3 text-sm text-[var(--text-secondary)]">
+        {blockingBalance && balance && (
+          <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
             {balance.netBalanceMinor > 0
-              ? `${name} is owed ${formatMoneyMinor(balance.netBalanceMinor, baseCurrency)} — `
-              : `${name} owes ${formatMoneyMinor(-balance.netBalanceMinor, baseCurrency)} — `}
-            you can still settle up with them after removing them from the trip.
+              ? `${name} is owed ${formatMoneyMinor(balance.netBalanceMinor, baseCurrency)}`
+              : `${name} owes ${formatMoneyMinor(-balance.netBalanceMinor, baseCurrency)}`}
+            {' — settle up before removing them, or the group balances will no longer add up.'}
+          </div>
+        )}
+        {!blockingBalance && hasOpenSettlement && (
+          <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
+            {name} has a payment still in progress (marked paid but not yet confirmed, or still suggested) — let it
+            finish before removing them.
           </div>
         )}
 
@@ -124,7 +157,7 @@ export function ManageParticipantSheet({
               <Button variant="outline" onClick={onClose}>
                 Close
               </Button>
-              <Button variant="danger" onClick={() => setConfirming(true)} disabled={isSoleOrganizer}>
+              <Button variant="danger" onClick={() => setConfirming(true)} disabled={isSoleOrganizer || blockRemoval}>
                 Remove from trip
               </Button>
             </div>
@@ -132,8 +165,8 @@ export function ManageParticipantSheet({
         ) : (
           <div className="space-y-4">
             <div className="bg-danger-50 border border-danger-200 rounded-[var(--radius-md)] p-3 text-sm text-danger-800">
-              Removes {name} from the trip roster. Their expense history and any outstanding balance stay intact — you
-              can still settle up with them, and you can re-add them later.
+              Removes {name} from the trip roster. Their past expenses stay in the ledger, and you can re-add them any
+              time.
             </div>
             <div className="flex gap-3 justify-end">
               <Button variant="ghost" onClick={() => setConfirming(false)} disabled={setActive.isPending}>

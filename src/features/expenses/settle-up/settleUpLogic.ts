@@ -10,7 +10,7 @@ import { minimizeTransactions, getUserTransactions, type Person, type Transactio
 import { fromMinorUnits } from '../../../lib/money'
 
 /** Matches computeBalances' BALANCE_EPSILON_MINOR=1 threshold, currency-aware (0.01 for GBP/USD/EUR, 1 for JPY, 0.001 for BHD/KWD/JOD/OMR) -- see the doc comment on minimizeTransactions' `epsilon` param for why a hardcoded 0.01 was wrong. */
-function balanceEpsilonMajor(currency: string): number {
+export function balanceEpsilonMajor(currency: string): number {
   return fromMinorUnits(1, currency)
 }
 import { computeBalances, carryoversToPseudoSettlements, partitionCarryovers } from '../lib/balances'
@@ -145,6 +145,50 @@ export function readLegacySnapshot(raw: unknown): SettlementSnapshot | null {
   const snap = raw as Partial<SettlementSnapshot>
   if (!Array.isArray(snap.transactions) || !Array.isArray(snap.balances)) return null
   return snap as SettlementSnapshot
+}
+
+/**
+ * For each 'marked_paid' settlement (payer says they paid, awaiting the
+ * payee's confirmation), compares the amount recorded when it was marked
+ * paid against what today's LIVE (unfrozen) suggested-payments computation
+ * would say for that from/to pair. A mismatch means expenses changed after
+ * the payer marked it paid -- surfaced to the payee/organizer as a warning
+ * so they can review before confirming. The row itself is never auto-
+ * corrected or deleted; it's real payment history.
+ *
+ * Returns a map of settlementId -> recomputed live amount (0 if the pair no
+ * longer owes anything at all).
+ */
+export function computePendingMismatches(
+  settlements: Settlement[],
+  liveSuggested: Transaction[],
+  baseCurrency: string
+): Map<string, number> {
+  const live = new Map(liveSuggested.map((t) => [`${t.from}:${t.to}`, t.amount]))
+  const map = new Map<string, number>()
+  for (const s of settlements) {
+    if (s.status !== 'marked_paid') continue
+    const recomputed = live.get(`${s.from_user_id}:${s.to_user_id}`) ?? 0
+    if (Math.abs(recomputed - s.amount) > balanceEpsilonMajor(s.currency ?? baseCurrency)) {
+      map.set(s.id, recomputed)
+    }
+  }
+  return map
+}
+
+/**
+ * Filters freshly-recomputed suggested payments (about to be inserted by a
+ * (re)freeze) to exclude any from/to pair that already has a pending
+ * ('marked_paid') settlement row for it -- that payment is real history
+ * awaiting confirmation, not something to duplicate. computePendingMismatches
+ * above is what surfaces an amount that has since drifted, instead of
+ * silently inserting a second, conflicting suggestion for the same pair.
+ */
+export function excludePendingPairs(suggested: Transaction[], settlements: Settlement[]): Transaction[] {
+  const pendingPairs = new Set(
+    settlements.filter((s) => s.status === 'marked_paid').map((s) => `${s.from_user_id}:${s.to_user_id}`)
+  )
+  return suggested.filter((t) => !pendingPairs.has(`${t.from}:${t.to}`))
 }
 
 /** Builds a fresh SettlementSnapshot to write on freeze, from the current suggested payments. */

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Button, EmptyState, Input, Modal, Select, SegmentedControl, TextArea, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
@@ -8,7 +8,8 @@ import { useSections } from '../../../lib/queries/usePlanning'
 import { useChecklists } from '../../../lib/queries/useChecklists'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { ChecklistTab, openBringCountForUser } from '../../checklists'
-import { ActionRow } from './ActionRow'
+import { ActionRow, ROW_ID_PREFIX } from './ActionRow'
+import { TODOS_TITLE, NEW_TODO_LABEL, ADD_TODO_LABEL, WHO_EVERYONE, doneCountLabel } from '../lib/todoLabels'
 import { countsTowardActions, isActionCompleteForUser, isGroupComplete, isOverdue, openActionCountForUser } from '../lib/actionStatus'
 import type { SectionVoterIds } from '../lib/actionStatus'
 import { getDecisionShape } from '../../decisions/lib/decisionShapes'
@@ -21,7 +22,12 @@ export interface ActionsSheetProps {
   isOrganizer: boolean
   /** Segment to show on open — Today's packing nudge lands on 'bring' directly. */
   initialSegment?: 'actions' | 'bring'
+  /** To-do (`trip_actions.id`) or bring item (`checklist_items.id`) to scroll to and briefly highlight on open. */
+  highlightId?: string
 }
+
+const HIGHLIGHT_CLASSES = ['ring-2', 'ring-accent-500']
+const HIGHLIGHT_MS = 2200
 
 type Segment = 'actions' | 'bring'
 
@@ -38,12 +44,12 @@ interface ActionFormValues {
 const EMPTY_FORM: ActionFormValues = { title: '', notes: '', assignee: '', beforeTrip: false, dueDate: '', sectionId: '' }
 
 /**
- * Launched "Actions" sheet — trip actions/to-dos (book it, send it, sort
+ * Launched "To-dos" sheet — trip actions/to-dos (book it, send it, sort
  * it) plus the packing/bring list, as two segments of one sheet (matches
  * QuickCaptureSheet/AddToPlanSheet chrome — a `Modal` — so z-index and
  * mobile/desktop framing are identical, no bespoke overlay classes).
  */
-export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegment }: ActionsSheetProps) {
+export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegment, highlightId }: ActionsSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const { data: trip } = useTrip(tripId)
@@ -70,7 +76,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
 
   const assigneeOptions = useMemo(
     () => [
-      { value: '', label: 'Whole group' },
+      { value: '', label: WHO_EVERYONE },
       ...(participants ?? [])
         .filter((p) => p.active !== false)
         .map((p) => ({ value: p.user_id, label: p.user?.full_name || p.user?.email || 'Unknown' })),
@@ -105,6 +111,34 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
     openList.sort(byUrgency)
     return { openList, doneList }
   }, [actions, trip, participants, sectionVoters])
+
+  // `?open=todo:<id>` / `bring:<id>`: once the rows exist, scroll to the row
+  // and flash a ring on it (a done to-do is tucked under "Show done", so
+  // expand that first).
+  const highlightedIsDone = !!highlightId && sorted.doneList.some((a) => a.id === highlightId)
+  useEffect(() => {
+    if (highlightedIsDone) setShowDone(true)
+  }, [highlightedIsDone])
+  const dataReady = !isLoading && !!bringItems
+  useEffect(() => {
+    if (!highlightId || !dataReady) return
+    const prefix = segment === 'bring' ? 'bring-row-' : ROW_ID_PREFIX
+    let off: ReturnType<typeof setTimeout> | undefined
+    let el: HTMLElement | null = null
+    const on = setTimeout(() => {
+      el = document.getElementById(`${prefix}${highlightId}`)
+      if (!el) return
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add(...HIGHLIGHT_CLASSES)
+      off = setTimeout(() => el?.classList.remove(...HIGHLIGHT_CLASSES), HIGHLIGHT_MS)
+    }, 150)
+    return () => {
+      clearTimeout(on)
+      clearTimeout(off)
+      el?.classList.remove(...HIGHLIGHT_CLASSES)
+    }
+    // Re-run only when the target or the visible segment/data readiness changes.
+  }, [highlightId, segment, dataReady, showDone])
 
   const openForCreate = () => {
     setEditingId(null)
@@ -163,7 +197,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
       setFormOpen(false)
       setEditingId(null)
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not save this action', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not save this to-do', description: (err as Error).message })
     }
   }
 
@@ -172,7 +206,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
       await deleteAction.mutateAsync(id)
       setConfirmingDeleteId(null)
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not delete this action', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not delete this to-do', description: (err as Error).message })
     }
   }
 
@@ -180,12 +214,12 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
     if (!user) return
     toggleDone.mutate(
       { actionId: action.id, isGroupAction: !action.assigned_to, userId: user.id, done },
-      { onError: (err) => showToast({ type: 'error', message: 'Could not update this action', description: (err as Error).message }) }
+      { onError: (err) => showToast({ type: 'error', message: 'Could not update this to-do', description: (err as Error).message }) }
     )
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="lg" title="Actions">
+    <Modal isOpen={isOpen} onClose={onClose} size="lg" title={TODOS_TITLE}>
       <div className="space-y-4">
         <SegmentedControl
           fullWidth
@@ -194,8 +228,8 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           options={[
             // Badges: open items relevant to the CURRENT user (their own /
             // whole-group actions; unclaimed or their unpacked bring items).
-            { value: 'actions', label: 'Actions', badge: openActionCountForUser(actions, user?.id, sectionVoters) },
-            { value: 'bring', label: 'Bring list', badge: openBringCountForUser(bringItems, user?.id) },
+            { value: 'actions', label: TODOS_TITLE, badge: openActionCountForUser(actions, user?.id, sectionVoters) },
+            { value: 'bring', label: '🎒 Bring', badge: openBringCountForUser(bringItems, user?.id) },
           ]}
         />
 
@@ -203,7 +237,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           <div className="space-y-4">
             <div className="flex justify-end">
               <Button size="sm" onClick={openForCreate}>
-                + New action
+                + {NEW_TODO_LABEL}
               </Button>
             </div>
 
@@ -212,11 +246,11 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
             ) : sorted.openList.length === 0 && sorted.doneList.length === 0 ? (
               <EmptyState
                 icon="✅"
-                title="No actions yet"
-                description="Tasks with an owner and a deadline — book it, send it, sort it."
+                title="No to-dos."
+                description="Add one for the group — like 'Book the transfer' or 'Bring a speaker'."
                 action={
                   <Button variant="primary" onClick={openForCreate}>
-                    + New action
+                    + {NEW_TODO_LABEL}
                   </Button>
                 }
               />
@@ -249,7 +283,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
                       onClick={() => setShowDone((v) => !v)}
                       className="text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
                     >
-                      {showDone ? 'Hide' : 'Show'} {sorted.doneList.length} done
+                      {showDone ? 'Hide' : 'Show'} {doneCountLabel(sorted.doneList.length, sorted.openList.length + sorted.doneList.length)}
                     </button>
                     {showDone && (
                       <ul className="mt-2 space-y-2">
@@ -279,11 +313,11 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           </div>
         ) : (
           <div className="space-y-2">
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Packing & bring list</h3>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Things to bring</h3>
             <ChecklistTab
               tripId={tripId}
               isOrganizer={isOrganizer}
-              emptyStateTitle="Nothing on the list yet"
+              emptyStateTitle="Nothing to bring yet."
               emptyStateDescription="Who's bringing what — no deadlines, just don't forget the speaker."
             />
           </div>
@@ -294,13 +328,13 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
         isOpen={formOpen}
         onClose={() => setFormOpen(false)}
         size="sm"
-        title={editingId ? 'Edit action' : 'New action'}
+        title={editingId ? 'Edit to-do' : NEW_TODO_LABEL}
       >
         <div className="space-y-4">
           <Input label="Title" value={values.title} onChange={(e) => updateField('title', e.target.value)} placeholder="e.g. Book the villa" required autoFocus />
           <TextArea label="Notes (optional)" value={values.notes} onChange={(e) => updateField('notes', e.target.value)} rows={2} />
           <Select
-            label="Assignee"
+            label="Who"
             value={values.assignee}
             onChange={(e) => updateField('assignee', e.target.value)}
             options={assigneeOptions}
@@ -319,7 +353,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
           )}
           {(values.beforeTrip || values.dueDate) && (
             <p className="text-xs text-[var(--text-muted)]">
-              Giving this a deadline means whoever it's assigned to (or everyone, if unassigned) gets reminder
+              Giving this a deadline means whoever it's assigned to (or everyone, if it's for Everyone) gets reminder
               emails — 7 days before, 1 day before, and once overdue. The organizer can turn this off for the whole
               trip in Auto-chase settings.
             </p>
@@ -329,7 +363,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
             value={values.sectionId}
             onChange={(e) => updateField('sectionId', e.target.value)}
             options={sectionOptions}
-            helperText="Ticks off automatically once someone votes — no need to also tick it by hand."
+            helperText="Ticks off automatically once someone answers — no need to also tick it by hand."
           />
 
           <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
@@ -337,7 +371,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
               Cancel
             </Button>
             <Button onClick={handleSave} isLoading={createAction.isPending || updateAction.isPending}>
-              {editingId ? 'Save' : 'Add action'}
+              {editingId ? 'Save' : ADD_TODO_LABEL}
             </Button>
           </div>
         </div>

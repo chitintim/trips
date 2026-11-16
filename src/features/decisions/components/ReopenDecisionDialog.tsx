@@ -34,10 +34,10 @@ export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decided
         entity: { type: 'section', id: section.id, label: section.title },
         metadata: { previous_option: decidedTitle ?? null },
       })
-      showToast({ type: 'success', message: 'Decision reopened', description: 'Voting is open again; existing votes were kept.' })
+      showToast({ type: 'success', message: 'Question reopened', description: 'The question is open again; existing answers were kept.' })
       onClose()
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not reopen the decision', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not reopen the question', description: (err as Error).message })
     }
   }
 
@@ -45,8 +45,8 @@ export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decided
     <Modal isOpen={isOpen} onClose={onClose} size="sm" title={`Reopen "${section.title}"?`}>
       <div className="space-y-3">
         <p className="text-sm text-[var(--text-secondary)]">
-          {decidedTitle ? `"${decidedTitle}" will no longer be the decision. ` : ''}
-          Voting opens again and everyone's existing votes are kept.
+          {decidedTitle ? `"${decidedTitle}" will no longer be the answer. ` : ''}
+          The question opens again and everyone's existing answers are kept.
         </p>
         <p className="text-sm text-[var(--text-secondary)]">
           Anything already created from this decision -- a scheduled event, a booking, a follow-up action -- is{' '}

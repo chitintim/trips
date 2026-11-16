@@ -9,9 +9,9 @@ import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcome
 import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
 import { canReopenDecision } from '../../decisions/lib/resolveDecision'
 import { resolveDecidedOptionId } from '../../decisions/lib/closeDecision'
-import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
+import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import { replaceableSiblingVoteIds, votingInstruction, type VotingMethod } from '../../decisions/lib/voting'
-import { computeQuestionState, formatEntryCardLabel, type QuestionState } from '../lib/responseState'
+import { computeQuestionStates, formatEntryCardLabel, type QuestionState } from '../lib/responseState'
 import { inScopeHeadcount } from '../../people/lib/inScopePeople'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { AnswerFlow } from './AnswerFlow'
@@ -59,12 +59,14 @@ export function PlanDecideLens({ trip, items, isOrganizer, onScheduleIt }: PlanD
   const headcount = useMemo(() => inScopeHeadcount(participants || [], isConfirmationEnabled(trip)), [participants, trip])
 
   const questionStates = useMemo(() => {
-    const map = new Map<string, QuestionState>()
-    for (const s of sections || []) {
-      map.set(s.id, computeQuestionState(s, votes || [], (participants || []).length, user?.id ?? null, trip.base_currency))
-    }
-    return map
-  }, [sections, votes, participants, user?.id, trip.base_currency])
+    return computeQuestionStates({
+      sections: sections || [],
+      votes: votes || [],
+      userId: user?.id ?? null,
+      trip,
+      participants: participants || [],
+    })
+  }, [sections, votes, participants, user?.id, trip])
 
   const withOptions = useMemo(
     () => (sections || []).filter((s) => s.options.some((o) => o.status !== 'cancelled')),
@@ -74,7 +76,7 @@ export function PlanDecideLens({ trip, items, isOrganizer, onScheduleIt }: PlanD
   const decidedQuestions = useMemo(() => withOptions.filter((s) => s.status === 'completed'), [withOptions])
 
   const needsMe = useMemo(
-    () => openQuestions.filter((s) => questionStates.get(s.id)?.state === 'needs_you'),
+    () => openQuestions.filter((s) => questionStates.get(s.id)?.state === 'needs_answer'),
     [openQuestions, questionStates]
   )
 
@@ -116,7 +118,7 @@ export function PlanDecideLens({ trip, items, isOrganizer, onScheduleIt }: PlanD
       <EmptyState
         icon={<NothingToDecide className="w-32 h-24 text-[var(--text-muted)]" />}
         title="Nothing to decide yet"
-        description="Open questions from the Plan (group votes and personal picks) show up here, along with what got decided."
+        description="Open questions from the Plan (group choices and own choices) show up here, along with what got decided."
       />
     )
   }
@@ -257,7 +259,6 @@ function QuestionCard({
   onViewOrders,
 }: QuestionCardProps) {
   const isPersonal = getDecisionShape(section.metadata) === 'personal'
-  const hasCatalogPricing = isPersonal ? sectionHasCatalogPricing(section.options) : false
   const isClosed = section.status === 'completed'
   const method = (section.voting_method as VotingMethod) || 'single'
   const activeOptionCount = section.options.filter((o) => o.status !== 'cancelled').length
@@ -272,8 +273,8 @@ function QuestionCard({
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             <h4 className="min-w-0 break-words text-sm font-medium text-[var(--text-primary)]">{section.title}</h4>
-            {!isClosed && state && (
-              <Badge variant={state.state === 'done' ? 'success' : 'warning'} size="sm">
+            {!isClosed && state?.label && (
+              <Badge variant={state.tone ?? 'neutral'} size="sm">
                 {state.label}
               </Badge>
             )}
@@ -281,12 +282,12 @@ function QuestionCard({
           <div className="mt-0.5 flex items-center gap-1.5 flex-wrap">
             <p className="text-xs text-[var(--text-muted)]">
               {isPersonal
-                ? `${state?.respondedCount ?? 0} of ${state?.totalParticipants ?? 0} ${hasCatalogPricing ? 'ordered' : 'have picked'}`
+                ? state?.countLabel
                 : isClosed
                   ? `${activeOptionCount} option${activeOptionCount === 1 ? '' : 's'}`
                   : `${activeOptionCount} option${activeOptionCount === 1 ? '' : 's'} · ${votingInstruction(method)} · ${
-                      state?.respondedCount ?? 0
-                    } of ${state?.totalParticipants ?? 0} voted`}
+                      state?.countLabel ?? ''
+                    }`}
             </p>
             {!isClosed && section.vote_deadline && <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />}
           </div>
@@ -311,11 +312,11 @@ function QuestionCard({
         !isClosed && (
           <div className="flex gap-2 flex-wrap">
             <Button variant="secondary" size="sm" onClick={onFillOrder}>
-              {state?.state === 'done' ? 'Edit your order' : 'Fill in your order'}
+              {state?.state === 'answered' ? 'Edit your answer' : 'Answer'}
             </Button>
             {isOrganizer && (
               <Button variant="outline" size="sm" onClick={onViewOrders}>
-                View orders
+                View answers
               </Button>
             )}
           </div>
@@ -407,7 +408,7 @@ function VoteOptionsList({ trip, section, votes, method }: VoteOptionsListProps)
               role={method === 'single' ? 'radio' : method === 'approval' ? 'checkbox' : undefined}
               aria-checked={method === 'ranked' ? undefined : !!myVote}
             >
-              {myVote ? '✓ Voted' : method === 'approval' ? 'Approve' : method === 'ranked' ? 'Rank' : 'Vote'}
+              {myVote ? '✓ Answered' : method === 'approval' ? 'Approve' : method === 'ranked' ? 'Rank' : 'Answer'}
             </Button>
           </div>
         )

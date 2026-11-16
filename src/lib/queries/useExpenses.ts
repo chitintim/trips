@@ -580,6 +580,12 @@ export function useSaveItemClaims() {
       // or is briefly disconnected. Partial key match invalidates every
       // ['claimLink', *] entry (we don't have the share code here).
       queryClient.invalidateQueries({ queryKey: ['claimLink'] })
+      // The to-dos snapshot reads the trip's expenses list (claims included), so
+      // a claim must clear its "Claim your items" to-do straight away. The hook
+      // has no trip id (the public claim page), so match every trip's list.
+      queryClient.invalidateQueries({
+        predicate: (q) => q.queryKey.length === 3 && q.queryKey[0] === 'trip' && q.queryKey[2] === 'expenses',
+      })
     },
   })
 }

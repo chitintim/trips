@@ -1,7 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { Button, Card, EmptyState, Skeleton } from '../../../components/ui'
 import { useTrips } from '../../../lib/queries/useTrip'
+import { useTodoCountsByTrip } from '../../../lib/queries/useTodos'
 import { TripCard } from './TripCard'
 import { CreateTripWizard } from './CreateTripWizard'
 import { LandingRedirectPrompt } from './LandingRedirectPrompt'
@@ -21,7 +22,7 @@ export function MemberDashboard() {
   const { data: trips, isLoading } = useTrips()
   const [createOpen, setCreateOpen] = useState(false)
   const [showPast, setShowPast] = useState(false)
-  const [attentionCounts, setAttentionCounts] = useState<Record<string, number>>({})
+  const { counts: attentionCounts, report: reportAttention } = useTodoCountsByTrip()
 
   const { myTrips, publicTrips } = useMemo(() => {
     if (!trips || !user) return { myTrips: [], publicTrips: [] }
@@ -40,10 +41,6 @@ export function MemberDashboard() {
   // handles the once-per-session guard and announcement sequencing itself.
 
   const ordered = useMemo(() => orderDashboardTrips(myTrips, attentionCounts), [myTrips, attentionCounts])
-
-  const reportAttention = useCallback((tripId: string, count: number) => {
-    setAttentionCounts((prev) => (prev[tripId] === count ? prev : { ...prev, [tripId]: count }))
-  }, [])
 
   if (isLoading) {
     return (

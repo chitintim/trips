@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useState } from 'react'
+import { Suspense, useEffect, useMemo, useState } from 'react'
 import { Button, EmptyState, SegmentedControl, Skeleton } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
 import { inScopeHeadcount } from '../../people/lib/inScopePeople'
@@ -24,8 +24,17 @@ type Lens = 'list' | 'map' | 'decide'
 // switches to Map — same treatment TripMapTab always had.
 const LazyPlanMapLens = lazyWithRetry(() => import('./PlanMapLens').then((m) => ({ default: m.PlanMapLens })))
 
+/** A deep-link hand-off from the shell: open an item's sheet, or scroll to / highlight a question's card. `nonce` re-fires the same target. */
+export interface PlanFocus {
+  kind: 'item' | 'question'
+  id: string
+  nonce: number
+}
+
 export interface PlanTabProps {
   trip: Trip
+  /** `?open=item:<id>` / `?open=question:<id>` (decided question) target. */
+  focus?: PlanFocus | null
   /** Cross-space links, e.g. tapping a linked-expense chip to jump to Money. */
   onNavigate?: (tabId: string, params?: { expenseId?: string }) => void
 }
@@ -36,7 +45,7 @@ export interface PlanTabProps {
  * sticky segmented control, with one detail sheet and one creation sheet
  * shared across all of them.
  */
-export function PlanTab({ trip, onNavigate }: PlanTabProps) {
+export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
   const { data: participants } = useParticipants(trip.id)
   const { items, isLoading, isError, refetch } = usePlanItems(trip.id)
 
@@ -46,6 +55,20 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
   const [addSheetDefaultIsVote, setAddSheetDefaultIsVote] = useState(false)
   const [scheduleItem, setScheduleItem] = useState<PlanItem | null>(null)
   const [organizeOpen, setOrganizeOpen] = useState(false)
+
+  // Deep link -> item: open its sheet once the plan has loaded. A question
+  // target needs the List lens, where its card lives (PlanBoard highlights it).
+  const [handledNonce, setHandledNonce] = useState(0)
+  useEffect(() => {
+    if (!focus || isLoading || focus.nonce === handledNonce) return
+    setHandledNonce(focus.nonce)
+    if (focus.kind === 'question') {
+      setLens('list')
+      return
+    }
+    const match = items.find((i) => i.id === focus.id || i.optionId === focus.id || i.eventId === focus.id)
+    if (match) setSelectedItem(match)
+  }, [focus, isLoading, items, handledNonce])
 
   const openAddSheet = (defaultIsVote = false) => {
     setAddSheetDefaultIsVote(defaultIsVote)
@@ -119,6 +142,7 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
           onOpenItem={setSelectedItem}
           onScheduleIt={setScheduleItem}
           onNewQuestion={() => openAddSheet(true)}
+          highlight={focus?.kind === 'question' ? { id: focus.id, nonce: focus.nonce } : null}
         />
       )}
       {lens === 'map' && (

@@ -29,11 +29,11 @@ function toAvatarSelections(selections: PlanItem['selections']) {
   }))
 }
 
-/** "Alex & Sarah voted" / "Alex, Sarah +3 voted" — same compact-summary shape as formatChosenBy above, but for `option_votes` rather than `selections`, so the two mechanisms read as clearly distinct affordances when a card happens to carry both. */
+/** "Alex & Sarah answered" / "Alex, Sarah +3 answered" — same compact-summary shape as formatChosenBy above, but for `option_votes` rather than `selections`, so the two mechanisms read as clearly distinct affordances when a card happens to carry both. */
 function formatVotedBy(voters: OptionVoteWithUser[]): string {
   const names = voters.map((v) => v.user?.full_name || v.user?.email || 'Someone')
-  if (names.length <= 2) return `${names.join(' & ')} voted`
-  return `${names.slice(0, 2).join(', ')} +${names.length - 2} voted`
+  if (names.length <= 2) return `${names.join(' & ')} answered`
+  return `${names.slice(0, 2).join(', ')} +${names.length - 2} answered`
 }
 
 function toAvatarVotes(voters: OptionVoteWithUser[]) {
@@ -278,12 +278,12 @@ export function PlanItemCard({
           {/* Who's voted for this option — right where the vote is cast
               (feedback: "when I vote for something I can't see others
               voted what as well"), not just in the detail sheet. Uses
-              entityLabel="voted for this" (vs. the default "selected
+              entityLabel="answered with this" (vs. the default "selected
               this" above) so the popover header never reads as the same
               affordance as "Chosen by" if a card somehow carries both. */}
           {isProposal && item.vote && votesVisible && voters.length > 0 && (
             <div className="mt-1.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-              <SelectionAvatars selections={toAvatarVotes(voters)} maxAvatars={4} size="sm" entityLabel="voted for this" />
+              <SelectionAvatars selections={toAvatarVotes(voters)} maxAvatars={4} size="sm" entityLabel="answered with this" />
               <span className="text-xs text-[var(--text-muted)]">{formatVotedBy(voters)}</span>
             </div>
           )}
@@ -299,7 +299,7 @@ export function PlanItemCard({
             isLoading={isVoting}
             onClick={() => onVote(item)}
           >
-            {myVoted ? '✓ Voted' : item.vote?.votingMethod === 'approval' ? 'Approve' : item.vote?.votingMethod === 'ranked' ? 'Rank' : 'Vote'}
+            {myVoted ? 'Answered ✓' : item.vote?.votingMethod === 'ranked' ? 'Rank' : 'Answer'}
           </Button>
         )}
       </div>

@@ -110,7 +110,7 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
         <p className="text-sm text-[var(--text-secondary)]">Pick a day (and optionally a time) to put this on the plan.</p>
         {closesVote && (
           <p className="rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-2.5 text-sm text-[var(--text-secondary)]">
-            Voting on "{sectionToClose!.title}" is still open. Scheduling this will <strong>close the vote</strong> and record "{item.title}" as the decision.
+            "{sectionToClose!.title}" is still open. Scheduling this will <strong>close the question</strong> and record "{item.title}" as the answer.
           </p>
         )}
         {/* [&>*]:min-w-0 — grid items default to min-width:auto, and native
@@ -126,7 +126,7 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
             Cancel
           </Button>
           <Button onClick={handleSchedule} isLoading={createEvent.isPending || updateSection.isPending}>
-            {closesVote ? 'Close vote & schedule' : 'Put it on the plan'}
+            {closesVote ? 'Close question & schedule' : 'Put it on the plan'}
           </Button>
         </div>
       </div>

@@ -275,9 +275,9 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
           message: 'Booking tracked',
           description:
             timelineEventId && expenseId
-              ? 'Timeline event and expense created too.'
+              ? 'Added to the plan and expense created too.'
               : timelineEventId
-                ? 'Timeline event created too.'
+                ? 'Added to the plan too.'
                 : expenseId
                   ? 'Expense created too.'
                   : undefined,
@@ -371,7 +371,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
             label="Booking for which option?"
             value={values.optionId}
             onChange={(e) => updateField('optionId', e.target.value)}
-            placeholder="Not linked to a decision"
+            placeholder="Not linked to a question"
             fullWidth
             options={optionChoices}
           />
@@ -414,7 +414,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
                 className="mt-0.5 w-5 h-5 accent-accent-600"
               />
               <span className="text-sm text-[var(--text-primary)]">
-                Timeline event on the booking date
+                Add to the plan on the booking date
                 {!canCreateEvent && <span className="block text-xs text-[var(--text-muted)]">Set a booking date to enable</span>}
               </span>
             </label>
@@ -474,7 +474,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
             <label className="flex items-start gap-3 cursor-pointer">
               <input type="checkbox" checked={removeEvent} onChange={(e) => setRemoveEvent(e.target.checked)} className="mt-0.5 w-5 h-5 accent-accent-600" />
               <span className="text-sm text-[var(--text-primary)]">
-                Remove the linked timeline event
+                Remove the linked entry from the plan
                 <span className="block text-xs text-[var(--text-muted)]">It will disappear from the plan.</span>
               </span>
             </label>

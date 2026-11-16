@@ -1,6 +1,7 @@
 import { HTMLAttributes, forwardRef } from 'react'
 import { Badge } from '../Badge'
 import { Database } from '../../../types/database.types'
+import { rsvpStatusLabel } from '../../../features/people/lib/rsvpLabels'
 
 // ============================================================================
 // TYPES
@@ -31,42 +32,34 @@ export interface ConfirmationStatusBadgeProps extends Omit<HTMLAttributes<HTMLSp
 }
 
 // ============================================================================
-// CONFIGURATION
+// CONFIGURATION (label text comes from rsvpStatusLabel: one RSVP vocabulary)
 // ============================================================================
 
 const STATUS_CONFIG: Record<
   ConfirmationStatus,
   {
-    label: string
     variant: 'primary' | 'secondary' | 'success' | 'warning' | 'error' | 'info' | 'neutral'
   }
 > = {
   pending: {
-    label: 'Pending',
     variant: 'warning',
   },
   confirmed: {
-    label: 'Confirmed',
     variant: 'success',
   },
   interested: {
-    label: 'Interested',
     variant: 'info',
   },
   conditional: {
-    label: 'Conditional',
     variant: 'warning',
   },
   waitlist: {
-    label: 'Waitlist',
     variant: 'neutral',
   },
   declined: {
-    label: 'Declined',
     variant: 'error',
   },
   cancelled: {
-    label: 'Cancelled',
     variant: 'error',
   },
 }
@@ -88,7 +81,7 @@ export const ConfirmationStatusBadge = forwardRef<HTMLSpanElement, ConfirmationS
         className={className}
         {...props}
       >
-        {config.label}
+        {rsvpStatusLabel(status)}
         {count !== undefined && count > 0 && ` (${count})`}
       </Badge>
     )

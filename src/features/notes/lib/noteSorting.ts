@@ -47,7 +47,7 @@ export const NOTE_TYPE_CONFIG: Record<NoteType, NoteTypeStyle> = {
   announcement: { label: 'Announcement', icon: '📢', badgeClassName: 'bg-warn-100 text-warn-800 dark:bg-warn-950 dark:text-warn-300' },
   note: { label: 'Note', icon: '📝', badgeClassName: 'bg-accent-100 text-accent-800 dark:bg-accent-950 dark:text-accent-300' },
   reminder: { label: 'Reminder', icon: '⏰', badgeClassName: 'bg-warn-100 text-warn-700 dark:bg-warn-950 dark:text-warn-400' },
-  question: { label: 'Question', icon: '❓', badgeClassName: 'bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-300' },
+  question: { label: 'Discussion', icon: '💬', badgeClassName: 'bg-neutral-200 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-300' },
   info: { label: 'Info', icon: 'ℹ️', badgeClassName: 'bg-success-100 text-success-800 dark:bg-success-950 dark:text-success-300' },
 }
 

@@ -151,7 +151,7 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
           <div className="flex-1">
             <h3 className="font-medium text-[var(--text-primary)] mb-1">Enable confirmation tracking</h3>
             <p className="text-sm text-[var(--text-secondary)]">
-              Participants can update their commitment status (confirmed, interested, conditional, etc).
+              Turn this on when you need firm commitments before booking. People answer "Are you coming?" — "I'm in" means they share the costs you book.
             </p>
           </div>
           <button
@@ -179,11 +179,11 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
             </legend>
             <label className="flex items-start gap-2 text-sm text-[var(--text-primary)]">
               <input type="radio" name="reopen-mode" className="mt-0.5" checked={reopenMode === 'keep'} onChange={() => setReopenMode('keep')} />
-              <span>Keep them (people stay confirmed)</span>
+              <span>Keep them (people stay Going)</span>
             </label>
             <label className="flex items-start gap-2 text-sm text-[var(--text-primary)]">
               <input type="radio" name="reopen-mode" className="mt-0.5" checked={reopenMode === 'fresh'} onChange={() => setReopenMode('fresh')} />
-              <span>Start fresh (everyone goes back to pending; the reset sends no email, but normal reminders resume)</span>
+              <span>Start fresh (everyone goes back to No reply yet; the reset sends no email, but normal reminders resume)</span>
             </label>
           </fieldset>
         )}
@@ -198,7 +198,7 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
                 rows={5}
                 maxLength={1000}
                 showCount
-                helperText="Shown on the trip brief — explain what confirming means, costs, and deadlines."
+                helperText={'Shown on the trip brief and when someone says "I\'m in" — explain what you\'ll book and what it costs.'}
               />
               <button
                 type="button"
@@ -247,7 +247,7 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
                 placeholder="Unlimited"
               />
               <Input
-                label="Confirmation deadline (optional)"
+                label="Reply-by deadline (optional)"
                 type="date"
                 value={values.confirmationDeadline}
                 onChange={(e) => updateField('confirmationDeadline', e.target.value)}

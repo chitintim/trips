@@ -58,9 +58,9 @@ export function shortenUrl(url: string): string {
  */
 const INTERNAL_LINK_LABELS: Array<[test: (params: URLSearchParams) => boolean, label: string]> = [
   [(p) => p.get('open') === 'travel-details', 'Your travel details'],
-  [(p) => p.get('open') === 'actions-bring', 'Bring list'],
-  [(p) => p.get('open') === 'actions', 'Actions'],
-  [(p) => p.get('tab') === 'decisions', 'Decisions'],
+  [(p) => p.get('open') === 'actions-bring', 'To-dos'],
+  [(p) => p.get('open') === 'actions', 'To-dos'],
+  [(p) => p.get('tab') === 'decisions', 'Plan'],
   [(p) => p.get('tab') === 'people', 'People'],
   [(p) => p.get('tab') === 'money', 'Money'],
   [(p) => p.get('tab') === 'plan', 'Plan'],

@@ -84,7 +84,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
         icon: '📅',
         title: 'Add itinerary event',
         summary: `"${action.title}" — ${action.event_date}${action.start_time ? `, ${action.start_time}` : ''}${action.location ? ` · ${action.location}` : ''}`,
-        target: 'Itinerary',
+        target: 'Plan',
         isDelete: false,
       }
     case 'create_option':
@@ -92,7 +92,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
         icon: '💡',
         title: 'Add option',
         summary: `"${action.title}"${action.price != null ? ` — ${action.currency ?? ''} ${action.price}`.trimEnd() : ''}`,
-        target: 'Decisions',
+        target: 'Plan',
         isDelete: false,
       }
     case 'create_booking_draft':
@@ -123,7 +123,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
         ]
           .filter(Boolean)
           .join(', ') || 'No field changes',
-        target: 'Itinerary',
+        target: 'Plan',
         isDelete: false,
       }
     case 'update_option': {
@@ -140,7 +140,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
         icon: '✏️',
         title: 'Update option',
         summary: `"${target ?? action.title ?? 'Option'}" — ${fields}`,
-        target: 'Decisions',
+        target: 'Plan',
         isDelete: false,
       }
     }
@@ -148,8 +148,8 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
       return {
         icon: '❔',
         title: 'New question',
-        summary: `"${action.title}" (${action.decision_shape === 'personal' ? 'Personal picks' : 'Group vote'})`,
-        target: 'Decisions',
+        summary: `"${action.title}" (${action.decision_shape === 'personal' ? 'Own choice' : 'Group choice'})`,
+        target: 'Plan',
         isDelete: false,
       }
     }
@@ -167,7 +167,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
         icon: '✏️',
         title: 'Update question',
         summary: `"${target ?? action.title ?? 'Question'}" — ${fields}`,
-        target: 'Decisions',
+        target: 'Plan',
         isDelete: false,
       }
     }
@@ -178,7 +178,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
         icon: '➡️',
         title: 'Move option',
         summary: `${optionTitle ? `"${optionTitle}"` : 'Option'} → ${sectionTitle ? `"${sectionTitle}"` : 'another question'}`,
-        target: 'Decisions',
+        target: 'Plan',
         isDelete: false,
       }
     }

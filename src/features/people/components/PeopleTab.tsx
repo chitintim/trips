@@ -123,9 +123,9 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
               <div>
                 <h2 className="text-lg font-semibold text-[var(--text-primary)]">Who's coming</h2>
                 <p className="text-sm text-[var(--text-secondary)] mt-0.5">
-                  {counts.confirmed} confirmed
-                  {counts.conditional > 0 && ` · ${counts.conditional} conditional`}
-                  {counts.waitlist > 0 && ` · ${counts.waitlist} waitlisted`}
+                  {counts.confirmed} going
+                  {counts.interested + counts.conditional > 0 && ` · ${counts.interested + counts.conditional} not sure`}
+                  {counts.waitlist > 0 && ` · ${counts.waitlist} on the waitlist`}
                 </p>
               </div>
               {isOrganizer && (
@@ -150,14 +150,14 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
 
             {trip.confirmation_deadline && (
               <div className="flex items-center gap-2">
-                <span className="text-sm text-[var(--text-secondary)]">RSVP by</span>
+                <span className="text-sm text-[var(--text-secondary)]">Reply by</span>
                 <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />
               </div>
             )}
 
             {myParticipant && (
               <Button fullWidth onClick={() => setStatusModalParticipant(myParticipant)}>
-                {myParticipant.confirmation_status === 'confirmed' ? 'View my status' : 'Update my status'}
+                {myParticipant.confirmation_status === 'confirmed' ? 'View my answer' : 'Update my answer'}
               </Button>
             )}
           </Card.Content>

@@ -116,7 +116,7 @@ export function EmailsPanel({ tripId }: EmailsPanelProps) {
             // subject -- say so instead.
             const entityTitle =
               n.entity_type === 'trip_action' && n.entity_id
-                ? (actionTitleById.get(n.entity_id) ?? '(action since deleted)')
+                ? (actionTitleById.get(n.entity_id) ?? '(to-do since deleted)')
                 : undefined
             return (
               <li key={n.id} className="flex items-start gap-3 py-2.5">

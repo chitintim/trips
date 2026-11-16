@@ -67,7 +67,7 @@ describe('linkifySegments', () => {
 
   it('renders app-origin URLs with www. stripped for internal-link matching too', () => {
     const segments = linkifySegments('https://www.trips.fontem.ai/abc123?tab=decisions')
-    expect(segments[0]).toEqual({ type: 'internal-link', href: '/abc123?tab=decisions', label: 'Decisions' })
+    expect(segments[0]).toEqual({ type: 'internal-link', href: '/abc123?tab=decisions', label: 'Plan' })
   })
 
   it('falls back to the raw path for an internal link with no recognized ?tab=/?open=', () => {
@@ -102,14 +102,14 @@ describe('shortenUrl', () => {
 describe('internalLinkLabel', () => {
   it('maps each known deep-link target to its friendly label', () => {
     const cases: Array<[string, string]> = [
-      ['https://trips.fontem.ai/abc?tab=decisions', 'Decisions'],
+      ['https://trips.fontem.ai/abc?tab=decisions', 'Plan'],
       ['https://trips.fontem.ai/abc?tab=people', 'People'],
       ['https://trips.fontem.ai/abc?tab=money', 'Money'],
       ['https://trips.fontem.ai/abc?tab=plan', 'Plan'],
       ['https://trips.fontem.ai/abc?tab=today', 'Today'],
       ['https://trips.fontem.ai/abc?open=travel-details', 'Your travel details'],
-      ['https://trips.fontem.ai/abc?open=actions-bring', 'Bring list'],
-      ['https://trips.fontem.ai/abc?open=actions', 'Actions'],
+      ['https://trips.fontem.ai/abc?open=actions-bring', 'To-dos'],
+      ['https://trips.fontem.ai/abc?open=actions', 'To-dos'],
       ['https://trips.fontem.ai/abc?tab=people&open=travel-details', 'Your travel details'],
     ]
     for (const [url, label] of cases) {

@@ -47,7 +47,7 @@ export interface ChaseSettingsSheetProps {
  * bundled chase kinds — unclaimed items, unvoted polls, RSVPs, waitlist,
  * settlements) is opt-IN and defaults to off; `action_reminders` (the
  * action-deadline email ladder) is opt-OUT and defaults to on, because
- * giving an action a deadline is itself the opt-in for its reminders.
+ * giving a to-do a deadline is itself the opt-in for its reminders.
  */
 export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheetProps) {
   const { showToast } = useToast()
@@ -135,9 +135,9 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
           <span>
             <span className="block text-sm font-medium text-[var(--text-primary)]">Enable auto-chase for this trip</span>
             <span className="block text-xs text-[var(--text-muted)] mt-0.5">
-              A daily job emails each laggard a deep link to their exact action — unvoted polls, unclaimed items,
-              pending RSVPs, unpaid settlements. Off by default; nobody is emailed about these until you turn it on.
-              This does not cover action deadline reminders — see below, those run separately and are on by default.
+              A daily job emails each laggard a deep link to their exact to-do — unanswered questions, unclaimed items,
+              unanswered "Are you coming?", unpaid payments. Off by default; nobody is emailed about these until you turn it on.
+              This does not cover to-do deadline reminders — see below, those run separately and are on by default.
             </span>
           </span>
         </label>
@@ -150,11 +150,11 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
             className="mt-1 w-5 h-5 accent-accent-600"
           />
           <span>
-            <span className="block text-sm font-medium text-[var(--text-primary)]">Action deadline reminders (on by default)</span>
+            <span className="block text-sm font-medium text-[var(--text-primary)]">To-do deadline reminders (on by default)</span>
             <span className="block text-xs text-[var(--text-muted)] mt-0.5">
-              Any action with a deadline already emails whoever it's assigned to (or the whole group) — 7 days
+              Any to-do with a deadline already emails whoever it's assigned to (or the whole group) — 7 days
               before, 1 day before, and once overdue. This runs for every trip regardless of the toggle above,
-              because giving an action a deadline is itself the opt-in. Turn this off to silence those emails too.
+              because giving a to-do a deadline is itself the opt-in. Turn this off to silence those emails too.
             </span>
           </span>
         </label>

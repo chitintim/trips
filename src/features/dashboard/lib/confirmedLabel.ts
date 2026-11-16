@@ -7,12 +7,12 @@ export interface ConfirmedLabelTrip {
 }
 
 /**
- * TripCard's confirmed line. With confirmation tracking ON it's the real
+ * TripCard's going line. With confirmation tracking ON it's the real
  * confirmed-status count, unchanged. With tracking OFF the stored statuses
  * are meaningless (mostly 'pending'), so everyone on the active roster
- * counts as confirmed — shown as "N/N confirmed".
+ * counts as going — shown as "N/N going".
  */
 export function confirmedCountLabel(trip: ConfirmedLabelTrip): string {
-  if (isConfirmationEnabled(trip)) return `${trip.confirmed_count} confirmed`
-  return `${trip.participant_count}/${trip.participant_count} confirmed`
+  if (isConfirmationEnabled(trip)) return `${trip.confirmed_count} going`
+  return `${trip.participant_count}/${trip.participant_count} going`
 }

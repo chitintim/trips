@@ -136,7 +136,7 @@ export function PlanItemSheet({
       if (voteGate.reason) showToast({ type: 'error', message: voteGate.reason })
       return
     }
-    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your vote', description: describeVoteError(err) })
+    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your answer', description: describeVoteError(err) })
     if (myVote) {
       toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onError })
     } else {
@@ -182,7 +182,7 @@ export function PlanItemSheet({
         await deleteEvent.mutateAsync(item.eventId)
       } else if (item.idKind === 'option' && item.optionId) {
         if (deletingDecidedOption) {
-          showToast({ type: 'error', message: 'This option is the decision', description: 'Reopen the decision first, then delete the option.' })
+          showToast({ type: 'error', message: 'This option is the answer', description: 'Reopen the question first, then delete the option.' })
           return
         }
         await deleteOption.mutateAsync(item.optionId)
@@ -194,21 +194,24 @@ export function PlanItemSheet({
     }
   }
 
-  const stageBadge = {
-    idea: { variant: 'neutral' as const, label: 'Idea' },
-    proposal: { variant: 'info' as const, label: 'Proposal' },
-    decided: { variant: 'success' as const, label: 'Decided' },
-    booked: { variant: 'success' as const, label: 'Booked' },
-  }[item.stage]
+  // No chip for options still being answered (no "Idea" / "Proposal" badges).
+  const stageBadge =
+    item.stage === 'decided'
+      ? { variant: 'success' as const, label: 'Decided' }
+      : item.stage === 'booked'
+        ? { variant: 'success' as const, label: 'Booked' }
+        : null
 
   return (
     <>
       <Modal isOpen={isOpen} onClose={onClose} size="md" title={item.title}>
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            <Badge variant={stageBadge.variant} size="sm">
-              {stageBadge.label}
-            </Badge>
+            {stageBadge && (
+              <Badge variant={stageBadge.variant} size="sm">
+                {stageBadge.label}
+              </Badge>
+            )}
             {item.date && (
               <Badge variant="neutral" size="sm">
                 {new Date(`${item.date}T00:00:00`).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
@@ -248,7 +251,7 @@ export function PlanItemSheet({
                 size="sm"
               />
               <span className="text-xs text-[var(--text-muted)]">
-                {item.selections.length} {item.selections.length === 1 ? 'person has' : 'people have'} picked this
+                {item.selections.length} {item.selections.length === 1 ? 'person has' : 'people have'} chosen this
               </span>
             </div>
           )}
@@ -280,13 +283,13 @@ export function PlanItemSheet({
                     ? item.vote.votingMethod === 'ranked'
                       ? `Ranked #${myVote.rank ?? 1}`
                       : item.vote.votingMethod === 'approval'
-                        ? '✓ Approved'
-                        : '✓ Your choice'
+                        ? 'Answered ✓'
+                        : 'Answered ✓'
                     : item.vote.votingMethod === 'approval'
                       ? 'Approve'
                       : item.vote.votingMethod === 'ranked'
                         ? 'Tap to rank next'
-                        : 'Choose'}
+                        : 'Answer'}
                 </Button>
                 {votesVisible ? (
                   <div className="flex items-center gap-2">
@@ -307,14 +310,14 @@ export function PlanItemSheet({
                         }))}
                       maxAvatars={4}
                       size="sm"
-                      entityLabel="voted for this"
+                      entityLabel="answered with this"
                     />
                     <span className="text-sm text-[var(--text-secondary)]">
-                      {item.vote.totalVotes} vote{item.vote.totalVotes === 1 ? '' : 's'}
+                      {item.vote.totalVotes} answer{item.vote.totalVotes === 1 ? '' : 's'}
                     </span>
                   </div>
                 ) : (
-                  <span className="text-xs text-[var(--text-muted)]">Votes hidden until close</span>
+                  <span className="text-xs text-[var(--text-muted)]">Answers hidden until the question closes</span>
                 )}
               </div>
 
@@ -408,7 +411,7 @@ export function PlanItemSheet({
               toast for non-organizers. */}
           {isOrganizer && !item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && onScheduleIt && (
             <Button variant="secondary" fullWidth onClick={() => onScheduleIt(item)}>
-              {scheduleClosesVote ? '📅 Close vote & schedule' : '📅 Schedule it'}
+              {scheduleClosesVote ? '📅 Close question & schedule' : '📅 Schedule it'}
             </Button>
           )}
           {canReopen && (

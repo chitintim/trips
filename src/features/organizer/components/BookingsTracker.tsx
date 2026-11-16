@@ -67,7 +67,7 @@ export function BookingsTracker({ trip }: BookingsTrackerProps) {
         <EmptyState
           icon="🧾"
           title="No bookings tracked"
-          description="Track what's booked — confirmation refs, amounts and free-cancellation deadlines — and let one entry create the timeline event and expense too."
+          description="Track what's booked — confirmation refs, amounts and free-cancellation deadlines — and let one entry add it to the plan and create the expense too."
           action={<Button onClick={openCreate}>Track your first booking</Button>}
         />
       ) : (

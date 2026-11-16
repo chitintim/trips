@@ -83,7 +83,7 @@ export function DecisionOutcomePanel({
     return (
       <div className="min-w-0 rounded-[var(--radius-md)] border border-success-200 dark:border-success-800 bg-success-50 dark:bg-success-900/30 p-2.5 space-y-2">
         <p className="min-w-0 break-words text-sm font-medium text-success-700 dark:text-success-300">
-          ✅ Decided{decidedOption ? `: ${decidedOption.title}` : ' — closed without a winner'}
+          {decidedOption ? `✅ Decided: ${decidedOption.title}` : 'Closed — no decision'}
         </p>
 
         <div className="flex flex-wrap items-center gap-1.5">
@@ -101,7 +101,7 @@ export function DecisionOutcomePanel({
             isOrganizer &&
             onScheduleOption && (
               <Button size="sm" variant="secondary" onClick={() => onScheduleOption(decidedOption.id)}>
-                📅 Schedule it
+                📅 Put it on the plan
               </Button>
             )
           )}
@@ -115,7 +115,7 @@ export function DecisionOutcomePanel({
             decidedOption &&
             isOrganizer && (
               <Button size="sm" variant="ghost" onClick={() => setFollowupOpen(true)}>
-                ＋ Follow-up action
+                ＋ Add a to-do
               </Button>
             )
           )}
@@ -145,14 +145,10 @@ export function DecisionOutcomePanel({
   return (
     <>
       <div className="min-w-0 rounded-[var(--radius-md)] border border-dashed border-[var(--border-default)] bg-[var(--surface-sunken)] p-2.5 space-y-1.5">
-        <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">→ Once decided</p>
         <p className="min-w-0 break-words text-xs text-[var(--text-secondary)]">
           {leaderOption
-            ? `${leader?.tied ? 'Tied — leading by tie-break' : 'Leading'}: ${leaderOption.title}. `
-            : `${distinctVoters} of ${Math.max(inScopeCount, distinctVoters)} voted${votesVisible ? '' : ' · results hidden until the vote closes'}. `}
-          {isOrganizer
-            ? 'Close the vote to lock in the winner — it can then be scheduled and given a follow-up action.'
-            : 'The organizer closes the vote, then the winner goes on the plan.'}
+            ? `${leader?.tied ? 'Tied — leading by tie-break' : 'Leading'}: ${leaderOption.title}.`
+            : `${distinctVoters} of ${Math.max(inScopeCount, distinctVoters)} answered${votesVisible ? '' : " · Results show when it's decided"}.`}
         </p>
         {leaderOption && leaderVotes.length > 0 && (
           <SelectionAvatars
@@ -170,17 +166,17 @@ export function DecisionOutcomePanel({
             }))}
             maxAvatars={4}
             size="sm"
-            entityLabel="voted for this"
+            entityLabel="chose this"
           />
         )}
         {autoClose.shouldClose && isOrganizer && (
           <p className="text-xs font-medium text-warn-700 dark:text-warn-300">
-            {autoClose.reason === 'deadline_passed' ? '⏰ The deadline has passed' : '🙌 Quorum reached'} — ready to close.
+            {autoClose.reason === 'deadline_passed' ? '⏰ The deadline has passed' : '🙌 Quorum reached'} — ready to decide.
           </p>
         )}
         {isOrganizer && (
           <Button size="sm" variant={autoClose.shouldClose ? 'primary' : 'secondary'} onClick={() => setCloseSheetOpen(true)}>
-            🏁 Close &amp; decide
+            🏁 Decide
           </Button>
         )}
       </div>
@@ -236,28 +232,28 @@ function FollowupActionModal({ isOpen, onClose, tripId, section, winnerTitle, pa
         assigned_to: assignedTo || null,
         due_date: dueDate || null,
         deadline_kind: 'fixed',
-        notes: `Follow-up from the decision "${section.title}" — decided: ${winnerTitle}.`,
+        notes: `From the question "${section.title}" — decided: ${winnerTitle}.`,
       })
       await updateSection.mutateAsync({
         id: section.id,
         update: { metadata: buildDecisionMetadata(section.metadata, { followup_action_id: action.id }) },
       })
-      showToast({ type: 'success', message: 'Follow-up action created', description: title.trim() })
+      showToast({ type: 'success', message: 'To-do added', description: title.trim() })
       onClose()
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not create the follow-up action', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not add the to-do', description: (err as Error).message })
     }
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="sm" title="Follow-up action">
+    <Modal isOpen={isOpen} onClose={onClose} size="sm" title="Add a to-do">
       <div className="space-y-4">
         <Input label="What needs doing?" value={title} onChange={(e) => setTitle(e.target.value)} required fullWidth />
         <Select
           label="Who does it?"
           value={assignedTo}
           onChange={(e) => setAssignedTo(e.target.value)}
-          placeholder="Whole group"
+          placeholder="Everyone"
           fullWidth
           options={participants.map((p) => ({
             value: p.user_id,
@@ -270,7 +266,7 @@ function FollowupActionModal({ isOpen, onClose, tripId, section, winnerTitle, pa
             Cancel
           </Button>
           <Button onClick={handleCreate} isLoading={createAction.isPending || updateSection.isPending} disabled={!title.trim()}>
-            Create action
+            Add to-do
           </Button>
         </div>
       </div>

@@ -38,22 +38,23 @@ export function getTripStatusBadgeVariant(status: TripStatus): BadgeVariant {
 }
 
 /**
- * Get display label for a trip status
+ * Get display label for a trip status. These are the five stage words
+ * (UX redesign 2.2): they never collide with item statuses such as Booked.
  */
 export function getTripStatusLabel(status: TripStatus): string {
   switch (status) {
     case 'gathering_interest':
-      return 'Gathering Interest'
+      return "Who's coming"
     case 'confirming_participants':
-      return 'Confirming Participants'
+      return "Who's coming"
     case 'booking_details':
-      return 'Booking Details'
+      return 'Planning'
     case 'booked_awaiting_departure':
-      return 'Booked'
+      return 'Ready to go'
     case 'trip_ongoing':
-      return 'Ongoing'
+      return 'On the trip'
     case 'trip_completed':
-      return 'Completed'
+      return 'Finished'
     default:
       return status
   }

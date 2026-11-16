@@ -144,11 +144,11 @@ export function useOrderForm(trip: Trip, section: SectionWithOptions): UseOrderF
 
     try {
       await saveOrderItems.mutateAsync({ userId: user.id, changes })
-      showToast({ type: 'success', message: 'Your order is saved' })
+      showToast({ type: 'success', message: 'Your answer is saved' })
       clearDraft()
       return true
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not save your order', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not save your answer', description: (err as Error).message })
       return false
     }
   }

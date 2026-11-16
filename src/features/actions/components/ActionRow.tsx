@@ -1,8 +1,12 @@
 import { Badge, Button, LinkifiedText, SelectionAvatars, UserAvatar } from '../../../components/ui'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
+import { WHO_EVERYONE, doneCountLabel } from '../lib/todoLabels'
 import { countdownBadgeVariant, countdownLabel, countsTowardActions, groupCompletedUserIds, isActionCompleteForUser, isGroupComplete } from '../lib/actionStatus'
 import type { SectionVoterIds, TripForActionStatus } from '../lib/actionStatus'
+
+/** DOM id prefix on each to-do row (ActionsSheet scrolls to / flashes a row for `?open=todo:<id>`). */
+export const ROW_ID_PREFIX = 'todo-row-'
 
 export interface ActionRowProps {
   action: ActionWithCompletions
@@ -42,7 +46,7 @@ export function ActionRow({
 }: ActionRowProps) {
   const isGroupAction = !action.assigned_to
   const assignee = action.assigned_to ? participants.find((p) => p.user_id === action.assigned_to) : null
-  const assigneeName = isGroupAction ? 'Everyone' : assignee?.user?.full_name || assignee?.user?.email || 'Someone'
+  const assigneeName = isGroupAction ? WHO_EVERYONE : assignee?.user?.full_name || assignee?.user?.email || 'Someone'
 
   const countedParticipants = participants.filter(countsTowardActions)
   const myDone = currentUserId ? isActionCompleteForUser(action, currentUserId, sectionVoters) : false
@@ -82,7 +86,10 @@ export function ActionRow({
   })
 
   return (
-    <li className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-2.5">
+    <li
+      id={`${ROW_ID_PREFIX}${action.id}`}
+      className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-2.5 transition-shadow"
+    >
       <DoneCircle
         checked={isGroupAction ? myDone : done}
         onToggle={(next) => {
@@ -109,23 +116,23 @@ export function ActionRow({
         )}
         {action.section_id && (
           <p className="text-xs italic text-[var(--text-muted)]">
-            {noLongerNeeded ? '🗳️ No longer needed — voting has closed' : '🗳️ Ticks off when you vote'}
+            {noLongerNeeded ? '🗳️ No longer needed — the question is closed' : '🗳️ Ticks off when you answer'}
           </p>
         )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
           {noLongerNeeded ? null : isGroupAction ? (
             <span className="flex items-center gap-1.5">
               <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Completed by ({completionSelections.length}/{countedParticipants.length})
+                {doneCountLabel(completionSelections.length, countedParticipants.length)}
               </span>
-              {myDone && !groupDone && <span className="text-success-600 dark:text-success-400">· yours done</span>}
+              {myDone && !groupDone && <span className="text-success-600 dark:text-success-400">· yours is done</span>}
               {completionSelections.length > 0 && (
-                <SelectionAvatars selections={completionSelections} size="sm" maxAvatars={4} entityLabel="completed this" />
+                <SelectionAvatars selections={completionSelections} size="sm" maxAvatars={4} entityLabel="finished this" />
               )}
             </span>
           ) : (
             <span className="flex items-center gap-1.5">
-              <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">Assigned to</span>
+              <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">Who</span>
               {assignee?.user && (
                 <span className="relative inline-flex shrink-0">
                   <UserAvatar avatarData={assignee.user} size="xs" className={done ? 'opacity-60 grayscale' : undefined} />

@@ -250,7 +250,7 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
     // Deleting a closed question's decided option would silently promote the runner-up.
     const parent = (sections || []).find((s) => s.id === sectionId)
     if (parent && isDecidedOption(parent, votes || [], option.id)) {
-      showToast({ type: 'error', message: 'This option is the decision', description: 'Reopen the decision first, then delete the option.' })
+      showToast({ type: 'error', message: 'This option is the answer', description: 'Reopen the question first, then delete the option.' })
       return
     }
     try {

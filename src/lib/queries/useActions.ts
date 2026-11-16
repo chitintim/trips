@@ -4,9 +4,10 @@ import { supabase } from '../supabase'
 import { Tables, TablesInsert, TablesUpdate } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
-import { useOptions, useSections, useVotes } from './usePlanning'
+import { useSections, useVotes } from './usePlanning'
 import { useParticipants } from './useTrip'
-import { buildSectionVoters, withClosedSections, type SectionVoterIds } from '../../features/actions/lib/actionStatus'
+import { withClosedSections, type SectionVoterIds } from '../../features/actions/lib/actionStatus'
+import { buildAnsweredSectionVoters } from '../answers/answers'
 import { assertRowsAffected, throwIfError } from './assertRowsAffected'
 
 export type ActionCompletion = Pick<Tables<'trip_action_completions'>, 'user_id' | 'completed_at'>
@@ -42,7 +43,6 @@ export function useActions(tripId: string | undefined) {
  * flows into completion.
  */
 export function useSectionVoters(tripId: string | undefined): SectionVoterIds {
-  const { data: options } = useOptions(tripId)
   const { data: votes } = useVotes(tripId)
   const { data: sections } = useSections(tripId)
   const { data: participants } = useParticipants(tripId)
@@ -51,11 +51,12 @@ export function useSectionVoters(tripId: string | undefined): SectionVoterIds {
   return useMemo(
     () =>
       withClosedSections(
-        buildSectionVoters(options ?? [], votes ?? []),
+        // Answered = vote OR selection (OR pass, Phase 2): see lib/answers/answers.ts.
+        buildAnsweredSectionVoters(sections ?? [], { votes: votes ?? [] }),
         sections ?? [],
         (participants ?? []).map((p) => p.user_id)
       ),
-    [options, votes, sections, participants]
+    [votes, sections, participants]
   )
 }
 

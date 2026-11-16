@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Button, Badge, Deadline, EmptyState, Modal, useToast, SelectionAvatars } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
@@ -15,11 +15,11 @@ import { MatrixView } from '../../decisions/components/MatrixView'
 import { SectionEditorSheet } from '../../decisions/components/SectionEditorSheet'
 import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcomePanel'
 import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
-import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
+import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import { votingInstruction, replaceableSiblingVoteIds, type VotingMethod } from '../../decisions/lib/voting'
 import { resolveDecidedOptionId } from '../../decisions/lib/closeDecision'
 import { canReopenDecision, canVoteOnOption, describeVoteError } from '../../decisions/lib/resolveDecision'
-import { computeQuestionState } from '../lib/responseState'
+import { computeQuestionStates } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
 import { ConsolidatedTravelRow } from './ConsolidatedTravelRow'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
@@ -81,6 +81,8 @@ export interface PlanBoardProps {
   onScheduleIt: (item: PlanItem) => void
   /** "New question" affordance in the Open questions tray (organizer only, UX_REDESIGN.md Part 4). */
   onNewQuestion?: () => void
+  /** Question card to scroll to and briefly highlight (`?open=question:<id>` on a decided question). */
+  highlight?: { id: string; nonce: number } | null
 }
 
 /**
@@ -104,7 +106,7 @@ const STARTER_QUESTIONS: Array<{ title: string; section_type: 'accommodation' | 
  * and live inside this component's own scroll container, never escaping
  * into the app chrome's stacking context.
  */
-export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onScheduleIt, onNewQuestion }: PlanBoardProps) {
+export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onScheduleIt, onNewQuestion, highlight = null }: PlanBoardProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const { data: places } = usePlaces(trip.id)
@@ -173,6 +175,43 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     const maxDate = [trip.end_date, ...eventDates].sort().pop()!
     return generateDateRange(minDate, maxDate)
   }, [items, trip.start_date, trip.end_date])
+
+  // Chips and "N of M answered" come from the one shared answers helper
+  // (selections count, finished trips never say "Needs your answer").
+  const questionStates = useMemo(
+    () =>
+      computeQuestionStates({
+        sections: sections || [],
+        votes: votes || [],
+        userId: user?.id ?? null,
+        trip,
+        participants: participants || [],
+      }),
+    [sections, votes, participants, user?.id, trip]
+  )
+
+  // Scroll to and flash the question card named by a deep link.
+  const highlightId = highlight?.id
+  const highlightNonce = highlight?.nonce
+  const sectionsReady = !!sections
+  useEffect(() => {
+    if (!highlightId || !sectionsReady) return
+    let off: ReturnType<typeof setTimeout> | undefined
+    let el: HTMLElement | null = null
+    const ring = ['ring-2', 'ring-accent-500']
+    const on = setTimeout(() => {
+      el = document.getElementById(`question-${highlightId}`)
+      if (!el) return
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add(...ring)
+      off = setTimeout(() => el?.classList.remove(...ring), 2200)
+    }, 200)
+    return () => {
+      clearTimeout(on)
+      clearTimeout(off)
+      el?.classList.remove(...ring)
+    }
+  }, [highlightId, highlightNonce, sectionsReady])
 
   const byDate = useMemo(() => groupPlanItemsByDate(items), [items])
   const undatedBySection = useMemo(() => groupUndatedBySection(items), [items])
@@ -358,7 +397,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
       { optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title },
       {
         onSettled: () => setVotingId(null),
-        onError: (err) => showToast({ type: 'error', message: 'Could not save your vote', description: describeVoteError(err) }),
+        onError: (err) => showToast({ type: 'error', message: 'Could not save your answer', description: describeVoteError(err) }),
       }
     )
   }
@@ -374,7 +413,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
         <EmptyState
           icon={<EmptyPlan className="w-32 h-24 text-accent-500" />}
           title="Start with the big questions"
-          description="Most trips begin by answering three things — set them up as group votes in one tap, or add your own with the + button."
+          description="Most trips begin by answering three things — set them up as questions in one tap, or add your own with the + button."
           action={
             <div className="space-y-2 text-left">
               <ul className="text-sm text-[var(--text-secondary)] space-y-1">
@@ -394,7 +433,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
       <EmptyState
         icon={<EmptyPlan className="w-32 h-24 text-[var(--text-muted)]" />}
         title="Nothing on the plan yet"
-        description="Add an idea, a vote, or a dated event with the + button to get started."
+        description="Add a question, an option, or a dated event with the + button to get started."
       />
     )
   }
@@ -424,15 +463,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
             const section = sectionId ? (sections || []).find((s) => s.id === sectionId) : undefined
             const isMatrix = sectionItems.some((i) => i.isMatrixSection)
             const isPersonalOrder = section ? getDecisionShape(section.metadata) === 'personal' : false
-            // Catalog-priced sections ("order form" style, e.g. ski rental
-            // with per-day rates) read as "ordered"; pre-v3 legacy sections
-            // stamped decision_shape 'personal' by the migration carry no
-            // pricing at all and read as plain picks ("have picked") — same
-            // underlying mechanism (selections), different wording.
-            const hasCatalogPricing = section ? sectionHasCatalogPricing(section.options) : false
-            const questionState = section
-              ? computeQuestionState(section, votes || [], (participants || []).length, user?.id ?? null, trip.base_currency)
-              : null
+            const questionState = section ? questionStates.get(section.id) ?? null : null
             const optionsWithPicks = section ? section.options.filter((o) => o.selections.length > 0) : []
             const picksExpanded = section ? expandedPicksSectionIds.has(section.id) : false
             // Questions, not sections (UX_REDESIGN.md Part 4 "Decisions:
@@ -451,7 +482,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
               {/* One raised card per question: neutral surface + real border +
                  shadow so adjacent questions can never read as one block. */}
               <div
-                className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--surface-raised)] shadow-[var(--shadow-sm)] p-3.5 space-y-2.5"
+                id={sectionId ? `question-${sectionId}` : undefined}
+                className="min-w-0 scroll-mt-20 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--surface-raised)] shadow-[var(--shadow-sm)] p-3.5 space-y-2.5 transition-shadow"
               >
                 {section && (
                   <div className="flex items-start justify-between gap-2">
@@ -460,8 +492,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                         <h4 className="min-w-0 break-words text-sm font-semibold leading-snug text-[var(--text-primary)]">
                           {section.title}
                         </h4>
-                        {questionState && (
-                          <Badge variant={questionState.state === 'done' ? 'success' : 'warning'} size="sm">
+                        {questionState?.label && (
+                          <Badge variant={questionState.tone ?? 'neutral'} size="sm">
                             {questionState.label}
                           </Badge>
                         )}
@@ -469,15 +501,14 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                         <p className="text-xs leading-relaxed text-[var(--text-muted)]">
                           {isPersonalOrder
-                            ? `${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} ${hasCatalogPricing ? 'ordered' : 'have picked'}`
+                            ? questionState?.countLabel
                             : section.status === 'completed'
                               ? `${section.options.length} option${section.options.length === 1 ? '' : 's'}`
-                              : /* Pick-one vs pick-multiple + response progress made
-                                   explicit on the question itself (voting-clarity +
-                                   "two questions" clarity asks). */
+                              : /* Choose-one vs choose-many + answer progress made
+                                   explicit on the question itself. */
                                 `${section.options.length} option${section.options.length === 1 ? '' : 's'} · ${votingInstruction(
                                   (section.voting_method as VotingMethod) || 'single'
-                                )} · ${questionState?.respondedCount ?? 0} of ${questionState?.totalParticipants ?? 0} voted`}
+                                )} · ${questionState?.countLabel ?? ''}`}
                         </p>
                         {section.vote_deadline && section.status !== 'completed' && (
                           <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />
@@ -490,7 +521,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                           Grid view
                         </Button>
                       )}
-                      {/* Poll settings (organizer-only, mirrors delete's
+                      {/* Question settings (organizer-only, mirrors delete's
                           isOrganizer gate): wires the previously-unreachable
                           SectionEditorSheet (voting method/deadline/quorum/
                           decision shape) into the live tray. */}
@@ -504,8 +535,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                           variant="ghost"
                           size="sm"
                           onClick={() => setSectionSettingsId(section.id)}
-                          aria-label={`Poll settings for ${section.title}`}
-                          title="Poll settings"
+                          aria-label={`Question settings for ${section.title}`}
+                          title="Question settings"
                         >
                           ⚙️
                         </Button>
@@ -526,16 +557,16 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                   <div className="space-y-2">
                     <div className="flex gap-2 flex-wrap">
                       <Button variant="secondary" size="sm" onClick={() => setOrderFormSectionId(section.id)}>
-                        {questionState?.state === 'done' ? 'Edit your order' : 'Fill in your order'}
+                        {questionState?.state === 'answered' ? 'Edit your answer' : 'Answer'}
                       </Button>
                       {isOrganizer && (
                         <Button variant="outline" size="sm" onClick={() => setConsolidatedOrdersSectionId(section.id)}>
-                          View orders
+                          View answers
                         </Button>
                       )}
                       {optionsWithPicks.length > 0 && (
                         <Button variant="ghost" size="sm" onClick={() => togglePicksExpanded(section.id)}>
-                          {picksExpanded ? 'Hide who picked ▲' : 'Who picked what ▾'}
+                          {picksExpanded ? 'Hide who answered ▲' : 'Who answered ▾'}
                         </Button>
                       )}
                     </div>
@@ -814,7 +845,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
         )}
       </Modal>
 
-      {/* Poll settings (UX_REDESIGN.md Part 5 / the vote-shape editing gap):
+      {/* Question settings (UX_REDESIGN.md Part 5 / the vote-shape editing gap):
           wires the previously-unreachable SectionEditorSheet in with the
           real section record — voting method, deadline, quorum, decision
           shape are all editable from here now. */}

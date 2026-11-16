@@ -159,7 +159,7 @@ describe('canVoteOnOption (vote gating)', () => {
 
 describe('describeVoteError', () => {
   it('explains a server-side closed rejection', () => {
-    expect(describeVoteError(new Error('Voting is closed for this question'))).toMatch(/closed/)
+    expect(describeVoteError(new Error('Voting is closed for this question'))).toMatch(/already been answered/)
     expect(describeVoteError({ message: 'new row violates row-level security policy' })).toMatch(/permission/)
   })
 })

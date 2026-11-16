@@ -148,7 +148,7 @@ describe('describeAction — new action types', () => {
       decision_shape: 'personal',
     })
     expect(desc.title).toBe('New question')
-    expect(desc.summary).toBe('"Ski & board rental" (Personal picks)')
+    expect(desc.summary).toBe('"Ski & board rental" (Own choice)')
   })
 
   it('describes create_section as a group vote when decision_shape is vote', () => {
@@ -160,7 +160,7 @@ describe('describeAction — new action types', () => {
       section_type: 'transport',
       decision_shape: 'vote',
     })
-    expect(desc.summary).toContain('Group vote')
+    expect(desc.summary).toContain('Group choice')
   })
 
   it('describes update_section using a resolved section title', () => {

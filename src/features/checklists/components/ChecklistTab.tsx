@@ -13,6 +13,7 @@ import {
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
+import { WHO_ANYONE, doneCountLabel } from '../../actions/lib/todoLabels'
 
 export interface ChecklistTabProps {
   tripId: string
@@ -43,8 +44,8 @@ const EMPTY_ADD_ITEM_VALUES: AddItemFormValues = { title: '', assignee: '' }
 export function ChecklistTab({
   tripId,
   isOrganizer = false,
-  emptyStateTitle = 'Nothing on the list yet',
-  emptyStateDescription = "Shared things the group needs — speaker, board games, first-aid kit — and who's bringing them.",
+  emptyStateTitle = 'No to-dos.',
+  emptyStateDescription = "Add one for the group — like 'Book the transfer' or 'Bring a speaker'.",
 }: ChecklistTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
@@ -82,7 +83,7 @@ export function ChecklistTab({
 
   const assigneeOptions = useMemo(
     () => [
-      { value: '', label: 'Anyone' },
+      { value: '', label: WHO_ANYONE },
       ...(participants ?? [])
         .filter((p) => p.active !== false)
         .map((p) => ({ value: p.user_id, label: p.user?.full_name || p.user?.email || 'Unknown' })),
@@ -104,7 +105,7 @@ export function ChecklistTab({
       clearAddItemDraft()
       setAddItemValues(EMPTY_ADD_ITEM_VALUES)
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not add item', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not add to-do', description: (err as Error).message })
     }
   }
 
@@ -116,7 +117,7 @@ export function ChecklistTab({
     toggleItem.mutate(
       { id, done, doneBy: user?.id ?? null },
       {
-        onError: (err) => showToast({ type: 'error', message: 'Could not update item', description: (err as Error).message }),
+        onError: (err) => showToast({ type: 'error', message: 'Could not update to-do', description: (err as Error).message }),
         onSuccess: () => {
           if (done && shouldLogChecklistCompletion(tripId, id, Date.now())) {
             logActivity({ verb: 'checklist_completed', entity: { type: 'checklist_item', id, label: itemTitle } })
@@ -131,7 +132,7 @@ export function ChecklistTab({
       await deleteItem.mutateAsync(id)
       setConfirmingDeleteId(null)
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not delete item', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not delete to-do', description: (err as Error).message })
     }
   }
 
@@ -141,8 +142,8 @@ export function ChecklistTab({
     return (
       <EmptyState
         icon={<ErrorState className="w-20 h-20 text-danger-500" />}
-        title="Couldn't load the checklist"
-        description="Something went wrong fetching this trip's checklist. Check your connection and try again."
+        title="Couldn't load the to-dos"
+        description="Something went wrong fetching this trip's to-dos. Check your connection and try again."
         action={
           <Button variant="primary" onClick={() => refetch()} isLoading={isRefetching}>
             Try again
@@ -162,7 +163,7 @@ export function ChecklistTab({
           <form onSubmit={handleAdd} className="flex flex-col gap-2 sm:flex-row sm:items-end">
             <div className="flex-1">
               <Input
-                label="Add to the list"
+                label="Add something to bring"
                 value={addItemValues.title}
                 onChange={(e) => updateAddItemField('title', e.target.value)}
                 placeholder="e.g. Bluetooth speaker, sunscreen, cards"
@@ -170,7 +171,7 @@ export function ChecklistTab({
             </div>
             <div className="sm:w-44">
               <Select
-                label="Who's bringing it"
+                label="Who"
                 value={addItemValues.assignee}
                 onChange={(e) => updateAddItemField('assignee', e.target.value)}
                 options={assigneeOptions}
@@ -201,6 +202,7 @@ export function ChecklistTab({
               return (
                 <li
                   key={item.id}
+                  id={`bring-row-${item.id}`}
                   className="group flex items-center gap-3 rounded-[var(--radius-md)] bg-[var(--surface-raised)] border border-[var(--border-subtle)] px-3 py-2"
                 >
                   {!isAssigned ? (
@@ -223,7 +225,7 @@ export function ChecklistTab({
                           : 'bg-accent-600 text-white hover:bg-accent-700'
                       }`}
                     >
-                      {item.done ? '✓ Packed' : 'Mark as packed'}
+                      {item.done ? '✓ Done' : 'Done'}
                     </button>
                   ) : (
                     <span
@@ -243,7 +245,7 @@ export function ChecklistTab({
                     <span className="flex shrink-0 items-center gap-1.5 text-xs text-[var(--text-muted)]">
                       <UserAvatar avatarData={assigneeInfo} size="xs" />
                       <span className="hidden sm:inline">
-                        {item.done ? `${assigneeInfo.name} packed it` : `Waiting on ${assigneeInfo.name}`}
+                        {item.done ? `${assigneeInfo.name} did it` : `${assigneeInfo.name} · to do`}
                       </span>
                     </span>
                   )}
@@ -300,7 +302,7 @@ export function ChecklistTab({
           </ul>
           {done.length > 0 && (
             <p className="text-xs text-[var(--text-muted)]">
-              {done.length} of {(items ?? []).length} sorted
+              {doneCountLabel(done.length, (items ?? []).length)}
             </p>
           )}
         </>

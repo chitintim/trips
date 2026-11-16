@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Card, Button, Badge, EmptyState, Skeleton, UserAvatar, useToast, SegmentedControl } from '../../../components/ui'
 import { AllSettled } from '../../../components/ui/illustrations'
@@ -36,6 +36,8 @@ import type { Settlement } from '../../../lib/queries/useSettlements'
 import type { Trip } from '../../../types'
 
 export interface SettleUpTabProps {
+  /** `?open=payment:<id>` for the receiver: scroll to that payment and highlight its "Confirm received" row (nothing is confirmed automatically). */
+  initialConfirmId?: string
   trip: Trip
 }
 
@@ -51,7 +53,7 @@ const SETTLEMENT_STATUS_LABELS: Record<string, string> = {
  * suggested -> marked_paid -> confirmed status flow, recipient payment
  * details card, CSV export, cross-trip carryover.
  */
-export function SettleUpTab({ trip }: SettleUpTabProps) {
+export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const queryClient = useQueryClient()
@@ -70,6 +72,24 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   // settlements/currentUserRow too) with partially-loaded data on a slow
   // connection instead of the skeleton.
   const isLoading = expensesLoading || participantsLoading || allParticipantsLoading || settlementsLoading || currentUserRowLoading
+
+  useEffect(() => {
+    if (!initialConfirmId || isLoading) return
+    let off: ReturnType<typeof setTimeout> | undefined
+    const el = document.getElementById(`settlement-${initialConfirmId}`)
+    const ring = ['ring-2', 'ring-accent-500']
+    const on = setTimeout(() => {
+      if (!el) return
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      el.classList.add(...ring)
+      off = setTimeout(() => el.classList.remove(...ring), 2200)
+    }, 150)
+    return () => {
+      clearTimeout(on)
+      clearTimeout(off)
+      el?.classList.remove(...ring)
+    }
+  }, [initialConfirmId, isLoading])
 
   const recordSettlement = useRecordSettlement(trip.id)
   const updateStatus = useUpdateSettlementStatus(trip.id)
@@ -401,7 +421,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
           }
 
           return (
-            <Card key={s.id} noPadding className="p-3.5 space-y-2">
+            <Card key={s.id} id={`settlement-${s.id}`} noPadding className="p-3.5 space-y-2">
               <div className="flex items-center gap-3">
                 <UserAvatar avatarData={recipient?.user} size="xs" alt={toName} />
                 <div className="flex-1 min-w-0">

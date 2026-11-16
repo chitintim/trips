@@ -6,8 +6,6 @@
  */
 export { ActionsSheet } from './components/ActionsSheet'
 export type { ActionsSheetProps } from './components/ActionsSheet'
-export { ActionsSection } from './components/ActionsSection'
-export type { ActionsSectionProps } from './components/ActionsSection'
 export { ActionRow } from './components/ActionRow'
 export type { ActionRowProps } from './components/ActionRow'
 

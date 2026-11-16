@@ -39,7 +39,7 @@ function formatLine(line: OrderLine): string {
 }
 
 function buildOrderSheetText(sectionTitle: string, people: PersonOrder[], itemTotals: Array<{ title: string; count: number; total: number; currency: string }>, groupTotals: Record<string, number>): string {
-  const lines: string[] = [`${sectionTitle} — order summary`, '']
+  const lines: string[] = [`${sectionTitle} — answers`, '']
 
   for (const person of people) {
     lines.push(`${person.name}:`)
@@ -51,7 +51,7 @@ function buildOrderSheetText(sectionTitle: string, people: PersonOrder[], itemTo
 
   lines.push('Per item:')
   for (const item of itemTotals) {
-    lines.push(`  ${item.title}: ${item.count} order${item.count === 1 ? '' : 's'} — ${formatMoney(item.total, item.currency)} total`)
+    lines.push(`  ${item.title}: ${item.count} answer${item.count === 1 ? '' : 's'} — ${formatMoney(item.total, item.currency)} total`)
   }
   lines.push('')
 
@@ -119,7 +119,7 @@ export function ConsolidatedOrdersSheet({ isOpen, onClose, section, participants
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
-      showToast({ type: 'success', message: 'Order sheet copied' })
+      showToast({ type: 'success', message: 'Answers copied' })
       setTimeout(() => setCopied(false), 2000)
     } catch (err) {
       showToast({ type: 'error', message: 'Could not copy to clipboard', description: (err as Error).message })
@@ -127,10 +127,10 @@ export function ConsolidatedOrdersSheet({ isOpen, onClose, section, participants
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="lg" title={`${section.title} — orders`}>
+    <Modal isOpen={isOpen} onClose={onClose} size="lg" title={`${section.title} — answers`}>
       <div className="space-y-4">
         {people.length === 0 ? (
-          <p className="text-sm text-[var(--text-muted)]">Nobody has ordered yet.</p>
+          <p className="text-sm text-[var(--text-muted)]">Nobody has answered yet.</p>
         ) : (
           <div className="overflow-x-auto -mx-4 px-4">
             <table className="w-full min-w-[420px] border-collapse text-sm">
@@ -177,7 +177,7 @@ export function ConsolidatedOrdersSheet({ isOpen, onClose, section, participants
         <div className="rounded-[var(--radius-lg)] bg-[var(--surface-sunken)] p-3 space-y-1.5">
           <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Per-item totals</p>
           {itemTotals.length === 0 ? (
-            <p className="text-sm text-[var(--text-muted)]">No orders yet.</p>
+            <p className="text-sm text-[var(--text-muted)]">No answers yet.</p>
           ) : (
             itemTotals.map((item) => (
               <div key={item.title} className="flex items-center justify-between text-sm">
@@ -200,7 +200,7 @@ export function ConsolidatedOrdersSheet({ isOpen, onClose, section, participants
 
         <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
           <Button variant="outline" onClick={handleCopy}>
-            {copied ? '✓ Copied' : '📋 Copy order sheet'}
+            {copied ? '✓ Copied' : '📋 Copy answers'}
           </Button>
           <Button variant="ghost" onClick={onClose}>
             Close

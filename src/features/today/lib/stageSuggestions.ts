@@ -76,7 +76,7 @@ export function computeStageSuggestion(input: StageSuggestionInput): StageSugges
         key: 'advance-confirming_participants-booking_details',
         to: 'booking_details',
         title: 'Everyone has answered — move to booking',
-        detail: 'All non-declined participants are confirmed. Time to decide and book the details.',
+        detail: 'Everyone who is still in is going. Time to decide and book the details.',
         kind: 'advance',
       }
     }

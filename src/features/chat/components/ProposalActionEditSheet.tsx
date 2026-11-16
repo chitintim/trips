@@ -85,10 +85,10 @@ export function ProposalActionEditSheet({ isOpen, onClose, tripId, action, onSav
       <div className="space-y-4">
         {type === 'create_option' && (
           <Select
-            label="Poll / section"
+            label="Question"
             value={values.section_id ?? ''}
             onChange={set('section_id')}
-            options={[{ value: '', label: 'Pick a section…', disabled: true }, ...sectionOptions]}
+            options={[{ value: '', label: 'Pick a question…', disabled: true }, ...sectionOptions]}
             helperText="Which decision this option belongs to"
           />
         )}

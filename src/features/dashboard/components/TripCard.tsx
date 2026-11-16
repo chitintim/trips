@@ -2,9 +2,10 @@ import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Badge, Card, Deadline } from '../../../components/ui'
 import { StageRail, getTripAccentStyle } from '../../../components/layout'
-import { useNeedsAttention } from '../../../lib/queries/useNeedsAttention'
+import { useTodoCount } from '../../../lib/queries/useTodos'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
 import { confirmedCountLabel } from '../lib/confirmedLabel'
+import { todoCountLabel } from '../../actions/lib/todoLabels'
 import { effectiveTripStage } from '../../../lib/tripStage'
 import { daysUntilClamped } from '../../../lib/dates'
 import type { TripWithCount } from '../../../lib/queries/useTrip'
@@ -12,7 +13,7 @@ import type { TripWithCount } from '../../../lib/queries/useTrip'
 interface TripCardProps {
   trip: TripWithCount
   /** Reports this card's needs-attention badge count up (dashboard ordering). */
-  onAttentionCount?: (tripId: string, count: number) => void
+  onAttentionCount?: (tripId: string, count: number | undefined) => void
 }
 
 function formatDateRange(startDate: string, endDate: string): string {
@@ -33,8 +34,8 @@ function formatDateRange(startDate: string, endDate: string): string {
  */
 export function TripCard({ trip, onAttentionCount }: TripCardProps) {
   const navigate = useNavigate()
-  const needsAttention = useNeedsAttention(trip.id)
-  const totalAttentionCount = needsAttention.reduce((sum, item) => sum + (item.count ?? 1), 0)
+  // The same engine count as the trip's header pill and Today's list.
+  const { count: totalAttentionCount } = useTodoCount(trip.id)
 
   useEffect(() => {
     onAttentionCount?.(trip.id, totalAttentionCount)
@@ -64,9 +65,9 @@ export function TripCard({ trip, onAttentionCount }: TripCardProps) {
               <h3 className="font-semibold text-[var(--text-primary)] truncate">{trip.name}</h3>
               <p className="text-sm text-[var(--text-secondary)] truncate">{trip.location}</p>
             </div>
-            {totalAttentionCount > 0 && (
+            {totalAttentionCount !== undefined && totalAttentionCount > 0 && (
               <Badge variant="warning" size="sm" dot>
-                {totalAttentionCount}
+                {todoCountLabel(totalAttentionCount)}
               </Badge>
             )}
           </div>

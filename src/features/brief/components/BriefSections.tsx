@@ -1,18 +1,16 @@
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
-import { Badge, Button, Card, CapacityProgressBar, Deadline, StatCard, UserAvatar } from '../../../components/ui'
+import { Badge, Card, StatCard, UserAvatar } from '../../../components/ui'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
 import { formatMoney, splitAcrossNote } from '../../decisions/lib/costImpact'
-import { FaqAccordion } from './FaqAccordion'
 import type { CostBand } from '../lib/costBand'
-import type { FaqEntry } from '../lib/autoFaq'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Trip, TripStatus } from '../../../types'
 
 /**
  * The trip brief, decomposed into importable sections (UX_REDESIGN.md Part 2:
  * Today's invitee/pre-commit layout composes these — cover hero, organizer
- * message, cost band, RSVP card, who's-in row, FAQ) so the brief is a set of
+ * message, cost band, RSVP card, who's-in row) so the brief is a set of
  * building blocks rather than one monolithic tab.
  */
 
@@ -59,7 +57,7 @@ export function CostBandCard({ costBand, fullCostLink }: { costBand: CostBand | 
         // sloppiness -- say so rather than hiding it.
         delta={
           [
-            costBand.low !== costBand.high ? 'depending on open votes' : null,
+            costBand.low !== costBand.high ? 'depending on open questions' : null,
             // Only figures that were actually divided by a headcount carry the
             // split note; an organiser-entered per-person estimate is shown plainly.
             costBand.dependsOnHeadcount && costBand.isEstimate && costBand.headcount > 0
@@ -79,44 +77,6 @@ export function CostBandCard({ costBand, fullCostLink }: { costBand: CostBand | 
   )
 }
 
-export interface RsvpCardProps {
-  trip: Trip
-  participants: ParticipantWithUser[]
-  myParticipant: ParticipantWithUser | null
-  confirmedCount: number
-  onOpenStatusModal: () => void
-}
-
-/** Capacity + deadline + one-tap "Are you in?" entry. The caller owns the StatusModal. */
-export function RsvpCard({ trip, participants, myParticipant, confirmedCount, onOpenStatusModal }: RsvpCardProps) {
-  return (
-    <Card>
-      <Card.Content className="space-y-3">
-        <CapacityProgressBar
-          confirmedCount={confirmedCount}
-          capacityLimit={trip.capacity_limit}
-          waitlistCount={participants.filter((p) => p.confirmation_status === 'waitlist').length}
-        />
-        {trip.confirmation_deadline && (
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-[var(--text-secondary)]">RSVP by</span>
-            <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />
-          </div>
-        )}
-        {trip.confirmation_enabled && (
-          <Button fullWidth onClick={onOpenStatusModal}>
-            {myParticipant?.confirmation_status === 'confirmed'
-              ? 'View my status'
-              : myParticipant?.confirmation_status && myParticipant.confirmation_status !== 'pending'
-                ? 'Update my status'
-                : "Are you in?"}
-          </Button>
-        )}
-      </Card.Content>
-    </Card>
-  )
-}
-
 /** Who's-in avatar row: confirmed people (then conditional), capped with a +N overflow. */
 export function WhosInRow({ participants, max = 8 }: { participants: ParticipantWithUser[]; max?: number }) {
   const confirmed = participants.filter((p) => p.confirmation_status === 'confirmed')
@@ -129,7 +89,7 @@ export function WhosInRow({ participants, max = 8 }: { participants: Participant
     <Card>
       <Card.Content>
         <p className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide mb-2">
-          Who's in ({confirmed.length} confirmed{conditional.length > 0 ? `, ${conditional.length} conditional` : ''})
+          Who's in ({confirmed.length} going{conditional.length > 0 ? `, ${conditional.length} not sure` : ''})
         </p>
         <div className="flex items-center gap-1.5 flex-wrap">
           {shown.map((p) => (
@@ -139,20 +99,6 @@ export function WhosInRow({ participants, max = 8 }: { participants: Participant
           ))}
           {overflow > 0 && <span className="text-sm text-[var(--text-muted)] ml-1">+{overflow}</span>}
         </div>
-      </Card.Content>
-    </Card>
-  )
-}
-
-export function FaqCard({ entries }: { entries: FaqEntry[] }) {
-  if (entries.length === 0) return null
-  return (
-    <Card>
-      <Card.Header>
-        <Card.Title>Common questions</Card.Title>
-      </Card.Header>
-      <Card.Content className="pt-0">
-        <FaqAccordion entries={entries} />
       </Card.Content>
     </Card>
   )

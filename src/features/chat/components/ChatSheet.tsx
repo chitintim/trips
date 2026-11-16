@@ -14,15 +14,15 @@ import type { Trip } from '../../../types'
 const SUGGESTIONS: Record<string, string[]> = {
   default: ['What do I owe?', "What's the plan?", "What's still undecided?"],
   today: ["What's happening today?", 'What needs my attention?', 'What do I owe?'],
-  plan: ["What's winning the polls?", "What's next on the itinerary?", "What's still undecided?"],
+  plan: ["What's leading on the open questions?", "What's next on the itinerary?", "What's still undecided?"],
   overview: ["What's the plan today?", 'Who still needs to confirm?', 'What do I owe?'],
-  decisions: ["What's winning the polls?", "Who hasn't voted yet?", 'Summarize the open decisions'],
+  decisions: ["What's leading on the open questions?", "Who hasn't answered yet?", 'Summarize the open questions'],
   expenses: ['How much do I owe?', "What's unclaimed?", 'Who has paid the most?'],
   'my-spending': ['How much have I spent?', 'What am I still owed?'],
   'settle-up': ['Who owes whom?', 'What settlements are unconfirmed?'],
   itinerary: ["What's the plan Saturday?", "What's next on the itinerary?"],
   people: ['Who still needs to confirm?', "Who's waiting on whom?"],
-  organizer: ['Who is blocking what?', 'Draft a plan for the unbooked polls'],
+  organizer: ['Who are we waiting on?', 'Draft a plan for what is left to book'],
   map: ['How far is dinner from the accommodation?'],
 }
 

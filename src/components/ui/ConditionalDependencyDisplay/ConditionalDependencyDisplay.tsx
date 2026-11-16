@@ -159,9 +159,9 @@ export function ConditionalDependencyDisplay({
         <div className="flex-1">
           <div className={`${sizeClasses[size]} text-[var(--text-secondary)] mb-1.5`}>
             {allUsersConfirmed ? (
-              <span className="text-success-600 font-medium">All required users confirmed</span>
+              <span className="text-success-600 font-medium">Everyone they depend on is going</span>
             ) : (
-              <span>Waiting for confirmation from:</span>
+              <span>Waiting to hear from:</span>
             )}
           </div>
           {!compact && selections.length > 0 && (
@@ -183,7 +183,7 @@ export function ConditionalDependencyDisplay({
           )}
           {!compact && !allUsersConfirmed && dependentUsers.length > 0 && (
             <div className="text-xs text-[var(--text-muted)] mt-1">
-              {dependentUsers.filter((p) => p?.confirmation_status === 'confirmed').length}/{dependentUsers.length} confirmed
+              {dependentUsers.filter((p) => p?.confirmation_status === 'confirmed').length}/{dependentUsers.length} going
             </div>
           )}
         </div>

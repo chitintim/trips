@@ -265,7 +265,7 @@ function AdminTripsTab() {
             <table className="w-full">
               <thead className="border-b border-[var(--border-subtle)] bg-[var(--surface-sunken)]">
                 <tr>
-                  {['Trip', 'Stage', 'Dates', 'Confirmed', ''].map((h, i) => (
+                  {['Trip', 'Stage', 'Dates', 'Going', ''].map((h, i) => (
                     <th
                       key={i}
                       className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-[var(--text-muted)]"

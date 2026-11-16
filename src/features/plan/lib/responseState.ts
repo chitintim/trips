@@ -1,143 +1,107 @@
 /**
- * Per-question "does this need me?" state + group progress (UX_REDESIGN.md
- * Part 5 "Focused answer flow"): question cards everywhere show a
- * response-state chip ("You're done ✓" / "Needs you") so a glance tells
- * whether the viewer is needed, without opening anything. Works for both
- * decision shapes:
- *   - vote sections: "done" once the viewer has cast at least one vote
- *     among the section's options.
- *   - personal-order sections: "done" once the viewer has at least one
- *     selection (any catalog item ticked) under the section, with the
- *     compact label showing their live order total. This also covers
- *     pre-v3 trips whose sections were stamped decision_shape:'personal' by
- *     the legacy-data migration (20260707160000_legacy_sections_to_personal):
- *     those selections rows carry no order-form metadata (no dates/variant/
- *     quantity) and their options carry no catalog pricing, so "done" is
- *     keyed off the presence of a selection at all, not off having priced
- *     order lines — a legacy participant who picked a restaurant/ski
- *     package is done even though there's nothing to total.
+ * Plan-side question chips and counts. A thin delegate to the one shared
+ * definition in src/lib/answers/answers.ts (see its header), so the Plan
+ * chips, the "N of M answered" lines, Today's to-dos and the header count
+ * cannot disagree:
  *
- * Chaser alignment: supabase/functions/auto-chase's section-deadline scan
- * mirrors this shape split — group-vote sections still chase via the
- * 'unvoted_poll' kind (checked via option_votes), while decision_shape
- * 'personal' sections chase via a distinct 'unfilled_order' kind (checked
- * via `selections` rows instead, since personal-order sections never get
- * option_votes at all) with "fill in your picks" wording rather than "vote".
+ *  - "answered" is the union of option_votes, selections and passes, so
+ *    answering through the grid / own-choice path (which writes `selections`)
+ *    clears "Needs your answer" the same as a vote does;
+ *  - the denominator is the in-scope headcount (declined / cancelled /
+ *    inactive people are not counted);
+ *  - a Finished trip never says "Needs your answer".
  *
- * Pure (no React/Supabase) so it's independently unit-testable — the Plan
- * tray / entry card / stepper components are thin wrappers over this.
+ * Chip words: "Needs your answer" / "Answered ✓" / "Decided" /
+ * "Closed — no decision". Pure (no React/Supabase).
  */
-import { formatMoney } from '../../decisions/lib/costImpact'
-import { readOptionPricing, readOrderItemMetadata, buildOrderLine, sumOrderLinesByCurrency, type OrderLine } from '../../decisions/lib/decisionShapes'
-import { getDecisionShape, type DecisionShape } from '../../decisions/lib/decisionShapes'
-import type { OptionVote, OptionWithSelections } from '../../../lib/queries/usePlanning'
-import type { Json } from '../../../types/database.types'
+import { TODO_EMPTY_STATE } from '../../../lib/todos/copy'
+import {
+  answerCounts,
+  indexAnswers,
+  isOwnChoice,
+  isTripFinished,
+  questionAnswerState,
+  type AnswerIndex,
+  type AnswerSection,
+  type AnswerVote,
+  type QuestionAnswerState,
+} from '../../../lib/answers/answers'
+import type { InScopeCandidate } from '../../people/lib/inScopePeople'
+import type { TripStatus } from '../../../lib/tripStatus'
 
-export type ResponseState = 'done' | 'needs_you'
+export type ResponseState = QuestionAnswerState
+
+export type QuestionShape = 'group' | 'own'
 
 export interface QuestionState {
   sectionId: string
-  shape: DecisionShape
-  state: ResponseState
-  /** Compact label for the question row chip, e.g. "You're done ✓", "Needs you", "Your order: £86 ✓", "Fill in your order". */
-  label: string
-  /** Distinct participants who have responded at all (voted, or placed a non-empty order). */
-  respondedCount: number
-  totalParticipants: number
+  shape: QuestionShape
+  state: QuestionAnswerState
+  /** Chip text, or null when no chip should show (no options / viewer out of the trip). */
+  label: string | null
+  /** Chip colour. */
+  tone: 'success' | 'warning' | 'neutral' | null
+  /** In-scope people who have answered. */
+  answered: number
+  /** In-scope headcount: the only denominator. */
+  total: number
+  /** "4 of 9 answered" */
+  countLabel: string
 }
 
-export interface VoteSectionInput {
-  id: string
-  metadata: Json | null
-  options: Array<{ id: string }>
+export const CHIP_NEEDS_ANSWER = 'Needs your answer'
+export const CHIP_ANSWERED = 'Answered ✓'
+export const CHIP_DECIDED = 'Decided'
+export const CHIP_CLOSED_NO_DECISION = 'Closed — no decision'
+
+export function formatAnsweredCount(answered: number, total: number): string {
+  return `${answered} of ${total} answered`
 }
 
-/** Response state for a group-vote (shape 1) question. */
-export function computeVoteQuestionState(
-  section: VoteSectionInput,
-  votes: OptionVote[],
-  totalParticipants: number,
-  currentUserId: string | null
-): QuestionState {
-  const optionIds = new Set(section.options.map((o) => o.id))
-  const sectionVotes = votes.filter((v) => optionIds.has(v.option_id))
-  const voterIds = new Set(sectionVotes.map((v) => v.user_id))
-  const myVoted = !!currentUserId && voterIds.has(currentUserId)
-
-  return {
-    sectionId: section.id,
-    shape: 'vote',
-    state: myVoted ? 'done' : 'needs_you',
-    label: myVoted ? "You're done ✓" : 'Needs you',
-    respondedCount: voterIds.size,
-    totalParticipants,
-  }
+const CHIPS: Record<QuestionAnswerState, { label: string | null; tone: QuestionState['tone'] }> = {
+  needs_answer: { label: CHIP_NEEDS_ANSWER, tone: 'warning' },
+  answered: { label: CHIP_ANSWERED, tone: 'success' },
+  decided: { label: CHIP_DECIDED, tone: 'success' },
+  closed_no_decision: { label: CHIP_CLOSED_NO_DECISION, tone: 'neutral' },
+  no_options: { label: null, tone: null },
+  not_applicable: { label: null, tone: null },
 }
 
-export interface PersonalSectionInput {
-  id: string
-  metadata: Json | null
-  options: OptionWithSelections[]
+export interface QuestionStateInput {
+  sections: ReadonlyArray<AnswerSection>
+  votes: ReadonlyArray<AnswerVote>
+  userId: string | null
+  trip: { status: TripStatus; start_date: string; end_date: string; confirmation_enabled: boolean | null }
+  participants: ReadonlyArray<InScopeCandidate>
+  now?: Date | string
 }
 
-/** Response state for a personal-order (shape 2) question. */
-export function computePersonalQuestionState(
-  section: PersonalSectionInput,
-  totalParticipants: number,
-  currentUserId: string | null,
-  fallbackCurrency: string
-): QuestionState {
-  const respondedUserIds = new Set<string>()
-  const myLines: OrderLine[] = []
-  // Tracked separately from myLines.length: a legacy selection with no
-  // catalog pricing on its option produces no order line at all, but it's
-  // still a real, committed pick and must count as "done".
-  let iHaveResponded = false
+/** question state per section id, all from answers.ts. */
+export function computeQuestionStates(input: QuestionStateInput): Map<string, QuestionState> {
+  const { sections, votes, userId, trip, participants, now } = input
+  const confirmationEnabled = trip.confirmation_enabled === true
+  const index: AnswerIndex = indexAnswers(sections, { votes })
+  const tripFinished = isTripFinished(trip, now)
+  const me = userId ? participants.find((p) => p.user_id === userId) : undefined
+  const viewerOut =
+    !userId ||
+    (!!me && (me.active === false || me.confirmation_status === 'declined' || me.confirmation_status === 'cancelled'))
 
-  for (const option of section.options) {
-    for (const selection of option.selections) {
-      respondedUserIds.add(selection.user_id)
-      if (currentUserId && selection.user_id === currentUserId) {
-        iHaveResponded = true
-        const pricing = readOptionPricing(option.metadata)
-        if (pricing) {
-          const item = readOrderItemMetadata(selection.metadata)
-          myLines.push(buildOrderLine({ id: option.id, title: option.title, currency: option.currency }, pricing, item, fallbackCurrency))
-        }
-      }
-    }
+  const result = new Map<string, QuestionState>()
+  for (const section of sections) {
+    const state = questionAnswerState(section, userId ?? '', { index, tripFinished, viewerOut })
+    const { answered, total } = answerCounts(section.id, index, participants, confirmationEnabled)
+    result.set(section.id, {
+      sectionId: section.id,
+      shape: isOwnChoice(section) ? 'own' : 'group',
+      state,
+      ...CHIPS[state],
+      answered,
+      total,
+      countLabel: formatAnsweredCount(answered, total),
+    })
   }
-
-  let label = 'Fill in your order'
-  if (iHaveResponded) {
-    const totals = sumOrderLinesByCurrency(myLines)
-    const entries = Object.entries(totals)
-    label = entries.length > 0 ? `Your order: ${formatMoney(entries[0][1], entries[0][0])} ✓` : "You're done ✓"
-  }
-
-  return {
-    sectionId: section.id,
-    shape: 'personal',
-    state: iHaveResponded ? 'done' : 'needs_you',
-    label,
-    respondedCount: respondedUserIds.size,
-    totalParticipants,
-  }
-}
-
-/** Dispatches to the right computation based on the section's decision_shape metadata. */
-export function computeQuestionState(
-  section: PersonalSectionInput,
-  votes: OptionVote[],
-  totalParticipants: number,
-  currentUserId: string | null,
-  fallbackCurrency: string
-): QuestionState {
-  const shape = getDecisionShape(section.metadata)
-  if (shape === 'personal') {
-    return computePersonalQuestionState(section, totalParticipants, currentUserId, fallbackCurrency)
-  }
-  return computeVoteQuestionState(section, votes, totalParticipants, currentUserId)
+  return result
 }
 
 export interface GroupProgress {
@@ -147,10 +111,10 @@ export interface GroupProgress {
   label: string
 }
 
-export function computeGroupProgress(states: QuestionState[]): GroupProgress {
+export function computeGroupProgress(states: Pick<QuestionState, 'state'>[]): GroupProgress {
   const total = states.length
-  const answered = states.filter((s) => s.state === 'done').length
-  return { answered, total, label: `${answered} of ${total} answered` }
+  const answered = states.filter((s) => s.state === 'answered').length
+  return { answered, total, label: formatAnsweredCount(answered, total) }
 }
 
 /** 30 seconds per open question, rounded to the nearest whole minute (minimum 1 when there's at least one open question). */
@@ -159,9 +123,9 @@ export function estimateAnswerMinutes(openCount: number): number {
   return Math.max(1, Math.round(openCount * 0.5))
 }
 
-/** "3 things need you · ~2 min" for the Decide lens entry card, or a calm all-done message when nothing's open. */
+/** "3 questions need your answer · ~2 min" for the Decide lens entry card, or a calm all-done message when nothing's open. */
 export function formatEntryCardLabel(openCount: number): string {
-  if (openCount <= 0) return "You're all caught up"
+  if (openCount <= 0) return TODO_EMPTY_STATE.headline
   const minutes = estimateAnswerMinutes(openCount)
-  return `${openCount} thing${openCount === 1 ? '' : 's'} need${openCount === 1 ? 's' : ''} you · ~${minutes} min`
+  return `${openCount} question${openCount === 1 ? '' : 's'} need${openCount === 1 ? 's' : ''} your answer · ~${minutes} min`
 }

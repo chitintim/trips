@@ -1,32 +1,23 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, Skeleton } from '../../../components/ui'
-import {
-  useBriefData,
-  BriefCover,
-  OrganizerMessageCard,
-  CostBandCard,
-  RsvpCard,
-  WhosInRow,
-  FaqCard,
-} from '../../brief'
-import { StatusModal, ConfirmationSettingsSheet } from '../../people'
-import { ActionsSection } from '../../actions'
+import { useBriefData, BriefCover, OrganizerMessageCard, CostBandCard, WhosInRow } from '../../brief'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
+import { StatusModal } from '../../people'
 import { usePlanItems } from '../../plan'
 import { formatTime } from '../../timeline'
-import { YourTurnStack } from './YourTurnStack'
 import { AnnouncementsSection } from './AnnouncementsSection'
 import { DecidedSoFarCard } from './DecidedSoFarCard'
-import { BlockersStrip } from './BlockersStrip'
 import { CountdownHero } from './CountdownHero'
 import { TripProgressStrip } from './TripProgressStrip'
 import { NowNextCard } from './NowNextCard'
 import { SettleStatusCard } from './SettleStatusCard'
 import { RecentActivitySection } from './RecentActivitySection'
-import { NextStepsCard } from './NextStepsCard'
 import { StageSuggestionCard } from './StageSuggestionCard'
 import { SetDatesFromWinnerCard } from './SetDatesFromWinnerCard'
-import { TravelDetailsPromptCard } from './TravelDetailsPromptCard'
 import { KeyBookingsCard } from './KeyBookingsCard'
+import { YourTodosCard } from './YourTodosCard'
+import { OrganiserSummaryCard } from './OrganiserSummaryCard'
+import { CapacityCard } from './CapacityCard'
 import type { Trip, TripStatus } from '../../../types'
 
 export interface TodayTabProps {
@@ -38,8 +29,6 @@ export interface TodayTabProps {
   onOpenConsole: () => void
   onOpenRecap: () => void
   onQuickCapture: () => void
-  /** Organizer "invite people" affordance (Add participant sheet). */
-  onInvite: () => void
   /** Opens the Actions sheet (trip to-dos + bring list); pass 'bring' to land on the packing segment. */
   onOpenActions: (segment?: 'actions' | 'bring') => void
 }
@@ -48,7 +37,7 @@ export interface TodayTabProps {
  * Today — the stage-aware home (UX_REDESIGN §1 + Part 2 layouts). One
  * scrollable action center per lifecycle stage, leading with "your turn",
  * absorbing the old Brief and Notes tabs, and hosting the organizer's
- * blockers strip + suggestion cards. Part 3's date-intelligence cards slot
+ * organiser summary + suggestion cards. Part 3's date-intelligence cards slot
  * into the same stack (each layout is just an ordered list of sections).
  */
 export function TodayTab({
@@ -59,12 +48,12 @@ export function TodayTab({
   onOpenConsole,
   onOpenRecap,
   onQuickCapture,
-  onInvite,
   onOpenActions,
 }: TodayTabProps) {
   const brief = useBriefData(trip.id)
   const [rsvpOpen, setRsvpOpen] = useState(false)
-  const [briefSettingsOpen, setBriefSettingsOpen] = useState(false)
+  const { canManageTrip } = useTripPermissions(trip)
+  const organiser = isOrganizer || canManageTrip
 
   if (brief.isLoading) {
     return (
@@ -75,38 +64,30 @@ export function TodayTab({
     )
   }
 
-  // Organizer helper cards shared by the pre-trip layouts.
-  const organizerCards = isOrganizer && (
+  const todos = <YourTodosCard tripId={trip.id} />
+  const announcements = <AnnouncementsSection trip={trip} isOrganizer={organiser} />
+  const activity = <RecentActivitySection tripId={trip.id} />
+  // Organiser-only: the summary, plus the two prompts that have no to-do yet
+  // (move the stage forward, set dates from the winning range).
+  const organiserCards = organiser && (
     <>
+      <OrganiserSummaryCard tripId={trip.id} onOpenConsole={onOpenConsole} />
       <SetDatesFromWinnerCard trip={trip} />
       <StageSuggestionCard trip={trip} effectiveStage={effectiveStage} />
-      {(effectiveStage === 'gathering_interest' || effectiveStage === 'confirming_participants' || effectiveStage === 'booking_details') && (
-        <NextStepsCard
-          tripId={trip.id}
-          onInvite={onInvite}
-          onSetBrief={() => setBriefSettingsOpen(true)}
-          onStartAccommodationVote={() => onNavigate('plan')}
-        />
-      )}
-      <BlockersStrip trip={trip} onOpenConsole={onOpenConsole} />
     </>
   )
-
-  const announcements = <AnnouncementsSection trip={trip} isOrganizer={isOrganizer} />
-  const activity = <RecentActivitySection tripId={trip.id} />
 
   let layout: React.ReactNode
   switch (effectiveStage) {
     case 'gathering_interest':
     case 'confirming_participants':
-      // Invitee / pre-commit layout: the brief IS the home.
       layout = (
         <>
           <BriefCover trip={trip} statusOverride={effectiveStage} />
-          {organizerCards}
-          <OrganizerMessageCard message={trip.confirmation_message} />
+          {todos}
           <CostBandCard costBand={brief.costBand} fullCostLink={trip.full_cost_link} />
-          <RsvpCard
+          <OrganizerMessageCard message={trip.confirmation_message} />
+          <CapacityCard
             trip={trip}
             participants={brief.participants}
             myParticipant={brief.myParticipant}
@@ -114,25 +95,21 @@ export function TodayTab({
             onOpenStatusModal={() => setRsvpOpen(true)}
           />
           <WhosInRow participants={brief.participants} />
-          <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
-          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
-          <FaqCard entries={brief.faqEntries} />
           {announcements}
+          {organiserCards}
           {activity}
         </>
       )
       break
 
     case 'booking_details':
-      // Planning layout: your turn first, then group signal.
       layout = (
         <>
-          <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
-          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
-          {organizerCards}
-          {announcements}
+          {todos}
           <DecidedSoFarCard trip={trip} onNavigate={onNavigate} />
           <KeyBookingsCard tripId={trip.id} />
+          {announcements}
+          {organiserCards}
           {activity}
         </>
       )
@@ -142,13 +119,11 @@ export function TodayTab({
       layout = (
         <>
           <CountdownHero trip={trip} />
-          <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
-          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
-          <TravelDetailsPromptCard tripId={trip.id} />
-          {organizerCards}
+          {todos}
           <KeyBookingsCard tripId={trip.id} />
           <ChecklistNudgeCard onOpen={() => onOpenActions('bring')} />
           {announcements}
+          {organiserCards}
           {activity}
         </>
       )
@@ -165,12 +140,10 @@ export function TodayTab({
               📷 Scan a receipt
             </Button>
           </div>
-          <SettleStatusCard trip={trip} onNavigate={onNavigate} compact />
-          <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
-          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
-          {isOrganizer && <BlockersStrip trip={trip} onOpenConsole={onOpenConsole} />}
-          {isOrganizer && <StageSuggestionCard trip={trip} effectiveStage={effectiveStage} />}
+          <SettleStatusCard trip={trip} onNavigate={onNavigate} />
+          {todos}
           {announcements}
+          {organiserCards}
           {activity}
         </>
       )
@@ -179,12 +152,10 @@ export function TodayTab({
     case 'trip_completed':
       layout = (
         <>
-          <SettleStatusCard trip={trip} onNavigate={onNavigate} />
+          {todos}
           <RecapTeaserCard onOpenRecap={onOpenRecap} />
-          {isOrganizer && <StageSuggestionCard trip={trip} effectiveStage={effectiveStage} />}
-          <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
-          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
           {announcements}
+          {organiserCards}
           {activity}
         </>
       )
@@ -193,9 +164,9 @@ export function TodayTab({
     default:
       layout = (
         <>
-          <YourTurnStack tripId={trip.id} onNavigate={onNavigate} />
-          <ActionsSection tripId={trip.id} isOrganizer={isOrganizer} onOpenActions={onOpenActions} />
+          {todos}
           {announcements}
+          {organiserCards}
           {activity}
         </>
       )
@@ -216,13 +187,6 @@ export function TodayTab({
           confirmedCount={brief.confirmedCount}
         />
       )}
-
-      <ConfirmationSettingsSheet
-        isOpen={briefSettingsOpen}
-        onClose={() => setBriefSettingsOpen(false)}
-        tripId={trip.id}
-        isOrganizer={isOrganizer}
-      />
     </div>
   )
 }
@@ -267,7 +231,7 @@ function ChecklistNudgeCard({ onOpen }: { onOpen: () => void }) {
       className="w-full text-left rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-4 py-2.5 flex items-center justify-between gap-3 hover:border-[var(--border-default)] transition-colors"
     >
       <span className="text-sm text-[var(--text-primary)]">🎒 Check the packing & bring-list</span>
-      <span className="text-sm text-[var(--text-muted)]">Actions →</span>
+      <span className="text-sm text-[var(--text-muted)]">To-dos →</span>
     </button>
   )
 }

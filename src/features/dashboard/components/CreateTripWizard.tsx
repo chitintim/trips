@@ -44,12 +44,12 @@ const STEPS = [
 const CURRENCY_OPTIONS = CURRENCY_LIST.slice(0, 12).map((c) => ({ value: c.code, label: `${c.code} — ${c.name}` }))
 
 const STATUS_OPTIONS: { value: TripStatus; label: string }[] = [
-  { value: 'gathering_interest', label: '💭 Gathering Interest - Seeing who might be interested' },
-  { value: 'confirming_participants', label: '✋ Confirming Participants - Getting commitments' },
-  { value: 'booking_details', label: '🔄 Booking Details - Planning flights, transport, etc.' },
-  { value: 'booked_awaiting_departure', label: '✅ Booked - All set, awaiting departure' },
-  { value: 'trip_ongoing', label: '🎿 Trip Ongoing - Currently happening' },
-  { value: 'trip_completed', label: '🏁 Trip Completed - All done' },
+  { value: 'gathering_interest', label: "💭 Who's coming - Seeing who might be interested" },
+  { value: 'confirming_participants', label: "✋ Who's coming - Getting replies" },
+  { value: 'booking_details', label: '🔄 Planning - Flights, transport, etc.' },
+  { value: 'booked_awaiting_departure', label: '✅ Ready to go - All set, awaiting departure' },
+  { value: 'trip_ongoing', label: '🎿 On the trip - Currently happening' },
+  { value: 'trip_completed', label: '🏁 Finished - All done' },
 ]
 
 /**
@@ -233,7 +233,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
           .insert({
             trip_id: tripId,
             title: TRIP_DATES_SECTION_TITLE,
-            description: 'When should we go? Vote for the dates that work for you.',
+            description: 'When should we go? Answer with the dates that work for you.',
             section_type: 'activities',
             status: 'in_progress',
             voting_method: 'single',
@@ -265,7 +265,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
       }
 
       queryClient.invalidateQueries({ queryKey: queryKeys.trips() })
-      showToast({ type: 'success', message: 'Trip created', description: datesMode === 'vote' ? 'The date poll is live.' : undefined })
+      showToast({ type: 'success', message: 'Trip created', description: datesMode === 'vote' ? 'The dates question is live.' : undefined })
       onSuccess?.()
       reset()
       onClose()
@@ -312,7 +312,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
                 onChange={setDatesMode}
                 options={[
                   { value: 'fixed', label: 'We know the dates' },
-                  { value: 'vote', label: 'Let the group vote' },
+                  { value: 'vote', label: 'Let the group choose' },
                 ]}
               />
             )}
@@ -325,7 +325,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
             ) : (
               <div className="space-y-3">
                 <p className="text-sm text-[var(--text-secondary)]">
-                  Add candidate date ranges — a "{TRIP_DATES_SECTION_TITLE}" poll goes up for the group, and you set the
+                  Add candidate date ranges — a "{TRIP_DATES_SECTION_TITLE}" question goes up for the group, and you set the
                   final dates from the winner.
                 </p>
                 {candidates.map((c, i) => (
@@ -364,7 +364,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
           <div className="space-y-4">
             {editTrip ? (
               <Select
-                label="Trip status"
+                label="Trip stage"
                 value={status}
                 onChange={(e) => setStatus(e.target.value as TripStatus)}
                 options={STATUS_OPTIONS}

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Modal, Button, Badge, Stepper, SelectionAvatars, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
+import { hasAnswered } from '../../../lib/answers/answers'
 import { formatCostImpact, getTierSensitivityLine } from '../../decisions/lib/costImpact'
 import { votingInstruction, replaceableSiblingVoteIds, areVotesVisible, type VotingMethod } from '../../decisions/lib/voting'
 import { canVoteOnOption, describeVoteError } from '../../decisions/lib/resolveDecision'
@@ -11,6 +12,7 @@ import { OrderFormFields } from './OrderFormFields'
 import type { SectionWithOptions, OptionVoteWithUser } from '../../../lib/queries/usePlanning'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Trip } from '../../../types'
+import { TODO_EMPTY_STATE } from '../../../lib/todos/copy'
 
 export interface AnswerFlowProps {
   isOpen: boolean
@@ -58,12 +60,12 @@ export function AnswerFlow({ isOpen, onClose, trip, sections, votes, participant
   const steps = sections.map((s) => ({ key: s.id, label: s.title }))
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} size="lg" title="Your turn">
+    <Modal isOpen={isOpen} onClose={handleClose} size="lg" title="Your answers">
       {done || total === 0 ? (
         <div className="py-10 text-center space-y-3">
           <p className="text-4xl">🎉</p>
-          <h3 className="text-lg font-semibold text-[var(--text-primary)]">You're all caught up</h3>
-          <p className="text-sm text-[var(--text-secondary)]">Nothing else needs you right now.</p>
+          <h3 className="text-lg font-semibold text-[var(--text-primary)]">{TODO_EMPTY_STATE.headline}</h3>
+          <p className="text-sm text-[var(--text-secondary)]">Nothing else needs your answer.</p>
           <Button onClick={handleClose}>Done</Button>
         </div>
       ) : (
@@ -194,7 +196,7 @@ function VoteStep({
       if (gate.reason) showToast({ type: 'error', message: gate.reason })
       return
     }
-    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your vote', description: describeVoteError(err) })
+    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your answer', description: describeVoteError(err) })
     const myVote = sectionVotes.find((v) => v.option_id === optionId && v.user_id === user.id)
     setVotingOptionId(optionId)
     if (myVote) {
@@ -208,7 +210,7 @@ function VoteStep({
     }
   }
 
-  const hasVoted = sectionVotes.some((v) => v.user_id === user?.id)
+  const hasVoted = !!user && hasAnswered(section, user.id, { votes: sectionVotes })
 
   return (
     <div className="space-y-4">
@@ -274,7 +276,7 @@ function VoteStep({
                           }))}
                           maxAvatars={4}
                           size="sm"
-                          entityLabel="voted for this"
+                          entityLabel="answered with this"
                         />
                       </div>
                     )}
@@ -315,7 +317,7 @@ function VoteStep({
         <Button variant="ghost" onClick={onSkip}>
           Skip for now
         </Button>
-        <Button onClick={onNext} disabled={!hasVoted} title={hasVoted ? undefined : 'Cast a vote to continue, or skip'}>
+        <Button onClick={onNext} disabled={!hasVoted} title={hasVoted ? undefined : 'Answer to continue, or skip'}>
           {isLast ? 'Finish' : 'Next'}
         </Button>
       </div>

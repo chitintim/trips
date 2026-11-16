@@ -195,11 +195,11 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
       if (values.isVote) {
         const filledRows = values.optionRows.filter((r) => r.title.trim())
         if (values.voteTarget === 'new' && filledRows.length < 2) {
-          showToast({ type: 'error', message: 'Add at least 2 options to start a vote' })
+          showToast({ type: 'error', message: 'Add at least 2 options to ask the group' })
           return
         }
         if (values.voteTarget === 'existing' && !values.existingSectionId) {
-          showToast({ type: 'error', message: 'Choose a section to add this option to' })
+          showToast({ type: 'error', message: 'Choose a question to add this option to' })
           return
         }
 
@@ -252,7 +252,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
           logActivity({ verb: 'option_added', entity: { type: 'option', label: values.title.trim() } })
         }
 
-        showToast({ type: 'success', message: 'Added to the plan as a vote' })
+        showToast({ type: 'success', message: 'Question added' })
       } else {
         if (values.hasDate && !values.date) {
           showToast({ type: 'error', message: 'Please pick a date, or turn off "has a date"' })
@@ -307,7 +307,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
               <div className="grid grid-cols-2 gap-3">
                 <Input label="Day" type="date" value={values.date} onChange={(e) => updateField('date', e.target.value)} />
                 <Select
-                  label="Category"
+                  label="Type"
                   value={values.category}
                   onChange={(e) => updateField('category', e.target.value as TimelineEventCategory)}
                   options={CATEGORY_OPTIONS}
@@ -370,14 +370,14 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
                 value={values.voteTarget}
                 onChange={(v) => updateField('voteTarget', v)}
                 options={[
-                  { value: 'new', label: 'New section' },
-                  { value: 'existing', label: 'Add to existing section' },
+                  { value: 'new', label: 'New question' },
+                  { value: 'existing', label: 'Add to existing question' },
                 ]}
               />
 
               {values.voteTarget === 'existing' ? (
                 <Select
-                  label="Section"
+                  label="Question"
                   value={values.existingSectionId}
                   onChange={(e) => updateField('existingSectionId', e.target.value)}
                   options={(sections || []).map((s) => ({ value: s.id, label: s.title }))}
@@ -392,14 +392,14 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
                       value={values.decisionShape}
                       onChange={(v) => updateField('decisionShape', v)}
                       options={[
-                        { value: 'vote', label: 'Group vote' },
-                        { value: 'personal', label: 'Personal picks' },
+                        { value: 'vote', label: 'Group choice' },
+                        { value: 'personal', label: 'Own choice' },
                       ]}
                     />
                     <p className="mt-1.5 text-xs text-[var(--text-muted)]">
                       {values.decisionShape === 'vote'
-                        ? 'One winner for everyone — the group votes on options.'
-                        : 'Each person orders their own items (rental gear, lessons) — not a vote.'}
+                        ? 'One answer for everyone — the group chooses between options.'
+                        : 'Each person chooses for themselves (rental gear, lessons).'}
                     </p>
                   </div>
 
@@ -453,29 +453,29 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
 
                   {values.decisionShape === 'vote' && (
                     <div>
-                      <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Voting method</label>
+                      <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">How people answer</label>
                       <SegmentedControl
                         fullWidth
                         size="sm"
                         value={values.votingMethod}
                         onChange={(v) => updateField('votingMethod', v)}
                         options={[
-                          { value: 'single', label: 'Single choice' },
-                          { value: 'approval', label: 'Approve multiple' },
-                          { value: 'ranked', label: 'Ranked' },
+                          { value: 'single', label: 'Choose one' },
+                          { value: 'approval', label: 'Choose any' },
+                          { value: 'ranked', label: 'Rank them' },
                         ]}
                       />
                     </div>
                   )}
 
                   <Input
-                    label={values.decisionShape === 'personal' ? 'Answer by (optional)' : 'Vote deadline (optional)'}
+                    label={values.decisionShape === 'personal' ? 'Answer by (optional)' : 'Answer by (optional)'}
                     type="datetime-local"
                     value={values.voteDeadline}
                     onChange={(e) => updateField('voteDeadline', e.target.value)}
                     helperText={
                       values.decisionShape === 'personal'
-                        ? 'Reuses the same deadline field — shown as when orders close, not a vote.'
+                        ? 'Shown to the group as when answers close.'
                         : undefined
                     }
                   />
@@ -489,7 +489,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
               Cancel
             </Button>
             <Button onClick={handleSave} isLoading={isSaving}>
-              {values.isVote ? 'Add vote' : 'Add to plan'}
+              {values.isVote ? 'Ask the group' : 'Add to plan'}
             </Button>
           </div>
         </div>

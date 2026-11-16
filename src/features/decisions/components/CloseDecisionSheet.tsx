@@ -82,25 +82,25 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
         entity: { type: 'section', id: section.id, label: section.title },
         metadata: { decided_option_id: selectedId, decided_option_title: winner?.title },
       })
-      showToast({ type: 'success', message: 'Decision closed', description: winner ? `Decided: ${winner.title}` : undefined })
+      showToast({ type: 'success', message: winner ? `Decided: ${winner.title}` : 'Closed — no decision' })
       onClose()
       if (winner) onClosed?.(selectedId)
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not close this decision', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not decide this question', description: (err as Error).message })
     }
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="md" title={`Close "${section.title}"`}>
+    <Modal isOpen={isOpen} onClose={onClose} size="md" title={`Decide "${section.title}"`}>
       <div className="space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">
-          Pick the winning option — the tally leader is pre-selected. Closing records the outcome, reveals the results to
-          everyone and ends voting.
+          Choose the winning option — the leader is pre-selected. Deciding records the answer, shows everyone the results
+          and closes the question.
         </p>
 
         {tie.tied && (
           <div role="status" className="rounded-[var(--radius-md)] border border-warning-300 bg-warning-50 dark:bg-warning-900/30 p-2.5 text-sm text-[var(--text-primary)]">
-            <p className="font-medium">Tied vote</p>
+            <p className="font-medium">Tied</p>
             <p className="mt-0.5 break-words text-xs text-[var(--text-secondary)]">
               {tiedTitles.join(', ')} are level.{' '}
               {tiePickTitle ? `The automatic tie-break picks "${tiePickTitle}". ` : ''}
@@ -139,7 +139,7 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
                     <span className="text-xs text-[var(--text-muted)]">
                       {method === 'ranked'
                         ? `${tally?.score ?? 0} point${(tally?.score ?? 0) === 1 ? '' : 's'}`
-                        : `${tally?.score ?? 0} vote${(tally?.score ?? 0) === 1 ? '' : 's'}`}
+                        : `${tally?.score ?? 0} answer${(tally?.score ?? 0) === 1 ? '' : 's'}`}
                     </span>
                     {tie.tied && tie.tiedOptionIds.includes(option.id) ? (
                       <Badge variant="warning" size="sm">
@@ -168,7 +168,7 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
                         }))}
                         maxAvatars={4}
                         size="sm"
-                        entityLabel="voted for this"
+                        entityLabel="chose this"
                       />
                     )}
                   </span>
@@ -178,14 +178,14 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
           })}
         </div>
 
-        <p className="text-xs text-[var(--text-muted)]">This poll was «{votingInstruction(method)}».</p>
+        <p className="text-xs text-[var(--text-muted)]">Answered as: {votingInstruction(method)}.</p>
 
         <div className="flex justify-end gap-3 border-t border-[var(--border-subtle)] pt-3">
           <Button variant="ghost" onClick={onClose} disabled={updateSection.isPending}>
             Cancel
           </Button>
           <Button onClick={handleConfirm} isLoading={updateSection.isPending} disabled={!selectedId}>
-            🏁 Close &amp; decide
+            🏁 Decide
           </Button>
         </div>
       </div>

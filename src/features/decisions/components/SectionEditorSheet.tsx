@@ -81,7 +81,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
     const update = {
       title: values.title.trim(),
       description: values.description.trim() || null,
-      // Merge, never replace: a closed poll's decided_option_id / followup_action_id live here.
+      // Merge, never replace: a decided question's decided_option_id / followup_action_id live here.
       metadata: mergeSectionMetadata(section?.metadata, { decision_shape: values.decisionShape }),
       voting_method: values.votingMethod,
       hide_votes_until_close: values.hideVotesUntilClose,
@@ -92,7 +92,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
     try {
       if (isEditing) {
         await updateSection.mutateAsync({ id: section!.id, update })
-        showToast({ type: 'success', message: 'Poll settings updated' })
+        showToast({ type: 'success', message: 'Question settings updated' })
       } else {
         await createSection.mutateAsync({
           ...update,
@@ -101,17 +101,17 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
           allow_multiple_selections: false,
           order_index: 0,
         })
-        showToast({ type: 'success', message: 'Section created' })
+        showToast({ type: 'success', message: 'Question created' })
       }
       clearDraft()
       onClose()
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not save section', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not save question', description: (err as Error).message })
     }
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} size="md" title={isEditing ? 'Poll settings' : 'New section'}>
+    <Modal isOpen={isOpen} onClose={handleClose} size="md" title={isEditing ? 'Question settings' : 'New question'}>
       <div className="space-y-4">
         <Input label="Title" value={values.title} onChange={(e) => updateField('title', e.target.value)} required autoFocus />
         <TextArea label="Description (optional)" value={values.description} onChange={(e) => updateField('description', e.target.value)} rows={2} />
@@ -124,37 +124,37 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
             value={values.decisionShape}
             onChange={(v) => updateField('decisionShape', v)}
             options={[
-              { value: 'vote', label: 'Group vote' },
-              { value: 'personal', label: 'Personal picks' },
+              { value: 'vote', label: 'Group choice' },
+              { value: 'personal', label: 'Own choice' },
             ]}
           />
           <p className="mt-1.5 text-xs text-[var(--text-muted)]">
             {values.decisionShape === 'vote'
-              ? 'One winner for everyone — the group votes on options.'
-              : "Each person orders their own items (rental gear, lessons) — not a vote. Add catalog items with pricing after saving."}
+              ? 'One answer for everyone — the group chooses between options.'
+              : 'Each person chooses for themselves (rental gear, lessons). Add options with pricing after saving.'}
           </p>
         </div>
 
         {values.decisionShape === 'vote' && (
           <>
             <div>
-              <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Voting method</label>
+              <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">How people answer</label>
               <SegmentedControl
                 fullWidth
                 size="sm"
                 value={values.votingMethod}
                 onChange={(v) => updateField('votingMethod', v)}
                 options={[
-                  { value: 'single', label: 'Single choice' },
-                  { value: 'approval', label: 'Approve multiple' },
-                  { value: 'ranked', label: 'Ranked' },
+                  { value: 'single', label: 'Choose one' },
+                  { value: 'approval', label: 'Choose any' },
+                  { value: 'ranked', label: 'Rank them' },
                 ]}
               />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <Input
-                label="Vote deadline (optional)"
+                label="Answer by (optional)"
                 type="datetime-local"
                 value={values.voteDeadline}
                 onChange={(e) => updateField('voteDeadline', e.target.value)}
@@ -164,7 +164,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
                 type="number"
                 value={values.quorum}
                 onChange={(e) => updateField('quorum', e.target.value)}
-                placeholder="e.g. 5 voters"
+                placeholder="e.g. 5 answers"
               />
             </div>
 
@@ -176,7 +176,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
                 className="mt-1 w-5 h-5 accent-accent-600"
               />
               <span className="text-sm text-[var(--text-primary)]">
-                Hide who voted for what until the poll closes (recommended — reduces herd voting)
+                Hide answers until it's decided (recommended — stops people following the crowd)
               </span>
             </label>
           </>
@@ -184,11 +184,11 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
 
         {values.decisionShape === 'personal' && (
           <Input
-            label="Order deadline (optional)"
+            label="Answer by (optional)"
             type="datetime-local"
             value={values.voteDeadline}
             onChange={(e) => updateField('voteDeadline', e.target.value)}
-            helperText="Reuses the same deadline field — shown as when orders close, not a vote."
+            helperText="Shown to the group as when answers close."
           />
         )}
 
@@ -197,7 +197,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
             Cancel
           </Button>
           <Button onClick={handleSave} isLoading={createSection.isPending || updateSection.isPending}>
-            {isEditing ? 'Save' : 'Create section'}
+            {isEditing ? 'Save' : 'Create question'}
           </Button>
         </div>
       </div>

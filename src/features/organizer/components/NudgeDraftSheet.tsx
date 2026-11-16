@@ -53,7 +53,7 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
       const fallbackMessage = `Hey ${targetName.split(' ')[0]}! ${blocker.detail ?? blocker.label} ${fallbackLink}`
       setMessage(fallbackMessage)
       baselineMessage.current = fallbackMessage
-      setAiNote('No AI draft for this blocker type — edit freely.')
+      setAiNote('No AI draft for this kind of to-do — edit freely.')
       return
     }
 
@@ -121,7 +121,7 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
               value={message}
               onChange={(e) => setMessage(e.target.value)}
               rows={5}
-              helperText="Edit freely — the deep link takes them straight to the action."
+              helperText="Edit freely — the deep link takes them straight to the to-do."
             />
             {deepLink && (
               <p className="text-xs text-[var(--text-muted)] break-all">

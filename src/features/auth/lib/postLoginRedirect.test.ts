@@ -25,6 +25,12 @@ describe('resolvePostLoginDestination', () => {
     ).toBe('/trip-1?tab=money')
   })
 
+  it('preserves ?open= to-do deep links (including the colon in question:<id>)', () => {
+    expect(
+      resolvePostLoginDestination({ from: { pathname: '/trip-1', search: '?open=question:s-1' } })
+    ).toBe('/trip-1?open=question:s-1')
+  })
+
   it('preserves hashes', () => {
     expect(
       resolvePostLoginDestination({ from: { pathname: '/trip-1', search: '?tab=plan', hash: '#day-3' } })

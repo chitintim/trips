@@ -88,8 +88,6 @@ export type { AppShellProps, AppShellTabItem } from './layout/AppShell'
 export { StageRail } from './layout/StageRail'
 export type { StageRailProps } from './layout/StageRail'
 
-export { NeedsAttentionStrip } from './layout/NeedsAttentionStrip'
-export type { NeedsAttentionStripProps, NeedsAttentionItem } from './layout/NeedsAttentionStrip'
 
 export { InstallPrompt } from './InstallPrompt'
 

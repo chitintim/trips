@@ -27,6 +27,8 @@ export interface MoneySpaceProps {
    * back-compat requirement).
    */
   initialScreen?: 'settle-up' | 'my-spending' | null
+  /** `?open=payment:<id>` for the receiver: Settle up opens scrolled to that payment's confirm row. */
+  initialConfirmId?: string | null
 }
 
 /**
@@ -41,7 +43,7 @@ export interface MoneySpaceProps {
  * + EXPENSE_TAB_CONFIGS) has been removed as dead code — this component is
  * the only Money surface now.
  */
-export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
+export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null }: MoneySpaceProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
   const { data, isLoading, isError, refetch } = useExpenses(trip.id)
@@ -169,7 +171,7 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
 
       {/* Settle up — pushed screen (plan §4 #4), not a tab. */}
       <Modal isOpen={settleUpOpen} onClose={() => setSettleUpOpen(false)} size="xl" title="Settle up">
-        <SettleUpTab trip={trip} />
+        <SettleUpTab trip={trip} initialConfirmId={initialConfirmId ?? undefined} />
       </Modal>
 
       {/* My spending — pushed from the position header's "see my breakdown" (plan §4 #5), not a tab. */}

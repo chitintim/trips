@@ -9,12 +9,12 @@
  *
  * The three answers:
  *  - "I'm in"          -> confirmed (terms/capacity handling unchanged)
- *  - "Can't say yet"   -> a follow-up ("What are you waiting on?"):
+ *  - "Not sure yet"   -> a follow-up ("What are you waiting on?"):
  *       a date            -> conditional, conditional_type='date'
  *       someone else      -> conditional, conditional_type='users'
  *       both              -> conditional, conditional_type='both'
  *       just thinking     -> interested
- *  - "I'm out"         -> declined, UNLESS the participant was previously
+ *  - "Can't make it"         -> declined, UNLESS the participant was previously
  *                         confirmed, in which case it's cancelled (with the
  *                         existing cancellation warning) — self-service
  *                         replaces the old "contact the organizer" dead-end.
@@ -35,7 +35,7 @@ export interface RsvpResolution {
 }
 
 /**
- * Resolves the final status to write for "Can't say yet" given which
+ * Resolves the final status to write for "Not sure yet" given which
  * follow-up option the user picked.
  */
 export function resolveCantSayYet(waitingOn: WaitingOnAnswer): RsvpResolution {
@@ -44,7 +44,7 @@ export function resolveCantSayYet(waitingOn: WaitingOnAnswer): RsvpResolution {
 }
 
 /**
- * Resolves the final status to write for "I'm out", given whether the
+ * Resolves the final status to write for "Can't make it", given whether the
  * participant was previously confirmed (self-service cancellation) or not
  * (a plain decline, the common pre-commit case).
  */
@@ -83,7 +83,7 @@ export function answerFromStatus(status: ConfirmationStatus): RsvpAnswer | null 
   }
 }
 
-/** Reverse mapping for the "Can't say yet" follow-up, so reopening the sheet pre-selects the right waiting-on option. */
+/** Reverse mapping for the "Not sure yet" follow-up, so reopening the sheet pre-selects the right waiting-on option. */
 export function waitingOnFromStatus(status: ConfirmationStatus, conditionalType: ConditionalType): WaitingOnAnswer | null {
   if (status === 'interested') return 'just-thinking'
   if (status !== 'conditional') return null

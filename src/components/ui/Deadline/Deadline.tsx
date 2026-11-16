@@ -13,7 +13,7 @@ export interface DeadlineProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'ch
 
   /**
    * What kind of deadline this is, used only to pick the "passed" label
-   * (e.g. "Vote closed" vs "Deadline passed"). Purely cosmetic.
+   * (e.g. "Question closed" vs "Deadline passed"). Purely cosmetic.
    */
   kind?: 'deadline' | 'vote' | 'offer' | 'cancellation'
 
@@ -35,7 +35,7 @@ export interface DeadlineProps extends Omit<HTMLAttributes<HTMLSpanElement>, 'ch
 
 const PASSED_LABEL: Record<NonNullable<DeadlineProps['kind']>, string> = {
   deadline: 'Deadline passed',
-  vote: 'Voting closed',
+  vote: 'Question closed',
   offer: 'Offer expired',
   cancellation: 'Window closed',
 }

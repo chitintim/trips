@@ -5,9 +5,8 @@
  * self-guards regardless (see OrganizerConsole.tsx).
  */
 export { OrganizerConsole } from './components/OrganizerConsole'
-export type { OrganizerConsoleProps } from './components/OrganizerConsole'
-export { BlockersBoard } from './components/BlockersBoard'
-export { OrganizerActionsPanel } from './components/OrganizerActionsPanel'
+export type { OrganizerConsoleProps, ConsoleView } from './components/OrganizerConsole'
+export { WaitingOnBoard } from './components/WaitingOnBoard'
 export { BookingsTracker } from './components/BookingsTracker'
 export { BookingEditorSheet } from './components/BookingEditorSheet'
 export type { BookingEditorSheetProps } from './components/BookingEditorSheet'
@@ -24,7 +23,7 @@ export { useTripActivityLog, renderActivity, describeNotificationKind } from './
 export type { ActivityVerb, ActivityEntity, LogActivityInput, RenderedActivity, NotificationKindInfo } from './lib/activity'
 
 // Pure libs (blockers computation, chase settings contract).
-export { computeBlockers } from './lib/blockers'
+export { computeBlockers, todoToBlocker, lastRemindedByUser, escalatedUserIds } from './lib/blockers'
 export type { Blocker, BlockerKind, PersonBlockers, BlockersBoardData } from './lib/blockers'
 export { parseChaseSettings, DEFAULT_CHASE_SETTINGS } from './lib/chaseSettings'
 export type { ChaseSettings } from './lib/chaseSettings'

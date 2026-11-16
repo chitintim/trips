@@ -1,5 +1,6 @@
 import { HTMLAttributes } from 'react'
 import type { Database } from '../../../types/database.types'
+import { getTripStatusLabel } from '../../../lib/tripStatus'
 
 type TripStatus = Database['public']['Enums']['trip_status']
 
@@ -23,13 +24,14 @@ export interface StageRailProps extends HTMLAttributes<HTMLDivElement> {
 // CONFIG
 // ============================================================================
 
-const STAGES: { status: TripStatus; label: string; shortLabel: string }[] = [
-  { status: 'gathering_interest', label: 'Gather interest', shortLabel: 'Interest' },
-  { status: 'confirming_participants', label: 'Confirm participants', shortLabel: 'Confirm' },
-  { status: 'booking_details', label: 'Decide & book', shortLabel: 'Book' },
-  { status: 'booked_awaiting_departure', label: 'Awaiting departure', shortLabel: 'Departure' },
-  { status: 'trip_ongoing', label: 'Trip ongoing', shortLabel: 'Ongoing' },
-  { status: 'trip_completed', label: 'Completed', shortLabel: 'Done' },
+// Five stage words (UX redesign 2.2). The stored enum still has six values;
+// gathering_interest and confirming_participants are one stage, "Who's coming".
+const STAGES: { statuses: TripStatus[]; status: TripStatus; label: string }[] = [
+  { status: 'gathering_interest', statuses: ['gathering_interest', 'confirming_participants'], label: getTripStatusLabel('gathering_interest') },
+  { status: 'booking_details', statuses: ['booking_details'], label: getTripStatusLabel('booking_details') },
+  { status: 'booked_awaiting_departure', statuses: ['booked_awaiting_departure'], label: getTripStatusLabel('booked_awaiting_departure') },
+  { status: 'trip_ongoing', statuses: ['trip_ongoing'], label: getTripStatusLabel('trip_ongoing') },
+  { status: 'trip_completed', statuses: ['trip_completed'], label: getTripStatusLabel('trip_completed') },
 ]
 
 // ============================================================================
@@ -37,12 +39,12 @@ const STAGES: { status: TripStatus; label: string; shortLabel: string }[] = [
 // ============================================================================
 
 /**
- * Compact progress rail rendering the 6 trip lifecycle stages, highlighting
+ * Compact progress rail rendering the 5 trip stages, highlighting
  * the current stage. Designed to sit in the trip header (see Header /
  * AppShell). Data-agnostic beyond the trip_status enum.
  */
 export function StageRail({ status, compact = false, className = '', ...props }: StageRailProps) {
-  const currentIndex = STAGES.findIndex((s) => s.status === status)
+  const currentIndex = STAGES.findIndex((s) => s.statuses.includes(status))
 
   return (
     <div
@@ -78,7 +80,7 @@ export function StageRail({ status, compact = false, className = '', ...props }:
                     isCurrent ? 'text-accent-700 dark:text-accent-300' : 'text-[var(--text-muted)]'
                   }`}
                 >
-                  {stage.shortLabel}
+                  {stage.label}
                 </span>
               )}
             </div>

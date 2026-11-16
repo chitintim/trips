@@ -10,6 +10,8 @@ import {
   Stepper,
   ConfirmDiscardSheet,
 } from '../../../components/ui'
+import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
 import { useTrip } from '../../../lib/queries/useTrip'
 import { useUpdateConfirmationStatus, ConfirmationStatus, ConditionalType } from '../../../lib/queries/useConfirmations'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
@@ -24,6 +26,7 @@ import {
   type RsvpAnswer,
   type WaitingOnAnswer,
 } from '../lib/rsvpAnswers'
+import { RSVP_PROMPT, RSVP_BUTTON_LABELS } from '../lib/rsvpLabels'
 
 // ============================================================================
 // CONFIG
@@ -38,41 +41,45 @@ import {
  * keep full 7-status fidelity — this is presentation-layer only, same
  * table, same enum.
  */
-const RSVP_ANSWER_OPTIONS: Array<{ value: RsvpAnswer; emoji: string; label: string; description: string }> = [
+function rsvpAnswerOptions(hasCapacityLimit: boolean): Array<{ value: RsvpAnswer; emoji: string; label: string; description: string }> {
+  return [
   {
     value: 'in',
     emoji: '✅',
-    label: "I'm in",
+    label: RSVP_BUTTON_LABELS.in,
     description:
-      "I'm 100% committed and ready to book. I understand others are counting on me. (Once confirmed, you cannot change your status yourself — contact the organizer.)",
+      "The organizer will book for you, and some of it is non-refundable. You're responsible for your share of those costs, even if you drop out later.",
   },
   {
     value: 'cant-say-yet',
     emoji: '🤔',
-    label: "Can't say yet",
-    description: "I need a bit more time — waiting on a date, someone else, or just thinking it over.",
+    label: RSVP_BUTTON_LABELS['cant-say-yet'],
+    description: `No commitment. Nothing is booked for you yet.${hasCapacityLimit ? ' You may lose your place if spots fill.' : ''}`,
   },
   {
     value: 'out',
     emoji: '❌',
-    label: "I'm out",
+    label: RSVP_BUTTON_LABELS.out,
     description: "I can't join this trip. Thanks for the invite!",
   },
-]
+  ]
+}
 
 const WAITING_ON_OPTIONS: Array<{ value: WaitingOnAnswer; label: string; description: string }> = [
   { value: 'date', label: 'A specific date', description: "I'll know by a certain date" },
-  { value: 'someone', label: 'Someone else', description: "I'll confirm once specific people confirm" },
+  { value: 'someone', label: 'Someone else', description: "I'll say I'm in once specific people are in" },
   { value: 'both', label: 'Both', description: 'A date AND specific people' },
-  { value: 'just-thinking', label: 'Just thinking it over', description: "No specific blocker — I'm just not ready to commit" },
+  { value: 'just-thinking', label: 'Just thinking it over', description: "Nothing specific — I just need more time" },
 ]
 
 const COMMITMENT_TERMS = [
-  'Cancellation Liability: if you cannot join after confirming, you will be liable to pay your share of the accommodation cost.',
-  'Insurance: certain cancellations may be covered by travel insurance — ask the organizer for guidance.',
-  'Space Transfer: you may transfer your space to someone else if needed.',
-  'Substitute Finder: the group can (but is not obligated to) help find a substitute at a discounted price if you need to cancel.',
+  'The organizer will book on your behalf. Some bookings are non-refundable.',
+  "You're responsible for your share of those costs, even if you drop out later.",
+  'You may be let off only if the organizer can cancel, or someone takes your place.',
+  'Travel insurance may cover some cancellations — ask the organizer.',
 ]
+
+const BOOKED_COSTS_STAND = 'Costs already booked for you still stand. You stay responsible for your share unless the organizer can cancel or someone takes your place.'
 
 // ============================================================================
 // COMPONENT
@@ -231,10 +238,10 @@ export function StatusModal({
   // confirmation with the same warning copy the recap used to show.
   if (wasConfirmed && !showCancelFlow) {
     return (
-      <Modal isOpen={isOpen} onClose={onClose} size="lg" title="You're confirmed" data-status-modal-readonly>
+      <Modal isOpen={isOpen} onClose={onClose} size="lg" title="You're going" data-status-modal-readonly>
         <div className="space-y-5">
           <p className="text-sm text-[var(--text-secondary)]">
-            You confirmed on{' '}
+            You said you're in on{' '}
             {participant.confirmed_at
               ? new Date(participant.confirmed_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })
               : 'an earlier date'}
@@ -249,11 +256,10 @@ export function StatusModal({
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-4">
             <p className="text-sm font-semibold text-warn-900 mb-2">Need to back out?</p>
             <p className="text-sm text-warn-800 mb-3">
-              You can cancel your spot yourself below — others are counting on you, so please only do this if you're
-              sure. The organizer is notified either way.
+              You can cancel your spot yourself below. The organizer is told either way. {BOOKED_COSTS_STAND}
             </p>
             <Button variant="danger" size="sm" onClick={() => setShowCancelFlow(true)}>
-              I'm out — cancel my spot
+              Can't make it — cancel my spot
             </Button>
           </div>
           <div className="flex justify-end pt-2">
@@ -332,7 +338,7 @@ export function StatusModal({
 
   const handleSubmit = async () => {
     if (status === 'confirmed' && !agreedToTerms) {
-      setValidationError('Please read and agree to the commitment terms before confirming')
+      setValidationError("Please tick the box to confirm you understand before saying you're in")
       return
     }
 
@@ -357,24 +363,24 @@ export function StatusModal({
         showToast({
           type: 'info',
           message: "You're on the waitlist",
-          description: 'The trip was at capacity, so you were automatically added to the waitlist instead of confirmed.',
+          description: 'The trip was at capacity, so you were automatically added to the waitlist instead of going.',
         })
       } else {
-        showToast({ type: 'success', message: 'Status updated' })
+        showToast({ type: 'success', message: 'Answer saved' })
       }
       clearDraft()
       setShowCancelFlow(false)
       onClose()
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not update your status', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not save your answer', description: (err as Error).message })
     }
   }
 
   const stepTitles: Record<Step, string> = {
-    answer: 'Are you in?',
+    answer: RSVP_PROMPT,
     'waiting-on': "What are you waiting on?",
     'condition-detail': 'A few more details',
-    review: 'Review & confirm',
+    review: 'Review your answer',
   }
 
   const stepperSteps =
@@ -409,22 +415,21 @@ export function StatusModal({
 
         {wasConfirmed && step !== 'review' && (
           <div className="bg-warn-50 border-2 border-warn-300 rounded-[var(--radius-md)] p-3 text-sm text-warn-900">
-            You're currently confirmed — continuing will cancel your spot. Others are counting on you, so please only
-            do this if you're sure.
+            You're currently going — continuing will cancel your spot. {BOOKED_COSTS_STAND}
           </div>
         )}
 
         {capacityWillWaitlist && (
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
-            This trip is at capacity ({confirmedCount}/{capacityLimit}). If you confirm, you'll automatically be
-            moved to the waitlist.
+            This trip is at capacity ({confirmedCount}/{capacityLimit}). If you say you're in, you'll automatically be
+            added to the waitlist.
           </div>
         )}
 
         {/* Step: the three big answers */}
         {step === 'answer' && (
           <div className="space-y-2.5">
-            {RSVP_ANSWER_OPTIONS.map((option) => {
+            {rsvpAnswerOptions(!!capacityLimit).map((option) => {
               const isSelected = answer === option.value
               return (
                 <button
@@ -477,7 +482,7 @@ export function StatusModal({
             {(waitingOn === 'date' || waitingOn === 'both') && (
               <div>
                 <label htmlFor="conditional-date" className="block text-sm font-medium text-[var(--text-primary)] mb-2">
-                  I'll confirm by this date
+                  I'll know by this date
                 </label>
                 <input
                   id="conditional-date"
@@ -493,11 +498,11 @@ export function StatusModal({
             {(waitingOn === 'someone' || waitingOn === 'both') && (
               <div>
                 <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">
-                  I'll confirm when these people confirm
+                  I'll say I'm in once these people are in
                 </label>
                 {confirmedParticipants.length > 0 && (
                   <div className="mb-3 p-3 bg-success-50 border border-success-200 rounded-[var(--radius-md)]">
-                    <p className="text-xs font-medium text-success-800 mb-2">Already confirmed:</p>
+                    <p className="text-xs font-medium text-success-800 mb-2">Already going:</p>
                     <div className="flex flex-wrap gap-2">
                       {confirmedParticipants.map((p) => (
                         <Badge key={p.user_id} variant="success" size="sm">
@@ -537,8 +542,8 @@ export function StatusModal({
                         </button>
                         {circular && isSelected && (
                           <p className="mt-1 ml-3 text-xs text-warn-700">
-                            {p.user?.full_name || p.user?.email} is also waiting on you — neither of you will confirm
-                            until one decides independently.
+                            {p.user?.full_name || p.user?.email} is also waiting on you — neither of you will be marked Going
+                            until one of you decides independently.
                           </p>
                         )}
                       </div>
@@ -555,15 +560,23 @@ export function StatusModal({
           <div className="space-y-5">
             {status === 'confirmed' && (
               <div className="bg-warn-50 border-2 border-warn-300 rounded-[var(--radius-md)] p-4">
-                <h3 className="text-sm font-semibold text-warn-900 mb-2">Commitment terms</h3>
+                <h3 className="text-sm font-semibold text-warn-900 mb-2">What "I'm in" means</h3>
+                {trip?.confirmation_message && (
+                  <div className="mb-3 prose prose-sm max-w-none text-warn-900">
+                    <ReactMarkdown remarkPlugins={[remarkBreaks]}>{trip.confirmation_message}</ReactMarkdown>
+                  </div>
+                )}
                 <ul className="space-y-1.5 text-sm text-warn-900">
                   {trip?.estimated_accommodation_cost && (
                     <li>
-                      <strong>Financial commitment:</strong> you agree to pay the committed accommodation cost of{' '}
-                      <strong>
-                        {trip.accommodation_cost_currency} {trip.estimated_accommodation_cost.toFixed(2)}
-                      </strong>
-                      .
+                      <strong>Estimated accommodation cost per person:</strong>{' '}
+                      {trip.accommodation_cost_currency} {trip.estimated_accommodation_cost.toFixed(2)} (an estimate, not a final price).
+                    </li>
+                  )}
+                  {trip?.confirmation_deadline && (
+                    <li>
+                      Reply by{' '}
+                      {new Date(trip.confirmation_deadline).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}.
                     </li>
                   )}
                   {COMMITMENT_TERMS.map((term) => (
@@ -578,7 +591,7 @@ export function StatusModal({
                     className="mt-1 w-5 h-5 accent-warn-600"
                   />
                   <span className="text-sm font-medium text-warn-900">
-                    I have read and agree to these commitment terms.
+                    I understand this and I'm in.
                   </span>
                 </label>
               </div>
@@ -586,17 +599,16 @@ export function StatusModal({
 
             {status === 'cancelled' && (
               <div className="bg-danger-50 border-2 border-danger-200 rounded-[var(--radius-md)] p-4">
-                <h3 className="text-sm font-semibold text-danger-800 mb-1">You're cancelling your confirmed spot</h3>
+                <h3 className="text-sm font-semibold text-danger-800 mb-1">You're cancelling your spot</h3>
                 <p className="text-sm text-danger-800">
-                  Cancellation Liability: you may still be liable to pay your share of the accommodation cost,
-                  depending on the group's arrangement — check with the organizer. This cannot be undone from here.
+                  {BOOKED_COSTS_STAND} This cannot be undone from here.
                 </p>
               </div>
             )}
 
             <div className="bg-[var(--surface-sunken)] rounded-[var(--radius-md)] p-4 space-y-3">
               <div>
-                <p className="text-sm font-medium text-[var(--text-secondary)] mb-1">Your status</p>
+                <p className="text-sm font-medium text-[var(--text-secondary)] mb-1">Your answer</p>
                 <ConfirmationStatusBadge status={status} size="md" />
               </div>
               {status === 'conditional' && conditionalType !== 'none' && (
@@ -650,7 +662,7 @@ export function StatusModal({
               <Button onClick={handleNext}>Next</Button>
             ) : (
               <Button onClick={handleSubmit} isLoading={updateStatus.isPending} variant={status === 'cancelled' ? 'danger' : 'primary'}>
-                {status === 'confirmed' ? 'Confirm my spot' : status === 'cancelled' ? 'Cancel my spot' : 'Update status'}
+                {status === 'confirmed' ? RSVP_BUTTON_LABELS.in : status === 'cancelled' ? 'Cancel my spot' : 'Save answer'}
               </Button>
             )}
           </div>

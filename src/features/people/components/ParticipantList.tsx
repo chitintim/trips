@@ -1,21 +1,11 @@
 import { UserAvatar, Badge, ConfirmationStatusBadge, Deadline, EmptyState } from '../../../components/ui'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
-import type { Enums } from '../../../types/database.types'
 import { getWaitlistQueue } from '../lib/waitlist'
+import { RSVP_CHIP_ORDER, rsvpChipFor, rsvpChipLabel } from '../lib/rsvpLabels'
 
-type ConfirmationStatus = Enums<'confirmation_status'>
 
-const STATUS_GROUP_ORDER: ConfirmationStatus[] = ['confirmed', 'conditional', 'interested', 'pending', 'waitlist', 'declined', 'cancelled']
-
-const STATUS_GROUP_LABEL: Record<ConfirmationStatus, string> = {
-  confirmed: 'Confirmed',
-  conditional: 'Conditional',
-  interested: 'Interested',
-  pending: 'Awaiting response',
-  waitlist: 'Waitlist',
-  declined: "Can't make it",
-  cancelled: 'Cancelled',
-}
+/** Groups follow the RSVP chips (Going / Not sure / No reply yet / Waitlist / Not going), several stored statuses per group. */
+const GROUP_ORDER = RSVP_CHIP_ORDER
 
 interface ParticipantListProps {
   participants: ParticipantWithUser[]
@@ -88,18 +78,18 @@ export function ParticipantList({ participants, currentUserId, onSelect, groupBy
   const waitlistQueue = getWaitlistQueue(participants)
   const positionByUserId = new Map(waitlistQueue.map((e) => [e.participant.user_id, e]))
 
-  const groups = STATUS_GROUP_ORDER.map((status) => ({
-    status,
-    members: participants.filter((p) => (p.confirmation_status || 'pending') === status),
+  const groups = GROUP_ORDER.map((chip) => ({
+    chip,
+    members: participants.filter((p) => rsvpChipFor(p.confirmation_status) === chip),
   })).filter((g) => g.members.length > 0)
 
   return (
     <div className="space-y-6">
       {groups.map((group) => (
-        <div key={group.status}>
+        <div key={group.chip}>
           <div className="flex items-center gap-2 mb-2.5">
             <h3 className="text-sm font-semibold text-[var(--text-secondary)] uppercase tracking-wide">
-              {STATUS_GROUP_LABEL[group.status]}
+              {rsvpChipLabel(group.chip)}
             </h3>
             <Badge variant="neutral" size="sm">
               {group.members.length}
@@ -107,7 +97,7 @@ export function ParticipantList({ participants, currentUserId, onSelect, groupBy
           </div>
           <div className="space-y-2">
             {group.members.map((p) => {
-              const waitlistEntry = group.status === 'waitlist' ? positionByUserId.get(p.user_id) : undefined
+              const waitlistEntry = group.chip === 'waitlist' ? positionByUserId.get(p.user_id) : undefined
               const isSelf = p.user_id === currentUserId
               const rowContent = (
                 <>

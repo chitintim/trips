@@ -91,7 +91,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         )
       }
 
-      const label = this.props.label || 'this section'
+      const label = this.props.label || 'this part'
       return (
         <Card className="max-w-lg mx-auto">
           <Card.Content className="py-10">

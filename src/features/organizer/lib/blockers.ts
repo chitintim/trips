@@ -5,13 +5,25 @@ import type { Settlement } from '../../../lib/queries/useSettlements'
 import type { Booking } from '../../../lib/queries/useBookings'
 import type { Notification } from '../../../lib/queries/useNotifications'
 import type { BlockerType } from '../../../shared/contracts/nudgeDraft'
-import { getDecisionShape } from '../../decisions/lib/decisionShapes'
+import { computeWaitingOn } from '../../../lib/todos/computeTodos'
+import type { SnapshotAction, SnapshotChecklistItem, SnapshotTravelEvent, Todo, TripSnapshot } from '../../../lib/todos/types'
 
 /**
- * Pure computation behind the organizer BLOCKERS BOARD (plan §14): every
- * open loop on the trip, grouped by the person who owes the action.
- * No React, no fetching — callers feed it already-fetched query data so it
- * stays trivially unit-testable.
+ * Thin adapter between the to-dos engine and the organiser console.
+ *
+ * There is no longer any "blocker" rule of its own: who owes what is decided
+ * by `computeWaitingOn` (src/lib/todos), the same engine that fills each
+ * person's own to-dos, so the console and a participant's list cannot
+ * disagree. This file only
+ *   - maps a `Todo` to the `Blocker` shape the nudge composer and older
+ *     consumers expect (`todoToBlocker`),
+ *   - adds the console-only extras the engine does not model: last-reminded
+ *     time, "needs a personal nudge" (auto-chase gave up) and upcoming
+ *     booking cancellation deadlines,
+ *   - keeps `computeBlockers(input)` working for callers that still hand in
+ *     raw query data (Today's BlockersStrip).
+ *
+ * No React, no fetching.
  */
 
 export type BlockerKind =
@@ -24,12 +36,15 @@ export type BlockerKind =
   | 'expiring_waitlist_offer'
   | 'booking_cancellation_deadline'
   | 'escalation'
+  | 'task'
+  | 'travel_details'
+  | 'organiser'
 
 export interface Blocker {
   kind: BlockerKind
   /** User who owes the action. */
   userId: string
-  /** Short chip label, e.g. `Vote: "Saturday dinner"`. */
+  /** Short chip label (the to-do's own title, verbatim). */
   label: string
   /** Longer description for detail rows/sheets. */
   detail?: string
@@ -50,13 +65,20 @@ export interface PersonBlockers {
   avatarUrl: unknown
   avatarData: unknown
   blockers: Blocker[]
+  /** Auto-chase has sent `maxReminders`+ reminders for one thing with no result. */
+  escalated?: boolean
+  /** ISO time of the latest reminder logged for this person, or null. */
+  lastRemindedAt?: string | null
 }
 
 export interface BlockersBoardData {
   people: PersonBlockers[]
   /** Trip-level (not person-actionable) warnings: upcoming cancellation deadlines. */
   bookingDeadlines: Blocker[]
+  /** To-dos owed + booking deadlines (deadlines are not to-dos; see `todoCount`). */
   totalCount: number
+  /** Sum of every person's to-do count: equals what each person sees. */
+  todoCount: number
 }
 
 export interface ComputeBlockersInput {
@@ -74,216 +96,125 @@ export interface ComputeBlockersInput {
   bookingDeadlineWindowMs?: number
   /**
    * Whether the trip tracks RSVP confirmation status (trips.confirmation_enabled).
-   * Suppresses pending_rsvp/due_conditional/expiring_waitlist_offer blockers
-   * when false — confirmation_status carries no meaning for a trip that
-   * doesn't use it. Defaults to true so existing callers/tests are unaffected.
+   * Only used when `trip` is not supplied. Defaults to true.
    */
   confirmationEnabled?: boolean
+  /**
+   * Optional engine inputs the legacy callers do not have. Pass them (or
+   * better, use `useWaitingOn`) to get task / packing / travel to-dos too.
+   */
+  trip?: TripSnapshot['trip']
+  actions?: ReadonlyArray<SnapshotAction>
+  checklists?: ReadonlyArray<SnapshotChecklistItem>
+  travelEvents?: ReadonlyArray<SnapshotTravelEvent>
+  balances?: Readonly<Record<string, number>>
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function displayName(p: ParticipantWithUser): string {
-  return p.user?.full_name || p.user?.email || 'Unknown'
+/** Nudge-draft blocker_type for a to-do (null = no AI draft, hand-written fallback). */
+function nudgeTypeFor(todo: Todo): BlockerType | null {
+  switch (todo.kind) {
+    case 'rsvp':
+    case 'waitlist_offer':
+      return 'pending_rsvp'
+    case 'answer':
+      return 'unvoted_poll'
+    case 'claim':
+      return 'unclaimed_items'
+    case 'pay':
+    case 'confirm_payment':
+      return 'unpaid_settlement'
+    default:
+      return null
+  }
 }
 
-export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData {
-  const {
-    participants,
-    sections,
-    votes,
-    expenses,
-    settlements,
-    bookings,
-    notifications,
-    maxReminders = 3,
-    now = Date.now(),
-    bookingDeadlineWindowMs = 7 * DAY_MS,
-    confirmationEnabled = true,
-  } = input
-
-  const active = participants.filter((p) => p.active !== false)
-  // People who declined or cancelled are out of the trip: they are never
-  // chased to vote, pick, claim or answer, so they don't count as blockers
-  // for those. (Money blockers below deliberately keep using `active`.)
-  const chaseable = active.filter((p) => p.confirmation_status !== 'declined' && p.confirmation_status !== 'cancelled')
-  const byUser = new Map<string, Blocker[]>()
-  const push = (b: Blocker) => {
-    const list = byUser.get(b.userId) ?? []
-    list.push(b)
-    byUser.set(b.userId, list)
+function blockerKindFor(todo: Todo): BlockerKind {
+  switch (todo.kind) {
+    case 'rsvp':
+      return 'pending_rsvp'
+    case 'waitlist_offer':
+      return 'expiring_waitlist_offer'
+    case 'answer':
+      return todo.shape === 'own' ? 'unfilled_order' : 'unvoted_poll'
+    case 'claim':
+      return 'unclaimed_items'
+    case 'pay':
+    case 'confirm_payment':
+      return 'unconfirmed_settlement'
+    case 'task':
+      return 'task'
+    case 'travel':
+      return 'travel_details'
+    default:
+      return 'organiser'
   }
+}
 
-  // ---- Pending RSVPs + arrived conditional_date promises -----------------
-  if (confirmationEnabled) {
-    for (const p of active) {
-      if (p.confirmation_status === 'pending') {
-        push({
-          kind: 'pending_rsvp',
-          userId: p.user_id,
-          label: 'RSVP pending',
-          detail: 'Has not said whether they are joining.',
-          nudgeType: 'pending_rsvp',
-          deadline: null,
-        })
-      } else if (
-        p.confirmation_status === 'conditional' &&
-        p.conditional_date &&
-        new Date(p.conditional_date).getTime() <= now
-      ) {
-        push({
-          kind: 'due_conditional',
-          userId: p.user_id,
-          label: `Promised an answer by ${p.conditional_date}`,
-          detail: `Said they would know by ${p.conditional_date} — that date has arrived.`,
-          nudgeType: 'pending_rsvp',
-          deadline: p.conditional_date,
-        })
-      }
-    }
-  }
+/** True for to-dos the organiser owes themselves (decide / book / set up): never nudged. */
+export function isOrganiserOwn(todo: Pick<Todo, 'group'>): boolean {
+  return todo.group === 'organiser'
+}
 
-  // ---- Unvoted deadline-polls --------------------------------------------
-  const votedOptionsByUser = new Map<string, Set<string>>()
-  for (const v of votes) {
-    const set = votedOptionsByUser.get(v.user_id) ?? new Set<string>()
-    set.add(v.option_id)
-    votedOptionsByUser.set(v.user_id, set)
+/**
+ * Map one engine to-do to the `Blocker` the nudge composer takes. The label
+ * is the to-do's own title, so the console reads exactly as the person's list.
+ */
+export function todoToBlocker(todo: Todo): Blocker {
+  return {
+    kind: blockerKindFor(todo),
+    userId: todo.userId,
+    label: todo.title,
+    detail: todo.subtitle ? `${todo.title}. ${todo.subtitle}` : todo.title,
+    // blocker_entity_id must be a UUID; synthetic ids ('pay:settle', trip id for rsvp) are left out.
+    entityId: todo.kind !== 'rsvp' && todo.kind !== 'waitlist_offer' && UUID_RE.test(todo.entityId) ? todo.entityId : undefined,
+    deadline: todo.due,
+    nudgeType: nudgeTypeFor(todo),
   }
-  for (const section of sections) {
-    if (!section.vote_deadline) continue
-    if (new Date(section.vote_deadline).getTime() <= now) continue
-    if (section.status === 'completed') continue // closed poll: nothing left to vote on
-    const options = section.options ?? []
-    if (options.length === 0) continue
-    const isPersonal = getDecisionShape(section.metadata) === 'personal'
-    for (const p of chaseable) {
-      if (isPersonal) {
-        // Personal-picks sections never receive option_votes — a participant
-        // is done when they have any selections row on the section's options.
-        const hasOrdered = options.some((o) => (o.selections ?? []).some((s) => s.user_id === p.user_id))
-        if (!hasOrdered) {
-          push({
-            kind: 'unfilled_order',
-            userId: p.user_id,
-            label: `Picks needed: "${section.title}"`,
-            detail: `Hasn't filled in their picks for "${section.title}" (answer by ${new Date(section.vote_deadline).toLocaleDateString()}).`,
-            entityId: section.id,
-            deadline: section.vote_deadline,
-            nudgeType: 'unvoted_poll',
-          })
-        }
-        continue
-      }
-      const voted = votedOptionsByUser.get(p.user_id)
-      const hasVoted = !!voted && options.some((o) => voted.has(o.id))
-      if (!hasVoted) {
-        push({
-          kind: 'unvoted_poll',
-          userId: p.user_id,
-          label: `Vote: "${section.title}"`,
-          detail: `Hasn't voted in "${section.title}" (closes ${new Date(section.vote_deadline).toLocaleDateString()}).`,
-          entityId: section.id,
-          deadline: section.vote_deadline,
-          nudgeType: 'unvoted_poll',
-        })
-      }
-    }
-  }
+}
 
-  // ---- Unclaimed itemized expense items, per receipt ----------------------
-  for (const expense of expenses) {
-    if (!expense.ai_parsed || !expense.status) continue
-    if (expense.status === 'allocated' || expense.status === 'confirmed') continue
-    const involved = expense.participant_ids?.length
-      ? expense.participant_ids
-      : chaseable.map((p) => p.user_id)
-    const claimedBy = new Set((expense.claims ?? []).map((c) => c.user_id))
-    for (const userId of involved) {
-      if (claimedBy.has(userId)) continue
-      if (userId === expense.paid_by) continue // the payer isn't chased on their own receipt
-      if (!chaseable.some((p) => p.user_id === userId)) continue
-      push({
-        kind: 'unclaimed_items',
-        userId,
-        label: `Claim items: "${expense.description}"`,
-        detail: `Hasn't claimed anything on "${expense.description}" (${expense.currency} ${expense.amount}).`,
-        entityId: expense.id,
-        nudgeType: 'unclaimed_items',
-      })
-    }
-  }
-
-  // ---- Unconfirmed settlements --------------------------------------------
-  for (const s of settlements) {
-    if (s.status === 'suggested') {
-      push({
-        kind: 'unconfirmed_settlement',
-        userId: s.from_user_id,
-        label: `Pay ${s.currency ?? ''} ${s.amount}`.trim(),
-        detail: `Suggested payment of ${s.currency ?? ''} ${s.amount} not yet marked paid.`,
-        entityId: s.id,
-        nudgeType: 'unpaid_settlement',
-      })
-    } else if (s.status === 'marked_paid') {
-      push({
-        kind: 'unconfirmed_settlement',
-        userId: s.to_user_id,
-        label: `Confirm receipt of ${s.currency ?? ''} ${s.amount}`.trim(),
-        detail: `Payer marked ${s.currency ?? ''} ${s.amount} as paid — awaiting the recipient's confirmation.`,
-        entityId: s.id,
-        nudgeType: 'unpaid_settlement',
-      })
-    }
-  }
-
-  // ---- Expiring waitlist offers (part of the confirmation/RSVP system) ---
-  if (confirmationEnabled) {
-    for (const p of active) {
-      if (!p.waitlist_offer_expires_at) continue
-      const expires = new Date(p.waitlist_offer_expires_at).getTime()
-      if (expires <= now) continue // already lapsed; auto-chase cascades it
-      push({
-        kind: 'expiring_waitlist_offer',
-        userId: p.user_id,
-        label: 'Waitlist offer expiring',
-        detail: `Their claim offer expires ${new Date(p.waitlist_offer_expires_at).toLocaleString()}.`,
-        deadline: p.waitlist_offer_expires_at,
-        nudgeType: 'pending_rsvp',
-      })
-    }
-  }
-
-  // ---- Escalations: 3+ reminders sent for the same open loop --------------
-  // notifications dedupe_key convention (auto-chase): kind:entity:user:seq —
-  // we count sends per (kind,entity,user) and surface >= maxReminders.
-  const reminderCounts = new Map<string, { count: number; kind: string; entityId: string | null; userId: string }>()
+/** Latest reminder time per recipient, from the notifications log. */
+export function lastRemindedByUser(notifications: ReadonlyArray<Pick<Notification, 'user_id' | 'sent_at'>>): Map<string, string> {
+  const out = new Map<string, string>()
   for (const n of notifications) {
-    const groupKey = `${n.kind}:${n.entity_id ?? ''}:${n.user_id}`
-    const existing = reminderCounts.get(groupKey)
-    if (existing) existing.count += 1
-    else reminderCounts.set(groupKey, { count: 1, kind: n.kind, entityId: n.entity_id, userId: n.user_id })
+    if (!n.sent_at) continue
+    const prev = out.get(n.user_id)
+    if (!prev || new Date(n.sent_at).getTime() > new Date(prev).getTime()) out.set(n.user_id, n.sent_at)
   }
-  for (const group of reminderCounts.values()) {
-    if (group.count < maxReminders) continue
-    if (!chaseable.some((p) => p.user_id === group.userId)) continue
-    push({
-      kind: 'escalation',
-      userId: group.userId,
-      label: `Needs a personal nudge (${group.count} reminders sent)`,
-      detail: `Auto-chase sent ${group.count} reminders about "${group.kind.replace(/_/g, ' ')}" with no result — time for a human touch.`,
-      entityId: group.entityId ?? undefined,
-      nudgeType: kindToNudgeType(group.kind),
-    })
-  }
+  return out
+}
 
-  // ---- Upcoming booking cancellation deadlines (trip-level) ----------------
-  const bookingDeadlines: Blocker[] = []
+/**
+ * People for whom auto-chase has sent `maxReminders`+ reminders about the
+ * same thing (kind + entity) with no result: time for a personal nudge.
+ */
+export function escalatedUserIds(notifications: ReadonlyArray<Pick<Notification, 'user_id' | 'kind' | 'entity_id'>>, maxReminders = 3): Set<string> {
+  const counts = new Map<string, { n: number; userId: string }>()
+  for (const n of notifications) {
+    const key = `${n.kind}:${n.entity_id ?? ''}:${n.user_id}`
+    const e = counts.get(key)
+    if (e) e.n += 1
+    else counts.set(key, { n: 1, userId: n.user_id })
+  }
+  const out = new Set<string>()
+  for (const c of counts.values()) if (c.n >= maxReminders) out.add(c.userId)
+  return out
+}
+
+/** Upcoming (within the window) cancellation deadlines of live bookings. Trip-level info, not a to-do. */
+export function upcomingCancellationDeadlines(
+  bookings: ReadonlyArray<Booking>,
+  now: number = Date.now(),
+  windowMs: number = 7 * DAY_MS
+): Blocker[] {
+  const out: Blocker[] = []
   for (const b of bookings) {
     if (b.status === 'cancelled' || !b.cancellation_deadline) continue
     const deadline = new Date(b.cancellation_deadline).getTime()
-    if (deadline <= now || deadline - now > bookingDeadlineWindowMs) continue
-    bookingDeadlines.push({
+    if (deadline <= now || deadline - now > windowMs) continue
+    out.push({
       kind: 'booking_cancellation_deadline',
       userId: b.booked_by,
       label: `Free cancellation on "${b.title}" ends soon`,
@@ -293,27 +224,65 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
       nudgeType: 'expiring_cancellation_window',
     })
   }
-
-  // ---- Assemble, ordered: most blockers first ------------------------------
-  const people: PersonBlockers[] = []
-  for (const p of active) {
-    const blockers = byUser.get(p.user_id)
-    if (!blockers || blockers.length === 0) continue
-    people.push({ userId: p.user_id, name: displayName(p), avatarUrl: p.user?.avatar_url ?? null, avatarData: p.user?.avatar_data ?? null, blockers })
-  }
-  people.sort((a, b) => b.blockers.length - a.blockers.length || a.name.localeCompare(b.name))
-
-  const totalCount = people.reduce((sum, p) => sum + p.blockers.length, 0) + bookingDeadlines.length
-
-  return { people, bookingDeadlines, totalCount }
+  return out
 }
 
-/** Best-effort mapping from a notifications.kind to a nudge blocker_type. */
-function kindToNudgeType(kind: string): BlockerType | null {
-  if (kind.includes('rsvp') || kind.includes('conditional') || kind.includes('waitlist')) return 'pending_rsvp'
-  if (kind.includes('poll') || kind.includes('vote') || kind.includes('order')) return 'unvoted_poll'
-  if (kind.includes('claim') || kind.includes('item')) return 'unclaimed_items'
-  if (kind.includes('settle')) return 'unpaid_settlement'
-  if (kind.includes('cancel')) return 'expiring_cancellation_window'
-  return null
+/** Legacy entry point: raw query data in, engine-backed board out (personal to-dos only). */
+export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData {
+  const {
+    participants,
+    notifications,
+    maxReminders = 3,
+    now = Date.now(),
+    bookingDeadlineWindowMs = 7 * DAY_MS,
+    confirmationEnabled = true,
+  } = input
+
+  const trip: TripSnapshot['trip'] = input.trip ?? {
+    id: '',
+    name: '',
+    status: 'confirming_participants',
+    start_date: '2099-01-01',
+    end_date: '2099-01-02',
+    confirmation_enabled: confirmationEnabled,
+    confirmation_deadline: null,
+    base_currency: 'GBP',
+  }
+  const snapshot: TripSnapshot = {
+    trip,
+    participants,
+    sections: input.sections,
+    votes: input.votes,
+    actions: input.actions ?? [],
+    checklists: input.checklists ?? [],
+    expenses: input.expenses,
+    settlements: input.settlements,
+    balances: input.balances,
+    travelEvents: input.travelEvents ?? [],
+    bookings: input.bookings,
+  }
+  // Personal to-dos only: this adapter feeds "who is holding things up", and
+  // the organiser's own decide/book/setup to-dos are not anyone else's blocker.
+  const waitingOn = computeWaitingOn(snapshot, new Date(now), { includeOrganiser: false })
+
+  const lastReminded = lastRemindedByUser(notifications)
+  const escalated = escalatedUserIds(notifications, maxReminders)
+  const byId = new Map(participants.map((p) => [p.user_id, p]))
+
+  const people: PersonBlockers[] = waitingOn.byPerson.map((wp) => {
+    const p = byId.get(wp.userId)
+    return {
+      userId: wp.userId,
+      name: p?.user?.full_name || p?.user?.email || wp.name,
+      avatarUrl: p?.user?.avatar_url ?? null,
+      avatarData: p?.user?.avatar_data ?? null,
+      blockers: wp.todos.map(todoToBlocker),
+      escalated: escalated.has(wp.userId),
+      lastRemindedAt: lastReminded.get(wp.userId) ?? null,
+    }
+  })
+
+  const bookingDeadlines = upcomingCancellationDeadlines(input.bookings, now, bookingDeadlineWindowMs)
+  const todoCount = waitingOn.totalTodos
+  return { people, bookingDeadlines, todoCount, totalCount: todoCount + bookingDeadlines.length }
 }

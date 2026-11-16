@@ -36,7 +36,7 @@ export function ActivityFeedPanel({ tripId }: ActivityFeedPanelProps) {
       <EmptyState
         icon="🌱"
         title="Nothing yet"
-        description="Trip activity — votes, expenses, bookings, approvals — will show up here as it happens."
+        description="Trip activity — answers, expenses, bookings, approvals — will show up here as it happens."
         compact
       />
     )

@@ -80,10 +80,10 @@ export function SetDatesFromWinnerCard({ trip }: SetDatesFromWinnerCardProps) {
   return (
     <Card variant="flat">
       <Card.Content className="py-3 space-y-2">
-        <h3 className="text-sm font-semibold text-[var(--text-primary)]">🗓️ The date poll has closed</h3>
+        <h3 className="text-sm font-semibold text-[var(--text-primary)]">🗓️ The dates question has closed</h3>
         <p className="text-sm text-[var(--text-secondary)]">
           Winning dates: <span className="font-medium text-[var(--text-primary)]">{formatRange(winner.range.start, winner.range.end)}</span>
-          {winner.votes > 0 ? ` (${winner.votes} ${winner.votes === 1 ? 'vote' : 'votes'})` : ' (no votes cast — earliest candidate)'}
+          {winner.votes > 0 ? ` (${winner.votes} ${winner.votes === 1 ? 'answer' : 'answers'})` : ' (no answers yet — earliest candidate)'}
         </p>
         <Button size="sm" onClick={apply} isLoading={updateTrip.isPending || updateSection.isPending}>
           Set trip dates from winner

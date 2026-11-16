@@ -198,7 +198,7 @@ export function ManageInvitationAccountSheet({ isOpen, onClose, detail }: Manage
                   setPendingConfirm({
                     action: 'update_email',
                     title: "Change this account's email?",
-                    message: `Change the email from ${detail.account_email} to ${emailDraft.trim()}? The account keeps the same id, so trip membership, votes and actions all stay attached — only the address changes. It will need to be reconfirmed afterwards.`,
+                    message: `Change the email from ${detail.account_email} to ${emailDraft.trim()}? The account keeps the same id, so trip membership, answers and to-dos all stay attached — only the address changes. It will need to be reconfirmed afterwards.`,
                     email: emailDraft.trim(),
                     successMessage: 'Email updated',
                   })

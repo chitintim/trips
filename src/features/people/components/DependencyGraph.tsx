@@ -107,7 +107,7 @@ export function DependencyGraph({ participants }: DependencyGraphProps) {
         compact
         icon="🔗"
         title="No dependencies yet"
-        description="When someone sets a conditional status depending on others confirming, the chain shows up here."
+        description="When someone is Not sure and waiting on other people to say they're in, the chain shows up here."
       />
     )
   }
@@ -133,7 +133,7 @@ export function DependencyGraph({ participants }: DependencyGraphProps) {
           <UserAvatar avatarData={keystoneParticipant.user} size="sm" />
           <div className="text-sm">
             <p className="text-accent-900">
-              <strong>{displayName(keystoneParticipant)}</strong> is the keystone — if they confirm,{' '}
+              <strong>{displayName(keystoneParticipant)}</strong> is the keystone — if they say they're in,{' '}
               <strong>{keystone.unlocksCount}</strong> {keystone.unlocksCount === 1 ? 'person' : 'people'} could
               resolve their conditions.
             </p>

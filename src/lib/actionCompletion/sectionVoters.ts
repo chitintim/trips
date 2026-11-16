@@ -14,12 +14,21 @@
  */
 
 /**
- * section_id -> the set of userIds who have cast an `option_votes` row for
- * any option under that section.
+ * section_id -> the set of userIds who have ANSWERED the section: cast an
+ * `option_votes` row, or hold a `selections` row, on any option under it
+ * (and, from Phase 2, passed on it). "Answered" is defined once in
+ * src/lib/answers/answers.ts. Callers feed selection rows through the same
+ * `votes` argument of `buildSectionVoters` (a selection row has the same
+ * `option_id` / `user_id` shape), so own-choice questions auto-tick their
+ * linked to-dos exactly like group votes do.
  */
 export type SectionVoterIds = Map<string, Set<string>>
 
-/** Minimal shapes needed to derive `SectionVoterIds` from already-fetched options + votes. */
+/**
+ * Minimal shapes needed to derive `SectionVoterIds` from already-fetched
+ * options + answers. `VoteForSectionVoters` is satisfied by BOTH
+ * `option_votes` and `selections` rows.
+ */
 export interface OptionForSectionVoters {
   id: string
   section_id: string

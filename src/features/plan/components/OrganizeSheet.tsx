@@ -14,7 +14,7 @@ export interface OrganizeSheetProps {
 }
 
 const INSTRUCTION_CHIPS = [
-  'Convert rental lists into order forms',
+  'Turn rental lists into own-choice questions',
   'Extract dates & prices from descriptions',
   'Group restaurants by evening',
 ]
@@ -112,7 +112,7 @@ export function OrganizeSheet({ isOpen, onClose, trip }: OrganizeSheetProps) {
                 value={instructions}
                 onChange={(e) => setInstructions(e.target.value)}
                 rows={3}
-                placeholder="e.g. Convert the ski rental options into one order form"
+                placeholder="e.g. Turn the ski rental options into one own-choice question"
               />
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {INSTRUCTION_CHIPS.map((phrase) => (

@@ -3,8 +3,7 @@ import { Button, Card, EmptyState, SegmentedControl, Skeleton } from '../../../c
 import { ErrorState } from '../../../components/ui/illustrations'
 import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
-import { BlockersBoard } from './BlockersBoard'
-import { OrganizerActionsPanel } from './OrganizerActionsPanel'
+import { WaitingOnBoard } from './WaitingOnBoard'
 import { BookingsTracker } from './BookingsTracker'
 import { ActivityFeedPanel } from './ActivityFeedPanel'
 import { EmailsPanel } from './EmailsPanel'
@@ -13,26 +12,28 @@ import { parseChaseSettings } from '../lib/chaseSettings'
 
 export interface OrganizerConsoleProps {
   tripId: string
+  /** Tab to open on. Defaults to 'waiting' (Waiting on), so a plain `?tab=organizer` lands there. */
+  initialView?: ConsoleView
 }
 
-type ConsoleView = 'blockers' | 'actions' | 'bookings' | 'activity' | 'emails'
+export type ConsoleView = 'waiting' | 'bookings' | 'activity' | 'emails'
 
 /**
- * Organizer console (plan §14): blockers board, bookings tracker and the
+ * Organizer console (plan §14): Waiting on, bookings tracker and the
  * activity feed behind one organizer-only tab, plus the per-trip
  * auto-chase settings sheet. The tab config exported from the feature
  * barrel is marked organizerOnly — the coordinator hides it for
  * participants — but the component also self-guards so a deep link can't
  * expose it.
  */
-export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
+export function OrganizerConsole({ tripId, initialView = 'waiting' }: OrganizerConsoleProps) {
   const { data: trip, isLoading: tripLoading, isError: tripError, refetch: refetchTrip } = useTrip(tripId)
   const {
     isLoading: participantsLoading,
     isError: participantsError,
     refetch: refetchParticipants,
   } = useParticipants(tripId)
-  const [view, setView] = useState<ConsoleView>('blockers')
+  const [view, setView] = useState<ConsoleView>(initialView)
   const [chaseOpen, setChaseOpen] = useState(false)
   const { canManageTrip, isLoading: permissionsLoading } = useTripPermissions(trip)
 
@@ -90,8 +91,7 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
             value={view}
             onChange={(v) => setView(v as ConsoleView)}
             options={[
-              { value: 'blockers', label: 'Blockers', icon: <span>🚧</span> },
-              { value: 'actions', label: 'Actions', icon: <span>✅</span> },
+              { value: 'waiting', label: 'Waiting on', icon: <span>⏳</span> },
               { value: 'bookings', label: 'Bookings', icon: <span>🧾</span> },
               { value: 'activity', label: 'Activity', icon: <span>📰</span> },
               { value: 'emails', label: 'Emails', icon: <span>📧</span> },
@@ -106,8 +106,7 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
         </Button>
       </div>
 
-      {view === 'blockers' && <BlockersBoard trip={trip} />}
-      {view === 'actions' && <OrganizerActionsPanel tripId={tripId} />}
+      {view === 'waiting' && <WaitingOnBoard trip={trip} />}
       {view === 'bookings' && <BookingsTracker trip={trip} />}
       {view === 'activity' && (
         <Card variant="flat">

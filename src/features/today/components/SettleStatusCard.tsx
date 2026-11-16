@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { Button, StatCard } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
@@ -11,16 +10,14 @@ import type { Trip } from '../../../types'
 export interface SettleStatusCardProps {
   trip: Trip
   onNavigate: (spaceId: string) => void
-  /** Compact chip mode for the ongoing layout ("you owe / are owed" chip). */
-  compact?: boolean
 }
 
 /**
- * Settle status (completed Today layout, and the compact running-balance
- * chip during the trip): the user's net position using the SAME balance
- * math as the Money tabs, one tap to Settle up.
+ * Running-balance chip during the trip: the user's net position using the
+ * SAME balance math as the Money tabs. After the trip, paying is a to-do in
+ * Your to-dos, so this card is only used while the trip is on.
  */
-export function SettleStatusCard({ trip, onNavigate, compact = false }: SettleStatusCardProps) {
+export function SettleStatusCard({ trip, onNavigate }: SettleStatusCardProps) {
   const { user } = useAuth()
   const { data: participants = [] } = useParticipants(trip.id)
   const { data: expensesData } = useExpenses(trip.id)
@@ -46,7 +43,7 @@ export function SettleStatusCard({ trip, onNavigate, compact = false }: SettleSt
   }, [user, participants, expensesData, settlements, trip.base_currency, carryovers])
 
   if (!summary) return null
-  if (compact && summary.isBalanced && (expensesData?.expenses ?? []).length === 0) return null
+  if (summary.isBalanced && (expensesData?.expenses ?? []).length === 0) return null
 
   const statusLine = summary.isBalanced
     ? "You're all square 🎉"
@@ -54,30 +51,15 @@ export function SettleStatusCard({ trip, onNavigate, compact = false }: SettleSt
       ? `You owe ${formatMoney(summary.youOwe, trip.base_currency)}`
       : `You're owed ${formatMoney(summary.owedToYou, trip.base_currency)}`
 
-  if (compact) {
-    return (
-      <button
-        onClick={() => onNavigate('money')}
-        className="w-full text-left rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-4 py-2.5 flex items-center justify-between gap-3 hover:border-[var(--border-default)] transition-colors"
-      >
-        <span className="text-sm text-[var(--text-primary)]">
-          💸 <span className="font-medium">{statusLine}</span>
-        </span>
-        <span className="text-sm text-[var(--text-muted)]">Money →</span>
-      </button>
-    )
-  }
-
   return (
-    <div className="space-y-2">
-      <StatCard
-        label="Settling up"
-        value={statusLine}
-        delta={summary.isBalanced ? undefined : 'Suggested payments are ready in Settle up.'}
-      />
-      <Button size="sm" onClick={() => onNavigate('money')}>
-        {summary.isBalanced ? 'See the money summary' : 'Settle up'}
-      </Button>
-    </div>
+    <button
+      onClick={() => onNavigate('money')}
+      className="w-full text-left rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-4 py-2.5 flex items-center justify-between gap-3 hover:border-[var(--border-default)] transition-colors"
+    >
+      <span className="text-sm text-[var(--text-primary)]">
+        💸 <span className="font-medium">{statusLine}</span>
+      </span>
+      <span className="text-sm text-[var(--text-muted)]">Money →</span>
+    </button>
   )
 }

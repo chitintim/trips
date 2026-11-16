@@ -1,189 +1,115 @@
 import { describe, it, expect } from 'vitest'
 import {
-  computeVoteQuestionState,
-  computePersonalQuestionState,
-  computeQuestionState,
+  computeQuestionStates,
   computeGroupProgress,
   estimateAnswerMinutes,
   formatEntryCardLabel,
+  type QuestionStateInput,
 } from './responseState'
-import type { OptionVote, OptionWithSelections } from '../../../lib/queries/usePlanning'
 
-function vote(overrides: Partial<OptionVote> & { option_id: string; user_id: string }): OptionVote {
-  return { id: `${overrides.option_id}-${overrides.user_id}`, rank: null, created_at: new Date().toISOString(), ...overrides }
+const trip = {
+  status: 'booking_details' as const,
+  start_date: '2099-08-01',
+  end_date: '2099-08-10',
+  confirmation_enabled: true as boolean | null,
 }
 
-function option(overrides: Partial<OptionWithSelections> & { id: string; title: string }): OptionWithSelections {
-  return {
-    section_id: 's1',
-    created_at: '',
-    updated_at: '',
-    currency: 'GBP',
-    description: null,
-    locked: false,
-    metadata: null,
-    order_index: 0,
-    place_id: null,
-    price: null,
-    price_type: 'per_person_fixed',
-    status: 'available',
-    selections: [],
-    ...overrides,
-  }
+const people = [
+  { user_id: 'me', active: true, confirmation_status: 'confirmed' },
+  { user_id: 'bob', active: true, confirmation_status: 'confirmed' },
+  { user_id: 'dec', active: true, confirmation_status: 'declined' },
+  { user_id: 'can', active: true, confirmation_status: 'cancelled' },
+  { user_id: 'gone', active: false, confirmation_status: 'confirmed' },
+]
+
+const group = {
+  id: 'g',
+  status: 'open',
+  metadata: null,
+  options: [
+    { id: 'g1', status: 'available', selections: [] },
+    { id: 'g2', status: 'available', selections: [] },
+  ],
 }
 
-describe('computeVoteQuestionState', () => {
-  const section = { id: 's1', metadata: null, options: [{ id: 'o1' }, { id: 'o2' }] }
+function run(overrides: Partial<QuestionStateInput> = {}) {
+  return computeQuestionStates({ sections: [group], votes: [], userId: 'me', trip, participants: people, ...overrides })
+}
 
-  it('needs_you when the viewer has not voted', () => {
-    const votes = [vote({ option_id: 'o1', user_id: 'someone-else' })]
-    const state = computeVoteQuestionState(section, votes, 5, 'me')
-    expect(state.state).toBe('needs_you')
-    expect(state.label).toBe('Needs you')
-    expect(state.respondedCount).toBe(1)
+describe('computeQuestionStates', () => {
+  it('shows "Needs your answer" until the viewer answers', () => {
+    const s = run().get('g')!
+    expect(s.state).toBe('needs_answer')
+    expect(s.label).toBe('Needs your answer')
+    expect(s.shape).toBe('group')
   })
 
-  it('done when the viewer has voted on any option in the section', () => {
-    const votes = [vote({ option_id: 'o2', user_id: 'me' })]
-    const state = computeVoteQuestionState(section, votes, 5, 'me')
-    expect(state.state).toBe('done')
-    expect(state.label).toBe("You're done ✓")
+  it('a vote shows "Answered ✓"', () => {
+    const s = run({ votes: [{ option_id: 'g1', user_id: 'me' }] }).get('g')!
+    expect(s.label).toBe('Answered ✓')
   })
 
-  it('needs_you when there is no current user', () => {
-    const state = computeVoteQuestionState(section, [], 5, null)
-    expect(state.state).toBe('needs_you')
+  it('a selection-only answer on a group-choice question shows "Answered ✓" (grid path)', () => {
+    const withSelection = { ...group, options: [{ id: 'g1', status: 'available', selections: [{ user_id: 'me' }] }, group.options[1]] }
+    const s = run({ sections: [withSelection] }).get('g')!
+    expect(s.state).toBe('answered')
+    expect(s.label).toBe('Answered ✓')
+    expect(s.answered).toBe(1)
   })
 
-  it('only counts votes for this section\'s own options', () => {
-    const votes = [vote({ option_id: 'other-section-option', user_id: 'me' })]
-    const state = computeVoteQuestionState(section, votes, 5, 'me')
-    expect(state.state).toBe('needs_you')
-    expect(state.respondedCount).toBe(0)
-  })
-})
-
-describe('computePersonalQuestionState', () => {
-  it('needs_you (fill in your order) when the viewer has no selections', () => {
-    const section = { id: 's1', metadata: { decision_shape: 'personal' as const }, options: [option({ id: 'o1', title: 'Skis', metadata: { pricing: { flat: 40 } } })] }
-    const state = computePersonalQuestionState(section, 5, 'me', 'GBP')
-    expect(state.state).toBe('needs_you')
-    expect(state.label).toBe('Fill in your order')
+  it('own-choice selections show "Answered ✓"', () => {
+    const own = { id: 'o', status: 'open', metadata: { decision_shape: 'personal' }, options: [{ id: 'o1', status: 'available', selections: [{ user_id: 'me' }] }] }
+    const s = run({ sections: [own] }).get('o')!
+    expect(s.shape).toBe('own')
+    expect(s.label).toBe('Answered ✓')
   })
 
-  it('done with the live order total when the viewer has selections', () => {
-    const section = {
-      id: 's1',
-      metadata: { decision_shape: 'personal' as const },
-      options: [
-        option({
-          id: 'o1',
-          title: 'Skis',
-          currency: 'GBP',
-          metadata: { pricing: { per_day: 10 } },
-          selections: [{ id: 'sel-1', option_id: 'o1', user_id: 'me', selected_at: '', metadata: { start_date: '2026-08-01', end_date: '2026-08-05' } }] as never,
-        }),
+  it('a finished trip never says "Needs your answer"', () => {
+    const finished = { ...trip, status: 'trip_completed' as const, start_date: '2020-01-01', end_date: '2020-01-05' }
+    const s = run({ trip: finished }).get('g')!
+    expect(s.state).toBe('closed_no_decision')
+    expect(s.label).toBe('Closed — no decision')
+    expect(s.label).not.toBe('Needs your answer')
+  })
+
+  it('a trip whose dates have passed counts as finished even if the stored status lags', () => {
+    const lagging = { ...trip, start_date: '2020-01-01', end_date: '2020-01-05' }
+    expect(run({ trip: lagging }).get('g')!.state).toBe('closed_no_decision')
+  })
+
+  it('decided questions say "Decided"', () => {
+    const s = run({ sections: [{ ...group, status: 'completed' }] }).get('g')!
+    expect(s.label).toBe('Decided')
+  })
+
+  it('count denominator excludes declined, cancelled and removed people', () => {
+    const s = run({
+      votes: [
+        { option_id: 'g1', user_id: 'bob' },
+        { option_id: 'g1', user_id: 'dec' },
+        { option_id: 'g1', user_id: 'gone' },
       ],
-    }
-    const state = computePersonalQuestionState(section, 5, 'me', 'GBP')
-    expect(state.state).toBe('done')
-    expect(state.label).toBe('Your order: £50 ✓')
+    }).get('g')!
+    expect(s.total).toBe(2)
+    expect(s.answered).toBe(1)
+    expect(s.countLabel).toBe('1 of 2 answered')
   })
 
-  it('done (own-state fix) when the viewer has a bare legacy selection with no metadata and the option has no catalog pricing at all', () => {
-    // Models a pre-v3 trip stamped decision_shape:'personal' by the
-    // 20260707160000_legacy_sections_to_personal migration: `selections`
-    // rows there carry no {start_date,end_date,variant,quantity} metadata
-    // and options carry no metadata.pricing, since neither concept existed
-    // in the legacy app. The viewer still committed a pick and must read
-    // as done, not "Fill in your order".
-    const section = {
-      id: 's1',
-      metadata: { decision_shape: 'personal' as const, legacy_migrated: true },
-      options: [
-        option({
-          id: 'o1',
-          title: 'Le Refuge (restaurant)',
-          metadata: null,
-          selections: [{ id: 'sel-1', option_id: 'o1', user_id: 'me', selected_at: '', metadata: null }] as never,
-        }),
-      ],
-    }
-    const state = computePersonalQuestionState(section, 5, 'me', 'GBP')
-    expect(state.state).toBe('done')
-    expect(state.label).toBe("You're done ✓")
+  it('shows no chip when the viewer has declined', () => {
+    const s = run({ userId: 'dec' }).get('g')!
+    expect(s.state).toBe('not_applicable')
+    expect(s.label).toBeNull()
   })
 
-  it('counts consistent: respondedCount matches distinct pickers across a legacy multi-select section with no pricing anywhere (e.g. Meribel\'s "Ski Equipment Rental")', () => {
-    const section = {
-      id: 'ski',
-      metadata: { decision_shape: 'personal' as const, legacy_migrated: true },
-      options: [
-        option({
-          id: 'ski-adult',
-          title: 'Adult skis',
-          metadata: null,
-          selections: [
-            { id: 's1', option_id: 'ski-adult', user_id: 'alex', selected_at: '', metadata: null },
-            { id: 's2', option_id: 'ski-adult', user_id: 'sarah', selected_at: '', metadata: null },
-          ] as never,
-        }),
-        option({
-          id: 'ski-own',
-          title: 'I have my own skis',
-          metadata: null,
-          selections: [{ id: 's3', option_id: 'ski-own', user_id: 'pat', selected_at: '', metadata: null }] as never,
-        }),
-      ],
-    }
-    const state = computePersonalQuestionState(section, 10, 'alex', 'GBP')
-    expect(state.respondedCount).toBe(3)
-    expect(state.state).toBe('done')
-  })
-
-  it('counts respondedCount across all participants, not just the viewer', () => {
-    const section = {
-      id: 's1',
-      metadata: { decision_shape: 'personal' as const },
-      options: [
-        option({
-          id: 'o1',
-          title: 'Skis',
-          metadata: { pricing: { flat: 40 } },
-          selections: [
-            { id: 'sel-1', option_id: 'o1', user_id: 'alice', selected_at: '', metadata: null },
-            { id: 'sel-2', option_id: 'o1', user_id: 'bob', selected_at: '', metadata: null },
-          ] as never,
-        }),
-      ],
-    }
-    const state = computePersonalQuestionState(section, 5, 'me', 'GBP')
-    expect(state.respondedCount).toBe(2)
-    expect(state.state).toBe('needs_you') // viewer ("me") has no selection of their own
-  })
-})
-
-describe('computeQuestionState dispatch', () => {
-  it('dispatches to vote logic by default', () => {
-    const section = { id: 's1', metadata: null, options: [{ id: 'o1' } as OptionWithSelections] }
-    const state = computeQuestionState(section, [], 5, 'me', 'GBP')
-    expect(state.shape).toBe('vote')
-  })
-
-  it('dispatches to personal logic when decision_shape is personal', () => {
-    const section = { id: 's1', metadata: { decision_shape: 'personal' as const }, options: [] }
-    const state = computeQuestionState(section, [], 5, 'me', 'GBP')
-    expect(state.shape).toBe('personal')
+  it('shows no chip for a question with no live options', () => {
+    const s = run({ sections: [{ ...group, options: [{ id: 'x', status: 'cancelled', selections: [] }] }] }).get('g')!
+    expect(s.label).toBeNull()
   })
 })
 
 describe('computeGroupProgress', () => {
-  it('counts done vs total', () => {
-    const states = [
-      { sectionId: 'a', shape: 'vote' as const, state: 'done' as const, label: '', respondedCount: 1, totalParticipants: 5 },
-      { sectionId: 'b', shape: 'vote' as const, state: 'needs_you' as const, label: '', respondedCount: 0, totalParticipants: 5 },
-    ]
-    expect(computeGroupProgress(states)).toEqual({ answered: 1, total: 2, label: '1 of 2 answered' })
+  it('counts answered vs total', () => {
+    expect(computeGroupProgress([{ state: 'answered' }, { state: 'needs_answer' }])).toEqual({ answered: 1, total: 2, label: '1 of 2 answered' })
   })
 
   it('handles an empty list', () => {
@@ -197,23 +123,20 @@ describe('estimateAnswerMinutes', () => {
   })
 
   it('rounds 30s-per-question to the nearest minute, minimum 1', () => {
-    expect(estimateAnswerMinutes(1)).toBe(1) // 30s -> rounds up to 1
-    expect(estimateAnswerMinutes(2)).toBe(1) // 60s -> 1 min
-    expect(estimateAnswerMinutes(3)).toBe(2) // 90s -> rounds to 2
-    expect(estimateAnswerMinutes(4)).toBe(2) // 120s -> 2 min
+    expect(estimateAnswerMinutes(1)).toBe(1)
+    expect(estimateAnswerMinutes(2)).toBe(1)
+    expect(estimateAnswerMinutes(3)).toBe(2)
+    expect(estimateAnswerMinutes(4)).toBe(2)
   })
 })
 
 describe('formatEntryCardLabel', () => {
   it('shows an all-caught-up message when nothing is open', () => {
-    expect(formatEntryCardLabel(0)).toBe("You're all caught up")
+    expect(formatEntryCardLabel(0)).toBe("You're all set ✓")
   })
 
-  it('pluralises correctly for one open question', () => {
-    expect(formatEntryCardLabel(1)).toBe('1 thing needs you · ~1 min')
-  })
-
-  it('pluralises correctly for multiple open questions', () => {
-    expect(formatEntryCardLabel(3)).toBe('3 things need you · ~2 min')
+  it('pluralises correctly', () => {
+    expect(formatEntryCardLabel(1)).toBe('1 question needs your answer · ~1 min')
+    expect(formatEntryCardLabel(3)).toBe('3 questions need your answer · ~2 min')
   })
 })

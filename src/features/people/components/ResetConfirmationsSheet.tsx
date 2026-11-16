@@ -28,7 +28,7 @@ export function ResetConfirmationsSheet({ isOpen, onClose, tripId }: ResetConfir
   const handleReset = async () => {
     try {
       const result = await reset.mutateAsync({ includeDeclined })
-      showToast({ type: 'success', message: `${describeResetCount(result.cleared)} cleared`, description: 'Everyone affected is back to pending.' })
+      showToast({ type: 'success', message: `${describeResetCount(result.cleared)} cleared`, description: 'Everyone affected is back to No reply yet.' })
       setIncludeDeclined(false)
       onClose()
     } catch (err) {
@@ -40,8 +40,8 @@ export function ResetConfirmationsSheet({ isOpen, onClose, tripId }: ResetConfir
     <Modal isOpen={isOpen} onClose={onClose} title="Reset confirmations?" size="sm">
       <div className="space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">
-          This will clear <strong>{describeResetCount(count)}</strong> (confirmed, interested, conditional and waitlisted
-          people) and put them back to pending, so a new round starts clean. Their notes are removed. This can't be
+          This will clear <strong>{describeResetCount(count)}</strong> (people who are Going, Not sure or on the Waitlist)
+          and put them back to No reply yet, so you can collect firm commitments again — for example if a booking fell through. Their notes are removed. This can't be
           undone. The reset itself sends no email; normal reminders resume, so people may get a reminder if the
           confirmation deadline is close.
         </p>
@@ -55,7 +55,7 @@ export function ResetConfirmationsSheet({ isOpen, onClose, tripId }: ResetConfir
               onChange={(e) => setIncludeDeclined(e.target.checked)}
             />
             <span>
-              Also reset the {declined} {declined === 1 ? 'person' : 'people'} who declined
+              Also reset the {declined} {declined === 1 ? 'person' : 'people'} who said they're not going
             </span>
           </label>
         )}

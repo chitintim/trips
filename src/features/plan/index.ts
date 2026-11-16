@@ -14,7 +14,7 @@ import type { ComponentType } from 'react'
 import { PlanTab, type PlanTabProps } from './components/PlanTab'
 
 export { PlanTab } from './components/PlanTab'
-export type { PlanTabProps } from './components/PlanTab'
+export type { PlanTabProps, PlanFocus } from './components/PlanTab'
 
 export { PlanBoard } from './components/PlanBoard'
 export type { PlanBoardProps } from './components/PlanBoard'
@@ -38,14 +38,12 @@ export { ConsolidatedOrdersSheet } from './components/ConsolidatedOrdersSheet'
 export type { ConsolidatedOrdersSheetProps } from './components/ConsolidatedOrdersSheet'
 
 export {
-  computeVoteQuestionState,
-  computePersonalQuestionState,
-  computeQuestionState,
+  computeQuestionStates,
   computeGroupProgress,
   estimateAnswerMinutes,
   formatEntryCardLabel,
 } from './lib/responseState'
-export type { ResponseState, QuestionState, GroupProgress } from './lib/responseState'
+export type { ResponseState, QuestionState, QuestionStateInput, GroupProgress } from './lib/responseState'
 
 export { PlanItemCard } from './components/PlanItemCard'
 export type { PlanItemCardProps } from './components/PlanItemCard'

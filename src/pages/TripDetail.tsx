@@ -3,26 +3,41 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { useTripPermissions } from '../hooks/useTripPermissions'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
-import { Button, Card, Spinner, EmptyState, Skeleton, Modal } from '../components/ui'
+import { Button, Card, Spinner, EmptyState, Skeleton, Modal, useToast } from '../components/ui'
 import { AddParticipantModal } from '../components'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { AppShell, StageRail, NeedsAttentionStrip } from '../components/layout'
+import { AppShell, StageRail, TodoPill } from '../components/layout'
 import type { AppShellTabItem } from '../components/layout'
 import { getTripAccentStyle } from '../components/layout/tripAccent'
-import { useTrip, useParticipants } from '../lib/queries/useTrip'
+import { useTrip, useParticipants, type ParticipantWithUser } from '../lib/queries/useTrip'
 import { CreateTripWizard } from '../features/dashboard'
 import { useTripRealtime } from '../lib/queries/useTripRealtime'
-import { useNeedsAttention } from '../lib/queries/useNeedsAttention'
+import { useTodos } from '../lib/queries/useTodos'
+import { useSections, useVotes } from '../lib/queries/usePlanning'
+import { useTimeline } from '../lib/queries/useTimeline'
+import { answerTodoList } from '../lib/todos/computeTodos'
+import { isTripFinished } from '../lib/answers/answers'
 import { useExpenses } from '../lib/queries/useExpenses'
+import { useSettlements } from '../lib/queries/useSettlements'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queries/queryKeys'
-import { getTripStatusLabel } from '../lib/tripStatus'
+import { getTripStatusLabel, isConfirmationEnabled } from '../lib/tripStatus'
 import { effectiveTripStage } from '../lib/tripStage'
 import { daysUntil } from '../lib/dates'
-import { resolveOpenParam } from './tripDeepLinks'
+import {
+  planDeepLink,
+  resolveOpenParam,
+  stripDeepLinkParams,
+  type DeepLinkContext,
+  type DeepLinkPlan,
+  type OpenTarget,
+  type SpaceId,
+} from './tripDeepLinks'
 
 import { todayTabConfig } from '../features/today'
-import { planTabConfig, AddToPlanSheet } from '../features/plan'
+import { planTabConfig, AddToPlanSheet, AnswerFlow } from '../features/plan'
+import type { PlanFocus } from '../features/plan'
+import { inScopeHeadcount } from '../features/people/lib/inScopePeople'
 import { peopleTabConfig, StatusModal, TravelDetailsSheet } from '../features/people'
 import { OPEN_QUICK_CAPTURE_EVENT } from '../features/timeline'
 import { OrganizerConsole } from '../features/organizer'
@@ -30,6 +45,7 @@ import { ActionsSheet } from '../features/actions'
 import { retroConfig } from '../features/retrospective'
 import { chatEntryConfig, LazyChatSheet } from '../features/chat'
 import { MoneySpace, QuickCaptureSheet } from '../features/expenses'
+import { MarkPaidSheet } from '../features/expenses/settle-up/MarkPaidSheet'
 
 /**
  * v2.1 navigation (UX_REDESIGN.md): four spaces only — Today · Plan ·
@@ -38,8 +54,6 @@ import { MoneySpace, QuickCaptureSheet } from '../features/expenses'
  * adds Console (organizers). Console, Recap and Chat are launched surfaces
  * (sheets), not tabs.
  */
-type SpaceId = 'today' | 'plan' | 'money' | 'people'
-
 const SPACE_IDS: SpaceId[] = ['today', 'plan', 'money', 'people']
 
 const SPACE_META: Record<SpaceId, { label: string; icon: string }> = {
@@ -70,6 +84,11 @@ const LEGACY_TAB_TO_SPACE: Record<string, SpaceId> = {
   checklist: 'today',
 }
 
+/** DOM id Today puts on its "Your to-dos" card (read by the todos deep link and the Today button). */
+const YOUR_TODOS_ANCHOR_ID = 'your-todos'
+
+const DEEP_LINK_UNKNOWN_TOAST = "That link didn't open anything."
+
 export function TripDetail() {
   const { tripId } = useParams<{ tripId: string }>()
   const navigate = useNavigate()
@@ -81,6 +100,8 @@ export function TripDetail() {
   useDocumentTitle(trip?.name)
   const { data: participants = [], isLoading: participantsLoading } = useParticipants(tripId)
   const { data: expensesData } = useExpenses(tripId)
+  // Same cache the to-dos snapshot reads, so a just-created settlement is found.
+  const { data: settlementsData } = useSettlements(tripId)
   const loading = tripLoading || participantsLoading
 
   // One realtime subscription per trip — mounted exactly once, here.
@@ -97,9 +118,26 @@ export function TripDetail() {
     screen: null,
     nonce: 0,
   })
-  const needsAttentionItems = useNeedsAttention(tripId, (spaceId) => {
-    setActiveSpace(LEGACY_TAB_TO_SPACE[spaceId] ?? 'today')
-  })
+  // One to-do engine for the whole screen: the header pill, the FAB and the
+  // ?open= router all read this, so they can never disagree with Today.
+  const { todos, count: todoCount, hasOverdue: todosOverdue, isLoading: todosLoading, snapshot } = useTodos(tripId)
+  const { showToast } = useToast()
+  const { data: sectionsData } = useSections(tripId)
+  const { data: votesData } = useVotes(tripId)
+  const { data: timelineData } = useTimeline(tripId)
+  // ?open= target parsed from the URL, waiting for the trip's data to load
+  // before it is routed (a stale-id check against half-loaded data would
+  // wrongly fail soft).
+  const [pendingOpen, setPendingOpen] = useState<OpenTarget | null>(null)
+  const [answerSectionIds, setAnswerSectionIds] = useState<string[] | null>(null)
+  const [markPaidSettlementId, setMarkPaidSettlementId] = useState<string | null>(null)
+  const [todosScrollNonce, setTodosScrollNonce] = useState(0)
+  // Hand-offs for deep links that target something a space owns: the Plan
+  // opens an item / highlights a question, Money scrolls to a payment, the
+  // To-dos sheet flashes a row. `nonce` re-fires the same link twice in a row.
+  const [planFocus, setPlanFocus] = useState<PlanFocus | null>(null)
+  const [moneyConfirm, setMoneyConfirm] = useState<{ id: string | null; nonce: number }>({ id: null, nonce: 0 })
+  const [actionsHighlightId, setActionsHighlightId] = useState<string | undefined>(undefined)
 
   const myParticipant = participants.find((p) => p.user_id === user?.id) || null
   const { canManageTrip: isOrganizer } = useTripPermissions(trip)
@@ -149,17 +187,132 @@ export function TripDetail() {
       }
     }
 
-    const openTarget = resolveOpenParam(openParam)
-    if (openTarget?.kind === 'travel-details') setTravelDetailsOpen(true)
-    else if (openTarget?.kind === 'actions') {
-      setActionsInitialSegment(openTarget.segment)
-      setActionsOpen(true)
+    if (openParam) {
+      const target = resolveOpenParam(openParam)
+      if (target) setPendingOpen(target)
+      else showToast({ type: 'info', message: DEEP_LINK_UNKNOWN_TOAST })
     }
 
-    if (tabParam) searchParams.delete('tab')
-    if (openParam) searchParams.delete('open')
-    setSearchParams(searchParams, { replace: true })
-  }, [searchParams, setSearchParams])
+    // One-shot: drop the params so a refresh (or back) doesn't reopen the sheet.
+    const rest = stripDeepLinkParams(searchParams.toString())
+    setSearchParams(rest ? new URLSearchParams(rest) : new URLSearchParams(), { replace: true })
+  }, [searchParams, setSearchParams, showToast])
+
+  // -------------------------------------------------------------------------
+  // ?open= routing. The pure table lives in tripDeepLinks.ts (planDeepLink);
+  // here we only build its read-only view of the data and apply the result to
+  // the sheet state this component already owns.
+  // -------------------------------------------------------------------------
+  const deepLinkContext = useMemo<DeepLinkContext | null>(() => {
+    if (!trip || !snapshot) return null
+    const sections = snapshot.sections.map((s) => ({
+      id: s.id,
+      status: s.status,
+      hasLiveOptions: s.options.some((o) => o.status !== 'cancelled'),
+    }))
+    const itemIds = new Set<string>()
+    for (const e of timelineData ?? []) itemIds.add(e.id)
+    for (const s of snapshot.sections) for (const o of s.options) itemIds.add(o.id)
+    return {
+      userId: user?.id ?? null,
+      isOrganizer,
+      isParticipant: !!myParticipant,
+      tripFinished: isTripFinished(trip),
+      participantCount: participants.length,
+      sections,
+      answerSectionIds: answerTodoList(todos).map((t) => t.entityId),
+      actionIds: new Set(snapshot.actions.map((a) => a.id)),
+      checklistIds: new Set(snapshot.checklists.map((c) => c.id)),
+      settlements: snapshot.settlements,
+      expenses: (expensesData?.expenses ?? []).map((e) => ({ id: e.id, claimCode: e.allocation_link?.code ?? null })),
+      itemIds,
+    }
+  }, [trip, snapshot, timelineData, user?.id, isOrganizer, myParticipant, participants.length, todos, expensesData])
+
+  const applyDeepLinkPlan = (plan: DeepLinkPlan) => {
+    setActiveSpace(plan.space)
+    if (plan.toast) showToast({ type: 'info', message: plan.toast })
+    const sheet = plan.open
+    if (!sheet) return
+    switch (sheet.sheet) {
+      case 'rsvp':
+        setRsvpOpen(true)
+        break
+      case 'answer':
+        setAnswerSectionIds(sheet.sectionIds)
+        break
+      case 'actions':
+        setActionsHighlightId(sheet.highlightId)
+        setActionsInitialSegment(sheet.segment)
+        setActionsOpen(true)
+        break
+      case 'travel-details':
+        setTravelDetailsOpen(true)
+        break
+      case 'settle-up':
+        setMoneyInitialScreen((prev) => ({ screen: 'settle-up', nonce: prev.nonce + 1 }))
+        break
+      case 'confirm-payment':
+        setMoneyConfirm((prev) => ({ id: sheet.settlementId, nonce: prev.nonce + 1 }))
+        setMoneyInitialScreen((prev) => ({ screen: 'settle-up', nonce: prev.nonce + 1 }))
+        break
+      case 'plan-item':
+        setPlanFocus((prev) => ({ kind: 'item', id: sheet.id, nonce: (prev?.nonce ?? 0) + 1 }))
+        break
+      case 'plan-question':
+        setPlanFocus((prev) => ({ kind: 'question', id: sheet.id, nonce: (prev?.nonce ?? 0) + 1 }))
+        break
+      case 'mark-paid':
+        setMarkPaidSettlementId(sheet.settlementId)
+        break
+      case 'claim':
+        navigate(`/claim/${encodeURIComponent(sheet.code)}`)
+        break
+      case 'add-participant':
+        setAddParticipantModalOpen(true)
+        break
+      case 'add-to-plan':
+        setAddToPlanOpen(true)
+        break
+      case 'scroll-todos':
+        setTodosScrollNonce((n) => n + 1)
+        break
+    }
+  }
+
+  useEffect(() => {
+    if (!pendingOpen || !deepLinkContext || todosLoading) return
+    setPendingOpen(null)
+    applyDeepLinkPlan(planDeepLink(pendingOpen, deepLinkContext))
+    // applyDeepLinkPlan only calls state setters, navigate and showToast.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOpen, deepLinkContext, todosLoading])
+
+  // "Your to-dos": scroll Today's card into view. Today renders it under
+  // id="your-todos" (hook-up for slice 1C); until that anchor exists on the
+  // page, fall back to the to-dos sheet so the pill always opens something.
+  useEffect(() => {
+    if (todosScrollNonce === 0) return
+    let tries = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const attempt = () => {
+      const el = document.getElementById(YOUR_TODOS_ANCHOR_ID)
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        return
+      }
+      // Today shows a skeleton until its data loads, so allow a few seconds.
+      if (++tries > 60) {
+        setActionsHighlightId(undefined)
+        setActionsInitialSegment('actions')
+        setActionsOpen(true)
+        return
+      }
+      timer = setTimeout(attempt, 60)
+    }
+    attempt()
+    return () => clearTimeout(timer)
+  }, [todosScrollNonce])
 
   // Any empty-state "paste a booking" CTA across the app can ask for
   // quick-capture without importing the expenses feature or the shell.
@@ -193,6 +346,7 @@ export function TripDetail() {
     }
   }, [overflowOpen])
 
+  const countdown = trip ? getCountdown(trip.start_date, trip.end_date) : null
   const effectiveStage = useMemo(() => (trip ? effectiveTripStage(trip) : 'gathering_interest'), [trip])
 
   if (loading) {
@@ -230,32 +384,27 @@ export function TripDetail() {
   }
 
   // -------------------------------------------------------------------------
-  // Context-aware FAB (UX_REDESIGN "Navigation (final)"): each space gets ONE
-  // primary action. Today's is stage-smart.
+  // The contextual sixth nav slot (UX redesign 5.1). One rule, one action per
+  // space: "Add" on Plan, "Scan receipt" on Money, "Invite" on People
+  // (organisers only), "Your to-dos" on Today when there are any. Otherwise
+  // the slot is simply absent.
   // -------------------------------------------------------------------------
-  const isPreCommit =
-    (effectiveStage === 'gathering_interest' || effectiveStage === 'confirming_participants') &&
-    myParticipant?.confirmation_status !== 'confirmed'
+  const goToTodos = () => {
+    setActiveSpace('today')
+    setTodosScrollNonce((n) => n + 1)
+  }
 
-  const fabForSpace = (): { icon: string; label: string; onClick: () => void } => {
+  const fabForSpace = (): { icon: string; label: string; onClick: () => void } | null => {
     switch (activeSpace) {
       case 'plan':
-        return { icon: '➕', label: 'Add to plan', onClick: () => setAddToPlanOpen(true) }
+        return { icon: '➕', label: 'Add', onClick: () => setAddToPlanOpen(true) }
       case 'money':
         return { icon: '📷', label: 'Scan receipt', onClick: openQuickCapture }
       case 'people':
-        return isOrganizer
-          ? { icon: '✉️', label: 'Add people', onClick: () => setAddParticipantModalOpen(true) }
-          : { icon: '✈️', label: 'My travel details', onClick: () => setTravelDetailsOpen(true) }
+        return isOrganizer ? { icon: '✉️', label: 'Invite', onClick: () => setAddParticipantModalOpen(true) } : null
       case 'today':
       default:
-        if (isPreCommit && myParticipant && trip.confirmation_enabled) {
-          return { icon: '📝', label: 'RSVP', onClick: () => setRsvpOpen(true) }
-        }
-        if (effectiveStage === 'trip_ongoing' || effectiveStage === 'trip_completed') {
-          return { icon: '📷', label: 'Scan receipt', onClick: openQuickCapture }
-        }
-        return { icon: '➕', label: 'Add to plan', onClick: () => setAddToPlanOpen(true) }
+        return todoCount !== undefined && todoCount > 0 ? { icon: '✅', label: 'Your to-dos', onClick: goToTodos } : null
     }
   }
   const fab = fabForSpace()
@@ -293,9 +442,9 @@ export function TripDetail() {
       <AppShell
         tabs={shellTabs}
         sidebarTabs={sidebarTabs}
-        onQuickAdd={fab.onClick}
-        quickAddIcon={<span className="text-xl leading-none">{fab.icon}</span>}
-        quickAddLabel={fab.label}
+        onQuickAdd={fab?.onClick}
+        quickAddIcon={fab ? <span className="text-xl leading-none">{fab.icon}</span> : undefined}
+        quickAddLabel={fab?.label}
         sidebarHeader={
           <button
             onClick={() => navigate('/dashboard')}
@@ -326,6 +475,10 @@ export function TripDetail() {
                 <h1 className="text-xl sm:text-2xl font-bold text-[var(--text-primary)] truncate">{trip.name}</h1>
               </div>
               <div className="flex gap-1 flex-shrink-0 items-center">
+                {/* One to-do count on every space; hidden at 0, red if overdue. */}
+                {todoCount !== undefined && todoCount > 0 && (
+                  <TodoPill count={todoCount} hasOverdue={todosOverdue} onClick={goToTodos} />
+                )}
                 {/* Ask AI — header entry point, all screens */}
                 <button
                   onClick={() => setChatOpen(true)}
@@ -403,9 +556,9 @@ export function TripDetail() {
                 <span className="text-base">📅</span>
                 {formatDateRange(trip.start_date, trip.end_date)}
               </span>
-              <span className="flex items-center gap-1 text-accent-700 dark:text-accent-400 font-medium">
-                {getCountdown(trip.start_date, trip.end_date)}
-              </span>
+              {countdown && (
+                <span className="flex items-center gap-1 text-accent-700 dark:text-accent-400 font-medium">{countdown}</span>
+              )}
             </div>
 
             {/* Stage rail — driven by the EFFECTIVE stage (date-upgraded). */}
@@ -415,13 +568,6 @@ export function TripDetail() {
                 {getTripStatusLabel(effectiveStage)}
               </span>
             </div>
-
-            {/* Needs your attention — visible on every space ("your turn" principle) */}
-            {needsAttentionItems.length > 0 && (
-              <div className="mt-3">
-                <NeedsAttentionStrip items={needsAttentionItems} />
-              </div>
-            )}
           </div>
         </div>
 
@@ -440,8 +586,8 @@ export function TripDetail() {
                 onOpenConsole={() => setConsoleOpen(true)}
                 onOpenRecap={() => setRecapOpen(true)}
                 onQuickCapture={openQuickCapture}
-                onInvite={() => setAddParticipantModalOpen(true)}
                 onOpenActions={(segment) => {
+                  setActionsHighlightId(undefined)
                   setActionsInitialSegment(segment ?? 'actions')
                   setActionsOpen(true)
                 }}
@@ -450,12 +596,17 @@ export function TripDetail() {
           )}
           {activeSpace === 'plan' && (
             <ErrorBoundary label="Plan">
-              <planTabConfig.Component trip={trip} onNavigate={(tabId) => setActiveSpace(LEGACY_TAB_TO_SPACE[tabId] ?? 'plan')} />
+              <planTabConfig.Component trip={trip} focus={planFocus} onNavigate={(tabId) => setActiveSpace(LEGACY_TAB_TO_SPACE[tabId] ?? 'plan')} />
             </ErrorBoundary>
           )}
           {activeSpace === 'money' && (
             <ErrorBoundary label="Money">
-              <MoneySpace key={moneyInitialScreen.nonce} trip={trip} initialScreen={moneyInitialScreen.screen} />
+              <MoneySpace
+                key={moneyInitialScreen.nonce}
+                trip={trip}
+                initialScreen={moneyInitialScreen.screen}
+                initialConfirmId={moneyConfirm.id}
+              />
             </ErrorBoundary>
           )}
           {activeSpace === 'people' && (
@@ -483,7 +634,7 @@ export function TripDetail() {
       {isOrganizer && consoleOpen && (
         <Modal isOpen={consoleOpen} onClose={() => setConsoleOpen(false)} size="xl" title="Organizer console">
           <ErrorBoundary label="Console">
-            <OrganizerConsole tripId={trip.id} />
+            <OrganizerConsole tripId={trip.id} initialView="waiting" />
           </ErrorBoundary>
         </Modal>
       )}
@@ -500,9 +651,35 @@ export function TripDetail() {
       )}
 
       {/* Actions sheet — trip to-dos + the packing/bring list, launched from
-          Today's ActionsSection card ("View all" / "Add an action"). */}
+          Today's Your to-dos card. */}
       {actionsOpen && (
-        <ActionsSheet isOpen={actionsOpen} onClose={() => setActionsOpen(false)} tripId={trip.id} isOrganizer={isOrganizer} initialSegment={actionsInitialSegment} />
+        <ActionsSheet isOpen={actionsOpen} onClose={() => setActionsOpen(false)} tripId={trip.id} isOrganizer={isOrganizer} initialSegment={actionsInitialSegment} highlightId={actionsHighlightId} />
+      )}
+
+      {/* ?open=question:<id> / answer-all: the focused answer flow, mounted here so
+          a to-do link lands on the exact question without going through the
+          Plan lens first. Unmounts on close so it restarts at question 1. */}
+      {answerSectionIds && (
+        <AnswerFlow
+          isOpen
+          onClose={() => setAnswerSectionIds(null)}
+          trip={trip}
+          sections={(sectionsData ?? []).filter((sec) => answerSectionIds.includes(sec.id))}
+          votes={votesData ?? []}
+          participants={participants}
+          headcount={inScopeHeadcount(participants, isConfirmationEnabled(trip))}
+        />
+      )}
+
+      {/* ?open=payment:<id> for a payment the viewer still has to make. */}
+      {markPaidSettlementId && (
+        <MarkPaidSheet
+          isOpen
+          onClose={() => setMarkPaidSettlementId(null)}
+          settlement={settlementsData?.find((st) => st.id === markPaidSettlementId) ?? null}
+          tripId={trip.id}
+          toName={nameOf(participants, settlementsData?.find((st) => st.id === markPaidSettlementId)?.to_user_id)}
+        />
       )}
 
       {/* FAB targets */}
@@ -548,6 +725,11 @@ export function TripDetail() {
   )
 }
 
+function nameOf(participants: ParticipantWithUser[], userId: string | undefined): string {
+  const p = participants.find((x) => x.user_id === userId)
+  return p?.user.full_name?.split(' ')[0] || 'them'
+}
+
 // Smart date formatting: only repeat month/year when they differ
 function formatDateRange(startDate: string, endDate: string) {
   const start = new Date(startDate)
@@ -570,12 +752,12 @@ function formatDateRange(startDate: string, endDate: string) {
 }
 
 // Countdown to trip (date-aware: quiet once the trip is over)
-function getCountdown(startDate: string, endDate: string) {
+function getCountdown(startDate: string, endDate: string): string | null {
   const now = new Date()
   const diffDays = daysUntil(startDate, now)
 
   if (new Date(endDate).getTime() < now.getTime() - 24 * 60 * 60 * 1000) {
-    return '🏁 Trip finished'
+    return null // the stage label next to the rail already says "Finished"
   } else if (diffDays < 0) {
     return '🎿 Trip in progress!'
   } else if (diffDays === 0) {

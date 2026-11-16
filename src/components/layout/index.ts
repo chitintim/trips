@@ -10,8 +10,8 @@ export type { AppShellProps, AppShellTabItem } from './AppShell'
 export { StageRail } from './StageRail'
 export type { StageRailProps } from './StageRail'
 
-export { NeedsAttentionStrip } from './NeedsAttentionStrip'
-export type { NeedsAttentionStripProps, NeedsAttentionItem } from './NeedsAttentionStrip'
+export { TodoPill } from './NeedsAttentionStrip'
+export type { TodoPillProps } from './NeedsAttentionStrip'
 
 export { QuickActionsSheet } from './QuickActionsSheet'
 export type { QuickActionsSheetProps, QuickAction } from './QuickActionsSheet'

@@ -130,17 +130,17 @@ export function CapacityProgressBar({
           <span className="font-medium text-[var(--text-primary)]">
             {capacityLimit ? (
               <>
-                {confirmedCount}/{capacityLimit} confirmed
+                {confirmedCount}/{capacityLimit} going
                 {isFull && ' · Full'}
                 {!isFull && spotsRemaining !== null && ` · ${spotsRemaining} ${spotsRemaining === 1 ? 'spot' : 'spots'} left`}
               </>
             ) : (
-              <>{confirmedCount} confirmed · No limit</>
+              <>{confirmedCount} going · No limit</>
             )}
           </span>
           {conditionalCount > 0 && (
             <span className="text-sm text-[var(--text-muted)]">
-              +{conditionalCount} conditional
+              +{conditionalCount} not sure
             </span>
           )}
         </div>
@@ -148,7 +148,7 @@ export function CapacityProgressBar({
         {/* Waitlist indicator */}
         {waitlistCount > 0 && (
           <div className="text-xs text-[var(--text-muted)]">
-            {waitlistCount} on waitlist
+            {waitlistCount} on the waitlist
           </div>
         )}
       </div>

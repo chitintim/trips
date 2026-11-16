@@ -323,6 +323,48 @@ SELECT p.oid::regprocedure AS fn,
 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 WHERE n.nspname = 'public' AND p.proname = 'claim_todo';
 
+-- 12f. Name collisions for the update guard: the function and both triggers must be free.
+--      Safe: zero rows before applying (this also lists any existing non-internal triggers on
+--      the two tables; they will run alongside the new guard, check they do not clash).
+--      Gates: update guard.
+SELECT 'function' AS kind, p.oid::regprocedure::text AS name
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public' AND p.proname = 'guard_todo_update'
+UNION ALL
+SELECT 'trigger', c.relname || '.' || t.tgname
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+WHERE c.oid IN ('public.trip_actions'::regclass, 'public.trip_checklists'::regclass)
+  AND NOT t.tgisinternal
+  AND t.tgname IN ('trip_actions_guard_update', 'trip_checklists_guard_update');
+
+-- 12g. All existing non-internal triggers on the two tables (informational).
+SELECT c.relname AS tbl, t.tgname, pg_get_triggerdef(t.oid) AS definition
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+WHERE c.oid IN ('public.trip_actions'::regclass, 'public.trip_checklists'::regclass) AND NOT t.tgisinternal
+ORDER BY 1, 2;
+
+-- 12h. FORCE ROW LEVEL SECURITY must be off on these tables (the SECURITY DEFINER functions
+--      rely on the owner bypassing RLS).
+--      Safe: relforcerowsecurity = false on every row.
+SELECT relname, relrowsecurity, relforcerowsecurity
+FROM pg_class
+WHERE oid IN ('public.activity_feed'::regclass, 'public.trip_actions'::regclass,
+              'public.trip_checklists'::regclass, 'public.selections'::regclass)
+ORDER BY 1;
+
+-- 12i. AFTER applying: guard_todo_update is a trigger function only, not callable by clients.
+--      Safe: one row, anon_can_execute = false, authenticated_can_execute = false, prosecdef = true;
+--      plus two trigger rows (trip_actions_guard_update, trip_checklists_guard_update).
+SELECT p.oid::regprocedure AS fn,
+       p.prosecdef,
+       has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_can_execute,
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_can_execute
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public' AND p.proname = 'guard_todo_update';
+SELECT c.relname, t.tgname, t.tgenabled
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+WHERE t.tgname IN ('trip_actions_guard_update', 'trip_checklists_guard_update') AND NOT t.tgisinternal;
+
 -- ============================================================================
 -- 13. 20261117110000_delete_question.sql  (delete a question atomically + selections guard)
 -- ============================================================================

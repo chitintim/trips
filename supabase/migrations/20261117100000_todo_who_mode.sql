@@ -24,6 +24,17 @@
 -- and the DROP POLICY IF EXISTS lines below clean up any earlier partial apply. No UPDATE policy is
 -- added or changed here; the existing "creator, assignee or organizer" policies stay as they are.
 --
+-- Update guard: the existing assignee UPDATE policies would otherwise let a claimer (who becomes the
+-- assignee) rewrite the whole row. BEFORE UPDATE triggers public.guard_todo_update on trip_actions
+-- and trip_checklists (both have trip_id, created_by NOT NULL, assigned_to, all uuid) refuse, for
+-- signed-in callers (auth.uid() not NULL; service role / SQL editor are unaffected):
+--   * changing trip_id or created_by, and
+--   * setting assigned_to to somebody else, unless the caller is the to-do's creator, an admin, the
+--     trip creator or an active organizer of the trip. Claiming (assigned_to = self) and clearing
+--     (NULL) stay open to anyone the row policies already let update. claim_todo's own updates pass.
+-- Assumes trip_participants.role = 'organizer' (as claim_todo already does) and public.is_admin(uuid).
+-- claim is idempotent: claiming a to-do already assigned to the caller returns the success payload.
+--
 -- Safe to re-run.
 
 -- Fail loudly if the due-date constraint is not the one we expect to drop. If it is already gone
@@ -152,6 +163,10 @@ BEGIN
     IF NOT v_active THEN
       RAISE EXCEPTION 'Only people on the trip can take this one' USING ERRCODE = '42501';
     END IF;
+    IF v_assigned IS NOT NULL AND v_assigned = v_uid THEN
+      -- Already yours (double tap, retry): succeed with the current state.
+      RETURN jsonb_build_object('ok', true, 'assigned_to', v_assigned, 'done', v_done);
+    END IF;
     IF v_assigned IS NOT NULL THEN
       RAISE EXCEPTION 'Someone else just took this one' USING ERRCODE = 'P0001';
     END IF;
@@ -215,3 +230,53 @@ $$;
 
 REVOKE ALL ON FUNCTION public.claim_todo(text, uuid, text) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.claim_todo(text, uuid, text) TO authenticated;
+
+-- ---------------------------------------------------------------------------
+-- guard_todo_update() -> trigger  (see header). SECURITY DEFINER so the organizer / trip-creator
+-- lookups are not hidden by RLS; auth.uid() still reflects the caller.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.guard_todo_update()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW.trip_id IS DISTINCT FROM OLD.trip_id OR NEW.created_by IS DISTINCT FROM OLD.created_by THEN
+    RAISE EXCEPTION 'A to-do cannot be moved or re-owned' USING ERRCODE = '42501';
+  END IF;
+
+  IF NEW.assigned_to IS DISTINCT FROM OLD.assigned_to
+     AND NEW.assigned_to IS NOT NULL
+     AND NEW.assigned_to <> v_uid
+     AND OLD.created_by IS DISTINCT FROM v_uid
+     AND NOT public.is_admin(v_uid)
+     AND NOT EXISTS (SELECT 1 FROM public.trips t WHERE t.id = OLD.trip_id AND t.created_by = v_uid)
+     AND NOT EXISTS (
+       SELECT 1 FROM public.trip_participants tp
+       WHERE tp.trip_id = OLD.trip_id AND tp.user_id = v_uid AND tp.active AND tp.role = 'organizer'
+     ) THEN
+    RAISE EXCEPTION 'Only the creator or an organizer can assign this to someone else' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.guard_todo_update() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trip_actions_guard_update ON public.trip_actions;
+CREATE TRIGGER trip_actions_guard_update
+  BEFORE UPDATE ON public.trip_actions
+  FOR EACH ROW EXECUTE FUNCTION public.guard_todo_update();
+
+DROP TRIGGER IF EXISTS trip_checklists_guard_update ON public.trip_checklists;
+CREATE TRIGGER trip_checklists_guard_update
+  BEFORE UPDATE ON public.trip_checklists
+  FOR EACH ROW EXECUTE FUNCTION public.guard_todo_update();

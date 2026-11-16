@@ -973,3 +973,111 @@ FROM unnest(array[
   'public._payment_token_summary(public.payment_confirm_tokens,public.settlements,text)',
   'public.issue_payment_confirm_token(uuid,text)', 'public.confirm_payment_by_token(text)',
   'public.dispute_payment_by_token(text)', 'public.payment_confirm_rate_hit(text,integer,integer)']) f;
+
+-- =====================================================================================
+-- 20. Migration 20261121090000_payment_receipt_dispute.sql ("I haven't received it" becomes a state).
+--     Run AFTER 20261120090000 and 20261120100000 are applied. All read-only.
+-- =====================================================================================
+
+-- 20a. The column name is free. Safe: zero rows (if one row, the migration's ADD COLUMN IF NOT EXISTS is a no-op;
+--      check its type is timestamptz).
+SELECT column_name, data_type FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'settlements' AND column_name IN ('receipt_disputed_at', 'last_retracted_at');
+-- The two new function names are free (clear_receipt_dispute and restore_receipt_dispute). Safe: zero rows.
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('clear_receipt_dispute', 'restore_receipt_dispute');
+SELECT conname FROM pg_constraint WHERE conrelid = 'public.settlements'::regclass AND conname = 'settlements_receipt_disputed_only_when_marked_paid';
+
+-- 20b. The live guard is exactly the body shipped in 20261120100000 (so CREATE OR REPLACE changes nothing we do not know of).
+--      md5 of the function source (the text between the $$ markers). Safe: b3df6de584d7bb77eb2e04a3fda1ff22
+--      (the value recorded live after applying 20261120100000). Anything else: someone edited it by hand; diff before applying.
+SELECT md5(prosrc) AS guard_md5, md5(prosrc) = 'b3df6de584d7bb77eb2e04a3fda1ff22' AS matches_shipped, prosecdef, proconfig
+FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'guard_settlement_party_update';
+
+-- 20c. Exactly the four expected triggers on settlements (the migration adds none).
+--      Safe: count = 4; trigger_guard_immutable_keys, trigger_guard_settlement_insert,
+--      trigger_guard_settlement_party_update, trigger_supersede_payment_tokens.
+SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'public.settlements'::regclass;
+SELECT t.tgname, pg_get_triggerdef(t.oid) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgrelid = 'public.settlements'::regclass ORDER BY 1;
+
+-- 20d. Nothing else depends on the guard function (replacing it must not surprise anything).
+--      Safe: only the trigger trigger_guard_settlement_party_update, and no other function whose body mentions it.
+SELECT t.tgname, t.tgrelid::regclass FROM pg_trigger t WHERE t.tgfoid = 'public.guard_settlement_party_update()'::regprocedure;
+SELECT p.proname FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+  AND p.proname <> 'guard_settlement_party_update' AND p.prosrc LIKE '%guard_settlement_party_update%';
+SELECT d.classid::regclass, d.objid, d.deptype FROM pg_depend d
+WHERE d.refobjid = 'public.guard_settlement_party_update()'::regprocedure AND d.deptype = 'n';
+
+-- 20e. Nothing else in the database writes settlements.status or the new column behind the guard's back
+--      (views / rules on settlements). Safe: zero rows.
+SELECT r.rulename FROM pg_rewrite r WHERE r.ev_class = 'public.settlements'::regclass AND r.rulename <> '_RETURN';
+
+-- 20f. The CHECK cannot fail on existing data (the column is new, so every row is NULL). Safe: 0 after applying.
+SELECT count(*) FROM public.settlements WHERE receipt_disputed_at IS NOT NULL AND status <> 'marked_paid';
+
+-- 20g. AFTER applying: the guard and the three RPCs are service_role only / not callable by clients.
+--      Safe: anon_exec and authenticated_exec false everywhere; service_exec true for the three RPCs.
+SELECT f, has_function_privilege('anon', f, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', f, 'EXECUTE') AS authenticated_exec,
+       has_function_privilege('service_role', f, 'EXECUTE') AS service_exec
+FROM unnest(array['public.guard_settlement_party_update()', 'public.dispute_payment_by_token(text)',
+                  'public.clear_receipt_dispute(uuid,text)', 'public.restore_receipt_dispute(uuid)']) f;
+
+-- 20h. AFTER applying: the guard is still SECURITY DEFINER with the pinned search_path. Safe: true, {search_path=public, pg_temp}.
+SELECT prosecdef, proconfig FROM pg_proc WHERE proname = 'guard_settlement_party_update';
+
+-- 20i. The live dispute_payment_by_token is exactly the body shipped in 20261120090000 (the migration replaces it).
+--      The expected md5 was computed by applying that file to a scratch Postgres (prosrc is stored verbatim).
+--      Safe: matches_shipped = true (md5 37c9f162e90e3905bc44b819d290350a, length 1691). If not, diff before applying.
+SELECT md5(prosrc) AS body_md5, length(prosrc) AS body_len, md5(prosrc) = '37c9f162e90e3905bc44b819d290350a' AS matches_shipped,
+       prosrc LIKE '%settlement_receipt_disputed%' AS has_activity_insert, prosrc LIKE '%set_config(''request.jwt.claim.sub''%' AS impersonates
+FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'dispute_payment_by_token';
+
+-- 20j. The full settlements column list: no updated_at, no generated or identity columns (the guard compares whole rows with
+--      to_jsonb(NEW) - to_jsonb(OLD); a trigger-maintained timestamp would make every payer/receiver update fail closed).
+--      Safe: no updated_at; is_generated = 'NEVER' everywhere; the new columns are absent BEFORE applying.
+SELECT column_name, data_type, is_nullable, column_default, is_generated, is_identity
+FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'settlements' ORDER BY ordinal_position;
+
+-- 20k. What is in the table now. Safe: mostly confirmed; marked_paid about 0-1 (a test row). Each marked_paid row is a live link in flight.
+SELECT status, count(*) FROM public.settlements GROUP BY 1 ORDER BY 1;
+SELECT count(*) AS unused_tokens FROM public.payment_confirm_tokens WHERE used_at IS NULL;
+
+-- 20l. The new column is covered by the existing grant: authenticated has TABLE-level UPDATE on settlements (so the guard, not a
+--      column grant, is what stops a client writing last_retracted_at / receipt_disputed_at). Safe: table_update = true.
+SELECT has_table_privilege('authenticated', 'public.settlements', 'UPDATE') AS table_update,
+       (SELECT count(*) FROM information_schema.column_privileges WHERE table_schema = 'public' AND table_name = 'settlements'
+          AND grantee = 'authenticated' AND privilege_type = 'UPDATE') AS column_update_grants;
+
+-- 20m. Informational: does is_trip_organizer() require an ACTIVE roster row? (decides whether an organizer who left is still
+--      "privileged" in the guard). The migration does not change this.
+SELECT pg_get_functiondef('public.is_trip_organizer(uuid,uuid)'::regprocedure) ~ 'active' AS checks_active;
+
+-- 20n. No long-running transaction touching settlements before the ALTER (the migration sets lock_timeout = 5s and would fail rather than queue).
+--      Safe: no rows older than a few seconds.
+SELECT pid, state, now() - xact_start AS xact_age, left(query, 120) AS query FROM pg_stat_activity
+WHERE state <> 'idle' AND pid <> pg_backend_pid() AND query ILIKE '%settlements%';
+
+-- 20o. Assumptions about activity_feed and notifications: clients can insert activity rows (the feed lines the functions use are
+--      for display and caps only), and cannot insert notifications at all (the dedupe/cap rows are unforgeable).
+--      Safe: notifications has SELECT policies only (no INSERT/UPDATE/DELETE policy); activity_feed insert policy requires actor = self.
+SELECT tablename, policyname, cmd, roles, qual, with_check FROM pg_policies
+WHERE schemaname = 'public' AND tablename IN ('activity_feed', 'notifications') ORDER BY tablename, cmd, policyname;
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- 20 POST-APPLY (run after the migration; compare with the pre-apply output)
+-- ---------------------------------------------------------------------------------------------------------------------
+-- 20p. Record the new guard md5 (put it in the deploy log), and confirm the shape. Safe: prosecdef true, search_path pinned.
+SELECT md5(prosrc) AS new_guard_md5, length(prosrc) AS len, prosecdef, proconfig,
+       prosrc LIKE '%last_retracted_at%' AS stamps_boundary, prosrc LIKE '%service_role%' AS payer_clear_is_server_only
+FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'guard_settlement_party_update';
+-- 20q. The constraint exists and is validated. Safe: convalidated = true.
+SELECT conname, convalidated FROM pg_constraint WHERE conname = 'settlements_receipt_disputed_only_when_marked_paid';
+-- 20r. Still exactly four non-internal triggers on settlements. Safe: 4.
+SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'public.settlements'::regclass;
+-- 20s. Both columns exist, nullable, timestamptz, no default. Safe: two rows.
+SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'settlements' AND column_name IN ('receipt_disputed_at', 'last_retracted_at');
+-- 20t. Privileges: run 20g again (anon/authenticated false, service_role true on the three RPCs), and
+SELECT p.oid::regprocedure, p.prosecdef, p.proconfig FROM pg_proc p
+WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('clear_receipt_dispute', 'restore_receipt_dispute', 'dispute_payment_by_token');
+-- 20u. PostgREST has the new columns (the migration ends with NOTIFY pgrst, 'reload schema'). Safe: both columns visible to the API.
+NOTIFY pgrst, 'reload schema';

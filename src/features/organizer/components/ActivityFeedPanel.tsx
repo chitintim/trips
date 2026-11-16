@@ -47,7 +47,7 @@ export function ActivityFeedPanel({ tripId }: ActivityFeedPanelProps) {
       {entries.map((entry) => {
         const actor = entry.actor ? usersById.get(entry.actor) : undefined
         const actorName = actor?.name ?? (entry.actor ? 'Someone' : 'Trip Planner')
-        const rendered = renderActivity(entry, actorName)
+        const rendered = renderActivity(entry, actorName, (id) => usersById.get(id)?.name)
         return (
           <li key={entry.id} className="flex items-start gap-3 py-2.5">
             {actor ? (

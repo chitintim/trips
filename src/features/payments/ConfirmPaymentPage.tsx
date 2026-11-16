@@ -39,12 +39,12 @@ function OpenTrip({ payment }: { payment: PaymentSummary | null }) {
  * POST, so nothing here is cached.)
  */
 export function ConfirmPaymentPage() {
-  const [{ token, fromUrl }] = useState(() => captureToken(window.location.search, safeSessionStorage()))
+  const [{ token, answer: hint, fromUrl }] = useState(() => captureToken(window.location.search, safeSessionStorage()))
   useEffect(() => {
     if (fromUrl) window.history.replaceState(window.history.state, '', cleanConfirmPath(import.meta.env.BASE_URL))
   }, [fromUrl])
   useEffect(() => applyNoReferrer(document), [])
-  const { state, reload, confirm, notReceived } = useConfirmPayment(token)
+  const { state, reload, confirm, notReceived, change } = useConfirmPayment(token, hint)
 
   if (state.kind === 'loading') {
     return (
@@ -60,20 +60,60 @@ export function ConfirmPaymentPage() {
 
   if (state.kind === 'valid') {
     const busy = state.posting !== null
+    const { payment, answer } = state
     return (
       <Shell>
-        <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">{COPY.forLine(state.payment.receiverName)}</p>
-        <h1 className="text-lg font-semibold text-[var(--text-primary)]">{COPY.headline(state.payment)}</h1>
-        {state.payment.note && <p className="text-sm text-[var(--text-secondary)]">&ldquo;{state.payment.note}&rdquo;</p>}
+        <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">{COPY.forLine(payment.receiverName)}</p>
+        <h1 className="text-lg font-semibold text-[var(--text-primary)]">{COPY.headline(payment)}</h1>
+        {payment.note && <p className="text-sm text-[var(--text-secondary)]">&ldquo;{payment.note}&rdquo;</p>}
         <p className="text-sm text-[var(--text-secondary)]">{COPY.checkFirst}</p>
-        <div className="space-y-2 pt-2">
-          <Button fullWidth onClick={confirm} disabled={busy} isLoading={state.posting === 'confirm'}>
-            Yes, I received it
-          </Button>
-          <Button fullWidth variant="secondary" onClick={notReceived} disabled={busy} isLoading={state.posting === 'not_received'}>
-            I haven't received it
-          </Button>
-        </div>
+        {answer === null ? (
+          <div className="space-y-2 pt-2">
+            <Button fullWidth onClick={confirm} disabled={busy} isLoading={state.posting === 'confirm'}>
+              Yes, I received it
+            </Button>
+            <Button fullWidth variant="secondary" onClick={notReceived} disabled={busy} isLoading={state.posting === 'not_received'}>
+              I haven't received it
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3 pt-2">
+            <Button
+              size="lg"
+              fullWidth
+              variant={answer === 'yes' ? 'primary' : 'secondary'}
+              onClick={answer === 'yes' ? confirm : notReceived}
+              disabled={busy}
+              isLoading={busy}
+            >
+              {answer === 'yes' ? COPY.yesButton(payment) : COPY.noButton(payment)}
+            </Button>
+            <button type="button" onClick={change} disabled={busy} className="text-sm text-[var(--text-muted)] underline disabled:opacity-50">
+              {COPY.changeAnswer}
+            </button>
+          </div>
+        )}
+      </Shell>
+    )
+  }
+
+  if (state.kind === 'status') {
+    const payer = state.payment?.payerName ?? 'The payer'
+    const p = state.payment
+    return (
+      <Shell>
+        <h1 className="text-lg font-semibold text-[var(--text-primary)]" role="status">
+          {state.reason === 'disputed' ? COPY.told(payer) : state.reason === 'asked_again' ? COPY.askedAgain(payer) : COPY.retracted(payer)}
+        </h1>
+        {state.reason === 'disputed' && <p className="text-sm text-[var(--text-secondary)]">{COPY.toldHelp(payer)}</p>}
+        {state.reason === 'asked_again' && <p className="text-sm text-[var(--text-secondary)]">{COPY.askedAgainHelp}</p>}
+        {state.reason === 'asked_again' && p?.settlementId ? (
+          <Link to={`/${p.tripId}?open=payment:${p.settlementId}`} className="inline-block">
+            <Button variant="secondary">{COPY.openPayment}</Button>
+          </Link>
+        ) : (
+          <OpenTrip payment={p} />
+        )}
       </Shell>
     )
   }
@@ -93,9 +133,8 @@ export function ConfirmPaymentPage() {
   if (state.kind === 'dead') {
     return (
       <Shell>
-        <h1 className="text-lg font-semibold text-[var(--text-primary)]">{COPY[state.reason]}</h1>
-        {state.reason !== 'invalid' && <OpenTrip payment={state.payment} />}
-        {state.reason === 'invalid' && <OpenTrip payment={null} />}
+        <h1 className="text-lg font-semibold text-[var(--text-primary)]">{state.reason === 'no_token' ? COPY.noToken : COPY[state.reason]}</h1>
+        <OpenTrip payment={state.reason === 'invalid' || state.reason === 'no_token' ? null : state.payment} />
       </Shell>
     )
   }

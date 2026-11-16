@@ -50,6 +50,8 @@ import {
   closesLabel,
   anyOrganizerLabel,
   confirmPaymentTitle,
+  DISPUTE_AGE_NUDGE_DAYS,
+  respondPaymentTitle,
   formatMoney,
   formatDayMonth,
   orgBookTitle,
@@ -91,6 +93,7 @@ export { DEEP_LINKS, todoHref } from './copy'
 /** Order of personal kinds within the same due date. */
 export const TODO_KIND_ORDER: TodoKind[] = [
   'pay',
+  'respond_payment',
   'rsvp',
   'answer',
   'task',
@@ -362,9 +365,29 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
     }
   }
 
-  // confirm_payment: someone says they paid me
+  // respond_payment: I marked a payment as paid and the receiver says it hasn't arrived.
+  // (A flag on any other status is stale and ignored.)
   for (const st of settlements) {
-    if (st.to_user_id !== userId || st.status !== 'marked_paid') continue
+    if (st.from_user_id !== userId || st.status !== 'marked_paid' || !st.receipt_disputed_at) continue
+    // Older than DISPUTE_AGE_NUDGE_DAYS: say how long it has been waiting (this is what organisers see in Waiting on).
+    const ageMs = ctx.now.getTime() - new Date(st.receipt_disputed_at).getTime()
+    const ageDays = ageMs > DISPUTE_AGE_NUDGE_DAYS * DAY_MS ? Math.floor(ageMs / DAY_MS) : null
+    out.push(
+      finish(ctx, userId, {
+        kind: 'respond_payment',
+        entityId: st.id,
+        title: respondPaymentTitle(firstName(ctx.namesById.get(st.to_user_id)), formatMoney(st.amount, st.currency ?? trip.base_currency), ageDays),
+        counterpartyId: st.to_user_id,
+        due: null,
+        link: DEEP_LINKS.payment(st.id),
+      })
+    )
+  }
+
+  // confirm_payment: someone says they paid me. Not once I have said it hasn't arrived: I have answered,
+  // the next step is the payer's.
+  for (const st of settlements) {
+    if (st.to_user_id !== userId || st.status !== 'marked_paid' || st.receipt_disputed_at) continue
     out.push(
       finish(ctx, userId, {
         kind: 'confirm_payment',
@@ -413,7 +436,7 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
 function disambiguatePayments(todos: Todo[], settlements: ReadonlyArray<SnapshotSettlement>): Todo[] {
   const byTitle = new Map<string, Todo[]>()
   for (const t of todos) {
-    if (t.kind !== 'pay' && t.kind !== 'confirm_payment') continue
+    if (t.kind !== 'pay' && t.kind !== 'confirm_payment' && t.kind !== 'respond_payment') continue
     byTitle.set(t.title, [...(byTitle.get(t.title) ?? []), t])
   }
   const rows = new Map(settlements.map((st) => [st.id, st]))

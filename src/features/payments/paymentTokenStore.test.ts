@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyNoReferrer, captureToken, cleanConfirmPath, TOKEN_STORAGE_KEY } from './paymentTokenStore'
+import { applyNoReferrer, captureToken, cleanConfirmPath, ANSWER_STORAGE_KEY, TOKEN_STORAGE_KEY } from './paymentTokenStore'
 
 function memoryStore(initial: Record<string, string> = {}) {
   const data = { ...initial }
@@ -9,11 +9,11 @@ function memoryStore(initial: Record<string, string> = {}) {
 describe('captureToken', () => {
   it('takes the token from the URL and remembers it for a refresh', () => {
     const store = memoryStore()
-    expect(captureToken('?t=abc', store)).toEqual({ token: 'abc', fromUrl: true })
+    expect(captureToken('?t=abc', store)).toEqual({ token: 'abc', answer: null, fromUrl: true })
     expect(store.data[TOKEN_STORAGE_KEY]).toBe('abc')
   })
   it('after the URL is cleaned, a refresh uses the remembered token', () => {
-    expect(captureToken('', memoryStore({ [TOKEN_STORAGE_KEY]: 'abc' }))).toEqual({ token: 'abc', fromUrl: false })
+    expect(captureToken('', memoryStore({ [TOKEN_STORAGE_KEY]: 'abc' }))).toEqual({ token: 'abc', answer: null, fromUrl: false })
   })
   it('the URL wins over a stale remembered token', () => {
     const store = memoryStore({ [TOKEN_STORAGE_KEY]: 'old' })
@@ -22,7 +22,7 @@ describe('captureToken', () => {
   })
   it('no token anywhere is null; a missing or throwing storage is fine', () => {
     expect(captureToken('', memoryStore()).token).toBeNull()
-    expect(captureToken('?t=abc', null)).toEqual({ token: 'abc', fromUrl: true })
+    expect(captureToken('?t=abc', null)).toEqual({ token: 'abc', answer: null, fromUrl: true })
     const throwing = { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('blocked') } }
     expect(captureToken('?t=abc', throwing).token).toBe('abc')
     expect(captureToken('', throwing).token).toBeNull()
@@ -53,5 +53,23 @@ describe('applyNoReferrer', () => {
     expect(added).toEqual([{ name: 'referrer', content: 'no-referrer' }])
     undo()
     expect(added).toEqual([])
+  })
+})
+
+describe('answer hint capture', () => {
+  it('takes a=yes|no from the URL and keeps it for a refresh', () => {
+    const store = memoryStore()
+    expect(captureToken('?t=abc&a=no', store)).toEqual({ token: 'abc', answer: 'no', fromUrl: true })
+    expect(store.data[ANSWER_STORAGE_KEY]).toBe('no')
+    expect(captureToken('', store)).toEqual({ token: 'abc', answer: 'no', fromUrl: false })
+  })
+  it('junk or missing a is no hint, and a new link without a clears an old one', () => {
+    const store = memoryStore({ [ANSWER_STORAGE_KEY]: 'yes' })
+    expect(captureToken('?t=abc&a=maybe', store).answer).toBeNull()
+    expect(captureToken('?t=abc', memoryStore({ [ANSWER_STORAGE_KEY]: 'yes' })).answer).toBeNull()
+    expect(captureToken('', memoryStore({ [TOKEN_STORAGE_KEY]: 'abc', [ANSWER_STORAGE_KEY]: 'zzz' })).answer).toBeNull()
+  })
+  it('a stray a= with no token still asks for the address bar to be cleaned', () => {
+    expect(captureToken('?a=yes', memoryStore())).toEqual({ token: null, answer: null, fromUrl: true })
   })
 })

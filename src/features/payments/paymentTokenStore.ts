@@ -7,6 +7,9 @@
  */
 
 export const TOKEN_STORAGE_KEY = 'confirm-payment-token'
+export const ANSWER_STORAGE_KEY = 'confirm-payment-answer'
+
+const hintOf = (v: string | null | undefined): 'yes' | 'no' | null => (v === 'yes' || v === 'no' ? v : null)
 
 type Store = Pick<Storage, 'getItem' | 'setItem'>
 
@@ -24,22 +27,32 @@ export function tokenFromSearch(search: string): string | null {
   return t && t.length > 0 ? t : null
 }
 
-/** The token for this page view: the URL's, else the one remembered by this tab. */
-export function captureToken(search: string, store: Store | null): { token: string | null; fromUrl: boolean } {
+export function answerFromSearch(search: string): 'yes' | 'no' | null {
+  return hintOf(new URLSearchParams(search).get('a'))
+}
+
+/**
+ * The token (and the answer hint) for this page view: the URL's, else the ones remembered by this tab.
+ * `fromUrl` is true when the URL carried either, so the caller strips the address bar.
+ */
+export function captureToken(search: string, store: Store | null): { token: string | null; answer: 'yes' | 'no' | null; fromUrl: boolean } {
   const fromUrl = tokenFromSearch(search)
   if (fromUrl) {
+    const answer = answerFromSearch(search)
     try {
       store?.setItem(TOKEN_STORAGE_KEY, fromUrl)
+      store?.setItem(ANSWER_STORAGE_KEY, answer ?? '')
     } catch {
       /* a refresh will not work in this browser; the in-memory token still does */
     }
-    return { token: fromUrl, fromUrl: true }
+    return { token: fromUrl, answer, fromUrl: true }
   }
   try {
     const kept = store?.getItem(TOKEN_STORAGE_KEY) ?? null
-    return { token: kept && kept.length > 0 ? kept : null, fromUrl: false }
+    if (!kept) return { token: null, answer: null, fromUrl: new URLSearchParams(search).has('a') }
+    return { token: kept, answer: hintOf(store?.getItem(ANSWER_STORAGE_KEY)), fromUrl: false }
   } catch {
-    return { token: null, fromUrl: false }
+    return { token: null, answer: null, fromUrl: false }
   }
 }
 

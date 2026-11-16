@@ -3,10 +3,11 @@
 // The payment-notice function emails the receiver the moment a payment is
 // marked paid (notifications.kind 'payment_paid_notice', dedupe key
 // `notice:paid:<settlementId>:<receiverId>:1`). The daily job must not then
-// nudge the same person about the same payment on the same UTC day. The
+// nudge the same person about the same payment on the same UTC day. A re-ask notice
+// (`payment_reask_notice`, same shape) counts the same way. The
 // recipient set of the daily job never grows because of this: it can only
 // remove an item.
-export { PAID_NOTICE_KIND } from '../_shared/paymentNoticeCore.ts'
+export { PAID_NOTICE_KIND, REASK_NOTICE_KIND } from '../_shared/paymentNoticeCore.ts'
 
 export interface PaidNoticeRow {
   entity_id: string | null

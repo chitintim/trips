@@ -59,7 +59,7 @@ export interface NoticeViewer {
 
 /** The extra caption lines for a marked-paid row (empty for other statuses). */
 export function paymentNoticeLines(
-  row: Pick<Settlement, 'status' | 'from_user_id' | 'to_user_id'>,
+  row: Pick<Settlement, 'status' | 'from_user_id' | 'to_user_id'> & { receipt_disputed_at?: string | null },
   info: PaymentNoticeInfo | undefined,
   viewer: NoticeViewer,
   receiverName: string,
@@ -72,7 +72,9 @@ export function paymentNoticeLines(
   if (info.requestedAt && (isPayer || viewer.canManageTrip) && !isReceiver) {
     lines.push(`Receipt request emailed to ${receiverName} on ${formatDate(info.requestedAt)}`)
   }
-  if (info.disputedAt && (isPayer || isReceiver || viewer.canManageTrip)) {
+  // With the dispute column the status line comes from disputeView (paymentDispute.ts); the activity row is only the fallback.
+  const columnSupported = 'receipt_disputed_at' in row
+  if (!columnSupported && info.disputedAt && (isPayer || isReceiver || viewer.canManageTrip)) {
     lines.push(`${receiverName} says they haven't received this`)
   }
   return lines

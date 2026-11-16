@@ -34,6 +34,7 @@ const KIND_ICON: Record<Todo['kind'], string> = {
   task: '✅',
   pay: '💸',
   confirm_payment: '🤝',
+  respond_payment: '💬',
   claim: '🧾',
   travel: '✈️',
   waitlist_offer: '⏳',

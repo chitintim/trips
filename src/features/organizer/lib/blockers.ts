@@ -124,6 +124,7 @@ function nudgeTypeFor(todo: Todo): BlockerType | null {
     case 'claim':
       return 'unclaimed_items'
     case 'pay':
+    case 'respond_payment':
     case 'confirm_payment':
       return 'unpaid_settlement'
     default:
@@ -142,6 +143,7 @@ function blockerKindFor(todo: Todo): BlockerKind {
     case 'claim':
       return 'unclaimed_items'
     case 'pay':
+    case 'respond_payment':
     case 'confirm_payment':
       return 'unconfirmed_settlement'
     case 'task':

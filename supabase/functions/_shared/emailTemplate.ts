@@ -164,6 +164,14 @@ export function renderBrandedEmail(opts: {
   </div>`
 }
 
+/**
+ * A clearly secondary button (outlined, not filled) for use in `afterCtaHtml`, under the primary
+ * renderBrandedEmail button. Label and URL are escaped here.
+ */
+export function renderSecondaryButton(label: string, url: string): string {
+  return `<div style="text-align:center;margin:8px 0 8px;"><a href="${escapeHtml(url)}" style="display:inline-block;background:${COLORS.card};color:${COLORS.brand};text-decoration:none;font-size:14px;font-weight:600;padding:10px 24px;border-radius:8px;border:1px solid ${COLORS.brand};">${escapeHtml(label)}</a></div>`
+}
+
 /** Digest subject line: specific when it can be, honest when it can't. */
 function digestSubject(input: DigestEmailInput): string {
   const sections = input.sections

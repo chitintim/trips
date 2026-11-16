@@ -62,6 +62,7 @@ interface PaymentSummary {
   formatted: string
   tripName: string
   tripId: string
+  settlementId: string
   note: string | null
 }
 
@@ -84,6 +85,7 @@ async function loadSummary(admin: SupabaseClient, settlementId: string): Promise
     formatted: formatMoneyExact(Number(s.amount), currency),
     tripName: trip.name,
     tripId: trip.id,
+    settlementId,
     note: trimNote(s.notes),
   }
 }
@@ -99,7 +101,7 @@ async function allow(admin: SupabaseClient, key: string, limit: number, windowSe
 }
 
 /** The states in which showing the payment summary is useful (and harmless: the caller holds the token). */
-const SHOW_SUMMARY: ConfirmState[] = ['valid', 'confirmed', 'disputed']
+const SHOW_SUMMARY: ConfirmState[] = ['valid', 'confirmed', 'disputed', 'asked_again', 'retracted']
 
 const TOO_MANY = { error: 'Too many attempts. Try again in a few minutes.' }
 
@@ -107,21 +109,48 @@ const TOO_MANY = { error: 'Too many attempts. Try again in a few minutes.' }
 async function peek(admin: SupabaseClient, hash: string): Promise<{ state: ConfirmState; payment?: PaymentSummary }> {
   const { data: token } = await admin
     .from('payment_confirm_tokens')
-    .select('settlement_id, receiver_id, amount, currency, expires_at, used_at, used_action')
+    .select('settlement_id, receiver_id, amount, currency, expires_at, used_at, used_action, created_at')
     .eq('token_hash', hash)
     .maybeSingle()
   let settlementFacts = null
+  let newerToken = false
   if (token) {
-    const { data: s } = await admin.from('settlements').select('status, to_user_id, amount, currency, trip_id').eq('id', token.settlement_id).maybeSingle()
+    // receipt_disputed_at / last_retracted_at may not exist yet (migration not applied): retry without them, then
+    // `undefined` = old behaviour.
+    let withFlag = true
+    let { data: s, error: sErr } = await admin.from('settlements').select('status, to_user_id, amount, currency, trip_id, receipt_disputed_at, last_retracted_at').eq('id', token.settlement_id).maybeSingle()
+    if (sErr) {
+      withFlag = false
+      ;({ data: s } = await admin.from('settlements').select('status, to_user_id, amount, currency, trip_id').eq('id', token.settlement_id).maybeSingle())
+    }
+    // A newer link for the same payment exists (a re-ask, or a fresh paid email after the payment was taken back).
+    const { count: newerCount } = await admin
+      .from('payment_confirm_tokens')
+      .select('id', { count: 'exact', head: true })
+      .eq('settlement_id', token.settlement_id)
+      .gt('created_at', (token as { created_at: string }).created_at)
+    newerToken = (newerCount ?? 0) > 0
     if (s) {
       const { data: trip } = await admin.from('trips').select('base_currency').eq('id', s.trip_id).maybeSingle()
-      settlementFacts = { status: s.status, to_user_id: s.to_user_id, amount: Number(s.amount), currency: s.currency || trip?.base_currency || '' }
+      settlementFacts = {
+        status: s.status,
+        to_user_id: s.to_user_id,
+        amount: Number(s.amount),
+        currency: s.currency || trip?.base_currency || '',
+        ...(withFlag
+          ? {
+              receipt_disputed_at: (s as { receipt_disputed_at?: string | null }).receipt_disputed_at ?? null,
+              last_retracted_at: (s as { last_retracted_at?: string | null }).last_retracted_at ?? null,
+            }
+          : {}),
+      }
     }
   }
   const state = mapTokenState({
     token: token ? { ...token, amount: Number(token.amount) } : null,
     settlement: settlementFacts,
     now: new Date(),
+    newerToken,
   })
   const payment = token && SHOW_SUMMARY.includes(state) ? await loadSummary(admin, token.settlement_id) : null
   return payment ? { state, payment } : { state }
@@ -161,6 +190,9 @@ Deno.serve(async (req) => {
         return reply(origin, { state: 'invalid' }, 500)
       }
       const r = (data ?? {}) as { result?: string; settlement_id?: string; used_action?: string }
+      // Anything other than "this very call confirmed / disputed it" shows the CURRENT truth, exactly as a peek would
+      // (retracted, asked again, confirmed elsewhere, expired ...): an old link never regains power.
+      if (r.result !== 'confirmed' && r.result !== 'disputed') return reply(origin, await peek(admin, hash))
       const state = mapRpcResult(r.result, r.used_action)
 
       // The email to the payer, only when this very call did the thing (the RPC result says so),

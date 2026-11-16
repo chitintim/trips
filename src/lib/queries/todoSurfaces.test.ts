@@ -131,6 +131,16 @@ const FIXTURES: Record<string, TripSnapshot> = {
       { id: 'st2', from_user_id: 'ana', to_user_id: 'tim', amount: 10, currency: 'GBP', status: 'marked_paid' },
     ],
   }),
+  // A payment the receiver says has not arrived: the payer responds, the receiver owes nothing.
+  // (A stale flag on a suggested row must change nothing.)
+  disputed: snap({
+    trip: { ...baseTrip, id: 'disp', status: 'trip_completed', start_date: '2025-06-01', end_date: '2025-06-08' },
+    balances: { tim: 5000, sam: -4698.61, chai: -301.39 },
+    settlements: [
+      { id: 'd1', from_user_id: 'sam', to_user_id: 'tim', amount: 4698.61, currency: 'GBP', status: 'marked_paid', receipt_disputed_at: new Date(NOW.getTime() - 3_600_000).toISOString() },
+      { id: 'd2', from_user_id: 'chai', to_user_id: 'tim', amount: 301.39, currency: 'GBP', status: 'suggested', receipt_disputed_at: new Date(NOW.getTime() - 3_600_000).toISOString() },
+    ],
+  }),
 }
 
 describe('one count on every surface', () => {
@@ -165,6 +175,15 @@ describe('one count on every surface', () => {
     expect(total(FIXTURES.sicily)).toBeGreaterThan(0)
     // Someone with more than five personal rows exercises the "See all" path.
     expect(todayListModel(todoSurfaceCore(FIXTURES.japow, 'chai', NOW).todos, false).seeAllCount).not.toBeNull()
+  })
+
+  it('disputed: payer is asked to respond, receiver is not asked to confirm, organiser sees it under the payer', () => {
+    const s = FIXTURES.disputed
+    expect(todoSurfaceCore(s, 'sam', NOW).todos.map((t) => t.kind)).toEqual(['respond_payment'])
+    expect(todoSurfaceCore(s, 'tim', NOW).todos.map((t) => t.kind)).not.toContain('confirm_payment')
+    expect(todoSurfaceCore(s, 'chai', NOW).todos.map((t) => t.kind)).not.toContain('respond_payment')
+    const wo = computeWaitingOn(s, NOW)
+    expect(wo.byPerson.find((r) => r.userId === 'sam')?.todos[0]).toMatchObject({ kind: 'respond_payment', title: "Tim says your £4,698.61 hasn't arrived" })
   })
 
   it('loading (no snapshot) or nobody signed in shows no count at all, never 0', () => {

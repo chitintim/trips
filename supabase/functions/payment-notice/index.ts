@@ -10,9 +10,13 @@
 // (see _shared/paymentNoticeSend.ts). Idempotent: a second
 // call for the same payment sends nothing.
 //
-// Body: { settlement_id } (event 'paid') or { settlement_id, event: 'confirmed' }.
-// The answer is always just { success: true } once the caller is authorised: it never says whether an
-// email was sent, skipped or capped (that would leak the receiver's email settings).
+// Body: { settlement_id } (event 'paid') or { settlement_id, event } with event one of
+//   'paid' (payer / manager), 'confirmed' (receiver), 're_ask' and 'retracted' (payer / manager),
+//   'disputed' (receiver, in-app "It hasn't arrived").
+// Answers (see ./response.ts): 200 { success: true } only when the thing happened (or nothing needs saying: a recipient
+// who opted out is a silent success, so the receiver's email settings are never revealed); 409 { success:false, reason }
+// for refusals (reask_limit, not_disputed, wrong_state, capped); 502 { success:false, reason } when OUR side failed
+// (send_failed, token_failed, clear_failed, state_failed); 403 not allowed; 429 rate limited.
 // Not gated by the trip's reminder switch (transactional), and outside the
 // daily digest and its one-email-per-day cap.
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts'
@@ -21,11 +25,19 @@ import { errorResponse, ForbiddenError, jsonResponse, ValidationError } from '..
 import { callerClient, requireUser, serviceClient } from '../_shared/supabaseClients.ts'
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
 import { getEmailSender } from '../_shared/emailSender.ts'
-import { canManageTripFacts, mayRequestConfirmedNotice, mayRequestPaidNotice } from '../_shared/paymentNoticeCore.ts'
-import { sendConfirmedNotice, sendPaidNotice } from '../_shared/paymentNoticeSend.ts'
-import { parseNoticeRequest } from './request.ts'
+import { mayRequestConfirmedNotice, mayRequestDisputedNotice, mayRequestPaidNotice, mayRequestReAsk, mayRequestRetractedNotice } from '../_shared/paymentNoticeCore.ts'
+import { sendConfirmedNotice, sendDisputedNotice, sendPaidNotice, sendReAskNotice, sendRetractedNotice, userCanManageTrip } from '../_shared/paymentNoticeSend.ts'
+import { parseNoticeRequest, type NoticeEvent } from './request.ts'
+import { noticeResponse } from './response.ts'
 
 const APP_BASE_URL = (Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai').replace(/\/$/, '')
+
+/** The reason is logged for us only (no addresses, no tokens); the caller gets the status from ./response.ts. */
+function answer(event: NoticeEvent, result: { sent: boolean; reason: string | null }): Response {
+  console.log(`[payment-notice] ${event}:`, result.sent ? 'sent' : result.reason)
+  const { status, body } = noticeResponse(event, result)
+  return jsonResponse(body, status)
+}
 
 Deno.serve(async (req) => {
   const preflight = handleCorsPreflight(req)
@@ -56,30 +68,30 @@ Deno.serve(async (req) => {
     if (event === 'confirmed') {
       if (!mayRequestConfirmedNotice({ callerId: user.id, receiverId: s.to_user_id })) throw new ForbiddenError()
       const result = await sendConfirmedNotice(admin, sender, { settlementId, appBaseUrl: APP_BASE_URL })
-      console.log('[payment-notice] confirmed:', result.sent ? 'sent' : result.reason)
-      return jsonResponse({ success: true })
+      return answer('confirmed', result)
     }
 
-    let canManage = false
-    if (user.id !== s.from_user_id) {
-      const [{ data: u }, { data: org }, { data: trip }] = await Promise.all([
-        admin.from('users').select('role').eq('id', user.id).maybeSingle(),
-        admin.from('trip_participants').select('user_id').eq('trip_id', s.trip_id).eq('user_id', user.id).eq('role', 'organizer').eq('active', true).maybeSingle(),
-        admin.from('trips').select('created_by').eq('id', s.trip_id).maybeSingle(),
-      ])
-      canManage = canManageTripFacts({
-        isSiteAdmin: u?.role === 'admin',
-        isActiveOrganizer: !!org,
-        isTripCreator: trip?.created_by === user.id,
-      })
+    const canManage = user.id !== s.from_user_id ? await userCanManageTrip(admin, s.trip_id, user.id) : false
+
+    if (event === 'disputed') {
+      if (!mayRequestDisputedNotice({ callerId: user.id, receiverId: s.to_user_id })) throw new ForbiddenError()
+      const result = await sendDisputedNotice(admin, sender, { settlementId, appBaseUrl: APP_BASE_URL, requireFlag: true, activityActorId: user.id })
+      return answer('disputed', result)
+    }
+    if (event === 're_ask') {
+      if (!mayRequestReAsk({ callerId: user.id, payerId: s.from_user_id, canManage })) throw new ForbiddenError()
+      const result = await sendReAskNotice(admin, sender, { settlementId, actorId: user.id, appBaseUrl: APP_BASE_URL })
+      return answer('re_ask', result)
+    }
+    if (event === 'retracted') {
+      if (!mayRequestRetractedNotice({ callerId: user.id, payerId: s.from_user_id, canManage })) throw new ForbiddenError()
+      const result = await sendRetractedNotice(admin, sender, { settlementId, actorId: user.id, appBaseUrl: APP_BASE_URL })
+      return answer('retracted', result)
     }
     if (!mayRequestPaidNotice({ callerId: user.id, payerId: s.from_user_id, canManage })) throw new ForbiddenError()
 
     const result = await sendPaidNotice(admin, sender, { settlementId, actorId: user.id, appBaseUrl: APP_BASE_URL })
-    // Never tell the caller whether (or why not) an email went out: that would reveal the receiver's
-    // email preferences. The reason is logged for us only (no addresses, no tokens).
-    console.log('[payment-notice] paid:', result.sent ? 'sent' : result.reason)
-    return jsonResponse({ success: true })
+    return answer('paid', result)
   } catch (error) {
     return errorResponse(error)
   }

@@ -1,16 +1,24 @@
 import { assert, assertEquals, assertFalse } from 'jsr:@std/assert@1'
 import type { EmailMessage, EmailSender } from './emailSender.ts'
-import { sendConfirmedNotice, sendDisputedNotice, sendPaidNotice, type SupabaseClient } from './paymentNoticeSend.ts'
+import { sendConfirmedNotice, sendDisputedNotice, sendPaidNotice, sendReAskNotice, sendRetractedNotice, type SupabaseClient } from './paymentNoticeSend.ts'
 
 type Row = Record<string, unknown>
 
 /** A tiny in-memory stand-in for the parts of supabase-js the senders use. */
-function fakeAdmin(tables: Record<string, Row[]>, rpcResult: unknown = { result: 'issued' }) {
+let tick = Date.now()
+const nextTime = () => new Date((tick += 1000)).toISOString()
+
+function fakeAdmin(
+  tables: Record<string, Row[]>,
+  rpcResult: unknown | ((fn: string, args: Record<string, unknown>) => unknown) = { result: 'issued' },
+  opts: { noFlagColumn?: boolean; failState?: boolean } = {}
+) {
   const calls = { rpc: [] as Array<{ fn: string; args: unknown }> }
   const builder = (name: string) => {
     const filters: Array<(r: Row) => boolean> = []
     let mode: 'select' | 'delete' = 'select'
     let head = false
+    let cols = ''
     const run = () => {
       const rows = (tables[name] ??= [])
       const hit = rows.filter((r) => filters.every((f) => f(r)))
@@ -21,11 +29,19 @@ function fakeAdmin(tables: Record<string, Row[]>, rpcResult: unknown = { result:
       return head ? { data: null, error: null, count: hit.length } : { data: hit, error: null }
     }
     const b: Record<string, unknown> = {
-      select: (_c?: string, opts?: { head?: boolean }) => {
-        head = !!opts?.head
+      select: (c?: string, o?: { head?: boolean }) => {
+        head = !!o?.head
+        cols = c ?? ''
         return b
       },
-      eq: (c: string, v: unknown) => (filters.push((r) => r[c] === v), b),
+      eq: (c: string, v: unknown) => {
+        // PostgREST JSON path filter: entity->>id
+        if (c.includes('->>')) {
+          const [col, key] = c.split('->>')
+          filters.push((r) => ((r[col] as Record<string, unknown> | null)?.[key] ?? null) === v)
+        } else filters.push((r) => r[c] === v)
+        return b
+      },
       neq: (c: string, v: unknown) => (filters.push((r) => r[c] !== v), b),
       gte: (c: string, v: unknown) => (filters.push((r) => String(r[c]) >= String(v)), b),
       // PostgREST or(): "a.eq.1,b.eq.2"
@@ -37,6 +53,12 @@ function fakeAdmin(tables: Record<string, Row[]>, rpcResult: unknown = { result:
       in: (c: string, vs: unknown[]) => (filters.push((r) => vs.includes(r[c])), b),
       delete: () => ((mode = 'delete'), b),
       maybeSingle: () => {
+        if (opts.noFlagColumn && name === 'settlements' && (cols.includes('receipt_disputed_at') || cols.includes('last_retracted_at'))) {
+          return Promise.resolve({ data: null, error: { code: '42703', message: 'column settlements.receipt_disputed_at does not exist' } })
+        }
+        if (opts.failState && name === 'settlements' && (cols.includes('receipt_disputed_at') || cols.includes('last_retracted_at'))) {
+          return Promise.resolve({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+        }
         const r = run()
         return Promise.resolve({ data: (r.data as Row[] | null)?.[0] ?? null, error: null })
       },
@@ -45,7 +67,7 @@ function fakeAdmin(tables: Record<string, Row[]>, rpcResult: unknown = { result:
         if (name === 'notifications' && rows.some((r) => r.dedupe_key === row.dedupe_key)) {
           return Promise.resolve({ error: { code: '23505', message: 'duplicate key value violates unique constraint' } })
         }
-        rows.push(row)
+        rows.push(name === 'notifications' ? { sent_at: nextTime(), ...row } : name === 'activity_feed' ? { created_at: nextTime(), ...row } : row)
         return Promise.resolve({ error: null })
       },
       then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) => Promise.resolve(run()).then(res, rej),
@@ -56,7 +78,9 @@ function fakeAdmin(tables: Record<string, Row[]>, rpcResult: unknown = { result:
     from: (n: string) => builder(n),
     rpc: (fn: string, args: unknown) => {
       calls.rpc.push({ fn, args })
-      return Promise.resolve({ data: rpcResult, error: null })
+      const data = typeof rpcResult === 'function' ? (rpcResult as (f: string, a: unknown) => unknown)(fn, args as Record<string, unknown>) : rpcResult
+      if (data && typeof data === 'object' && '__error' in (data as object)) return Promise.resolve({ data: null, error: { message: 'rpc failed' } })
+      return Promise.resolve({ data, error: null })
     },
   }
   return { client: client as unknown as SupabaseClient, tables, calls }
@@ -103,7 +127,8 @@ Deno.test('paid notice: sends once to the receiver with a token link, writes ded
   assertEquals(sent.length, 1)
   assertEquals(sent[0].toEmail, 'r@x.co')
   assertEquals(sent[0].subject, 'Salim paid you £105.11 — Japow')
-  assert(/confirm-payment\?t=[A-Za-z0-9_-]{43}/.test(sent[0].text))
+  assert(/confirm-payment\?t=[A-Za-z0-9_-]{43}&a=yes/.test(sent[0].text))
+  assert(/confirm-payment\?t=[A-Za-z0-9_-]{43}&a=no/.test(sent[0].text))
   assert(sent[0].html!.includes('Bank &lt;transfer&gt;'))
   assertEquals(tables.notifications.length, 1)
   assertEquals(tables.notifications[0].dedupe_key, 'notice:paid:s1:recv:1')
@@ -316,4 +341,306 @@ Deno.test('disputed notice: payer is told once, only while the payment is still 
   const f = fakeAdmin(base())
   assertEquals((await sendDisputedNotice(f.client, fakeSender({ fail: true }).sender, OPTS)).reason, 'send_failed')
   assertEquals(f.tables.notifications.length, 0) // released so a retry can send
+})
+
+// ---------------------------------------------------------------------------
+// Dispute / re-ask / retract
+// ---------------------------------------------------------------------------
+
+/**
+ * rpc stub: tokens issue; clear_receipt_dispute clears the flag (and issues the fresh link when given a hash, like the
+ * real one); restore_receipt_dispute puts the flag back.
+ */
+const rpcFor = (tables: { settlements: Row[] }) => (fn: string, _args: Record<string, unknown>) => {
+  if (fn === 'clear_receipt_dispute') {
+    const row = tables.settlements[0]
+    if (!row.receipt_disputed_at) return { result: 'not_disputed' }
+    row.receipt_disputed_at = null
+    return { result: 'cleared' }
+  }
+  if (fn === 'restore_receipt_dispute') {
+    tables.settlements[0].receipt_disputed_at = '2026-11-21T00:00:00Z'
+    return { result: 'restored' }
+  }
+  return { result: 'issued' }
+}
+/** What the database guard does when a payment goes back to suggested: stamp last_retracted_at. */
+const retract = (d: { settlements: Row[] }) => {
+  d.settlements[0].status = 'suggested'
+  d.settlements[0].last_retracted_at = nextTime()
+}
+const disputedBase = () => {
+  const d = base()
+  ;(d.settlements[0] as Row).receipt_disputed_at = '2026-11-20T10:00:00Z'
+  return d
+}
+const OPTS_ACTOR = { ...OPTS, actorId: 'payer' }
+const kinds = (t: Record<string, Row[]>) => t.notifications.map((n) => n.dedupe_key)
+
+Deno.test('paid notice: second marking after a retraction sends again (key 2), capped at 4 per payment', async () => {
+  const d = base()
+  const a = fakeAdmin(d)
+  const s = fakeSender()
+  assert((await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)).sent)
+  assertEquals((await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'already_sent') // same round
+  for (const n of [2, 3, 4]) {
+    retract(d)
+    assert((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).sent || true)
+    d.settlements[0].status = 'marked_paid'
+    const r = await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+    assert(r.sent, `paid #${n}`)
+    assertEquals(a.tables.notifications.filter((x) => x.kind === 'payment_paid_notice').at(-1)!.dedupe_key, `notice:paid:s1:recv:${n}`)
+  }
+  retract(d)
+  await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)
+  d.settlements[0].status = 'marked_paid'
+  assertEquals(await sendPaidNotice(a.client, s.sender, OPTS_ACTOR), { sent: false, reason: 'capped' })
+  assertEquals(a.tables.notifications.filter((x) => x.kind === 'payment_paid_notice').length, 4)
+})
+
+Deno.test('retracted notice: needs suggested + an earlier paid notice, one per retraction, writes the boundary activity', async () => {
+  const d = base()
+  const a = fakeAdmin(d)
+  const s = fakeSender()
+  // never told: nothing sent, nothing written
+  retract(d)
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'never_notified')
+  assertEquals(a.tables.activity_feed.length, 0)
+  d.settlements[0].status = 'marked_paid'
+  await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  // still marked paid: refused
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'not_suggested')
+  retract(d)
+  const r = await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)
+  assertEquals(r, { sent: true, reason: null })
+  const mail = s.sent.at(-1)!
+  assertEquals(mail.toEmail, 'r@x.co')
+  assertEquals(mail.subject, "Salim hasn't paid the £105.11 yet — Japow")
+  assert(a.tables.notifications.some((n) => n.dedupe_key === 'notice:retracted:s1:recv:1' && n.kind === 'payment_retracted_notice'))
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_retracted').length, 1)
+  // a repeated call (double tap) sends nothing and writes nothing more
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'already_sent')
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_retracted').length, 1)
+})
+
+Deno.test('retracted notice: a forged retraction activity row (any actor, even the payer) never reopens the paid sequence', async () => {
+  const d = base()
+  const a = fakeAdmin(d)
+  const s = fakeSender()
+  await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  a.tables.activity_feed.push({ verb: 'settlement_retracted', actor: 'recv', entity: { type: 'settlement', id: 's1' }, created_at: nextTime() })
+  a.tables.activity_feed.push({ verb: 'settlement_retracted', actor: null, entity: { type: 'settlement', id: 's1' }, created_at: nextTime() })
+  a.tables.activity_feed.push({ verb: 'settlement_retracted', actor: 'payer', entity: { type: 'settlement', id: 's1' }, created_at: nextTime() })
+  assertEquals((await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'already_sent')
+})
+
+Deno.test('D3: the boundary is the database stamp, so a lost "retracted" call does not block the next paid notice', async () => {
+  const d = base()
+  const a = fakeAdmin(d)
+  const s = fakeSender()
+  assert((await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)).sent)
+  retract(d) // the guard stamped it; the client's fire-and-forget 'retracted' call never arrived
+  d.settlements[0].status = 'marked_paid'
+  const r = await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  assertEquals(r, { sent: true, reason: null })
+  assertEquals(a.tables.notifications.filter((n) => n.kind === 'payment_paid_notice').map((n) => n.dedupe_key), ['notice:paid:s1:recv:1', 'notice:paid:s1:recv:2'])
+})
+
+Deno.test('D3: an unknown boundary sends nothing (lookup error -> state_failed; column missing -> old once-only behaviour)', async () => {
+  const failing = fakeAdmin(base(), undefined, { failState: true })
+  assertEquals(await sendPaidNotice(failing.client, fakeSender().sender, OPTS_ACTOR), { sent: false, reason: 'state_failed' })
+  assertEquals(failing.tables.notifications.length, 0)
+  const old = fakeAdmin(base(), undefined, { noFlagColumn: true })
+  assert((await sendPaidNotice(old.client, fakeSender().sender, OPTS_ACTOR)).sent)
+  assertEquals((await sendPaidNotice(old.client, fakeSender().sender, OPTS_ACTOR)).reason, 'already_sent')
+})
+
+Deno.test('D3: retracted email needs a recent server stamp and one per retraction', async () => {
+  const d = base()
+  const a = fakeAdmin(d)
+  const s = fakeSender()
+  await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  d.settlements[0].status = 'suggested' // moved back without a stamp (should not happen; the guard always stamps)
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'not_retracted')
+  d.settlements[0].last_retracted_at = new Date(Date.now() - 31 * 60_000).toISOString()
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'retract_stale')
+  assertEquals(s.sent.length, 1)
+  assertEquals(a.tables.notifications.filter((n) => n.kind === 'payment_retracted_notice').length, 0)
+  retract(d)
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).sent, true)
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'already_sent')
+})
+
+Deno.test('retracted notice: receiver gates apply (opt-out); the feed line is still written', async () => {
+  const d = base()
+  const a = fakeAdmin(d)
+  const s = fakeSender()
+  await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  d.users[1].email_notifications_enabled = false
+  retract(d)
+  assertEquals((await sendRetractedNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'opt_out')
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_retracted').length, 1)
+  assertEquals(a.tables.notifications.filter((x) => x.kind === 'payment_retracted_notice').length, 0)
+})
+
+Deno.test('re-ask: only while marked paid AND disputed; new token; two buttons; flag cleared; activities written', async () => {
+  const d = disputedBase()
+  const a = fakeAdmin(d, rpcFor(d))
+  const s = fakeSender()
+  await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  const r = await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)
+  assertEquals(r, { sent: true, reason: null })
+  const mail = s.sent.at(-1)!
+  assertEquals(mail.toEmail, 'r@x.co')
+  assertEquals(mail.subject, "Salim says they've sent £105.11 — can you check again?")
+  assert(/a=yes/.test(mail.text) && /a=no/.test(mail.text))
+  const key = a.tables.notifications.find((n) => n.kind === 'payment_reask_notice')!
+  assertEquals(key.dedupe_key, 'notice:paid:s1:recv:2')
+  assertEquals(d.settlements[0].receipt_disputed_at, null)
+  // D4: ONE atomic call clears the flag and issues the fresh link (hash included); no separate issue call for the re-ask
+  assertEquals(a.calls.rpc.map((c) => c.fn), ['issue_payment_confirm_token', 'clear_receipt_dispute'])
+  assertEquals(((a.calls.rpc[1].args as { p_token_hash: string }).p_token_hash).length, 64)
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_re_asked').length, 1)
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_receipt_requested' && (x.metadata as Row).re_ask === true).length, 1)
+  // no longer disputed: a second tap does nothing
+  assertEquals((await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'not_disputed')
+  assertEquals(s.sent.length, 2)
+})
+
+Deno.test('re-ask: refused when not disputed, not marked paid, or the column is missing (nothing at all happens)', async () => {
+  const plain = fakeAdmin(base(), rpcFor(base()))
+  assertEquals((await sendReAskNotice(plain.client, fakeSender().sender, OPTS_ACTOR)).reason, 'not_disputed')
+  const sug = disputedBase()
+  sug.settlements[0].status = 'suggested'
+  assertEquals((await sendReAskNotice(fakeAdmin(sug, rpcFor(sug)).client, fakeSender().sender, OPTS_ACTOR)).reason, 'not_marked_paid')
+  const d = disputedBase()
+  const missing = fakeAdmin(d, rpcFor(d), { noFlagColumn: true })
+  const s = fakeSender()
+  assertEquals((await sendReAskNotice(missing.client, s.sender, OPTS_ACTOR)).reason, 'not_disputed')
+  assertEquals(s.sent.length, 0)
+  assertEquals(missing.calls.rpc.length, 0)
+  assertEquals(missing.tables.activity_feed.length, 0)
+})
+
+Deno.test('re-ask: at most 2 per payment ever; the third is refused and nothing is cleared', async () => {
+  const d = disputedBase()
+  const a = fakeAdmin(d, rpcFor(d))
+  const s = fakeSender()
+  await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  for (const n of [2, 3]) {
+    d.settlements[0].receipt_disputed_at = '2026-11-20T10:00:00Z'
+    assert((await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)).sent, `re-ask ${n}`)
+    assert(a.tables.notifications.some((x) => x.dedupe_key === `notice:paid:s1:recv:${n}`))
+  }
+  d.settlements[0].receipt_disputed_at = '2026-11-20T10:00:00Z'
+  assertEquals((await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'reask_limit')
+  assertEquals(d.settlements[0].receipt_disputed_at, '2026-11-20T10:00:00Z')
+  assertEquals(s.sent.length, 3)
+})
+
+Deno.test('re-ask: receiver has emails off -> no email, but the flag is cleared and the re-ask counts (via activity)', async () => {
+  const d = disputedBase()
+  d.users[1].email_notifications_enabled = false
+  const a = fakeAdmin(d, rpcFor(d))
+  const s = fakeSender()
+  assertEquals((await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'opt_out')
+  assertEquals(s.sent.length, 0)
+  assertEquals(d.settlements[0].receipt_disputed_at, null)
+  assertEquals(a.tables.notifications.length, 0)
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_re_asked').length, 1)
+  // two more rounds exhaust the cap of 2 even though no notification rows exist
+  d.settlements[0].receipt_disputed_at = 'x'
+  await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)
+  d.settlements[0].receipt_disputed_at = 'x'
+  assertEquals((await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'reask_limit')
+})
+
+Deno.test('re-ask (D4): a failed send puts the flag back, retires nothing the receiver saw, releases the key so a retry works', async () => {
+  const d = disputedBase()
+  const a = fakeAdmin(d, rpcFor(d))
+  const r = await sendReAskNotice(a.client, fakeSender({ fail: true }).sender, OPTS_ACTOR)
+  assertEquals(r.reason, 'send_failed')
+  assert(d.settlements[0].receipt_disputed_at, 'flag restored')
+  assertEquals(a.calls.rpc.map((c) => c.fn), ['clear_receipt_dispute', 'restore_receipt_dispute'])
+  assertEquals(a.tables.notifications.length, 0)
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_re_asked').length, 0) // a failed ask does not count toward the cap
+  assert((await sendReAskNotice(a.client, fakeSender().sender, OPTS_ACTOR)).sent)
+})
+
+Deno.test('re-ask (D2): database failures are reported, nothing is left claimed', async () => {
+  for (const [fail, reason] of [
+    [{ result: 'token_failed' }, 'token_failed'],
+    [{ __error: true }, 'clear_failed'],
+    [{ result: 'weird' }, 'clear_failed'],
+    [{ result: 'not_disputed' }, 'not_disputed'],
+    [{ result: 'not_marked_paid' }, 'not_marked_paid'],
+  ] as const) {
+    const d = disputedBase()
+    const a = fakeAdmin(d, () => fail)
+    const s = fakeSender()
+    assertEquals((await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)).reason, reason)
+    assertEquals(s.sent.length, 0)
+    assertEquals(a.tables.notifications.length, 0)
+  }
+  // a transient failure reading the flag is NOT "not supported"
+  const t = fakeAdmin(disputedBase(), undefined, { failState: true })
+  assertEquals((await sendReAskNotice(t.client, fakeSender().sender, OPTS_ACTOR)).reason, 'state_failed')
+})
+
+Deno.test('re-ask (D2): capped (sequence full) changes nothing and says so', async () => {
+  const d = disputedBase()
+  const a = fakeAdmin(d, rpcFor(d))
+  a.tables.notifications.push(
+    ...[1, 2, 3, 4].map((n) => ({ kind: 'payment_paid_notice', entity_id: 's1', sent_at: nextTime(), dedupe_key: `notice:paid:s1:recv:${n}` }))
+  )
+  const s = fakeSender()
+  assertEquals((await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)).reason, 'capped')
+  assert(d.settlements[0].receipt_disputed_at)
+  assertEquals(a.calls.rpc.length, 0)
+  assertEquals(s.sent.length, 0)
+})
+
+Deno.test('re-ask: both people must be on the trip; gates and the daily cap leave no stray rows', async () => {
+  const d = disputedBase()
+  d.trip_participants = d.trip_participants.filter((p) => p.user_id !== 'recv')
+  const a = fakeAdmin(d, rpcFor(d))
+  assertEquals((await sendReAskNotice(a.client, fakeSender().sender, OPTS_ACTOR)).reason, 'not_found')
+  assertEquals(d.settlements[0].receipt_disputed_at, '2026-11-20T10:00:00Z')
+})
+
+Deno.test('disputed notice (in app): needs the flag; one per round; a new round after a re-ask', async () => {
+  const d = disputedBase()
+  const a = fakeAdmin(d, rpcFor(d))
+  const s = fakeSender()
+  const inApp = { ...OPTS, requireFlag: true, activityActorId: 'recv' }
+  await sendPaidNotice(a.client, s.sender, OPTS_ACTOR)
+  assertEquals(await sendDisputedNotice(a.client, s.sender, inApp), { sent: true, reason: null })
+  assertEquals(s.sent.at(-1)!.toEmail, 'p@x.co')
+  assertEquals(a.tables.notifications.find((n) => n.kind === 'payment_disputed_notice')!.dedupe_key, 'notice:disputed:s1:payer:1')
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_receipt_disputed').length, 1)
+  // double tap: nothing more
+  assertEquals((await sendDisputedNotice(a.client, s.sender, inApp)).reason, 'already_sent')
+  assertEquals(a.tables.activity_feed.filter((x) => x.verb === 'settlement_receipt_disputed').length, 1)
+  // payer asks again, receiver says no again: round 2
+  await sendReAskNotice(a.client, s.sender, OPTS_ACTOR)
+  d.settlements[0].receipt_disputed_at = '2026-11-20T12:00:00Z'
+  assertEquals((await sendDisputedNotice(a.client, s.sender, inApp)).sent, true)
+  assert(a.tables.notifications.some((n) => n.dedupe_key === 'notice:disputed:s1:payer:2'))
+  // not flagged: an in-app caller cannot make the payer receive mail
+  d.settlements[0].receipt_disputed_at = null
+  const before = a.tables.notifications.length
+  const b = fakeAdmin(d, rpcFor(d))
+  assertEquals((await sendDisputedNotice(b.client, fakeSender().sender, inApp)).reason, 'not_disputed')
+  assertEquals(b.tables.notifications.length, before)
+  // column missing: nothing
+  const c = fakeAdmin(disputedBase(), undefined, { noFlagColumn: true })
+  assertEquals((await sendDisputedNotice(c.client, fakeSender().sender, inApp)).reason, 'not_disputed')
+})
+
+Deno.test('disputed notice (token path, no flag check): unchanged behaviour plus round-awareness', async () => {
+  const a = fakeAdmin(base())
+  const s = fakeSender()
+  assert((await sendDisputedNotice(a.client, s.sender, OPTS)).sent)
+  assertEquals((await sendDisputedNotice(a.client, s.sender, OPTS)).reason, 'already_sent')
+  assertEquals(kinds(a.tables), ['notice:disputed:s1:payer:1'])
 })

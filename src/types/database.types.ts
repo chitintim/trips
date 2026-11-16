@@ -1454,6 +1454,9 @@ export type Database = {
           id: string
           notes: string | null
           payment_method: string | null
+          // optional on purpose: absent until 20261121090000 is applied (select('*') omits it)
+          last_retracted_at?: string | null
+          receipt_disputed_at?: string | null
           settled_at: string
           status: string
           to_user_id: string
@@ -1468,6 +1471,8 @@ export type Database = {
           id?: string
           notes?: string | null
           payment_method?: string | null
+          last_retracted_at?: string | null
+          receipt_disputed_at?: string | null
           settled_at: string
           status?: string
           to_user_id: string
@@ -1482,6 +1487,8 @@ export type Database = {
           id?: string
           notes?: string | null
           payment_method?: string | null
+          last_retracted_at?: string | null
+          receipt_disputed_at?: string | null
           settled_at?: string
           status?: string
           to_user_id?: string

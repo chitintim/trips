@@ -164,7 +164,9 @@ import {
   waitlistOfferDescription,
 } from './chaseCopy.ts'
 
-import { PAID_NOTICE_KIND, paidNoticeSentToday, type PaidNoticeRow } from './paymentNoticeToday.ts'
+import { PAID_NOTICE_KIND, REASK_NOTICE_KIND, paidNoticeSentToday, type PaidNoticeRow } from './paymentNoticeToday.ts'
+import { settlementChase } from './settlementChase.ts'
+import type { ChaseKind } from './chaseKinds.ts'
 
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
 
@@ -173,22 +175,7 @@ interface ChaseItem {
   tripId: string
   tripName: string
   userId: string
-  kind:
-    | 'unclaimed_items'
-    | 'unvoted_poll'
-    | 'unfilled_order'
-    | 'pending_rsvp'
-    | 'conditional_date_arrived'
-    | 'waitlist_offer'
-    | 'unpaid_settlement'
-    | 'unconfirmed_settlement'
-    | 't30_no_transport'
-    | 't14_missing_arrival'
-    | 't1_checkin'
-    | 'decision'
-    | 'action_due_7d'
-    | 'action_due_1d'
-    | 'overdue_action'
+  kind: ChaseKind
   entityType: string
   entityId: string
   /** Overrides the default `chase:<kind>:<entityId>:<userId>:<seq>` dedupe key (the decision email carries the winner in it). */
@@ -764,12 +751,18 @@ Deno.serve(async (req) => {
       // ---- f. Settlements 'suggested'/'marked_paid' older than N days ----
       if (moneyOpen) {
         const staleDays = 3
-        const { data: settlements } = await admin
-          .from('settlements')
-          .select('id, from_user_id, to_user_id, amount, currency, status, created_at')
-          .eq('trip_id', trip.id)
-          .in('status', ['suggested', 'marked_paid'])
-          .lt('created_at', hoursAgoIso(staleDays * 24, now))
+        const settlementQuery = (cols: string) =>
+          admin
+            .from('settlements')
+            .select(cols)
+            .eq('trip_id', trip.id)
+            .in('status', ['suggested', 'marked_paid'])
+            .lt('created_at', hoursAgoIso(staleDays * 24, now))
+        // receipt_disputed_at may not exist yet (migration not applied): retry without it.
+        // deno-lint-ignore no-explicit-any
+        let settlementRes: { data: any[] | null; error: unknown } = await settlementQuery('id, from_user_id, to_user_id, amount, currency, status, created_at, receipt_disputed_at')
+        if (settlementRes.error) settlementRes = await settlementQuery('id, from_user_id, to_user_id, amount, currency, status, created_at')
+        const settlements = settlementRes.data
         const nameIds = [...new Set((settlements ?? []).flatMap((s) => [s.from_user_id as string, s.to_user_id as string]))]
         const nameById = new Map<string, string>()
         if (nameIds.length > 0) {
@@ -786,18 +779,20 @@ Deno.serve(async (req) => {
           const { data: noticeRows } = await admin
             .from('notifications')
             .select('entity_id, user_id, sent_at')
-            .eq('kind', PAID_NOTICE_KIND)
+            .in('kind', [PAID_NOTICE_KIND, REASK_NOTICE_KIND])
             .in('entity_id', markedPaidIds)
             .gte('sent_at', todayStartIso)
           paidNoticesToday = (noticeRows ?? []) as PaidNoticeRow[]
         }
         for (const s of settlements ?? []) {
-          if (s.status === 'suggested') {
+          const chase = settlementChase(s)
+          if (!chase) continue // confirmed, or the receiver already said "it hasn't arrived": nobody is chased
+          if (chase.kind === 'unpaid_settlement') {
             // Chase the payer to pay.
             items.push({
               tripId: trip.id,
               tripName: trip.name,
-              userId: s.from_user_id,
+              userId: chase.userId,
               kind: 'unpaid_settlement',
               entityType: 'settlement',
               entityId: s.id,
@@ -810,7 +805,7 @@ Deno.serve(async (req) => {
             items.push({
               tripId: trip.id,
               tripName: trip.name,
-              userId: s.to_user_id,
+              userId: chase.userId,
               kind: 'unconfirmed_settlement',
               entityType: 'settlement',
               entityId: s.id,

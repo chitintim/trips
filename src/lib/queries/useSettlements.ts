@@ -4,7 +4,7 @@ import { Tables, TablesInsert, Json } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { toRpcError } from './useDecide'
-import { notifyPaymentEvent, shouldNotifyPaymentEvent } from './notifyPaymentEvent'
+import { invokePaymentNotice, notifyPaymentEventAndRefresh, shouldNotifyPaymentEvent } from './notifyPaymentEvent'
 import { unresolvedDuplicateGroups } from '../../features/expenses/settle-up/settleUpLogic'
 import {
   isSettlementRpcMissing,
@@ -90,6 +90,7 @@ export interface UpdateSettlementStatusVars {
  * reverted "bounce".
  */
 export function useUpdateSettlementStatus(tripId: string) {
+  const queryClient = useQueryClient()
   return useOptimisticMutation<Settlement, UpdateSettlementStatusVars, Settlement[]>({
     mutationFn: async ({ settlementId, status, payment_method, notes, settled_at }) => {
       const patch: Record<string, unknown> = { status }
@@ -111,7 +112,7 @@ export function useUpdateSettlementStatus(tripId: string) {
           .getUser()
           .then(({ data: auth }) => {
             const event = shouldNotifyPaymentEvent({ newStatus: data.status, actorId: auth.user?.id, receiverId: data.to_user_id })
-            if (event) void notifyPaymentEvent(data.id, event)
+            if (event) void notifyPaymentEventAndRefresh(queryClient, tripId, data.id, event)
           })
           .catch(() => undefined)
         return data
@@ -366,7 +367,7 @@ export function useSettleOnBehalf(tripId: string) {
       }
       // Only a payment recorded as paid asks the receiver to confirm; recording
       // it as received (single or batch) sends nothing.
-      if (to === 'marked_paid') void notifyPaymentEvent(data.id, 'paid')
+      if (to === 'marked_paid') void notifyPaymentEventAndRefresh(queryClient, tripId, data.id, 'paid')
       const currency = data.currency ?? ''
       const { error: logError } = await supabase.from('activity_feed').insert({
         trip_id: tripId,
@@ -393,5 +394,95 @@ export function useSettleOnBehalf(tripId: string) {
     // Settle up, the Money header, Waiting on and the to-do list all read the settlements query.
     onSettled: () => invalidateSettlementState(queryClient, tripId),
     scope: { id: `settlement-status-${tripId}` },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// "It hasn't arrived": receiver says no in the app; payer asks again or takes it back.
+// Needs 20261121090000_payment_receipt_dispute.sql; the UI hides these actions until a settlement row
+// carries `receipt_disputed_at` (see paymentDispute.ts).
+// ---------------------------------------------------------------------------
+
+/** Receiver: flag a marked-paid payment as not received, then email the payer. */
+export function useReceiverDisputeReceipt(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (settlementId: string): Promise<Settlement> => {
+      const { data, error } = await supabase
+        .from('settlements')
+        .update({ receipt_disputed_at: new Date().toISOString() })
+        .eq('id', settlementId)
+        .eq('status', 'marked_paid')
+        .is('receipt_disputed_at', null)
+        .select()
+        .maybeSingle()
+      if (error) throw toRpcError(error, "Couldn't tell the payer")
+      if (data) {
+        void notifyPaymentEventAndRefresh(queryClient, tripId, data.id, 'disputed')
+        return data
+      }
+      const { data: current, error: readError } = await supabase.from('settlements').select().eq('id', settlementId).maybeSingle()
+      if (readError) throw readError
+      if (current && current.status === 'marked_paid' && current.receipt_disputed_at) return current // already said
+      throw new Error('This payment has changed, so it could not be updated. Reload to see where it stands.')
+    },
+    onSettled: () => invalidateSettlementState(queryClient, tripId),
+  })
+}
+
+/**
+ * What to tell the payer when "ask again" did not happen. payment-notice answers 409 with a `reason` for refusals
+ * (reask_limit, not_disputed, wrong_state, capped), 502 when our side failed, 403 when it is not theirs to do.
+ */
+export function askAgainErrorMessage(status: number | null | undefined, reason: string | null | undefined, receiverName: string): string {
+  if (reason === 'reask_limit') return "You've already asked twice — ask an organizer to help"
+  if (reason === 'not_disputed') return `${receiverName} has already replied, so there is nothing to ask again. Reload to see where it stands.`
+  if (reason === 'wrong_state') return 'This payment has changed since you opened it. Reload to see where it stands.'
+  if (reason === 'capped') return `We can't send another email to ${receiverName} right now. Ask an organizer to help.`
+  if (status === 403) return "You can't ask again for this payment. Ask an organizer to help."
+  if (status === 404) return "Asking again isn't available yet."
+  return "Couldn't ask again. Check your connection and try again."
+}
+
+/**
+ * Payer (or an organizer): "I've sent it — ask again". Server side only: payment-notice 're_ask' checks the caps,
+ * clears the flag and issues the receiver's fresh link in one step, then emails them. Not fire-and-forget: the
+ * mutation succeeds ONLY when the function answered 200, so the UI never says "asked" when nothing happened.
+ * (A payer cannot clear the flag with a direct update: the database refuses it.)
+ */
+export function useAskReceiverAgain(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ settlementId, receiverName }: { settlementId: string; receiverName: string }): Promise<void> => {
+      const outcome = await invokePaymentNotice(settlementId, 're_ask')
+      if (!outcome.ok) throw new Error(askAgainErrorMessage(outcome.status, outcome.reason, receiverName))
+    },
+    onSettled: () => invalidateSettlementState(queryClient, tripId),
+  })
+}
+
+/** Payer (or an organizer): "I haven't paid yet". Back to suggested; the database resets the payment details. */
+export function useRetractPayment(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (settlementId: string): Promise<Settlement> => {
+      const { data, error } = await supabase
+        .from('settlements')
+        .update({ status: 'suggested' }) // the database resets the details and the flag, and stamps last_retracted_at
+        .eq('id', settlementId)
+        .eq('status', 'marked_paid')
+        .select()
+        .maybeSingle()
+      if (error) throw toRpcError(error, "Couldn't undo this payment")
+      if (data) {
+        void notifyPaymentEventAndRefresh(queryClient, tripId, data.id, 'retracted')
+        return data
+      }
+      const { data: current, error: readError } = await supabase.from('settlements').select().eq('id', settlementId).maybeSingle()
+      if (readError) throw readError
+      if (current && current.status === 'suggested') return current
+      throw new Error("This payment couldn't be undone: it may have been confirmed, or you don't have permission.")
+    },
+    onSettled: () => invalidateSettlementState(queryClient, tripId),
   })
 }

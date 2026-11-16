@@ -48,6 +48,8 @@ import {
 } from './settleOnBehalf'
 import { paymentNoticeBySettlement, paymentNoticeLines } from './paymentNoticeStatus'
 import { OnBehalfMenu } from './OnBehalfMenu'
+import { DisputeActions } from './DisputeActions'
+import { DISPUTED_PAYMENT_PAUSE, disputedPayments, disputeSupported, disputeView, reAsksUsed } from './paymentDispute'
 import { SettleAllDialog } from './SettleAllDialog'
 import { PaymentDetailsSheet } from './PaymentDetailsSheet'
 import { MarkPaidSheet } from './MarkPaidSheet'
@@ -153,6 +155,12 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   // Freeze is blocked (here and in the server function) while a payment recorded twice is unresolved.
   const freezeBlockedByDuplicates = useMemo(() => unresolvedDuplicateGroups(settlements, trip.base_currency).length > 0, [settlements, trip.base_currency])
 
+  // Freeze and Unfreeze (which leads to a refreeze) are also paused while a payment is flagged "hasn't arrived": a flagged
+  // payment still counts as sent, so a refreeze would hide it (see disputedPayments). UI guard only; the freeze RPCs are unchanged.
+  const disputedList = useMemo(() => disputedPayments(settlements), [settlements])
+  const freezeBlockedByDisputes = disputedList.length > 0
+  const showFirstDisputed = () => document.getElementById(`settlement-${disputedList[0]?.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+
   // Freeze/unfreeze: trip organiser, creator or site admin (one shared rule,
   // see useTripPermissions). The trips-row snapshot write is RLS-protected, so
   // a non-manager's click used to insert a batch of settlement rows while the
@@ -160,7 +168,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   // NOTE: the settlements UPDATE and settlement_carryovers INSERT RLS policies use
   // is_trip_organizer() only, so a site admin who is not on the roster can freeze but
   // may be rejected on those writes; we deliberately do not add UI for them.
-  const { canManageTrip: isOrganizer } = useTripPermissions(trip)
+  const { canManageTrip } = useTripPermissions(trip)
 
   const isFrozen = !!trip.settlement_snapshot
   const legacySnapshot = useMemo(() => readLegacySnapshot(trip.settlement_snapshot), [trip.settlement_snapshot])
@@ -202,6 +210,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
     [participants, trip.created_by]
   )
   const noticeInfo = useMemo(() => paymentNoticeBySettlement(activityEntries, settlements, managerIds), [activityEntries, settlements, managerIds])
+  const disputeOn = disputeSupported(settlements)
   const everythingSettled = isEverythingSettled(settlements) && (isFrozen || suggested.length === 0)
 
   const recordOnBehalf = async (s: Settlement, to: 'marked_paid' | 'confirmed', batch = false) => {
@@ -278,6 +287,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
       const freshSettlements = await fetchSettlements(trip.id)
       queryClient.setQueryData(queryKeys.settlements(trip.id), freshSettlements)
       if (unresolvedDuplicateGroups(freshSettlements, trip.base_currency).length > 0) throw new Error(FREEZE_BLOCKED_BY_DUPLICATES)
+      if (disputedPayments(freshSettlements).length > 0) throw new Error(DISPUTED_PAYMENT_PAUSE)
 
       // Payments already marked paid (or confirmed) are taken into account:
       // only what is STILL owed is suggested, so a freeze never re-creates a
@@ -307,7 +317,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   }
 
   const handleUnfreeze = async () => {
-    if (!user || freezeBlockedByDuplicates) return
+    if (!user || freezeBlockedByDuplicates || freezeBlockedByDisputes) return
     setIsUnfreezing(true)
     try {
       await unfreezeSettlements.mutateAsync({ userId: user.id })
@@ -321,7 +331,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
 
   const handleExportCsv = () => {
     const ledgerCsv = buildExpenseLedgerCsv(expenses, (id) => nameById[id] ?? id)
-    const settlementCsv = buildSettlementSummaryCsv(settlements, (id) => nameById[id] ?? id, (s) => isOrganizer || s.from_user_id === user?.id || s.to_user_id === user?.id)
+    const settlementCsv = buildSettlementSummaryCsv(settlements, (id) => nameById[id] ?? id, (s) => canManageTrip || s.from_user_id === user?.id || s.to_user_id === user?.id)
     downloadCsv(`${trip.name.replace(/\s+/g, '_')}_expense_ledger.csv`, ledgerCsv)
     downloadCsv(`${trip.name.replace(/\s+/g, '_')}_settlement_summary.csv`, settlementCsv)
   }
@@ -413,8 +423,8 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
         <Card noPadding className="p-4 space-y-3">
           <div className="flex items-center justify-between">
             <Badge variant="info">🔒 Balances frozen</Badge>
-            {isOrganizer ? (
-              <Button variant="ghost" size="sm" onClick={handleUnfreeze} disabled={isUnfreezing || freezeBlockedByDuplicates} isLoading={isUnfreezing}>
+            {canManageTrip ? (
+              <Button variant="ghost" size="sm" onClick={handleUnfreeze} disabled={isUnfreezing || freezeBlockedByDuplicates || freezeBlockedByDisputes} isLoading={isUnfreezing}>
                 Unfreeze
               </Button>
             ) : (
@@ -424,12 +434,20 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
           <p className="text-sm text-[var(--text-secondary)]">
             Expense edits are blocked while frozen. Unfreezing is audit-logged to the activity feed.
           </p>
-          {isOrganizer && freezeBlockedByDuplicates && (
+          {canManageTrip && freezeBlockedByDuplicates && (
             <p className="text-xs text-[var(--text-muted)]" role="status">
               {UNFREEZE_BLOCKED_BY_DUPLICATES}
             </p>
           )}
-          {canOfferSettleAll({ canManageTrip: isOrganizer, isFrozen, unfinishedCount: settleAllList.count }) && (
+          {canManageTrip && freezeBlockedByDisputes && (
+            <p className="text-xs text-[var(--text-muted)]" role="status">
+              {DISPUTED_PAYMENT_PAUSE}{' '}
+              <button type="button" className="underline" onClick={showFirstDisputed}>
+                Show me
+              </button>
+            </p>
+          )}
+          {canOfferSettleAll({ canManageTrip, isFrozen, unfinishedCount: settleAllList.count }) && (
             <div className="pt-1">
               <Button
                 variant="secondary"
@@ -464,16 +482,24 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
               ]}
             />
           </div>
-          {isOrganizer ? (
-            <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing || freezeBlockedByDuplicates} isLoading={isFreezing}>
+          {canManageTrip ? (
+            <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing || freezeBlockedByDuplicates || freezeBlockedByDisputes} isLoading={isFreezing}>
               Freeze balances & suggest payments
             </Button>
           ) : (
             <p className="text-sm text-center text-[var(--text-muted)] py-2">Ask an organizer to freeze balances</p>
           )}
-          {isOrganizer && freezeBlockedByDuplicates && (
+          {canManageTrip && freezeBlockedByDuplicates && (
             <p className="text-xs text-center text-[var(--text-muted)]" role="status">
               {FREEZE_BLOCKED_BY_DUPLICATES}
+            </p>
+          )}
+          {canManageTrip && freezeBlockedByDisputes && (
+            <p className="text-xs text-center text-[var(--text-muted)]" role="status">
+              {DISPUTED_PAYMENT_PAUSE}{' '}
+              <button type="button" className="underline" onClick={showFirstDisputed}>
+                Show me
+              </button>
             </p>
           )}
         </Card>
@@ -520,7 +546,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
 
       <DuplicatePaymentsNotice
         groups={duplicatePayments}
-        canRemove={isOrganizer}
+        canRemove={canManageTrip}
         tripId={trip.id}
         baseCurrency={trip.base_currency}
         nameOf={(id) => nameById[id] ?? 'Someone'}
@@ -536,7 +562,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
           const toName = nameById[s.to_user_id] ?? 'someone'
           const paidDate = new Date(s.settled_at).toLocaleDateString()
           const mismatchAmount = pendingMismatchByPair.get(s.id)
-          const behalfActions = onBehalfActions(s, { canManageTrip: isOrganizer, viewerId: user?.id, receiverName: toName })
+          const behalfActions = onBehalfActions(s, { canManageTrip, viewerId: user?.id, receiverName: toName })
           const rec = onBehalfRecords.get(s.id)
           const behalfLabel = onBehalfLabel(
             s,
@@ -546,7 +572,12 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
             (iso) => new Date(iso).toLocaleDateString()
           )
 
-          const noticeLines = paymentNoticeLines(s, noticeInfo.get(s.id), { viewerId: user?.id, canManageTrip: isOrganizer }, toName, (iso) => new Date(iso).toLocaleDateString())
+          const dView = disputeView(
+            s,
+            { viewerId: user?.id, canManageTrip },
+            { supported: disputeOn, reAsksUsed: reAsksUsed(activityEntries, s, managerIds), payerName: fromName, receiverName: toName }
+          )
+          const noticeLines = paymentNoticeLines(s, noticeInfo.get(s.id), { viewerId: user?.id, canManageTrip }, toName, (iso) => new Date(iso).toLocaleDateString())
 
           // Bug #14: a bare status badge told nobody what it meant or whose
           // turn it was next. One caption per status/viewer, mirroring the
@@ -623,7 +654,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
               {(s.payment_method || s.notes) && s.status !== 'suggested' && (
                 <p className="text-xs text-[var(--text-muted)] pl-9">
                   Paid via {s.payment_method ?? 'an unspecified method'} on {paidDate}
-                  {s.notes && (isOrganizer || s.from_user_id === user?.id || s.to_user_id === user?.id) ? ` — "${s.notes}"` : ''}
+                  {s.notes && (canManageTrip || s.from_user_id === user?.id || s.to_user_id === user?.id) ? ` — "${s.notes}"` : ''}
                 </p>
               )}
 
@@ -632,6 +663,8 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
               ) : (
                 caption && <p className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">{caption}</p>
               )}
+
+              <DisputeActions tripId={trip.id} settlementId={s.id} payerName={fromName} receiverName={toName} view={dView} recordedOnBehalf={s.status === 'marked_paid' && rec?.toStatus === 'marked_paid'} />
 
               {noticeLines.map((line) => (
                 <p key={line} className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">

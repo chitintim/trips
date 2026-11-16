@@ -76,8 +76,79 @@ test.describe('confirm payment page', () => {
     await expect(page.getByRole('button', { name: 'Yes, I received it' })).toHaveCount(0)
   })
 
-  test('missing token', async ({ page }) => {
+  test('missing token: a distinct message and no call to the function', async ({ page }) => {
+    const calls = await mock(page, { peek: { state: 'invalid' } })
     await page.goto('/trips/confirm-payment')
-    await expect(page.getByText("This link isn't valid.")).toBeVisible()
+    await expect(page.getByText('This link is missing its code — open the email again or open the app.')).toBeVisible()
+    await expect(page.getByText("This link isn't valid.")).toHaveCount(0)
+    await expect(page.getByRole('link', { name: /Open Tim's Trip Planner/ })).toBeVisible()
+    expect(calls).toHaveLength(0)
+  })
+
+  test('a=yes: preselected, one big button, confirms; token and a= leave the address bar', async ({ page }) => {
+    const calls = await mock(page, { peek: { state: 'valid', payment }, post: { state: 'confirmed', payment } })
+    await page.goto('/trips/confirm-payment?t=abc&a=yes')
+    const yes = page.getByRole('button', { name: 'Yes, I received £105.11 from Salim' })
+    await expect(yes).toBeVisible()
+    await expect(page.getByRole('button', { name: "Tell Salim it hasn't arrived" })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Change my answer' })).toBeVisible()
+    expect(page.url()).not.toContain('abc')
+    expect(page.url()).not.toContain('a=')
+    // Opening changed nothing: only peeks so far.
+    expect(calls.every((c) => (c.body as { action: string }).action === 'peek')).toBe(true)
+    await yes.click()
+    await expect(page.getByText(/you've confirmed it/i)).toBeVisible()
+    expect(collapse(calls.map((c) => (c.body as { action: string }).action))).toEqual(['peek', 'confirm'])
+    expect(calls.every((c) => !c.url.includes('abc'))).toBe(true)
+  })
+
+  test('a=no: preselected, tells the payer', async ({ page }) => {
+    const calls = await mock(page, { peek: { state: 'valid', payment }, post: { state: 'disputed', payment } })
+    await page.goto('/trips/confirm-payment?t=abc&a=no')
+    await page.getByRole('button', { name: "Tell Salim it hasn't arrived" }).click()
+    await expect(page.getByText("Thanks. We've told Salim.")).toBeVisible()
+    expect(collapse(calls.map((c) => (c.body as { action: string }).action))).toEqual(['peek', 'not_received'])
+  })
+
+  test('change my answer flips the choice and posts the other action; a refresh keeps the hint', async ({ page }) => {
+    const calls = await mock(page, { peek: { state: 'valid', payment }, post: { state: 'confirmed', payment } })
+    await page.goto('/trips/confirm-payment?t=abc&a=no')
+    await page.reload()
+    await expect(page.getByRole('button', { name: "Tell Salim it hasn't arrived" })).toBeVisible()
+    await page.getByRole('button', { name: 'Change my answer' }).click()
+    await expect(page.getByRole('button', { name: 'Yes, I received £105.11 from Salim' })).toBeVisible()
+    await page.getByRole('button', { name: 'Change my answer' }).click()
+    await expect(page.getByRole('button', { name: "Tell Salim it hasn't arrived" })).toBeVisible()
+    await page.getByRole('button', { name: 'Change my answer' }).click()
+    await page.getByRole('button', { name: 'Yes, I received £105.11 from Salim' }).click()
+    await expect(page.getByText(/you've confirmed it/i)).toBeVisible()
+    expect(calls.filter((c) => (c.body as { action: string }).action !== 'peek').map((c) => (c.body as { action: string }).action)).toEqual(['confirm'])
+  })
+
+  test('junk a= shows both explicit buttons', async ({ page }) => {
+    await mock(page, { peek: { state: 'valid', payment } })
+    await page.goto('/trips/confirm-payment?t=abc&a=maybe')
+    await expect(page.getByRole('button', { name: 'Yes, I received it' })).toBeVisible()
+    await expect(page.getByRole('button', { name: "I haven't received it" })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Change my answer' })).toHaveCount(0)
+  })
+
+  test('old links show the current truth, with no action buttons', async ({ page }) => {
+    await mock(page, { peek: { state: 'asked_again', payment: { ...payment, settlementId: 's-1' } } })
+    await page.goto('/trips/confirm-payment?t=abc&a=no')
+    await expect(page.getByText("Salim says they've sent it — check again.")).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Open this payment in the app' })).toHaveAttribute('href', /trip-1\?open=payment:s-1/)
+    // The only button is the link-wrapped "open the payment" one; no answer buttons.
+    await expect(page.getByRole('button', { name: /received|arrived/i })).toHaveCount(0)
+  })
+
+  test('retracted and disputed revisits', async ({ page }) => {
+    await mock(page, { peek: { state: 'retracted', payment } })
+    await page.goto('/trips/confirm-payment?t=abc')
+    await expect(page.getByText("Salim's payment is no longer marked as paid.")).toBeVisible()
+    await page.unroute('**/functions/v1/payment-confirm*')
+    await mock(page, { peek: { state: 'disputed', payment } })
+    await page.goto('/trips/confirm-payment?t=def')
+    await expect(page.getByText("You told Salim it hasn't arrived.")).toBeVisible()
   })
 })

@@ -55,6 +55,8 @@ export interface PositionPayment {
   amount: number
   currency: string
   status: PaymentStatus
+  /** Marked paid and the receiver has said it hasn't arrived (receipt_disputed_at). */
+  disputed?: boolean
 }
 
 export interface EquationTerm {
@@ -215,6 +217,8 @@ export function explainMoneyPosition(input: ExplainMoneyInput): MoneyEquation {
     amount: s.amount,
     currency: s.currency || baseCurrency,
     status: s.status === 'suggested' ? 'suggested' : s.status === 'marked_paid' ? 'marked_paid' : 'confirmed',
+    // Only meaningful while marked paid; a stale flag on any other status is ignored.
+    disputed: s.status === 'marked_paid' && !!s.receipt_disputed_at,
   })
   const sentPayments = settlements.filter((s) => s.from_user_id === currentUserId).map((s) => toPayment(s, s.to_user_id))
   const receivedPayments = settlements.filter((s) => s.to_user_id === currentUserId).map((s) => toPayment(s, s.from_user_id))
@@ -245,10 +249,26 @@ export function explainMoneyPosition(input: ExplainMoneyInput): MoneyEquation {
   const remainingToReceive = kind === 'owed' ? Math.max(fromMinorUnits(toMinorUnits(ledgerAmount, baseCurrency) - toMinorUnits(receivedWaiting, baseCurrency), baseCurrency), 0) : 0
 
   const waitingOn = sentPayments.filter((p) => p.status === 'marked_paid' && baseMinorOf(p) != null).map((p) => p.counterpartyName)
-  const waitingFrom = receivedPayments.filter((p) => p.status === 'marked_paid' && baseMinorOf(p) != null).map((p) => p.counterpartyName)
   const approx = waitingConverted ? '≈' : ''
-  const sentNote = sentWaiting > 0 ? `${approx}${money(sentWaiting)} sent — waiting for ${nameList(waitingOn)} to confirm` : null
-  const receivedNote = receivedWaiting > 0 ? `${nameList(waitingFrom)} ${new Set(waitingFrom).size > 1 ? 'say' : 'says'} they've paid you ${approx}${money(receivedWaiting)} — confirm receipt` : null
+  // A payment the receiver has said hasn't arrived still counts as sent/waiting; only the wording changes.
+  const disputedOf = (list: PositionPayment[]) => list.filter((p) => p.status === 'marked_paid' && p.disputed && baseMinorOf(p) != null)
+  const sumOf = (list: PositionPayment[]) => fromMinorUnits(list.reduce((acc, p) => acc + (baseMinorOf(p) ?? 0), 0), baseCurrency)
+  const sentDisputed = disputedOf(sentPayments)
+  const receivedDisputed = disputedOf(receivedPayments)
+  const sentDisputedNote = sentDisputed.length > 0 ? `${nameList(sentDisputed.map((p) => p.counterpartyName))} says ${approx}${money(sumOf(sentDisputed))} hasn't arrived` : null
+  const sentNote =
+    sentWaiting > 0 ? `${approx}${money(sentWaiting)} sent — waiting for ${nameList(waitingOn)} to confirm${sentDisputedNote ? ` · ${sentDisputedNote}` : ''}` : null
+  const receivedOpen = receivedPayments.filter((p) => p.status === 'marked_paid' && !p.disputed && baseMinorOf(p) != null)
+  const receivedOpenNames = receivedOpen.map((p) => p.counterpartyName)
+  const receivedOpenNote =
+    receivedOpen.length > 0
+      ? `${nameList(receivedOpenNames)} ${new Set(receivedOpenNames).size > 1 ? 'say' : 'says'} they've paid you ${approx}${money(sumOf(receivedOpen))} — confirm receipt`
+      : null
+  const receivedDisputedNote =
+    receivedDisputed.length > 0
+      ? `You said ${approx}${money(sumOf(receivedDisputed))} from ${nameList(receivedDisputed.map((p) => p.counterpartyName))} hasn't arrived — waiting for ${nameList(receivedDisputed.map((p) => p.counterpartyName))}`
+      : null
+  const receivedNote = receivedWaiting > 0 ? [receivedOpenNote, receivedDisputedNote].filter(Boolean).join(' · ') || null : null
 
   // Money sent beyond the debt (typically payments recorded twice): never "nothing more to pay".
   const overpaidMinor =

@@ -36,7 +36,7 @@ export function RecentActivitySection({ tripId }: { tripId: string }) {
       {open && (
         <ul className="mt-2 space-y-1.5">
           {entries.slice(0, SHOWN).map((entry) => {
-            const rendered = renderActivity(entry, nameFor(entry.actor))
+            const rendered = renderActivity(entry, nameFor(entry.actor), (id) => nameFor(id))
             return (
               <li key={entry.id} className="text-sm text-[var(--text-secondary)] flex items-baseline gap-2">
                 <span aria-hidden="true">{rendered.icon}</span>

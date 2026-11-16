@@ -146,3 +146,12 @@ Deno.test('renderDigestEmail: no decisions -> output identical to before (to-do 
   assert(!r.html.includes('We have an answer'))
   assert(r.html.includes('A few to-dos are waiting on you'))
 })
+
+import { renderSecondaryButton } from './emailTemplate.ts'
+Deno.test('renderSecondaryButton: outlined link, label and url escaped', () => {
+  const h = renderSecondaryButton('No <b>', 'https://x.y/?a=1&b="2"')
+  assert(h.includes('border:1px solid'))
+  assert(h.includes('No &lt;b&gt;'))
+  assert(h.includes('href="https://x.y/?a=1&amp;b=&quot;2&quot;"'))
+  assert(!h.includes('<b>'))
+})

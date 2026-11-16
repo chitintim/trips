@@ -209,6 +209,53 @@ describe('Sicily: finished trip with money owed and long-overdue group actions',
     expect(tim[0].link).toBe('?open=payment:st2')
   })
 
+  describe('payment the receiver says has not arrived', () => {
+    const row = (over = {}) => ({ id: 'st2', from_user_id: 'sam', to_user_id: 'tim', amount: 4698.61, currency: 'GBP', status: 'marked_paid', ...over })
+    const mk = (rows: ReturnType<typeof row>[]) => snap({ ...sicily, settlements: rows })
+    const flagged = new Date(NOW.getTime() - 3_600_000).toISOString() // an hour ago: no age shown yet
+
+    it('payer gets respond_payment, receiver gets nothing, organiser Waiting on lists it under the payer', () => {
+      const s = mk([row({ receipt_disputed_at: flagged })])
+      const sam = computeTodos(s, 'sam', NOW)
+      expect(sam.map((t) => t.kind)).toEqual(['respond_payment'])
+      expect(sam[0]).toMatchObject({ title: "Tim says your £4,698.61 hasn't arrived", actionLabel: 'Respond', link: '?open=payment:st2', counterpartyId: 'tim', group: 'personal' })
+      expect(computeTodos(s, 'tim', NOW).map((t) => t.kind)).toEqual([])
+      const wo = computeWaitingOn(s, NOW)
+      expect(wo.byPerson.find((p) => p.userId === 'sam')?.todos.map((t) => t.kind)).toEqual(['respond_payment'])
+      expect(wo.byPerson.find((p) => p.userId === 'tim')).toBeUndefined()
+    })
+    it('D6: a flag older than 3 days shows how long it has waited (Waiting on); a fresh one does not', () => {
+      const day = 86_400_000
+      const ago = (days: number) => new Date(NOW.getTime() - days * day).toISOString()
+      const title = (flag: string) => computeTodos(mk([row({ receipt_disputed_at: flag })]), 'sam', NOW)[0].title
+      expect(title(ago(4.2))).toBe("Tim says your £4,698.61 hasn't arrived — 4 days")
+      expect(title(ago(3.5))).toBe("Tim says your £4,698.61 hasn't arrived — 3 days")
+      expect(title(ago(2.9))).toBe("Tim says your £4,698.61 hasn't arrived")
+      const wo = computeWaitingOn(mk([row({ receipt_disputed_at: ago(10) })]), NOW)
+      expect(wo.byPerson.find((p) => p.userId === 'sam')?.todos[0].title).toContain('— 10 days')
+    })
+    it('once the payer asks again (flag cleared) the receiver is asked again and the payer is not', () => {
+      const s = mk([row({ receipt_disputed_at: null })])
+      expect(computeTodos(s, 'tim', NOW).map((t) => t.kind)).toEqual(['confirm_payment'])
+      expect(computeTodos(s, 'sam', NOW)).toEqual([])
+    })
+    it('a flag on a confirmed or suggested row is ignored', () => {
+      expect(computeTodos(mk([row({ status: 'confirmed', receipt_disputed_at: flagged })]), 'sam', NOW).map((t) => t.kind)).not.toContain('respond_payment')
+      const sug = computeTodos(mk([row({ status: 'suggested', receipt_disputed_at: flagged })]), 'sam', NOW)
+      expect(sug.map((t) => t.kind)).not.toContain('respond_payment')
+    })
+    it('a disputed payment still counts as sent when working out what is owed', () => {
+      const a = computeTodos(mk([row({ receipt_disputed_at: flagged })]), 'sam', NOW).map((t) => t.kind)
+      expect(a).not.toContain('pay')
+    })
+    it('two identical disputed payments are told apart', () => {
+      const s = mk([row({ id: 'a1', receipt_disputed_at: flagged, settled_at: '2025-06-01T00:00:00Z' }), row({ id: 'a2', receipt_disputed_at: flagged, settled_at: '2025-06-02T00:00:00Z' })])
+      const titles = computeTodos(s, 'sam', NOW).map((t) => t.title)
+      expect(new Set(titles).size).toBe(2)
+      expect(titles[0]).toMatch(/hasn't arrived \(/)
+    })
+  })
+
   it('D7: only same-currency marked-paid amounts reduce what is owed', () => {
     const eur = snap({
       ...sicily,

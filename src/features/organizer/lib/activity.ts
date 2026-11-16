@@ -37,6 +37,8 @@ export type ActivityVerb =
   | 'settlement_confirmed_by_email'
   | 'settlement_receipt_disputed'
   | 'settlement_receipt_requested'
+  | 'settlement_re_asked'
+  | 'settlement_retracted'
   | 'booking_added'
   | 'booking_updated'
   | 'event_added'
@@ -118,6 +120,8 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   settlement_confirmed_by_email: { icon: '📧', phrase: (e) => `confirmed receipt by email${e ? ` (${e})` : ''}` },
   settlement_receipt_disputed: { icon: '⚠️', phrase: (e) => `says they haven't received a payment${e ? ` (${e})` : ''}` },
   settlement_receipt_requested: { icon: '✉️', phrase: (e) => `emailed a receipt confirmation request${e ? ` (${e})` : ''}` },
+  settlement_re_asked: { icon: '🔁', phrase: (e) => `asked for a payment to be checked again${e ? ` (${e})` : ''}` },
+  settlement_retracted: { icon: '↩️', phrase: (e) => `took back "marked as paid"${e ? ` (${e})` : ''}` },
   booking_added: { icon: '🧾', phrase: (e) => `marked${e ? ` "${e}"` : ' an item'} as booked` },
   booking_updated: { icon: '🧾', phrase: (e) => `updated the booking details${e ? ` for "${e}"` : ''}` },
   event_added: { icon: '📅', phrase: (e) => `added${e ? ` "${e}"` : ' something'} to the plan` },
@@ -144,7 +148,7 @@ export interface RenderedActivity {
  * Render one activity_feed row into a human-readable line. Unknown verbs
  * (e.g. rows written by newer code) degrade to `<actor> <verb>`.
  */
-export function renderActivity(entry: ActivityFeedEntry, actorName: string): RenderedActivity {
+export function renderActivity(entry: ActivityFeedEntry, actorName: string, nameOf?: (userId: string) => string | null | undefined): RenderedActivity {
   const entity = (entry.entity ?? null) as ActivityEntity | null
   const label = entity?.label ?? null
   // Written by the scheduled job (auto_decide_question): no actor, flagged auto.
@@ -153,6 +157,12 @@ export function renderActivity(entry: ActivityFeedEntry, actorName: string): Ren
     const winner = typeof meta.decided_option_title === 'string' && meta.decided_option_title ? meta.decided_option_title : null
     const text = `${label ? `"${label}"` : 'A question'} was decided automatically when answers closed${winner ? `: ${winner}` : ''}`
     return { icon: '🏁', text, actorName }
+  }
+  // "Tim added Sam to the trip": the row is written by the person who added (actor) with the ADDED
+  // person's id in entity.id and their role in the label. A person joining themselves keeps "joined the trip".
+  if (entry.verb === 'participant_joined' && entity?.id && entry.actor && entity.id !== entry.actor) {
+    const added = nameOf?.(entity.id)
+    return { icon: '🎉', text: `${actorName} added ${added || 'someone'} to the trip`, actorName }
   }
   const template = VERB_TEMPLATES[entry.verb as ActivityVerb]
   if (!template) {
@@ -190,6 +200,8 @@ const NOTIFICATION_KIND_LABELS: Record<string, NotificationKindInfo> = {
   unconfirmed_settlement: { icon: '🤝', label: 'Payment confirmation reminder' },
   payment_paid_notice: { icon: '💸', label: 'Payment received? (sent right away)' },
   payment_confirmed_notice: { icon: '🤝', label: 'Payment confirmed (sent right away)' },
+  payment_reask_notice: { icon: '🔁', label: 'Payment check again (sent right away)' },
+  payment_retracted_notice: { icon: '↩️', label: 'Payment not paid yet (sent right away)' },
   payment_disputed_notice: { icon: '⚠️', label: 'Payment not received (sent right away)' },
   t30_no_transport: { icon: '✈️', label: 'No transport booked yet' },
   t14_missing_arrival: { icon: '🛬', label: 'Missing arrival details' },

@@ -108,6 +108,7 @@ export const TODO_ACTION_LABEL: Record<TodoKind, string> = {
   task: 'Done',
   pay: 'Pay',
   confirm_payment: 'Confirm',
+  respond_payment: 'Respond',
   claim: 'Claim',
   travel: 'Add',
   waitlist_offer: 'Respond',
@@ -159,6 +160,10 @@ export const unblocksLabel = (n: number) => `${n} ${n === 1 ? 'person' : 'people
 export const anyOrganizerLabel = (n: number) => `Any organizer can do this (${n})`
 export const freezeBalancesTitle = 'Freeze balances so people can settle'
 export const FREEZE_BALANCES_SUBTITLE = 'The trip is over and people owe money, but they cannot pay until you freeze balances'
+/** A flagged payment older than this many days shows its age (organisers see it in Waiting on). */
+export const DISPUTE_AGE_NUDGE_DAYS = 3
+export const respondPaymentTitle = (receiverName: string, amount: string, ageDays: number | null = null) =>
+  `${receiverName} says your ${amount} hasn't arrived${ageDays === null ? '' : ` — ${ageDays} ${ageDays === 1 ? 'day' : 'days'}`}`
 export const confirmPaymentTitle = (fromName: string, amount: string) => `Confirm ${fromName} paid you ${amount}`
 /** Tells two otherwise identical payment lines apart ("Confirm Tim paid you £619.18 (12 Jun)"). */
 export const distinguishedTitle = (title: string, label: string) => `${title} (${label})`

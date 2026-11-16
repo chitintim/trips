@@ -252,3 +252,30 @@ describe('D3/E3: money in another currency is never read 1:1', () => {
     expect(more.overpaid).toBeCloseTo(99.99, 1)
   })
 })
+
+describe('explainMoneyPosition: a payment the receiver says has not arrived', () => {
+  const disputed = (p: Settlement): Settlement => ({ ...p, receipt_disputed_at: '2026-09-11T00:00:00Z' }) as Settlement
+  it('still counts as sent and waiting, but the note says it has not arrived', () => {
+    const eq = explain([...confirmedBack, disputed(pay('p1', ME, ALEX, 2000, 'marked_paid'))])
+    expect(eq.sentWaiting).toBe(2000)
+    expect(eq.remainingToPay).toBe(2698.61)
+    expect(eq.headline.kind).toBe('owe')
+    expect(eq.headline.note).toBe("£2,000.00 sent — waiting for Alex to confirm · Alex says £2,000.00 hasn't arrived")
+  })
+  it('receiver side reads "You said ... hasn\'t arrived"', () => {
+    const eq = explain([disputed(pay('r', ALEX, ME, 3000, 'marked_paid'))])
+    expect(eq.receivedWaiting).toBe(3000)
+    expect(eq.headline.note).toBe("You said £3,000.00 from Alex hasn't arrived — waiting for Alex")
+  })
+  it('mixed: undisputed and disputed notes are both shown', () => {
+    const eq = explain([disputed(pay('r', ALEX, ME, 3000, 'marked_paid')), pay('r2', BEN, ME, 1000, 'marked_paid')])
+    expect(eq.headline.note).toBe("Ben says they've paid you £1,000.00 — confirm receipt · You said £3,000.00 from Alex hasn't arrived — waiting for Alex")
+  })
+  it('a stale flag on a confirmed or suggested row changes nothing', () => {
+    const a = explain([...confirmedBack, pay('p1', ME, ALEX, 2000, 'marked_paid')])
+    const b = explain([...confirmedBack, { ...pay('p1', ME, ALEX, 2000, 'marked_paid') }])
+    expect(b.headline).toEqual(a.headline)
+    const c = explain([...confirmedBack, disputed(pay('p1', ME, ALEX, 2000, 'suggested'))])
+    expect(c.sentPayments[0].disputed).toBe(false)
+  })
+})

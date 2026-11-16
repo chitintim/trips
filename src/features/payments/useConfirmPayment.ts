@@ -4,6 +4,9 @@ import {
   startPosting,
   stateFromHttpFailure,
   stateFromReply,
+  changeAnswer,
+  NO_TOKEN_STATE,
+  type Answer,
   type PageState,
 } from './confirmPaymentState'
 
@@ -27,8 +30,8 @@ export function buildConfirmRequest(token: string, action: Action): RequestInit 
  * are the only calls that change anything and they are sent from an explicit
  * button press.
  */
-export function useConfirmPayment(token: string | null) {
-  const [state, setState] = useState<PageState>(token ? { kind: 'loading' } : { kind: 'dead', reason: 'invalid', payment: null })
+export function useConfirmPayment(token: string | null, hint: Answer | null = null) {
+  const [state, setState] = useState<PageState>(token ? { kind: 'loading' } : NO_TOKEN_STATE)
   const posting = useRef(false)
 
   const load = useCallback(async () => {
@@ -37,11 +40,11 @@ export function useConfirmPayment(token: string | null) {
     try {
       const res = await fetch(FUNCTION_URL, buildConfirmRequest(token, 'peek'))
       if (!res.ok) return setState(stateFromHttpFailure(res.status, 'load'))
-      setState(stateFromReply(parseServerReply(await res.json())))
+      setState(stateFromReply(parseServerReply(await res.json()), hint, 'peek'))
     } catch {
       setState(stateFromHttpFailure(null, 'load'))
     }
-  }, [token])
+  }, [token, hint])
 
   useEffect(() => {
     void load()
@@ -64,7 +67,7 @@ export function useConfirmPayment(token: string | null) {
           setState(failed.kind === 'error' && before && (before as PageState).kind === 'valid' ? { ...(before as PageState & { kind: 'valid' }), posting: null } : failed)
           return
         }
-        setState(stateFromReply(parseServerReply(await res.json())))
+        setState(stateFromReply(parseServerReply(await res.json()), null, 'post'))
       } catch {
         setState(before && (before as PageState).kind === 'valid' ? { ...(before as PageState & { kind: 'valid' }), posting: null } : stateFromHttpFailure(null, 'post'))
       } finally {
@@ -74,5 +77,5 @@ export function useConfirmPayment(token: string | null) {
     [token]
   )
 
-  return { state, reload: load, confirm: () => send('confirm'), notReceived: () => send('not_received') }
+  return { state, reload: load, change: () => setState((s) => changeAnswer(s)), confirm: () => send('confirm'), notReceived: () => send('not_received') }
 }

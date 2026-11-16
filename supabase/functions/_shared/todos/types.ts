@@ -125,6 +125,8 @@ export interface SnapshotSettlement {
   settled_at?: string | null
   created_at?: string | null
   notes?: string | null
+  /** Set while marked_paid when the receiver has said it hasn't arrived and the payer has not responded. Ignored on any other status. */
+  receipt_disputed_at?: string | null
 }
 
 export interface SnapshotTravelEvent {
@@ -184,6 +186,7 @@ export type TodoKind =
   | 'task'
   | 'pay'
   | 'confirm_payment'
+  | 'respond_payment'
   | 'claim'
   | 'travel'
   | 'waitlist_offer'
@@ -230,7 +233,7 @@ export interface Todo {
   unblocks?: number
   /** Organiser decide / tie / close-answers: the title without the "(deadline passed, 7 of 9 answered)" reason, for one-line summaries. */
   shortTitle?: string
-  /** For `confirm_payment`: the person who paid (the other party). */
+  /** For `confirm_payment`: the person who paid (the other party). For `respond_payment`: the receiver who says it hasn't arrived. */
   counterpartyId?: string
 }
 

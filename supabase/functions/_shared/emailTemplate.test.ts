@@ -62,7 +62,7 @@ Deno.test('renderDigestEmail: itemCount counts actions plus other lines after fi
     appUrl: APP_URL,
   })
   assertEquals(rendered.itemCount, 3)
-  assert(rendered.subject.includes('3 things need your attention'))
+  assertEquals(rendered.subject, 'Sailing Sicily: 3 to-dos are waiting on you')
 })
 
 Deno.test('renderDigestEmail: single-action subject still works after filtering empties', () => {
@@ -74,4 +74,33 @@ Deno.test('renderDigestEmail: single-action subject still works after filtering 
   // With the empty section dropped only ONE section remains, so the
   // specific single-action subject line applies.
   assertEquals(rendered.subject, 'Sailing Sicily: "Book the ferry" is due in 6 days')
+})
+
+Deno.test('renderDigestEmail: action rows and footer carry their exact deep links (html and text)', () => {
+  const rendered = renderDigestEmail({
+    greetingName: 'Tim',
+    sections: [
+      section({
+        tripName: 'Sailing Sicily',
+        actionRows: [{ ...sampleRow, link: `${APP_URL}/t?open=todo:a1` }],
+        otherLines: [{ description: 'Answer "Where to stay"', link: `${APP_URL}/t?open=question:s1` }],
+        todosLink: `${APP_URL}/t?open=todos`,
+      }),
+    ],
+    appUrl: APP_URL,
+  })
+  assert(rendered.html.includes('href="https://trips.fontem.ai/t?open=todo:a1"'))
+  assert(rendered.html.includes('href="https://trips.fontem.ai/t?open=question:s1"'))
+  assert(rendered.html.includes('href="https://trips.fontem.ai/t?open=todos"'))
+  assert(rendered.html.includes('See all your to-dos'))
+  assert(rendered.text.includes('https://trips.fontem.ai/t?open=todo:a1'))
+  assert(rendered.text.includes('See all your to-dos: https://trips.fontem.ai/t?open=todos'))
+  assert(!rendered.subject.includes('attention'))
+  assert(!rendered.html.includes('things on your trips'))
+})
+
+Deno.test('renderDigestEmail: rows without links and sections without todosLink render as before', () => {
+  const rendered = renderDigestEmail({ greetingName: 'Tim', sections: [section({ actionRows: [sampleRow] })], appUrl: APP_URL })
+  assert(!rendered.html.includes('See all your to-dos'))
+  assert(rendered.html.includes('Book the ferry'))
 })

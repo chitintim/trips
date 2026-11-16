@@ -68,6 +68,19 @@
 // gracefully). All emails render through the shared "Tim's Trip Planner"
 // template in _shared/emailTemplate.ts -- one digest per user per day.
 //
+// Phase 1 (slice 1F) -- one definition of "what does this person owe":
+//   - every email link is the exact deep link for the thing it is about
+//     (`?open=question:<id>`, `rsvp`, `todo:<id>`, `payment:<id>`,
+//     `travel-details`, `claim:<expenseId>` or the /claim/:code page), built
+//     from the mirrored DEEP_LINKS (_shared/todos/copy.ts); each trip section
+//     of the digest ends with "See all your to-dos" -> `?open=todos`;
+//   - the shared engine (_shared/todos, mirror of src/lib/todos) FILTERS the
+//     candidates (see ./chaseEngine.ts): selections count as answered, no
+//     email for questions without live options, RSVP chases need RSVP
+//     tracking on, travel chases only for confirmed people before the trip.
+//     It can only remove recipients, never add them: no new email kinds, no
+//     email for questions without a deadline. Dedupe keys are unchanged.
+//
 // Test entrypoint: POST {"test_digest": {"trip_id", "user_id", "to_email"}}
 // (same cron/service-role auth) composes that user's action digest for one
 // trip and sends it to to_email ONLY -- no notification/reminder state is
@@ -96,6 +109,29 @@ import { outstandingTargets } from './outstandingTargets.ts'
 import { chaseScopes, isChaseableParticipant, isSectionClosed, isTripOpenForReminders, joinedAfterDueDate } from './chaseScope.ts'
 import { actionRemindersGateOpen, DEFAULT_SETTINGS, inQuietHours, parseChaseSettings } from './chaseSettings.ts'
 import { decideEmailSuppression } from './emailSuppression.ts'
+import {
+  answerTodoId,
+  type ChaseSectionRow,
+  claimChaseOpen,
+  claimEmailLink,
+  DEEP_LINKS,
+  emailLink,
+  engineTodoIds,
+  isOwnChoiceSection,
+  rsvpTodoId,
+  toEngineSections,
+  travelTodoId,
+} from './chaseEngine.ts'
+import {
+  answerDescription,
+  claimDescription,
+  conditionalDateDescription,
+  confirmPaymentDescription,
+  payDescription,
+  rsvpDescription,
+  travelDescription,
+  waitlistOfferDescription,
+} from './chaseCopy.ts'
 
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
 
@@ -180,12 +216,13 @@ interface SectionOptionRow {
   id: string
   section_id: string
   option_votes: { user_id: string }[] | null
+  selections: { user_id: string }[] | null
 }
 
 /**
  * DERIVED completion substrate (see src/features/actions/lib/actionStatus.ts
  * and _shared/actionCompletion/sectionVoters.ts): fetch every option +
- * option_votes row under `sectionIds` and join them into a SectionVoterIds
+ * option_votes / selections row under `sectionIds` and join them into a SectionVoterIds
  * map, so `outstandingTargets` can tell a section-linked action is complete
  * for anyone who's voted, even without a trip_action_completions row.
  * Shared by the staged-reminder sweep and the test-digest entrypoint below.
@@ -194,11 +231,15 @@ async function fetchSectionVoters(admin: SupabaseClient, sectionIds: string[]): 
   if (sectionIds.length === 0) return new Map()
   const { data } = await admin
     .from('options')
-    .select('id, section_id, option_votes(user_id)')
+    .select('id, section_id, option_votes(user_id), selections(user_id)')
     .in('section_id', sectionIds)
   const rows = (data ?? []) as SectionOptionRow[]
   const options: OptionForSectionVoters[] = rows.map((o) => ({ id: o.id, section_id: o.section_id }))
-  const votes: VoteForSectionVoters[] = rows.flatMap((o) => (o.option_votes ?? []).map((v) => ({ option_id: o.id, user_id: v.user_id })))
+  // A selection row (own-choice answers, grid answers) is an answer exactly
+  // like a vote: it has option_id + user_id, same as src/lib/answers/answers.ts.
+  const votes: VoteForSectionVoters[] = rows.flatMap((o) =>
+    [...(o.option_votes ?? []), ...(o.selections ?? [])].map((v) => ({ option_id: o.id, user_id: v.user_id }))
+  )
   return buildSectionVoters(options, votes)
 }
 
@@ -271,7 +312,9 @@ Deno.serve(async (req) => {
     // ---- 1. Load chase-enabled trips (opt-in via trips.chase_settings.enabled) ----
     const { data: trips, error: tripsError } = await admin
       .from('trips')
-      .select('id, name, status, capacity_limit, confirmation_deadline, chase_settings, start_date, end_date')
+      .select(
+        'id, name, status, capacity_limit, confirmation_deadline, confirmation_enabled, base_currency, chase_settings, start_date, end_date, settlement_snapshot'
+      )
       .not('chase_settings', 'is', null)
     if (tripsError) throw tripsError
 
@@ -283,7 +326,12 @@ Deno.serve(async (req) => {
     const waitlistOffersSent: Array<{ trip_id: string; user_id: string; expires_at: string }> = []
 
     for (const trip of chaseTrips) {
-      const tripLink = `${APP_BASE_URL}/${trip.id}`
+      // One bad trip row must never stop everyone else's reminders. Anything
+      // already pushed to `items` for this trip is still valid and is sent
+      // (and deduped per item by `notifications.dedupe_key` as always), so a
+      // retry cannot double-send; the rest of this trip waits for tomorrow.
+      try {
+      const tripLink = emailLink(APP_BASE_URL, trip.id)
       // Finished trips (completed, or end date passed) get no more
       // planning-phase chases (votes, picks, RSVP, arrival details). Money
       // reminders -- unclaimed items (a) and settlements (f) -- are NOT
@@ -293,7 +341,7 @@ Deno.serve(async (req) => {
       // Active participants (used by several loops below).
       const { data: participants } = await admin
         .from('trip_participants')
-        .select('user_id, role, confirmation_status, conditional_type, conditional_date, created_at')
+        .select('user_id, role, active, confirmation_status, conditional_type, conditional_date, created_at')
         .eq('trip_id', trip.id)
         .eq('active', true)
       const activeParticipants = participants ?? []
@@ -308,7 +356,8 @@ Deno.serve(async (req) => {
       const allActiveIds = activeParticipants.map((p) => p.user_id)
 
       // ---- a. Unclaimed items on itemized expenses past threshold ----
-      if (moneyOpen) {
+      // Not once balances are frozen: claims are locked, so the link would be a dead end.
+      if (moneyOpen && claimChaseOpen(trip.settlement_snapshot)) {
         const { data: expenses } = await admin
           .from('expenses')
           .select('id, description, amount, currency, paid_by, participant_ids, created_at, expense_item_claims(user_id), expense_allocation_links(code)')
@@ -334,8 +383,11 @@ Deno.serve(async (req) => {
               kind: 'unclaimed_items',
               entityType: 'expense',
               entityId: e.id,
-              description: `Claim your items on "${e.description}" (${e.currency} ${e.amount})`,
-              deepLink: claimCode ? `${APP_BASE_URL}/claim/${claimCode}` : tripLink,
+              description: claimDescription(e.description, e.amount, e.currency),
+              // The /claim/:code page keeps working for people without the app open.
+              // Without a code there is nothing to claim on, so go to the money tab
+              // rather than a dead "Claiming isn't open" page.
+              deepLink: claimEmailLink(APP_BASE_URL, trip.id, claimCode),
             })
           }
         }
@@ -352,54 +404,39 @@ Deno.serve(async (req) => {
       if (tripOpen) {
         const { data: sections } = await admin
           .from('planning_sections')
-          .select('id, title, status, vote_deadline, metadata, options(id, option_votes(user_id), selections(user_id))')
+          .select('id, title, status, vote_deadline, voting_method, metadata, options(id, status, option_votes(user_id), selections(user_id))')
           .eq('trip_id', trip.id)
           .neq('status', 'completed') // closed polls / finished decisions are never chased
           .not('vote_deadline', 'is', null)
           .gt('vote_deadline', now.toISOString())
           .lt('vote_deadline', hoursAheadIso(48, now))
-        for (const s of sections ?? []) {
+        // The shared engine decides who still owes an answer (votes AND
+        // selections, a question with live options, an in-scope person).
+        const sectionRows = (sections ?? []) as unknown as ChaseSectionRow[]
+        const { sections: engineSections, votes: engineVotes } = toEngineSections(sectionRows)
+        const owed = engineTodoIds(
+          { trip, participants: activeParticipants, sections: engineSections, votes: engineVotes },
+          participantIds,
+          now
+        )
+        for (const s of sectionRows) {
           if (isSectionClosed(s)) continue // belt and braces for the .neq above
-          // deno-lint-ignore no-explicit-any
-          const meta = s.metadata as any
-          const isPersonal = !!meta && typeof meta === 'object' && meta.decision_shape === 'personal'
-
-          if (isPersonal) {
-            const responded = new Set(
-              // deno-lint-ignore no-explicit-any
-              (s.options ?? []).flatMap((o: any) => (o.selections ?? []).map((sel: any) => sel.user_id))
-            )
-            for (const uid of participantIds) {
-              if (responded.has(uid)) continue
-              items.push({
-                tripId: trip.id,
-                tripName: trip.name,
-                userId: uid,
-                kind: 'unfilled_order',
-                entityType: 'planning_section',
-                entityId: s.id,
-                description: `Fill in your picks for "${s.title}" before ${new Date(s.vote_deadline).toUTCString()}`,
-                deepLink: tripLink,
-              })
-            }
-          } else {
-            const voted = new Set(
-              // deno-lint-ignore no-explicit-any
-              (s.options ?? []).flatMap((o: any) => (o.option_votes ?? []).map((v: any) => v.user_id))
-            )
-            for (const uid of participantIds) {
-              if (voted.has(uid)) continue
-              items.push({
-                tripId: trip.id,
-                tripName: trip.name,
-                userId: uid,
-                kind: 'unvoted_poll',
-                entityType: 'planning_section',
-                entityId: s.id,
-                description: `Vote on "${s.title}" before ${new Date(s.vote_deadline).toUTCString()}`,
-                deepLink: tripLink,
-              })
-            }
+          // Own choice (decision_shape 'personal') keeps its own kind so the
+          // dedupe keys and reminder counts are exactly what they were.
+          const isPersonal = isOwnChoiceSection(s.metadata)
+          const deadlineIso = s.vote_deadline as string
+          for (const uid of participantIds) {
+            if (!owed.get(uid)?.has(answerTodoId(s.id))) continue
+            items.push({
+              tripId: trip.id,
+              tripName: trip.name,
+              userId: uid,
+              kind: isPersonal ? 'unfilled_order' : 'unvoted_poll',
+              entityType: 'planning_section',
+              entityId: s.id,
+              description: answerDescription(s.title, isPersonal, deadlineIso),
+              deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.question(s.id)),
+            })
           }
         }
       }
@@ -409,8 +446,13 @@ Deno.serve(async (req) => {
         const deadline = new Date(trip.confirmation_deadline)
         const within72h = deadline.getTime() - now.getTime() < 72 * 3600_000 && deadline.getTime() > now.getTime()
         if (within72h) {
+          // "Are you coming?" is a to-do only while RSVP tracking is on, and
+          // 'interested' people only because a reply-by deadline exists (the
+          // outer condition). The engine confirms both.
+          const rsvpOwed = engineTodoIds({ trip, participants: activeParticipants }, activeParticipants.map((p) => p.user_id), now)
           for (const p of activeParticipants) {
             if (p.confirmation_status === 'pending' || p.confirmation_status === 'interested') {
+              if (!rsvpOwed.get(p.user_id)?.has(rsvpTodoId(trip.id))) continue
               items.push({
                 tripId: trip.id,
                 tripName: trip.name,
@@ -418,8 +460,8 @@ Deno.serve(async (req) => {
                 kind: 'pending_rsvp',
                 entityType: 'trip_participant',
                 entityId: trip.id,
-                description: `Confirm whether you're joining "${trip.name}" -- deadline ${deadline.toUTCString()}`,
-                deepLink: tripLink,
+                description: rsvpDescription(trip.name, trip.confirmation_deadline),
+                deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.rsvp()),
               })
             }
           }
@@ -429,7 +471,9 @@ Deno.serve(async (req) => {
       // ---- d. Stated-date conditionals: conditional_date arrived ----
       if (tripOpen) {
         const todayStr = now.toISOString().split('T')[0]
+        const conditionalOwed = engineTodoIds({ trip, participants: activeParticipants }, activeParticipants.map((p) => p.user_id), now)
         for (const p of activeParticipants) {
+          if (!conditionalOwed.get(p.user_id)?.has(rsvpTodoId(trip.id))) continue
           if (
             p.confirmation_status === 'conditional' &&
             (p.conditional_type === 'date' || p.conditional_type === 'both') &&
@@ -443,8 +487,8 @@ Deno.serve(async (req) => {
               kind: 'conditional_date_arrived',
               entityType: 'trip_participant',
               entityId: trip.id,
-              description: `You said you'd know by ${p.conditional_date} -- can you confirm your spot on "${trip.name}" now?`,
-              deepLink: tripLink,
+              description: conditionalDateDescription(trip.name, p.conditional_date),
+              deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.rsvp()),
             })
           }
         }
@@ -490,8 +534,8 @@ Deno.serve(async (req) => {
               kind: 'waitlist_offer',
               entityType: 'trip_participant',
               entityId: trip.id,
-              description: `A spot opened up on "${trip.name}"! Claim it before ${new Date(expiresAt).toUTCString()} or it passes to the next person.`,
-              deepLink: tripLink,
+              description: waitlistOfferDescription(trip.name, expiresAt),
+              deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.rsvp()),
             })
             spotsToOffer--
           }
@@ -507,6 +551,15 @@ Deno.serve(async (req) => {
           .eq('trip_id', trip.id)
           .in('status', ['suggested', 'marked_paid'])
           .lt('created_at', hoursAgoIso(staleDays * 24, now))
+        const nameIds = [...new Set((settlements ?? []).flatMap((s) => [s.from_user_id as string, s.to_user_id as string]))]
+        const nameById = new Map<string, string>()
+        if (nameIds.length > 0) {
+          const { data: nameRows } = await admin.from('users').select('id, first_name, full_name').in('id', nameIds)
+          for (const u of nameRows ?? []) {
+            const first = (u.first_name as string | null)?.trim() || (u.full_name as string | null)?.trim().split(/\s+/)[0]
+            if (first) nameById.set(u.id as string, first)
+          }
+        }
         for (const s of settlements ?? []) {
           if (s.status === 'suggested') {
             // Chase the payer to pay.
@@ -517,8 +570,8 @@ Deno.serve(async (req) => {
               kind: 'unpaid_settlement',
               entityType: 'settlement',
               entityId: s.id,
-              description: `Settle up ${s.currency ?? ''} ${s.amount} for "${trip.name}"`,
-              deepLink: tripLink,
+              description: payDescription(trip.name, s.amount, s.currency ?? trip.base_currency, nameById.get(s.to_user_id)),
+              deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.payment(s.id)),
             })
           } else {
             // marked_paid: chase the recipient to confirm receipt.
@@ -529,8 +582,8 @@ Deno.serve(async (req) => {
               kind: 'unconfirmed_settlement',
               entityType: 'settlement',
               entityId: s.id,
-              description: `Confirm you received ${s.currency ?? ''} ${s.amount} for "${trip.name}"`,
-              deepLink: tripLink,
+              description: confirmPaymentDescription(trip.name, s.amount, s.currency ?? trip.base_currency, nameById.get(s.from_user_id)),
+              deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.payment(s.id)),
             })
           }
         }
@@ -590,15 +643,19 @@ Deno.serve(async (req) => {
       if (tripOpen && daysUntilStart != null && daysUntilStart <= 14 && daysUntilStart >= 0) {
         const { data: travelEvents } = await admin
           .from('trip_timeline_events')
-          .select('participant_ids')
+          .select('title, participant_ids, metadata')
           .eq('trip_id', trip.id)
           .in('category', ['flight', 'transfer'])
         const events = travelEvents ?? []
         const everyoneCovered = events.some((e) => e.participant_ids === null)
         if (!everyoneCovered) {
           const coveredIds = new Set(events.flatMap((e) => e.participant_ids ?? []))
+          // The engine adds: confirmed people only (when RSVP tracking is on)
+          // and only until the trip starts.
+          const travelOwed = engineTodoIds({ trip, participants: activeParticipants, travelEvents: events }, participantIds, now)
           for (const p of chaseableParticipants) {
             if (coveredIds.has(p.user_id)) continue
+            if (!travelOwed.get(p.user_id)?.has(travelTodoId(trip.id))) continue
             items.push({
               tripId: trip.id,
               tripName: trip.name,
@@ -606,8 +663,8 @@ Deno.serve(async (req) => {
               kind: 't14_missing_arrival',
               entityType: 'trip_participant',
               entityId: trip.id,
-              description: `"${trip.name}" is 2 weeks away -- add your arrival/departure details so the group knows when you're around.`,
-              deepLink: tripLink,
+              description: travelDescription(trip.name),
+              deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.travelDetails()),
             })
           }
         }
@@ -634,9 +691,13 @@ Deno.serve(async (req) => {
             entityType: 'booking',
             entityId: b.id,
             description: `Check in for "${b.title}" (ref ${b.confirmation_ref}) -- it's tomorrow!`,
-            deepLink: tripLink,
+            // The decided option's plan item when the booking has one.
+            deepLink: b.option_id ? emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.item(b.option_id)) : tripLink,
           })
         }
+      }
+      } catch (tripError) {
+        console.error('[auto-chase] trip failed, continuing with the next one:', trip.id, tripError)
       }
     }
 
@@ -659,6 +720,8 @@ Deno.serve(async (req) => {
       if (actionTripsError) throw actionTripsError
 
       for (const trip of actionTrips ?? []) {
+       // Same isolation as the main loop: one bad trip never stops the rest.
+       try {
         // Skip when the organizer has explicitly turned off action
         // reminders, or during configured quiet hours -- both apply even
         // when the bundled chase engine (`enabled`) is off.
@@ -667,8 +730,6 @@ Deno.serve(async (req) => {
         // deadline reminders -- previously overdue "before trip" actions
         // kept emailing people on ongoing and finished trips.
         if (!isTripOpenForReminders(trip, now)) continue
-        const tripLink = `${APP_BASE_URL}/${trip.id}`
-
         // deno-lint-ignore no-explicit-any
         const openActions = (trip.trip_actions ?? []) as any[]
         const staged = openActions.flatMap((a) => {
@@ -733,7 +794,7 @@ Deno.serve(async (req) => {
               entityType: 'trip_action',
               entityId: a.id,
               description: `${chipLabel}: "${a.title}" for "${trip.name}" (${deadlineLabel})`,
-              deepLink: tripLink,
+              deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.todo(a.id)),
               actionReminder: {
                 actionId: a.id,
                 stage,
@@ -745,6 +806,9 @@ Deno.serve(async (req) => {
             })
           }
         }
+       } catch (tripError) {
+        console.error('[auto-chase] action reminders failed for trip, continuing:', trip.id, tripError)
+       }
       }
     }
 
@@ -835,7 +899,13 @@ Deno.serve(async (req) => {
       for (const i of userItems) {
         let section = sectionsByTrip.get(i.tripId)
         if (!section) {
-          section = { tripName: i.tripName, tripLink: `${APP_BASE_URL}/${i.tripId}`, actionRows: [], otherLines: [] }
+          section = {
+            tripName: i.tripName,
+            tripLink: emailLink(APP_BASE_URL, i.tripId),
+            actionRows: [],
+            otherLines: [],
+            todosLink: emailLink(APP_BASE_URL, i.tripId, DEEP_LINKS.todos()),
+          }
           sectionsByTrip.set(i.tripId, section)
         }
         if (i.actionReminder) {
@@ -844,15 +914,18 @@ Deno.serve(async (req) => {
             deadlineLabel: i.actionReminder.deadlineLabel,
             chipLabel: i.actionReminder.chipLabel,
             chipTone: i.actionReminder.chipTone,
+            link: i.deepLink,
           })
         } else {
           section.otherLines.push({ description: i.description, link: i.deepLink })
         }
       }
+      const digestSections = [...sectionsByTrip.values()]
       const rendered = renderDigestEmail({
         greetingName,
-        sections: [...sectionsByTrip.values()],
-        appUrl: APP_BASE_URL,
+        sections: digestSections,
+        // One trip: the button opens its to-dos. Several: the app home.
+        appUrl: digestSections.length === 1 ? digestSections[0].todosLink! : APP_BASE_URL,
       })
 
       // Never send an empty digest. Structurally every user in byUser has
@@ -1021,6 +1094,7 @@ async function handleTestDigest(
       dueDate,
       row: {
         title: a.title,
+        link: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.todo(a.id)),
         deadlineLabel: formatDueDate(dueDate, a.deadline_kind),
         chipLabel: actionDueChipLabel(dueDate, now),
         chipTone: stageChipTone(actionReminderStage(dueDate, now)),
@@ -1047,12 +1121,13 @@ async function handleTestDigest(
     sections: [
       {
         tripName: trip.name,
-        tripLink: `${APP_BASE_URL}/${trip.id}`,
+        tripLink: emailLink(APP_BASE_URL, trip.id),
         actionRows: rows.map((r) => r.row),
         otherLines: [],
+        todosLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.todos()),
       },
     ],
-    appUrl: APP_BASE_URL,
+    appUrl: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.todos()),
   })
 
   if (!emailSender.available) {

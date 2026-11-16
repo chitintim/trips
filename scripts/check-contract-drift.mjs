@@ -8,6 +8,11 @@
  *   - src/shared/contracts/*        <-> supabase/functions/_shared/contracts/*
  *   - src/lib/money/{currencyExponent,minorUnits}.ts
  *                                   <-> supabase/functions/_shared/money/*
+ *   - the "Your to-dos" engine (src/lib/answers, src/lib/todos and the pure
+ *     modules they import) <-> supabase/functions/_shared/{answers,todos}/*.
+ *     Those files import across the src/ feature folders, so FILE_PAIRS
+ *     lists, per file, which import specifiers are spelled differently on the
+ *     edge side. FUNCTION_PAIRS covers a file the edge only needs a slice of.
  *
  * The two copies of each file are expected to differ ONLY in:
  *   - the zod import specifier ('zod' vs 'npm:zod@3')
@@ -36,6 +41,71 @@ const MIRROR_PAIRS = [
 ]
 
 /**
+ * Single-file mirrors whose imports are spelled differently on the edge side
+ * (the frontend file reaches into src/features/**; the edge copy lives in
+ * _shared/). `rewrites` maps the FRONTEND specifier to the EDGE specifier and
+ * is applied to the frontend side before comparing. Code must otherwise match.
+ * [frontend file, edge file, label, rewrites]
+ */
+const D = 'supabase/functions/_shared/todos/deps'
+const FILE_PAIRS = [
+  ['src/lib/answers/answers.ts', 'supabase/functions/_shared/answers/answers.ts', 'answers', {
+    '../../types/database.types': '../todos/deps/json',
+    '../tripStatus': '../todos/deps/tripStatus',
+    '../tripStage': '../todos/deps/tripStage',
+    '../../features/decisions/lib/decisionShapes': '../todos/deps/decisionShapes',
+    '../../features/people/lib/inScopePeople': '../todos/deps/inScopePeople',
+  }],
+  ['src/lib/todos/types.ts', 'supabase/functions/_shared/todos/types.ts', 'todos', {
+    '../../types/database.types': './deps/json',
+    '../tripStatus': './deps/tripStatus',
+  }],
+  ['src/lib/todos/copy.ts', 'supabase/functions/_shared/todos/copy.ts', 'todos', {}],
+  ['src/lib/todos/computeTodos.ts', 'supabase/functions/_shared/todos/computeTodos.ts', 'todos', {
+    '../tripStage': './deps/tripStage',
+    '../../features/people/lib/inScopePeople': './deps/inScopePeople',
+    '../../features/actions/lib/actionStatus': './deps/actionStatus',
+    '../../features/people/lib/travelDetails': './deps/travelDetails',
+    '../../features/decisions/lib/resolveDecision': './deps/resolveDecision',
+  }],
+  ['src/lib/tripStage.ts', `${D}/tripStage.ts`, 'todos-deps', { '../types': './tripStatus' }],
+  ['src/features/people/lib/inScopePeople.ts', `${D}/inScopePeople.ts`, 'todos-deps', {}],
+  ['src/features/decisions/lib/optionMetadata.ts', `${D}/optionMetadata.ts`, 'todos-deps', { '../../../types/database.types': './json' }],
+  ['src/features/decisions/lib/decisionShapes.ts', `${D}/decisionShapes.ts`, 'todos-deps', {
+    '../../../lib/money': '../../money/minorUnits',
+    '../../../types/database.types': './json',
+  }],
+  ['src/features/decisions/lib/voting.ts', `${D}/voting.ts`, 'todos-deps', { '../../../lib/queries/usePlanning': './planningTypes' }],
+  ['src/features/decisions/lib/resolveDecision.ts', `${D}/resolveDecision.ts`, 'todos-deps', { '../../../types/database.types': './json' }],
+  ['src/features/people/lib/travelDetails.ts', `${D}/travelDetails.ts`, 'todos-deps', {
+    '../../../types': './timelineEvent',
+    '../../../types/database.types': './json',
+  }],
+]
+
+/**
+ * Edge files that carry only some functions of a frontend file. The named
+ * top-level `export function`s must match exactly (comments/whitespace aside).
+ * [frontend file, edge file, label, function names]
+ */
+const FUNCTION_PAIRS = [
+  ['src/features/actions/lib/actionStatus.ts', `${D}/actionStatus.ts`, 'todos-deps', ['withClosedSections']],
+]
+
+/** Source text of a top-level `export function name(...) {...}` (up to its closing `}` in column 0). */
+function extractFunction(src, name) {
+  const lines = src.split('\n')
+  const start = lines.findIndex((l) => l.startsWith(`export function ${name}(`) || l.startsWith(`export function ${name}<`))
+  if (start === -1) return null
+  const out = []
+  for (let i = start; i < lines.length; i++) {
+    out.push(lines[i])
+    if (lines[i] === '}') break
+  }
+  return out.join('\n')
+}
+
+/**
  * Strips /* *\/ block comments and // line comments, then collapses all
  * whitespace runs to a single space and trims. Adequate for these files
  * (no string literals containing `//` or `/*`, no template-literal regex
@@ -60,16 +130,19 @@ function stripCommentsAndWhitespace(src) {
  * the specifier detail -- it only cares that, once normalized, the two
  * files describe the same imports.
  */
-function normalizeImports(src) {
+function normalizeImports(src, rewrites = {}) {
   return src
     .replace(/from\s+'zod'/g, "from 'npm:zod@3'")
     .replace(/from\s+"zod"/g, 'from "npm:zod@3"')
-    .replace(/from\s+'(\.\/[a-zA-Z0-9_-]+)'/g, "from '$1.ts'")
-    .replace(/from\s+'(\.\/[a-zA-Z0-9_-]+)\.ts\.ts'/g, "from '$1.ts'") // idempotent guard
+    // Relative specifiers: apply the per-file rewrites, then require '.ts'.
+    .replace(/from\s+'(\.{1,2}\/[^']+)'/g, (_m, spec) => {
+      const mapped = rewrites[spec] ?? spec
+      return `from '${mapped.endsWith('.ts') ? mapped : mapped + '.ts'}'`
+    })
 }
 
-function normalize(src) {
-  return stripCommentsAndWhitespace(normalizeImports(src))
+function normalize(src, rewrites = {}) {
+  return stripCommentsAndWhitespace(normalizeImports(src, rewrites))
 }
 
 function listTsFiles(dir) {
@@ -109,6 +182,39 @@ for (const [frontendRel, edgeRel, label] of MIRROR_PAIRS) {
     const normEdge = normalize(edgeSrc)
     if (normFrontend !== normEdge) {
       failures.push({ label, file: f, frontendPath: join(frontendRel, f), edgePath: join(edgeRel, f) })
+    }
+  }
+}
+
+for (const [frontendRel, edgeRel, label, rewrites] of FILE_PAIRS) {
+  checkedCount++
+  const frontendPath = join(repoRoot, frontendRel)
+  const edgePath = join(repoRoot, edgeRel)
+  if (!existsSync(frontendPath) || !existsSync(edgePath)) {
+    failures.push({ label, file: '(missing file)', frontendPath: frontendRel, edgePath: edgeRel })
+    continue
+  }
+  const a = normalize(readFileSync(frontendPath, 'utf8'), rewrites)
+  const b = normalize(readFileSync(edgePath, 'utf8'))
+  if (a !== b) failures.push({ label, file: frontendRel, frontendPath: frontendRel, edgePath: edgeRel })
+}
+
+for (const [frontendRel, edgeRel, label, names] of FUNCTION_PAIRS) {
+  const frontendPath = join(repoRoot, frontendRel)
+  const edgePath = join(repoRoot, edgeRel)
+  if (!existsSync(frontendPath) || !existsSync(edgePath)) {
+    checkedCount++
+    failures.push({ label, file: '(missing file)', frontendPath: frontendRel, edgePath: edgeRel })
+    continue
+  }
+  const frontendSrc = readFileSync(frontendPath, 'utf8')
+  const edgeSrc = readFileSync(edgePath, 'utf8')
+  for (const name of names) {
+    checkedCount++
+    const a = extractFunction(frontendSrc, name)
+    const b = extractFunction(edgeSrc, name)
+    if (a === null || b === null || normalize(a) !== normalize(b)) {
+      failures.push({ label, file: `${frontendRel}#${name}`, frontendPath: `${frontendRel}#${name}`, edgePath: `${edgeRel}#${name}` })
     }
   }
 }

@@ -1,0 +1,181 @@
+/**
+ * Run with: deno test supabase/functions/auto-chase/
+ *
+ * Proves the engine bridge only ever REMOVES recipients relative to the old
+ * auto-chase rules, and that every email link is the exact deep link.
+ */
+import { assert, assertEquals } from 'jsr:@std/assert@1'
+import {
+  answerTodoId,
+  claimChaseOpen,
+  claimEmailLink,
+  type ChaseSectionRow,
+  DEEP_LINKS,
+  emailLink,
+  engineTodoIds,
+  isOwnChoiceSection,
+  rsvpTodoId,
+  toEngineSections,
+  travelTodoId,
+} from './chaseEngine.ts'
+import { buildSectionVoters } from '../_shared/actionCompletion/sectionVoters.ts'
+
+const NOW = new Date('2026-11-16T10:00:00Z')
+const BASE = 'https://trips.fontem.ai'
+
+const trip = {
+  id: 't1',
+  name: 'Japow 2027',
+  status: 'booking_details',
+  start_date: '2027-01-20',
+  end_date: '2027-01-27',
+  confirmation_enabled: true,
+  confirmation_deadline: '2026-11-18T12:00:00Z',
+}
+const person = (user_id: string, confirmation_status = 'confirmed', extra = {}) => ({ user_id, active: true, confirmation_status, ...extra })
+
+const section = (over: Partial<ChaseSectionRow> = {}): ChaseSectionRow => ({
+  id: 's1',
+  title: 'Where are we staying?',
+  status: 'in_progress',
+  vote_deadline: '2026-11-17T10:00:00Z',
+  voting_method: 'single',
+  metadata: null,
+  options: [
+    { id: 'o1', status: 'proposed', option_votes: [], selections: [] },
+    { id: 'o2', status: 'proposed', option_votes: [], selections: [] },
+  ],
+  ...over,
+})
+
+function owed(rows: ChaseSectionRow[], users: string[], t = trip, participants = users.map((u) => person(u))) {
+  const { sections, votes } = toEngineSections(rows)
+  return engineTodoIds({ trip: t, participants, sections, votes }, users, NOW)
+}
+
+Deno.test('links: exact deep links on top of APP_BASE_URL', () => {
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.question('s1')), `${BASE}/t1?open=question:s1`)
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.rsvp()), `${BASE}/t1?open=rsvp`)
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.todo('a1')), `${BASE}/t1?open=todo:a1`)
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.payment('p1')), `${BASE}/t1?open=payment:p1`)
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.claim('e1')), `${BASE}/t1?open=claim:e1`)
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.travelDetails()), `${BASE}/t1?open=travel-details`)
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.todos()), `${BASE}/t1?open=todos`)
+  assertEquals(emailLink(BASE, 't1', DEEP_LINKS.settle()), `${BASE}/t1?open=settle`)
+  assertEquals(emailLink(BASE, 't1'), `${BASE}/t1`)
+})
+
+Deno.test('answers: nobody has answered -> everyone in scope owes the answer', () => {
+  const r = owed([section()], ['u1', 'u2'])
+  assert(r.get('u1')!.has(answerTodoId('s1')))
+  assert(r.get('u2')!.has(answerTodoId('s1')))
+})
+
+Deno.test('answers: a vote counts as answered', () => {
+  const s = section()
+  s.options![0].option_votes = [{ user_id: 'u1' }]
+  const r = owed([s], ['u1', 'u2'])
+  assert(!r.get('u1')!.has(answerTodoId('s1')))
+  assert(r.get('u2')!.has(answerTodoId('s1')))
+})
+
+Deno.test('answers: a SELECTION counts as answered on a group question too (old rule would have chased u1)', () => {
+  const s = section()
+  s.options![1].selections = [{ user_id: 'u1' }]
+  const r = owed([s], ['u1', 'u2'])
+  assert(!r.get('u1')!.has(answerTodoId('s1')))
+  assert(r.get('u2')!.has(answerTodoId('s1')))
+})
+
+Deno.test('answers: own-choice question answered by a selection is not chased', () => {
+  const s = section({ metadata: { decision_shape: 'personal' } })
+  s.options![0].selections = [{ user_id: 'u1' }]
+  assert(isOwnChoiceSection(s.metadata))
+  const r = owed([s], ['u1', 'u2'])
+  assert(!r.get('u1')!.has(answerTodoId('s1')))
+  assert(r.get('u2')!.has(answerTodoId('s1')))
+})
+
+Deno.test('answers: no live option -> nothing to answer; cancelled options do not count', () => {
+  const s = section()
+  s.options = [{ id: 'o1', status: 'cancelled', option_votes: [], selections: [] }]
+  assert(!owed([s], ['u1']).get('u1')!.has(answerTodoId('s1')))
+  assert(!owed([section({ options: [] })], ['u1']).get('u1')!.has(answerTodoId('s1')))
+})
+
+Deno.test('answers: a finished trip never needs an answer', () => {
+  const finished = { ...trip, status: 'trip_completed' }
+  assert(!owed([section()], ['u1'], finished).get('u1')!.has(answerTodoId('s1')))
+  const pastEnd = { ...trip, start_date: '2026-10-01', end_date: '2026-10-10' }
+  assert(!owed([section()], ['u1'], pastEnd).get('u1')!.has(answerTodoId('s1')))
+})
+
+Deno.test('answers: declined people owe nothing', () => {
+  const r = owed([section()], ['u1'], trip, [person('u1', 'declined')])
+  assert(!r.get('u1')!.has(answerTodoId('s1')))
+})
+
+Deno.test('rsvp: pending is chased; interested only because a deadline exists; RSVP tracking off -> nobody', () => {
+  const users = ['p', 'i', 'c']
+  const parts = [person('p', 'pending'), person('i', 'interested'), person('c', 'confirmed')]
+  const r = engineTodoIds({ trip, participants: parts }, users, NOW)
+  assert(r.get('p')!.has(rsvpTodoId('t1')))
+  assert(r.get('i')!.has(rsvpTodoId('t1')))
+  assert(!r.get('c')!.has(rsvpTodoId('t1')))
+
+  const noDeadline = engineTodoIds({ trip: { ...trip, confirmation_deadline: null }, participants: parts }, users, NOW)
+  assert(noDeadline.get('p')!.has(rsvpTodoId('t1')))
+  assert(!noDeadline.get('i')!.has(rsvpTodoId('t1')))
+
+  const off = engineTodoIds({ trip: { ...trip, confirmation_enabled: false }, participants: parts }, users, NOW)
+  for (const u of users) assert(!off.get(u)!.has(rsvpTodoId('t1')))
+})
+
+Deno.test('rsvp: a conditional person whose date has arrived owes the RSVP', () => {
+  const parts = [person('c', 'conditional', { conditional_date: '2026-11-16' }), person('f', 'conditional', { conditional_date: '2026-12-01' })]
+  const r = engineTodoIds({ trip, participants: parts }, ['c', 'f'], NOW)
+  assert(r.get('c')!.has(rsvpTodoId('t1')))
+  assert(!r.get('f')!.has(rsvpTodoId('t1')))
+})
+
+Deno.test('travel: only confirmed people (RSVP on), only before the trip starts', () => {
+  const soon = { ...trip, start_date: '2026-11-25', end_date: '2026-12-02' }
+  const parts = [person('c', 'confirmed'), person('p', 'pending')]
+  const r = engineTodoIds({ trip: soon, participants: parts }, ['c', 'p'], NOW)
+  assert(r.get('c')!.has(travelTodoId('t1')))
+  assert(!r.get('p')!.has(travelTodoId('t1')))
+
+  const ongoing = { ...trip, start_date: '2026-11-10', end_date: '2026-11-20', status: 'trip_ongoing' }
+  assert(!engineTodoIds({ trip: ongoing, participants: parts }, ['c'], NOW).get('c')!.has(travelTodoId('t1')))
+})
+
+Deno.test('travel: someone with arrival AND departure travel-details events is not chased', () => {
+  const soon = { ...trip, start_date: '2026-11-25', end_date: '2026-12-02' }
+  const ev = (direction: string) => ({ title: direction, participant_ids: ['c'], metadata: { travel_details: true, direction } })
+  const r = engineTodoIds({ trip: soon, participants: [person('c')], travelEvents: [ev('arrival'), ev('departure')] }, ['c'], NOW)
+  assert(!r.get('c')!.has(travelTodoId('t1')))
+})
+
+Deno.test('the bridge never produces organiser kinds, whatever the data', () => {
+  const s = section()
+  s.options![0].option_votes = [{ user_id: 'u1' }, { user_id: 'u2' }]
+  const r = owed([s], ['u1', 'u2'])
+  for (const ids of r.values()) for (const id of ids) assert(!id.startsWith('org_'), id)
+})
+
+Deno.test('action auto-tick: a selection in the linked question completes the action for that person', () => {
+  const voters = buildSectionVoters(
+    [{ id: 'o1', section_id: 's1' }],
+    [{ option_id: 'o1', user_id: 'u1' }] // a selection row has the same option_id + user_id shape as a vote
+  )
+  assertEquals([...(voters.get('s1') ?? [])], ['u1'])
+})
+
+Deno.test('claim reminders: not once balances are frozen; no code falls back to the money tab, not a dead claim page', () => {
+  assertEquals(claimChaseOpen(null), true)
+  assertEquals(claimChaseOpen(undefined), true)
+  assertEquals(claimChaseOpen({ transactions: [] }), false)
+  assertEquals(claimEmailLink('https://app.test', 't1', 'abc'), 'https://app.test/claim/abc')
+  assertEquals(claimEmailLink('https://app.test', 't1', undefined), 'https://app.test/t1?open=settle')
+  assertEquals(claimEmailLink('https://app.test', 't1', ''), 'https://app.test/t1?open=settle')
+})

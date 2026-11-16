@@ -41,6 +41,8 @@ export interface DigestActionRow {
   /** e.g. "Overdue", "Due tomorrow", "Due in 6 days" */
   chipLabel: string
   chipTone: StatusChipTone
+  /** Exact deep link to this to-do (`?open=todo:<id>`). Optional: older callers just show the title. */
+  link?: string
 }
 
 export interface DigestTripSection {
@@ -50,7 +52,12 @@ export interface DigestTripSection {
   actionRows: DigestActionRow[]
   /** Any other open loops (votes, RSVPs, settlements, ...), rendered as a list. */
   otherLines: Array<{ description: string; link: string }>
+  /** `${tripLink}?open=todos` -- rendered as the "See all your to-dos" footer link when set. */
+  todosLink?: string
 }
+
+/** Link text for the per-trip "all my to-dos" footer (same words as the app's EMAIL_TODOS_FOOTER). */
+export const TODOS_FOOTER_LABEL = 'See all your to-dos'
 
 export interface DigestEmailInput {
   greetingName: string
@@ -90,7 +97,7 @@ function renderActionsTable(rows: DigestActionRow[]): string {
     .map(
       (r) => `
       <tr>
-        <td style="padding:10px 12px 10px 0;border-bottom:1px solid ${COLORS.border};font-size:14px;color:${COLORS.ink};">${escapeHtml(r.title)}</td>
+        <td style="padding:10px 12px 10px 0;border-bottom:1px solid ${COLORS.border};font-size:14px;color:${COLORS.ink};">${r.link ? `<a href="${escapeHtml(r.link)}" style="color:${COLORS.ink};text-decoration:underline;">${escapeHtml(r.title)}</a>` : escapeHtml(r.title)}</td>
         <td style="padding:10px 12px 10px 0;border-bottom:1px solid ${COLORS.border};font-size:13px;color:${COLORS.muted};white-space:nowrap;">${escapeHtml(r.deadlineLabel)}</td>
         <td style="padding:10px 0;border-bottom:1px solid ${COLORS.border};text-align:right;">${renderChip(r.chipLabel, r.chipTone)}</td>
       </tr>`
@@ -99,7 +106,7 @@ function renderActionsTable(rows: DigestActionRow[]): string {
   return `
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:4px 0 8px;">
       <tr>
-        <th align="left" style="padding:0 12px 6px 0;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:${COLORS.muted};border-bottom:2px solid ${COLORS.border};">Action</th>
+        <th align="left" style="padding:0 12px 6px 0;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:${COLORS.muted};border-bottom:2px solid ${COLORS.border};">To-do</th>
         <th align="left" style="padding:0 12px 6px 0;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:${COLORS.muted};border-bottom:2px solid ${COLORS.border};">Deadline</th>
         <th align="right" style="padding:0 0 6px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:${COLORS.muted};border-bottom:2px solid ${COLORS.border};">Status</th>
       </tr>
@@ -147,9 +154,9 @@ function digestSubject(input: DigestEmailInput): string {
     if (totalOther === 0 && totalActions === 1) {
       return `${s.tripName}: "${s.actionRows[0].title}" is ${s.actionRows[0].chipLabel.toLowerCase()}`
     }
-    return `${s.tripName}: ${totalActions + totalOther} ${totalActions + totalOther === 1 ? 'thing needs' : 'things need'} your attention`
+    return `${s.tripName}: ${totalActions + totalOther} ${totalActions + totalOther === 1 ? 'to-do is' : 'to-dos are'} waiting on you`
   }
-  return `${totalActions + totalOther} things waiting on you across your trips`
+  return `${totalActions + totalOther} to-dos waiting on you across your trips`
 }
 
 /**
@@ -179,16 +186,20 @@ export function renderDigestEmail(rawInput: DigestEmailInput): RenderedEmail {
               )
               .join('')}</ul>`
           : ''
+      const todosFooter = s.todosLink
+        ? `<p style="margin:4px 0 8px;font-size:13px;"><a href="${escapeHtml(s.todosLink)}" style="color:${COLORS.brand};">${TODOS_FOOTER_LABEL}</a></p>`
+        : ''
       return `
       <h2 style="margin:20px 0 8px;font-size:17px;color:${COLORS.ink};">${escapeHtml(s.tripName)}</h2>
       ${s.actionRows.length > 0 ? renderActionsTable(s.actionRows) : ''}
-      ${others}`
+      ${others}
+      ${todosFooter}`
     })
     .join('')
 
   const bodyHtml = `
     <p style="margin:0 0 4px;font-size:15px;color:${COLORS.ink};">Hi ${escapeHtml(input.greetingName)},</p>
-    <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:${COLORS.muted};">A few things on your trips are waiting on you:</p>
+    <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:${COLORS.muted};">A few to-dos are waiting on you:</p>
     ${sectionsHtml}`
 
   const tripNames = input.sections.map((s) => s.tripName)
@@ -207,12 +218,15 @@ export function renderDigestEmail(rawInput: DigestEmailInput): RenderedEmail {
   // Plain-text mirror for clients that prefer it.
   const textSections = input.sections
     .map((s) => {
-      const actionLines = s.actionRows.map((r) => `  • ${r.title} — ${r.deadlineLabel} (${r.chipLabel})`)
+      const actionLines = s.actionRows.map(
+        (r) => `  • ${r.title} — ${r.deadlineLabel} (${r.chipLabel})${r.link ? `\n    ${r.link}` : ''}`
+      )
       const otherLines = s.otherLines.map((l) => `  • ${l.description}\n    ${l.link}`)
-      return `${s.tripName}\n${[...actionLines, ...otherLines].join('\n')}`
+      const footer = s.todosLink ? [`  ${TODOS_FOOTER_LABEL}: ${s.todosLink}`] : []
+      return `${s.tripName}\n${[...actionLines, ...otherLines, ...footer].join('\n')}`
     })
     .join('\n\n')
-  const text = `Hi ${input.greetingName},\n\nA few things on your trips are waiting on you:\n\n${textSections}\n\nOpen ${BRAND_NAME}: ${input.appUrl}\n\n${footerLine}\nYou can turn these emails off in your profile settings.`
+  const text = `Hi ${input.greetingName},\n\nA few to-dos are waiting on you:\n\n${textSections}\n\nOpen ${BRAND_NAME}: ${input.appUrl}\n\n${footerLine}\nYou can turn these emails off in your profile settings.`
 
   return { subject: digestSubject(input), html, text, itemCount }
 }

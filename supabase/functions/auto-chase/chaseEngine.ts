@@ -1,0 +1,154 @@
+// Bridge between auto-chase's candidate loops and the shared "Your to-dos"
+// engine (_shared/todos, a mirror of src/lib/todos). Pure and unit-testable:
+// no service-role client in here.
+//
+// HOW THE ENGINE IS USED (Phase 1, slice 1F). auto-chase still generates its
+// own CANDIDATES with today's narrow rules (a deadline inside 48h, an RSVP
+// deadline inside 72h, T-14 travel, ...). The engine then acts as a FILTER:
+// a candidate is only emailed while the engine agrees it is still a to-do for
+// that person. The result is the intersection of the old and the new rule, so
+// the set of emails can only shrink, never grow:
+//   - selections (own-choice questions, grid answers) now count as answered;
+//   - questions with no live option are not chased;
+//   - RSVP / "date arrived" chases need RSVP tracking switched on;
+//   - travel details are only chased for confirmed people (when RSVP is on),
+//     and only until the trip starts.
+// Questions with no deadline ARE to-dos in the app but are deliberately not
+// emailed this phase (the candidate loops still require a deadline).
+//
+// The snapshot passed to the engine never marks anyone as an organiser, so
+// the organiser-only kinds (decide / book / setup) are never produced here.
+
+import { computeTodos } from '../_shared/todos/computeTodos.ts'
+import { DEEP_LINKS } from '../_shared/todos/copy.ts'
+import type { SnapshotSection, SnapshotTravelEvent, SnapshotVote, TripSnapshot } from '../_shared/todos/types.ts'
+import { isOwnChoice } from '../_shared/answers/answers.ts'
+import type { Json } from '../_shared/todos/deps/json.ts'
+
+export { DEEP_LINKS }
+
+/** Absolute email link for a `?open=...` deep link (`link` comes from DEEP_LINKS). */
+export function emailLink(appBaseUrl: string, tripId: string, link: string = ''): string {
+  return `${appBaseUrl}/${tripId}${link}`
+}
+
+export const answerTodoId = (sectionId: string) => `answer:${sectionId}`
+export const rsvpTodoId = (tripId: string) => `rsvp:${tripId}`
+export const travelTodoId = (tripId: string) => `travel:${tripId}`
+
+/** True for an "Own choice" question (`metadata.decision_shape === 'personal'`). */
+export function isOwnChoiceSection(metadata: Json | null | undefined): boolean {
+  return isOwnChoice({ metadata })
+}
+
+/** A `planning_sections` row as auto-chase selects it (options with nested votes + selections). */
+export interface ChaseSectionRow {
+  id: string
+  title: string
+  status: string
+  vote_deadline: string | null
+  voting_method: string | null
+  metadata: Json | null
+  options: Array<{
+    id: string
+    status: string | null
+    option_votes: Array<{ user_id: string }> | null
+    selections: Array<{ user_id: string }> | null
+  }> | null
+}
+
+/** Reshape selected rows into the engine's section + vote inputs. */
+export function toEngineSections(rows: ChaseSectionRow[]): { sections: SnapshotSection[]; votes: SnapshotVote[] } {
+  const votes: SnapshotVote[] = []
+  const sections: SnapshotSection[] = rows.map((s) => ({
+    id: s.id,
+    title: s.title,
+    status: s.status,
+    vote_deadline: s.vote_deadline,
+    voting_method: s.voting_method,
+    metadata: s.metadata,
+    options: (s.options ?? []).map((o) => {
+      for (const v of o.option_votes ?? []) votes.push({ option_id: o.id, user_id: v.user_id })
+      return { id: o.id, status: o.status ?? 'proposed', selections: o.selections ?? [] }
+    }),
+  }))
+  return { sections, votes }
+}
+
+export interface EngineTripRow {
+  id: string
+  name: string
+  status: string
+  start_date: string
+  end_date: string
+  confirmation_enabled: boolean | null
+  confirmation_deadline: string | null
+  base_currency?: string | null
+}
+
+export interface EngineParticipantRow {
+  user_id: string
+  active?: boolean | null
+  confirmation_status?: string | null
+  conditional_date?: string | null
+}
+
+export interface EngineInput {
+  trip: EngineTripRow
+  participants: EngineParticipantRow[]
+  sections?: SnapshotSection[]
+  votes?: SnapshotVote[]
+  travelEvents?: SnapshotTravelEvent[]
+}
+
+/**
+ * Run the shared engine for each of `userIds` and return the ids of the
+ * to-dos each one owes (`answer:<sectionId>`, `rsvp:<tripId>`, `travel:<tripId>`,
+ * plus money/task ids when those inputs exist -- this bridge passes none).
+ */
+export function engineTodoIds(input: EngineInput, userIds: string[], now: Date): Map<string, Set<string>> {
+  const snapshot: TripSnapshot = {
+    trip: {
+      id: input.trip.id,
+      name: input.trip.name,
+      status: input.trip.status as TripSnapshot['trip']['status'],
+      start_date: input.trip.start_date,
+      end_date: input.trip.end_date,
+      confirmation_enabled: input.trip.confirmation_enabled,
+      confirmation_deadline: input.trip.confirmation_deadline,
+      base_currency: input.trip.base_currency ?? 'GBP',
+      created_by: null, // never an organiser: see header
+    },
+    participants: input.participants.map((p) => ({
+      user_id: p.user_id,
+      role: null,
+      active: p.active,
+      confirmation_status: p.confirmation_status,
+      conditional_date: p.conditional_date,
+    })),
+    sections: input.sections ?? [],
+    votes: input.votes ?? [],
+    actions: [],
+    checklists: [],
+    expenses: [],
+    settlements: [],
+    travelEvents: input.travelEvents ?? [],
+  }
+  const out = new Map<string, Set<string>>()
+  for (const uid of userIds) out.set(uid, new Set(computeTodos(snapshot, uid, now).map((t) => t.id)))
+  return out
+}
+
+/** Claims are locked once balances are frozen (`trips.settlement_snapshot` set), so nobody is chased to claim. */
+export function claimChaseOpen(settlementSnapshot: unknown): boolean {
+  return settlementSnapshot == null
+}
+
+/**
+ * Where a claim reminder points. The /claim/:code page works without the app;
+ * with no code there is nothing to claim on, so fall back to the money tab
+ * (`?open=settle`) rather than a dead "Claiming isn't open" page.
+ */
+export function claimEmailLink(appBaseUrl: string, tripId: string, claimCode: string | null | undefined): string {
+  return claimCode ? `${appBaseUrl}/claim/${encodeURIComponent(claimCode)}` : emailLink(appBaseUrl, tripId, DEEP_LINKS.settle())
+}

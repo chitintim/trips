@@ -12,6 +12,8 @@ import {
   groupCompletedUserIds,
   buildSectionVoters,
   countdownLabel,
+  withClosedSections,
+  countsTowardActions,
   type ActionRow,
   type ActionWithCompletions,
   type SectionVoterIds,
@@ -393,5 +395,42 @@ describe('derived (vote-based) completion', () => {
       expect(openActionCountForUser(actions, 'me', votersFor('sec1', []))).toBe(1)
       expect(openActionCountForUser(actions, 'me', votersFor('sec1', ['me']))).toBe(0)
     })
+  })
+})
+
+describe('withClosedSections (closed poll => vote-linked action no longer required)', () => {
+  const sections = [
+    { id: 'sec-open', status: 'in_progress' },
+    { id: 'sec-closed', status: 'completed' },
+  ]
+  const voters = withClosedSections(new Map([['sec-closed', new Set(['u1'])]]), sections, ['u1', 'u2'])
+
+  it('treats a non-voter as done for an action linked to a closed section', () => {
+    const action = makeAction({ section_id: 'sec-closed', assigned_to: null })
+    expect(isActionCompleteForUser(action, 'u2', voters)).toBe(true)
+    expect(isActionOpenForUser(action, 'u2', voters)).toBe(false)
+    expect(isGroupComplete(action, ['u1', 'u2'], voters)).toBe(true)
+  })
+
+  it('also covers individually assigned vote actions', () => {
+    const action = makeAction({ section_id: 'sec-closed', assigned_to: 'u2' })
+    expect(isActionCompleteForUser(action, 'u2', voters)).toBe(true)
+  })
+
+  it('leaves actions on open sections untouched and does not mutate the input', () => {
+    const input: SectionVoterIds = new Map([['sec-open', new Set<string>()]])
+    const out = withClosedSections(input, sections, ['u1'])
+    expect(isActionCompleteForUser(makeAction({ section_id: 'sec-open' }), 'u1', out)).toBe(false)
+    expect(input.get('sec-closed')).toBeUndefined()
+  })
+})
+
+describe('countsTowardActions', () => {
+  it('excludes inactive, declined and cancelled people', () => {
+    expect(countsTowardActions({ active: true, confirmation_status: 'confirmed' })).toBe(true)
+    expect(countsTowardActions({ active: true, confirmation_status: 'pending' })).toBe(true)
+    expect(countsTowardActions({ active: false, confirmation_status: 'confirmed' })).toBe(false)
+    expect(countsTowardActions({ active: true, confirmation_status: 'declined' })).toBe(false)
+    expect(countsTowardActions({ active: true, confirmation_status: 'cancelled' })).toBe(false)
   })
 })

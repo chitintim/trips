@@ -25,6 +25,8 @@ export interface CostImpactInput {
   confirmedCount: number
   /** Option metadata — read for `price_tiers` (shape 3). Optional/omittable everywhere price_type-based pricing is all that's needed. */
   metadata?: Json | null
+  /** True when `confirmedCount` is an in-scope headcount estimate (RSVP tracking off, or nobody confirmed yet) rather than a real confirmed count. total_split figures then read "≈ £X per person across N people". */
+  isEstimate?: boolean
 }
 
 /** True when this option's metadata carries at least one price tier — tiered pricing takes over from price/price_type when present. */
@@ -109,6 +111,10 @@ export function formatCostImpact(input: CostImpactInput): string | null {
     const count = input.confirmedCount
     const peopleLabel = count === 1 ? 'person' : 'people'
     return `≈${formatMoney(perPerson, input.currency)}/person${count > 0 ? ` at ${count} ${peopleLabel}` : ''}`
+  }
+
+  if (input.isEstimate && input.priceType === 'total_split' && input.confirmedCount > 0) {
+    return `≈${formatMoney(perPerson, input.currency)}/person across ${input.confirmedCount} ${input.confirmedCount === 1 ? 'person' : 'people'}`
   }
 
   return `+${formatMoney(perPerson, input.currency)}/person`

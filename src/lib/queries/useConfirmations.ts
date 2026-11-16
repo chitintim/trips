@@ -3,6 +3,7 @@ import { supabase } from '../supabase'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { ParticipantWithUser } from './useTrip'
+import { assertCountAffected, assertRowsAffected, throwIfError } from './assertRowsAffected'
 import { Enums } from '../../types/database.types'
 import { useTripActivityLog } from '../../features/organizer/lib/activity'
 
@@ -21,7 +22,7 @@ export function useConfirmationSummary(tripId: string | undefined) {
     queryKey: queryKeys.confirmationSummary(tripId || ''),
     queryFn: async (): Promise<ConfirmationSummaryRow[]> => {
       const { data, error } = await supabase.rpc('get_confirmation_summary', { p_trip_id: tripId as string })
-      if (error) throw error
+      throwIfError(error)
       return (data as ConfirmationSummaryRow[]) || []
     },
     enabled: !!tripId,
@@ -61,12 +62,15 @@ export function useUpdateConfirmationStatus(tripId: string) {
         update.conditional_user_ids = input.conditionalUserIds?.length ? input.conditionalUserIds : null
       }
 
-      const { error } = await supabase
+      // Count form (no .select()): a RETURNING would make Postgres require the
+      // updated row to pass the SELECT policy, which can depend on the row's state.
+      const { count, error } = await supabase
         .from('trip_participants')
-        .update(update)
+        .update(update, { count: 'exact' })
         .eq('trip_id', input.tripId)
         .eq('user_id', input.userId)
-      if (error) throw error
+      throwIfError(error)
+      assertCountAffected(count, "Your status could not be saved: you may no longer be on this trip.")
     },
     queryKey: () => [queryKeys.participants(tripId), queryKeys.confirmationSummary(tripId)],
     updater: (participants, input) => {
@@ -108,7 +112,7 @@ export function useAddParticipant(tripId: string) {
       const { error } = await supabase
         .from('trip_participants')
         .upsert({ trip_id: tripId, user_id: userId, role, active: true }, { onConflict: 'trip_id,user_id' })
-      if (error) throw error
+      throwIfError(error)
     },
     onSuccess: (_data, input) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) })
@@ -122,12 +126,19 @@ export function useSetParticipantActive(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ userId, active }: { userId: string; active: boolean }) => {
-      const { error } = await supabase
+      // Deactivating is also guarded server-side (guard_participant_removal
+      // trigger): it refuses while the person has an open balance or an
+      // unfinished settlement, and that message surfaces as the error here.
+      // Count form, not .select(): this update flips `active`, which the
+      // trip_participants SELECT policy may filter on, and RETURNING would then
+      // reject the (now hidden) updated row and roll the change back.
+      const { count, error } = await supabase
         .from('trip_participants')
-        .update({ active, updated_at: new Date().toISOString() })
+        .update({ active, updated_at: new Date().toISOString() }, { count: 'exact' })
         .eq('trip_id', tripId)
         .eq('user_id', userId)
-      if (error) throw error
+      throwIfError(error)
+      assertCountAffected(count, 'You don\'t have permission to change this person, or they are no longer on the trip.')
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) }),
   })
@@ -137,13 +148,46 @@ export function useChangeParticipantRole(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ userId, role }: { userId: string; role: 'organizer' | 'participant' }) => {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('trip_participants')
         .update({ role })
         .eq('trip_id', tripId)
         .eq('user_id', userId)
-      if (error) throw error
+        .select('user_id')
+      throwIfError(error)
+      assertRowsAffected(data, 'You don\'t have permission to change this person\'s role.')
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) }),
+  })
+}
+
+export interface ResetConfirmationsResult {
+  cleared: number
+  reminder_history_cleared: number
+}
+
+/**
+ * Organizer/admin "start a fresh confirmation round": calls the
+ * reset_trip_confirmations RPC, which checks the caller's role server-side,
+ * returns active participants to pending, clears RSVP reminder history and
+ * writes the activity-feed audit row itself (so no client logging here).
+ */
+export function useResetConfirmations(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ includeDeclined = false }: { includeDeclined?: boolean } = {}): Promise<ResetConfirmationsResult> => {
+      const { data, error } = await supabase.rpc('reset_trip_confirmations', {
+        p_trip_id: tripId,
+        p_include_declined: includeDeclined,
+      })
+      throwIfError(error)
+      return data as unknown as ResetConfirmationsResult
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.confirmationSummary(tripId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.activityFeed(tripId) })
+      queryClient.invalidateQueries({ queryKey: queryKeys.notifications(tripId) })
+    },
   })
 }

@@ -9,6 +9,8 @@ import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcome
 import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
 import { replaceableSiblingVoteIds, votingInstruction, type VotingMethod } from '../../decisions/lib/voting'
 import { computeQuestionState, formatEntryCardLabel, type QuestionState } from '../lib/responseState'
+import { inScopeHeadcount } from '../../people/lib/inScopePeople'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { AnswerFlow } from './AnswerFlow'
 import { OrderFormSheet } from './OrderFormSheet'
 import { ConsolidatedOrdersSheet } from './ConsolidatedOrdersSheet'
@@ -51,7 +53,7 @@ export function PlanDecideLens({ trip, items, isOrganizer, onScheduleIt }: PlanD
   const [orderFormSectionId, setOrderFormSectionId] = useState<string | null>(null)
   const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
 
-  const confirmedCount = (participants || []).filter((p) => p.confirmation_status === 'confirmed').length
+  const headcount = useMemo(() => inScopeHeadcount(participants || [], isConfirmationEnabled(trip)), [participants, trip])
 
   const questionStates = useMemo(() => {
     const map = new Map<string, QuestionState>()
@@ -141,7 +143,7 @@ export function PlanDecideLens({ trip, items, isOrganizer, onScheduleIt }: PlanD
             sections={needsMe}
             votes={votes || []}
             participants={participants || []}
-            confirmedCount={confirmedCount}
+            headcount={headcount}
           />
         </>
       )}

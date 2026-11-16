@@ -5,6 +5,8 @@ import { useSections, useVotes } from '../../../lib/queries/usePlanning'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useSettlements } from '../../../lib/queries/useSettlements'
+import { inScopeHeadcount } from '../../people/lib/inScopePeople'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { computeCostBand } from './costBand'
 import { buildAutoFaq } from './autoFaq'
 import type { CostBand } from './costBand'
@@ -39,11 +41,13 @@ export function useBriefData(tripId: string): BriefData {
 
   const myParticipant = participants.find((p) => p.user_id === user?.id) ?? null
   const confirmedCount = participants.filter((p) => p.confirmation_status === 'confirmed').length
+  // Cost maths use the in-scope headcount (all active people when RSVP tracking is off), not the raw confirmed count.
+  const headcount = useMemo(() => inScopeHeadcount(participants, isConfirmationEnabled(trip)), [participants, trip])
 
   const costBand = useMemo(() => {
     if (!trip || !sections) return null
-    return computeCostBand(trip, sections, votes || [], confirmedCount, user?.id ?? null)
-  }, [trip, sections, votes, confirmedCount, user?.id])
+    return computeCostBand(trip, sections, votes || [], headcount, user?.id ?? null)
+  }, [trip, sections, votes, headcount, user?.id])
 
   const hasUnpaidBalance = (settlements || []).some(
     (s) => (s.from_user_id === user?.id || s.to_user_id === user?.id) && s.status !== 'confirmed'

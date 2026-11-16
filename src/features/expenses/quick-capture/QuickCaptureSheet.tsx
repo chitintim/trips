@@ -8,6 +8,7 @@ import { useTripActivityLog } from '../../organizer/lib/activity'
 import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
 import { resolveExpenseFxFields, splitBaseCurrencyAmount } from '../../../lib/fx/resolveExpenseFxFields'
 import { ALL_CATEGORIES, categoryIcon, categoryLabel } from '../lib/categoryStyle'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { defaultTaggedParticipantIds } from '../lib/participantDefaults'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
@@ -123,7 +124,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
       // (falling back to everyone if nobody's confirmed yet) -- declined/
       // pending people shouldn't be pre-tagged into expenses or auto-chased
       // (refine later lets you narrow/widen it either way).
-      const participantIds = defaultTaggedParticipantIds(participants)
+      const participantIds = defaultTaggedParticipantIds(participants, isConfirmationEnabled(trip))
       const totalMinor = toMinorUnits(totalMajor, state.currency)
       const shares = largestRemainderDistribute(totalMinor, participantIds.map(() => 1))
 
@@ -256,8 +257,8 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
           />
 
           <p className="text-xs text-[var(--text-muted)]">
-            Split equally among {defaultTaggedParticipantIds(participants).length} confirmed trip participant
-            {defaultTaggedParticipantIds(participants).length === 1 ? '' : 's'}. Paid by you. Refine later to change either.
+            Split equally among {defaultTaggedParticipantIds(participants, isConfirmationEnabled(trip)).length} trip participant
+            {defaultTaggedParticipantIds(participants, isConfirmationEnabled(trip)).length === 1 ? '' : 's'}. Paid by you. Refine later to change either.
           </p>
 
           <div className="flex items-center gap-3 pt-1">

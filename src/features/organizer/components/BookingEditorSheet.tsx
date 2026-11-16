@@ -3,10 +3,12 @@ import { supabase } from '../../../lib/supabase'
 import { Modal, Button, Input, TextArea, Select, useToast, ConfirmDiscardSheet, Chip } from '../../../components/ui'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { useQueryClient } from '@tanstack/react-query'
-import { useCreateBooking, useUpdateBooking, type Booking } from '../../../lib/queries/useBookings'
+import { useCreateBooking, useUpdateBooking, useCancelBookingFollowUps, type Booking } from '../../../lib/queries/useBookings'
 import { queryKeys } from '../../../lib/queries/queryKeys'
 import { useCreateExpense, type SplitRow } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
+import { useSections } from '../../../lib/queries/usePlanning'
+import { inScopePeople } from '../../people/lib/inScopePeople'
 import { useAuth } from '../../../hooks/useAuth'
 import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
 import { PlacePicker, PlaceChip } from '../../places'
@@ -25,6 +27,7 @@ interface BookingFormValues {
   refundable: boolean
   status: string
   notes: string
+  optionId: string
   placeId: string | null
   placeName: string | null
   // Linked-creation choices (create mode only)
@@ -43,6 +46,7 @@ const EMPTY = (baseCurrency: string): BookingFormValues => ({
   refundable: false,
   status: 'reserved',
   notes: '',
+  optionId: '',
   placeId: null,
   placeName: null,
   createEvent: true,
@@ -62,6 +66,7 @@ function fromBooking(booking: Booking | null, baseCurrency: string): BookingForm
     refundable: booking.refundable ?? false,
     status: booking.status,
     notes: booking.notes ?? '',
+    optionId: booking.option_id ?? '',
     placeId: booking.place_id,
     placeName: null,
     createEvent: false,
@@ -95,6 +100,23 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
   const createExpense = useCreateExpense(tripId)
   const { data: participants } = useParticipants(tripId)
   const logActivity = useTripActivityLog(tripId)
+  const cancelFollowUps = useCancelBookingFollowUps(tripId)
+  const { data: sections } = useSections(tripId)
+  // Options the booking can be linked to (so the plan card turns "Booked"
+  // for the decided option). Closed decisions first.
+  const optionChoices = (sections ?? [])
+    .slice()
+    .sort((a, b) => Number(b.status === 'completed') - Number(a.status === 'completed'))
+    .flatMap((s) =>
+      s.options
+        .filter((o) => o.status !== 'cancelled')
+        .map((o) => ({ value: o.id, label: `${s.title} — ${o.title}${s.status === 'completed' ? ' (decided)' : ''}` }))
+    )
+  // Cancel-booking confirm step: shown on save when the status is being
+  // switched to cancelled and the booking has a linked expense/event.
+  const [cancelStep, setCancelStep] = useState(false)
+  const [removeExpense, setRemoveExpense] = useState(false)
+  const [removeEvent, setRemoveEvent] = useState(false)
 
   const isEditing = !!booking
   const draftKey = isEditing ? `booking-editor:${booking!.id}` : `booking-editor:new:${tripId}`
@@ -122,12 +144,12 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
   const handleClose = () => confirmClose(onClose)
 
-  const isSaving = createBooking.isPending || updateBooking.isPending || createExpense.isPending
+  const isSaving = createBooking.isPending || updateBooking.isPending || createExpense.isPending || cancelFollowUps.isPending
   const amountNumber = values.amount ? parseFloat(values.amount) : null
   const canCreateExpense = amountNumber != null && !Number.isNaN(amountNumber) && amountNumber > 0
   const canCreateEvent = !!values.bookingDate
 
-  const handleSave = async () => {
+  const handleSave = async (followUps?: { removeExpense: boolean; removeEvent: boolean }) => {
     if (!user) return
     if (!values.title.trim()) {
       showToast({ type: 'error', message: 'Please enter a booking title' })
@@ -150,11 +172,33 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
       status: values.status,
       notes: values.notes.trim() || null,
       place_id: values.placeId,
+      option_id: values.optionId || null,
+    }
+
+    // Cancelling a booking with linked records: ask first, never silently.
+    if (
+      isEditing &&
+      !followUps &&
+      values.status === 'cancelled' &&
+      booking!.status !== 'cancelled' &&
+      (booking!.expense_id || booking!.timeline_event_id)
+    ) {
+      setRemoveExpense(false)
+      setRemoveEvent(false)
+      setCancelStep(true)
+      return
     }
 
     try {
       if (isEditing) {
         await updateBooking.mutateAsync({ id: booking!.id, update: bookingFields })
+        if (followUps && (followUps.removeExpense || followUps.removeEvent)) {
+          await cancelFollowUps.mutateAsync({
+            bookingId: booking!.id,
+            removeExpenseId: followUps.removeExpense ? booking!.expense_id : null,
+            removeEventId: followUps.removeEvent ? booking!.timeline_event_id : null,
+          })
+        }
         logActivity({ verb: 'booking_updated', entity: { type: 'booking', id: booking!.id, label: bookingFields.title } })
         showToast({ type: 'success', message: 'Booking updated' })
       } else {
@@ -185,7 +229,8 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
         // ---- Linked creation: expense draft ----------------------------
         let expenseId: string | null = null
         if (values.createExpense && canCreateExpense && amountNumber != null) {
-          const activeIds = (participants ?? []).filter((p) => p.active !== false).map((p) => p.user_id)
+          // Same in-scope rule as new-expense defaults, cost per person and vote counts.
+          const activeIds = inScopePeople(participants ?? [], trip.confirmation_enabled === true).map((p) => p.user_id)
           const splitUserIds = activeIds.length > 0 ? activeIds : [user.id]
           const currency = values.currency || baseCurrency
           const totalMinor = toMinorUnits(amountNumber, currency)
@@ -321,6 +366,17 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
           </label>
         </div>
 
+        {optionChoices.length > 0 && (
+          <Select
+            label="Booking for which option?"
+            value={values.optionId}
+            onChange={(e) => updateField('optionId', e.target.value)}
+            placeholder="Not linked to a decision"
+            fullWidth
+            options={optionChoices}
+          />
+        )}
+
         <div>
           <span className="block text-sm font-medium text-[var(--text-primary)] mb-1.5">Place</span>
           {pickedPlace ? (
@@ -371,7 +427,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
                 className="mt-0.5 w-5 h-5 accent-accent-600"
               />
               <span className="text-sm text-[var(--text-primary)]">
-                Expense, paid by you, split equally among everyone
+                Expense, paid by you, split equally among everyone who's in (editable later)
                 {!canCreateExpense && <span className="block text-xs text-[var(--text-muted)]">Enter an amount to enable</span>}
               </span>
             </label>
@@ -382,7 +438,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
           <Button variant="ghost" onClick={handleClose} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} isLoading={isSaving}>
+          <Button onClick={() => handleSave()} isLoading={isSaving}>
             {isEditing ? 'Save booking' : 'Track booking'}
           </Button>
         </div>
@@ -399,6 +455,46 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
           setPlacePickerOpen(false)
         }}
       />
+
+      <Modal isOpen={cancelStep} onClose={() => setCancelStep(false)} size="sm" title="Booking cancelled">
+        <div className="space-y-3">
+          <p className="text-sm text-[var(--text-secondary)]">
+            This booking has linked records. Nothing is removed unless you tick it — leave unticked to keep them.
+          </p>
+          {booking?.expense_id && (
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={removeExpense} onChange={(e) => setRemoveExpense(e.target.checked)} className="mt-0.5 w-5 h-5 accent-accent-600" />
+              <span className="text-sm text-[var(--text-primary)]">
+                Remove the linked expense
+                <span className="block text-xs text-[var(--text-muted)]">It will leave everyone's balances. Only the payer or an organiser can do this.</span>
+              </span>
+            </label>
+          )}
+          {booking?.timeline_event_id && (
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" checked={removeEvent} onChange={(e) => setRemoveEvent(e.target.checked)} className="mt-0.5 w-5 h-5 accent-accent-600" />
+              <span className="text-sm text-[var(--text-primary)]">
+                Remove the linked timeline event
+                <span className="block text-xs text-[var(--text-muted)]">It will disappear from the plan.</span>
+              </span>
+            </label>
+          )}
+          <div className="flex justify-end gap-3 border-t border-[var(--border-subtle)] pt-3">
+            <Button variant="ghost" onClick={() => setCancelStep(false)} disabled={isSaving}>
+              Back
+            </Button>
+            <Button
+              isLoading={isSaving}
+              onClick={async () => {
+                await handleSave({ removeExpense, removeEvent })
+                setCancelStep(false)
+              }}
+            >
+              Mark cancelled
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <ConfirmDiscardSheet
         isOpen={guardProps.showConfirm}

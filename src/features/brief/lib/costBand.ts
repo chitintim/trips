@@ -16,7 +16,8 @@ import {
   hasPriceTiers,
   type OrderLine,
 } from '../../decisions/lib/decisionShapes'
-import { tallyVotes, getWinner, type VotingMethod } from '../../decisions/lib/voting'
+import { resolveWinner } from '../../decisions/lib/resolveDecision'
+import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
 import type { SectionWithOptions } from '../../../lib/queries/usePlanning'
 import type { OptionVote } from '../../../lib/queries/usePlanning'
 
@@ -27,6 +28,9 @@ export interface CostBand {
   currency: string
   /** Human breakdown lines for a "what's included" disclosure. */
   breakdown: Array<{ label: string; amount: number; currency: string }>
+  /** People the cost is split across (in-scope headcount) and whether that is an estimate rather than a confirmed count. */
+  headcount: number
+  isEstimate: boolean
 }
 
 function leadingOptionForSection(
@@ -59,13 +63,10 @@ function sectionActiveOptions(section: SectionWithOptions): SectionWithOptions['
 /** A section counts as "decided" once its poll is closed with an actual winner — its cost becomes a fixed contribution rather than a min/max spread. */
 function resolveSectionWinner(section: SectionWithOptions, votes: OptionVote[]): SectionWithOptions['options'][number] | null {
   if (section.status !== 'completed') return null
-  const votingMethod = (section.voting_method as VotingMethod) || 'single'
-  const optionIds = section.options.map((o) => o.id)
-  const sectionVotes = votes.filter((v) => optionIds.includes(v.option_id))
-  const tallies = tallyVotes(optionIds, sectionVotes, votingMethod)
-  const winner = getWinner(tallies)
-  if (!winner) return null
-  return section.options.find((o) => o.id === winner.optionId) ?? null
+  // Same winner rule as the Plan board and the close flow (recorded stamp, then tally + documented tie-breaks).
+  const winnerId = resolveWinner(section, votes).optionId
+  if (!winnerId) return null
+  return section.options.find((o) => o.id === winnerId) ?? null
 }
 
 /**
@@ -97,10 +98,13 @@ export function computeCostBand(
   trip: { estimated_accommodation_cost: number | null; accommodation_cost_currency: string | null },
   sections: SectionWithOptions[],
   votes: OptionVote[],
-  confirmedCount: number,
+  /** In-scope headcount (people/lib/inScopePeople). A bare number is treated as a confirmed (non-estimate) count. */
+  headcountInput: number | InScopeHeadcount,
   /** The viewer's own user id, to fold their personal-order (shape 2) totals into the estimate. Omit to skip that line entirely. */
   currentUserId: string | null = null
 ): CostBand | null {
+  const confirmedCount = typeof headcountInput === 'number' ? headcountInput : headcountInput.count
+  const isEstimate = typeof headcountInput === 'number' ? false : headcountInput.isEstimate
   const currency = trip.accommodation_cost_currency || sections.find((s) => s.options[0]?.currency)?.options[0]?.currency || 'GBP'
   const breakdown: Array<{ label: string; amount: number; currency: string }> = []
   let low = 0
@@ -188,5 +192,5 @@ export function computeCostBand(
 
   if (breakdown.length === 0) return null
 
-  return { low, high, currency, breakdown }
+  return { low, high, currency, breakdown, headcount: confirmedCount, isEstimate }
 }

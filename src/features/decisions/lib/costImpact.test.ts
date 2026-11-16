@@ -133,4 +133,10 @@ describe('tier-aware cost impact (UX_REDESIGN.md Part 5, shape 3)', () => {
     const formatted = formatCostImpact({ price: null, currency: 'GBP', priceType: 'total_split', confirmedCount: 30, metadata: tieredMetadata })
     expect(formatted).toBe('≈£15/person at 30 people') // 450 / 30
   })
+
+  it('formatCostImpact labels a total_split headcount estimate honestly', () => {
+    const base = { price: 3000, currency: 'GBP', priceType: 'total_split' as const, confirmedCount: 10 }
+    expect(formatCostImpact({ ...base, isEstimate: true })).toBe('≈£300/person across 10 people')
+    expect(formatCostImpact(base)).toBe('+£300/person')
+  })
 })

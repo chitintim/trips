@@ -1,8 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import { Modal, Button, Input, TextArea, Select, useToast } from '../../../components/ui'
-import { useTrip, useUpdateTrip } from '../../../lib/queries/useTrip'
+import { useTrip, useUpdateTrip, useParticipants } from '../../../lib/queries/useTrip'
+import { useResetConfirmations } from '../../../lib/queries/useConfirmations'
+import { ResetConfirmationsSheet } from './ResetConfirmationsSheet'
+import { countResettableConfirmations, describeResetCount } from '../lib/resetConfirmations'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useUnsavedChangesGuard } from '../../../lib/forms/useUnsavedChangesGuard'
 import { ConfirmDiscardSheet } from '../../../components/ui'
@@ -50,6 +53,13 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
   const { data: trip } = useTrip(tripId)
   const updateTrip = useUpdateTrip(tripId)
   const { showToast } = useToast()
+  const { data: participants } = useParticipants(tripId)
+  const resetConfirmations = useResetConfirmations(tripId)
+  const [resetOpen, setResetOpen] = useState(false)
+  // Only meaningful when re-opening confirmation that was closed with answers still on file.
+  const [reopenMode, setReopenMode] = useState<'keep' | 'fresh'>('keep')
+  const existingCount = countResettableConfirmations(participants ?? [])
+  const isReopening = !!trip && !trip.confirmation_enabled && existingCount > 0
 
   const draftKey = `confirmation-settings:${tripId}`
   // This sheet only ever edits the trip's existing confirmation settings
@@ -62,6 +72,7 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
 
   useEffect(() => {
     if (isOpen && trip) {
+      setReopenMode('keep')
       setValues({
         confirmationEnabled: trip.confirmation_enabled || false,
         confirmationMessage: trip.confirmation_message || '',
@@ -111,6 +122,11 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
     }
 
     try {
+      // Re-opening with "start fresh": wipe the old round first, so a failed
+      // reset aborts before the trip is switched back on.
+      if (isReopening && values.confirmationEnabled && reopenMode === 'fresh') {
+        await resetConfirmations.mutateAsync({})
+      }
       await updateTrip.mutateAsync({
         confirmation_enabled: values.confirmationEnabled,
         confirmation_message: values.confirmationEnabled ? values.confirmationMessage.trim() : null,
@@ -155,6 +171,22 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
             />
           </button>
         </div>
+
+        {isReopening && values.confirmationEnabled && (
+          <fieldset className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] p-3 space-y-2">
+            <legend className="px-1 text-sm font-medium text-[var(--text-primary)]">
+              {describeResetCount(existingCount)} from the previous round
+            </legend>
+            <label className="flex items-start gap-2 text-sm text-[var(--text-primary)]">
+              <input type="radio" name="reopen-mode" className="mt-0.5" checked={reopenMode === 'keep'} onChange={() => setReopenMode('keep')} />
+              <span>Keep them (people stay confirmed)</span>
+            </label>
+            <label className="flex items-start gap-2 text-sm text-[var(--text-primary)]">
+              <input type="radio" name="reopen-mode" className="mt-0.5" checked={reopenMode === 'fresh'} onChange={() => setReopenMode('fresh')} />
+              <span>Start fresh (everyone goes back to pending; the reset sends no email, but normal reminders resume)</span>
+            </label>
+          </fieldset>
+        )}
 
         {values.confirmationEnabled && (
           <div className="space-y-5">
@@ -224,15 +256,28 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
           </div>
         )}
 
+        {trip?.confirmation_enabled && existingCount > 0 && (
+          <div className="flex items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border-subtle)] p-3">
+            <p className="text-sm text-[var(--text-secondary)]">
+              Booking fell through? Clear {describeResetCount(existingCount)} and start a new round.
+            </p>
+            <Button variant="outline" onClick={() => setResetOpen(true)}>
+              Reset confirmations
+            </Button>
+          </div>
+        )}
+
         <div className="flex justify-end gap-3 pt-4 border-t border-[var(--border-subtle)]">
           <Button variant="outline" onClick={handleClose} disabled={updateTrip.isPending}>
             Cancel
           </Button>
-          <Button onClick={handleSave} isLoading={updateTrip.isPending}>
+          <Button onClick={handleSave} isLoading={updateTrip.isPending || resetConfirmations.isPending}>
             Save settings
           </Button>
         </div>
       </div>
+
+      <ResetConfirmationsSheet isOpen={resetOpen} onClose={() => setResetOpen(false)} tripId={tripId} />
 
       <ConfirmDiscardSheet
         isOpen={guardProps.showConfirm}

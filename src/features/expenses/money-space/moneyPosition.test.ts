@@ -215,17 +215,22 @@ describe('computeMoneyPosition', () => {
     expect(pos.perPerson).toEqual([])
   })
 
-  it('excludes a carryover involving a departed participant from BOTH the headline and the breakdown (zero-sum guard)', () => {
+  it('includes a carryover with a departed participant in BOTH the headline and the breakdown (same people set as Settle Up, zero-sum)', () => {
     const expenses = [
       makeExpense({ id: 'e1', amount: 100, paid_by: 'alice', splits: [makeSplit('alice', 50), makeSplit('bob', 50)] }),
     ]
-    // 'charlie' is not in the participant list -- applying only Alice's side
-    // of this row would break zero-sum and desync header vs suggestions.
+    // 'charlie' left the trip but is a party to a folded carryover. Settle Up
+    // (withMoneyParticipants) keeps him in the ledger, so the headline and the
+    // breakdown must too -- otherwise only Alice's side would be applied.
     const carryovers = [makeCarryover({ from_user_id: 'charlie', to_user_id: 'alice', amount: 40 })]
     const pos = computeMoneyPosition(expenses, [], ['alice', 'bob'], 'alice', 'GBP', carryovers)
     expect(pos.kind).toBe('owed')
-    expect(pos.amount).toBe(50) // baseline only -- the charlie row contributes nothing
-    expect(pos.perPerson).toEqual([{ userId: 'bob', netMinor: 5000 }])
+    expect(pos.amount).toBe(90)
+    expect([...pos.perPerson].sort((a, b) => a.userId.localeCompare(b.userId))).toEqual([
+      { userId: 'bob', netMinor: 5000 },
+      { userId: 'charlie', netMinor: 4000 },
+    ])
+    expect(pos.perPerson.reduce((n, r) => n + r.netMinor, 0)).toBe(9000)
   })
 })
 

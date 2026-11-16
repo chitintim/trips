@@ -4,7 +4,7 @@ import { Modal, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
-import { useParticipants } from '../../../lib/queries/useTrip'
+import { useParticipants, useAllParticipants } from '../../../lib/queries/useTrip'
 import { effectiveTripStage } from '../../../lib/tripStage'
 import { MoneyPositionHeader } from './MoneyPositionHeader'
 import { MoneyFilterChips } from './MoneyFilterChips'
@@ -46,6 +46,7 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
   const navigate = useNavigate()
   const { data, isLoading, isError, refetch } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
+  const { data: allParticipants = [] } = useAllParticipants(trip.id)
   const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
@@ -108,6 +109,7 @@ export function MoneySpace({ trip, initialScreen = null }: MoneySpaceProps) {
         settlements={settlements}
         carryovers={carryovers}
         participants={participants}
+        allParticipants={allParticipants}
         currentUserId={user?.id}
         baseCurrency={trip.base_currency}
         onSettleUp={() => setSettleUpOpen(true)}

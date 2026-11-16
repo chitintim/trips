@@ -6,7 +6,7 @@
  * functions the legacy BalanceHeader/SettleUpTab use, so the figures always
  * agree across every surface that shows money.
  */
-import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from '../lib/balances'
+import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers, withMoneyParticipants } from '../lib/balances'
 import { toMinorUnits } from '../../../lib/money'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
@@ -62,7 +62,10 @@ export function computeMoneyPosition(
   baseCurrency: string,
   carryovers: SettlementCarryover[] = []
 ): MoneyPosition {
-  const { balances, expensesMissingRate } = computeBalances(expenses, settlements, participantUserIds, baseCurrency, carryovers)
+  // Roster + anyone else in the money (e.g. a payer who left): the SAME id set
+  // Settle Up uses, so headline, breakdown and Settle Up agree and the ledger sums to zero.
+  const ledgerIds = withMoneyParticipants(participantUserIds, expenses, settlements, baseCurrency, carryovers)
+  const { balances, expensesMissingRate } = computeBalances(expenses, settlements, ledgerIds, baseCurrency, carryovers)
   const mine = balances.find((b) => b.userId === currentUserId)
   const { youOwe, owedToYou } = splitOwedAmounts(mine?.netBalanceMinor ?? 0, baseCurrency)
 
@@ -75,8 +78,8 @@ export function computeMoneyPosition(
   // computePairwiseBreakdown has its own independent settlements loop (not
   // routed through computeBalances), so it needs the merged list passed
   // explicitly to stay in sync with the headline figure.
-  const settlementsWithCarryovers = mergeSettlementsWithUsableCarryovers(settlements, carryovers, baseCurrency, participantUserIds)
-  const perPerson = computePairwiseBreakdown(expenses, settlementsWithCarryovers, participantUserIds, currentUserId, baseCurrency)
+  const settlementsWithCarryovers = mergeSettlementsWithUsableCarryovers(settlements, carryovers, baseCurrency, ledgerIds)
+  const perPerson = computePairwiseBreakdown(expenses, settlementsWithCarryovers, ledgerIds, currentUserId, baseCurrency)
 
   return { kind, amount, currency: baseCurrency, perPerson, expensesMissingRate }
 }

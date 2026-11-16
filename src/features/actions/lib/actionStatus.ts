@@ -41,6 +41,41 @@ export interface TripForActionStatus {
  * completion (see scripts/check-contract-drift.mjs).
  */
 
+/**
+ * Whether a participant still counts toward group-action completion and
+ * "N of M done" denominators: active, and not declined/cancelled (those
+ * people are out of the trip, so they never block an action or get chased).
+ */
+export function countsTowardActions(p: { active?: boolean | null; confirmation_status?: string | null }): boolean {
+  return p.active !== false && p.confirmation_status !== 'declined' && p.confirmation_status !== 'cancelled'
+}
+
+/**
+ * Treat every vote-linked action whose question is CLOSED (section status
+ * 'completed') as done for everyone: nobody can vote any more, so the action
+ * is no longer required of anyone -- not open, not overdue, not chased.
+ * Done in the status derivation (no completion rows are written): each closed
+ * section's voter set is widened to include all `participantIds`, which every
+ * downstream predicate (isActionCompleteForUser, groupCompletedUserIds,
+ * isGroupComplete, ...) already reads. Returns a new map; the input is not
+ * mutated. Mirrored server-side by auto-chase's closedSectionIds.
+ */
+export function withClosedSections(
+  sectionVoters: SectionVoterIds,
+  sections: ReadonlyArray<{ id: string; status?: string | null }>,
+  participantIds: ReadonlyArray<string>
+): SectionVoterIds {
+  const result: SectionVoterIds = new Map()
+  for (const [id, voters] of sectionVoters) result.set(id, new Set(voters))
+  for (const section of sections) {
+    if (section.status !== 'completed') continue
+    const voters = result.get(section.id) ?? new Set<string>()
+    for (const uid of participantIds) voters.add(uid)
+    result.set(section.id, voters)
+  }
+  return result
+}
+
 /** Whether `userId` has cast a vote in the section an action is linked to (false when unlinked or no vote data was supplied). */
 function hasVotedInSection(action: ActionRow, userId: string, sectionVoters: SectionVoterIds | undefined): boolean {
   return hasVotedInSectionId(action.section_id, userId, sectionVoters)

@@ -53,7 +53,8 @@ import type { Booking } from '../../../lib/queries/useBookings'
 import type { TimelineEvent } from '../../../types'
 import type { Json } from '../../../types/database.types'
 import { readOptionMetadata } from '../../decisions/lib/optionMetadata'
-import { tallyVotes, getWinner, type VotingMethod } from '../../decisions/lib/voting'
+import { type VotingMethod } from '../../decisions/lib/voting'
+import { resolveWinner } from '../../decisions/lib/resolveDecision'
 import { getPerPersonCostImpact, getTierSensitivityLine, isTieredCostImpact } from '../../decisions/lib/costImpact'
 import { isPersonalOrderSection } from '../../decisions/lib/decisionShapes'
 
@@ -65,6 +66,8 @@ export interface PlanItemVoteSummary {
   myVote: { voted: boolean; rank: number | null }
   voteDeadline: string | null
   hideVotesUntilClose: boolean
+  /** The question's status; a closed ('completed') question always reveals results (areVotesVisible). */
+  sectionStatus: string
   quorum: number | null
 }
 
@@ -75,6 +78,10 @@ export interface PlanItemCostImpact {
   isTiered: boolean
   /** "£75/pp if 6 · £38/pp if 12" — null when not tiered. */
   sensitivityLine: string | null
+  /** True when the divisor is an in-scope headcount estimate (RSVP tracking off / nobody confirmed) — render "≈ per person across N people". */
+  isEstimate: boolean
+  /** The headcount a total_split price was divided by. */
+  headcount: number
 }
 
 export interface PlanItemBookingInfo {
@@ -86,6 +93,8 @@ export interface PlanItemBookingInfo {
   amount: number | null
   currency: string | null
   expenseId: string | null
+  /** True when this (newest available) booking is cancelled and no live booking replaces it — the card shows "Booking cancelled — needs rebooking". */
+  cancelled: boolean
 }
 
 export interface PlanItem {
@@ -167,8 +176,10 @@ export interface ComposePlanItemsInput {
   sections: SectionWithOptions[]
   votes: OptionVote[]
   bookings: Booking[]
-  /** For cost-impact display (getPerPersonCostImpact needs a divisor for total_split options). */
+  /** For cost-impact display (getPerPersonCostImpact needs a divisor for total_split options). Pass the in-scope headcount (features/people/lib/inScopePeople). */
   confirmedCount: number
+  /** True when `confirmedCount` is an estimate rather than a real confirmed count (defaults to false). */
+  headcountIsEstimate?: boolean
   currentUserId?: string | null
 }
 
@@ -184,23 +195,35 @@ export interface ComposePlanItemsResult {
  * testable and safe to call from a `useMemo` in the hook wrapper.
  */
 export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItemsResult {
-  const { events, sections, votes, bookings, confirmedCount, currentUserId } = input
+  const { events, sections, votes, bookings, confirmedCount, headcountIsEstimate = false, currentUserId } = input
 
+  // Cancelled bookings never make an item "Booked". For each option/event we
+  // keep the NEWEST live booking; failing that, the newest cancelled one so
+  // the card can say "Booking cancelled — needs rebooking" (rule 8).
   const bookingsByOptionId = new Map<string, Booking>()
   const bookingsByEventId = new Map<string, Booking>()
   const unlinkedBookings: Booking[] = []
+  const isNewer = (a: Booking, b: Booking) => (a.created_at ?? '') > (b.created_at ?? '')
+  const better = (candidate: Booking, current: Booking | undefined): boolean => {
+    if (!current) return true
+    const candLive = candidate.status !== 'cancelled'
+    const curLive = current.status !== 'cancelled'
+    if (candLive !== curLive) return candLive
+    return isNewer(candidate, current)
+  }
   for (const booking of bookings) {
     let linked = false
     if (booking.option_id) {
-      bookingsByOptionId.set(booking.option_id, booking)
+      if (better(booking, bookingsByOptionId.get(booking.option_id))) bookingsByOptionId.set(booking.option_id, booking)
       linked = true
     }
     if (booking.timeline_event_id) {
-      bookingsByEventId.set(booking.timeline_event_id, booking)
+      if (better(booking, bookingsByEventId.get(booking.timeline_event_id))) bookingsByEventId.set(booking.timeline_event_id, booking)
       linked = true
     }
     if (!linked) unlinkedBookings.push(booking)
   }
+  const isLive = (b: Booking | undefined): b is Booking => !!b && b.status !== 'cancelled'
 
   function toBookingInfo(booking: Booking | undefined): PlanItemBookingInfo | null {
     if (!booking) return null
@@ -213,6 +236,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       amount: booking.amount,
       currency: booking.currency,
       expenseId: booking.expense_id,
+      cancelled: booking.status === 'cancelled',
     }
   }
 
@@ -231,7 +255,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
     items.push({
       id: event.id,
       idKind: 'event',
-      stage: booking ? 'booked' : 'decided',
+      stage: isLive(booking) ? 'booked' : 'decided',
       title: event.title,
       description: event.description,
       date: event.event_date,
@@ -262,8 +286,8 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
     const votingMethod = (section.voting_method as VotingMethod) || 'single'
     const optionIds = section.options.map((o) => o.id)
     const sectionVotes = votes.filter((v) => optionIds.includes(v.option_id))
-    const tallies = tallyVotes(optionIds, sectionVotes, votingMethod)
-    const winner = getWinner(tallies)
+    // The one shared winner rule (recorded stamp, then tally + deterministic tie-breaks).
+    const winnerId = resolveWinner(section, votes).optionId
     const sectionDateMeta = readSectionDateMetadata(section.description)
     const isMatrixSection = section.options.some((o) => {
       const meta = readOptionMetadata(o.metadata)
@@ -291,10 +315,13 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       // live catalog entry, never a parked idea.
       const isIdea = !isPersonalOrder && section.status === 'not_started' && !hasAnyVotes
 
-      const isWinner = !!winner && winner.optionId === option.id && winner.score > 0
+      const isWinner = winnerId === option.id
       // Rule 6: a `bookings` row OR the option's own status='booked' both
       // mean "booked" — pre-v3 trips only ever set the latter.
-      const stage: PlanItemStage = booking || option.status === 'booked' ? 'booked' : isIdea ? 'idea' : 'proposal'
+      // A cancelled booking (with no live replacement) overrides the option's
+      // own 'booked' flag: the real-world booking fell through.
+      const stage: PlanItemStage =
+        isLive(booking) || (!booking && option.status === 'booked') ? 'booked' : isIdea ? 'idea' : 'proposal'
 
       const costImpactInput = {
         price: option.price,
@@ -302,6 +329,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
         priceType: option.price_type,
         confirmedCount,
         metadata: option.metadata,
+        isEstimate: headcountIsEstimate,
       }
       const perPerson = getPerPersonCostImpact(costImpactInput)
 
@@ -334,6 +362,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
               myVote: { voted: !!myVote, rank: myVote?.rank ?? null },
               voteDeadline: section.vote_deadline,
               hideVotesUntilClose: section.hide_votes_until_close,
+              sectionStatus: section.status,
               quorum: section.quorum,
             },
         costImpact:
@@ -343,6 +372,8 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
                 currency: option.currency,
                 isTiered: isTieredCostImpact(option.metadata),
                 sensitivityLine: getTierSensitivityLine(costImpactInput),
+                isEstimate: headcountIsEstimate && option.price_type === 'total_split' && !isTieredCostImpact(option.metadata),
+                headcount: confirmedCount,
               }
             : null,
         booking: toBookingInfo(booking),

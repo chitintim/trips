@@ -77,6 +77,22 @@ describe('computeDatePollWinner', () => {
     expect(winner?.optionId).toBe('earlier')
   })
 
+  it("honours the organizer's recorded tie-break over the tally", () => {
+    const s = section([option('earlier', '2026-08-01', '2026-08-05'), option('later', '2026-08-10', '2026-08-14')])
+    ;(s as unknown as { status: string }).status = 'completed'
+    ;(s as unknown as { metadata: unknown }).metadata = { decided_option_id: 'later' }
+    const winner = computeDatePollWinner(s, [vote('earlier', 'u1'), vote('later', 'u2')])
+    expect(winner?.optionId).toBe('later')
+    expect(winner?.source).toBe('stamp')
+  })
+
+  it('falls back to the earliest candidate when nobody voted', () => {
+    const s = section([option('later', '2026-08-10', '2026-08-14'), option('earlier', '2026-08-01', '2026-08-05')])
+    const winner = computeDatePollWinner(s, [])
+    expect(winner?.optionId).toBe('earlier')
+    expect(winner?.source).toBe('earliest-candidate')
+  })
+
   it('ignores cancelled options and options without ranges', () => {
     const s = section([
       option('cancelled', '2026-08-01', '2026-08-05', { status: 'cancelled' }),

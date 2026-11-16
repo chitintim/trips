@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Badge, Button, UserAvatar } from '../../../components/ui'
 import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
+import { withMoneyParticipants } from '../lib/balances'
 import { computeMoneyPosition, computePairwiseLedger, mergeSettlementsWithUsableCarryovers } from './moneyPosition'
 import type { PairwiseLedgerEntry } from './moneyPosition'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -13,6 +14,8 @@ export interface MoneyPositionHeaderProps {
   /** Already-folded cross-trip carryovers for this trip (as fold target) -- folded into the SAME balance math settlements use, so this header agrees with Settle Up. */
   carryovers?: SettlementCarryover[]
   participants: ParticipantWithUser[]
+  /** Active + removed participants, used only to NAME people who left but are still in the money. */
+  allParticipants?: ParticipantWithUser[]
   currentUserId: string | undefined
   baseCurrency: string
   /** Settle-up STATE card affordance (plan §4 #4) — only meaningful when there's actually something to settle. */
@@ -54,6 +57,7 @@ export function MoneyPositionHeader({
   settlements,
   carryovers = [],
   participants,
+  allParticipants = [],
   currentUserId,
   baseCurrency,
   onSettleUp,
@@ -70,14 +74,20 @@ export function MoneyPositionHeader({
     carryovers
   )
   const copy = KIND_COPY[position.kind]
-  const byUserId = new Map(participants.map((p) => [p.user_id, p]))
+  const byUserId = new Map([...allParticipants, ...participants].map((p) => [p.user_id, p]))
 
   // Same merged real-settlements + usable-carryovers list computeMoneyPosition
   // fed computePairwiseBreakdown -- the per-pair ledger must read the same
   // rows or its lines wouldn't sum to the net shown on the row above.
   const settlementsWithCarryovers = useMemo(
-    () => mergeSettlementsWithUsableCarryovers(settlements, carryovers, baseCurrency, participants.map((p) => p.user_id)),
-    [settlements, carryovers, baseCurrency, participants]
+    () =>
+      mergeSettlementsWithUsableCarryovers(
+        settlements,
+        carryovers,
+        baseCurrency,
+        withMoneyParticipants(participants.map((p) => p.user_id), expenses, settlements, baseCurrency, carryovers)
+      ),
+    [expenses, settlements, carryovers, baseCurrency, participants]
   )
 
   return (
@@ -142,7 +152,7 @@ export function MoneyPositionHeader({
         <div className="space-y-2 stagger-list">
           {position.perPerson.map((row) => {
             const person = byUserId.get(row.userId)
-            const personName = person?.user?.full_name || person?.user?.email || 'Someone'
+            const personName = person?.user?.full_name || person?.user?.email || 'Former member'
             const theyOweMe = row.netMinor > 0
             const isOpen = expandedPersonId === row.userId
             const ledger = isOpen

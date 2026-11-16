@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Modal, Badge, Button, Chip, UserAvatar, TextArea, SelectionAvatars } from '../../../components/ui'
+import { Modal, Badge, Button, Chip, UserAvatar, TextArea, SelectionAvatars, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useParticipants } from '../../../lib/queries/useTrip'
@@ -20,8 +20,11 @@ import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
 import { BookingEditorSheet } from '../../organizer/components/BookingEditorSheet'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { areVotesVisible, votingInstruction, replaceableSiblingVoteIds } from '../../decisions/lib/voting'
+import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
 import { formatCostImpact } from '../../decisions/lib/costImpact'
 import { OptionEditorSheet } from '../../decisions/components/OptionEditorSheet'
+import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
+import { canReopenDecision, canVoteOnOption, describeVoteError, isDecidedOption, resolveWinnerId } from '../../decisions/lib/resolveDecision'
 import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import { formatTimeRange, CATEGORY_CONFIG } from '../../timeline/lib/categoryConfig'
 import { planItemEditTarget } from '../lib/planItems'
@@ -36,7 +39,8 @@ export interface PlanItemSheetProps {
   trip: Trip
   item: PlanItem | null
   isOrganizer: boolean
-  confirmedCount: number
+  /** In-scope headcount (people/lib/inScopePeople) the cost is split across. */
+  headcount: InScopeHeadcount
   /** Navigate to the Money space for this item's linked expense. */
   onNavigateToExpense?: (expenseId: string) => void
   /** "Schedule it" — opens a day/time picker to place a decided-but-undated item onto the timeline. */
@@ -55,12 +59,13 @@ export function PlanItemSheet({
   trip,
   item,
   isOrganizer,
-  confirmedCount,
+  headcount,
   onNavigateToExpense,
   onScheduleIt,
 }: PlanItemSheetProps) {
   const tripId = trip.id
   const { user } = useAuth()
+  const { showToast } = useToast()
   const { data: places } = usePlaces(tripId)
   const { data: participants } = useParticipants(tripId)
   const { data: sections } = useSections(tripId)
@@ -83,6 +88,7 @@ export function PlanItemSheet({
   const [editOptionOpen, setEditOptionOpen] = useState(false)
   const [editBookingOpen, setEditBookingOpen] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [reopenOpen, setReopenOpen] = useState(false)
 
   if (!item) return null
 
@@ -96,7 +102,7 @@ export function PlanItemSheet({
   const optionVotes = item.optionId ? (votes || []).filter((v) => v.option_id === item.optionId) : []
   const myVote = optionVotes.find((v) => v.user_id === user?.id)
   const votesVisible = item.vote
-    ? areVotesVisible({ vote_deadline: item.vote.voteDeadline, hide_votes_until_close: item.vote.hideVotesUntilClose })
+    ? areVotesVisible({ vote_deadline: item.vote.voteDeadline, hide_votes_until_close: item.vote.hideVotesUntilClose, status: section?.status })
     : true
 
   const optionReactions = item.optionId ? (reactions || []).filter((r) => r.option_id === item.optionId) : []
@@ -108,16 +114,31 @@ export function PlanItemSheet({
   const byUserId = new Map((participants || []).map((p) => [p.user_id, p]))
 
   const costImpactLabel = option
-    ? formatCostImpact({ price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount })
+    ? formatCostImpact({ price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount: headcount.count, isEstimate: headcount.isEstimate, metadata: option.metadata })
     : null
 
   const category = event ? CATEGORY_CONFIG[event.category] ?? CATEGORY_CONFIG.other : null
   const timeRange = event ? formatTimeRange(event.all_day, event.start_time, event.end_time) : null
 
+  // The section that owns this item's option, even for a timeline event that
+  // absorbed it (events carry source_option_id but no sectionId).
+  const decisionSection = item.optionId ? (sections || []).find((s) => s.options.some((o) => o.id === item.optionId)) : undefined
+  const decisionIsPersonal = decisionSection ? getDecisionShape(decisionSection.metadata) === 'personal' : false
+  const decidedOptionId = decisionSection && decisionSection.status === 'completed' ? resolveWinnerId(decisionSection, votes || []) : null
+  const canReopen = isOrganizer && !!decisionSection && !decisionIsPersonal && canReopenDecision(decisionSection) && decidedOptionId === item.optionId
+  const voteGate = canVoteOnOption(section, option)
+  // "Schedule it" on a still-open vote closes it and records this option as the decision.
+  const scheduleClosesVote = !!section && section.status !== 'completed' && !decisionIsPersonal
+
   const handleVote = () => {
     if (!user || !item.optionId) return
+    if (!voteGate.ok) {
+      if (voteGate.reason) showToast({ type: 'error', message: voteGate.reason })
+      return
+    }
+    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your vote', description: describeVoteError(err) })
     if (myVote) {
-      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'remove', voteId: myVote.id })
+      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onError })
     } else {
       // Radio semantics for single-choice polls: casting here replaces any
       // vote I already have on a sibling option (see useToggleVote).
@@ -130,7 +151,7 @@ export function PlanItemSheet({
             item.vote?.votingMethod ?? 'single'
           )
         : []
-      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title })
+      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title }, { onError })
     }
   }
 
@@ -150,14 +171,27 @@ export function PlanItemSheet({
     setCommentDraft('')
   }
 
+  // Deleting the option a closed question decided would silently promote the
+  // runner-up (the tally fallback), so it is blocked until the decision is reopened.
+  const deletingDecidedOption =
+    item.idKind === 'option' && !!item.optionId && !!section && isDecidedOption(section, votes || [], item.optionId)
+
   const handleDelete = async () => {
-    if (item.idKind === 'event' && item.eventId) {
-      await deleteEvent.mutateAsync(item.eventId)
-    } else if (item.idKind === 'option' && item.optionId) {
-      await deleteOption.mutateAsync(item.optionId)
+    try {
+      if (item.idKind === 'event' && item.eventId) {
+        await deleteEvent.mutateAsync(item.eventId)
+      } else if (item.idKind === 'option' && item.optionId) {
+        if (deletingDecidedOption) {
+          showToast({ type: 'error', message: 'This option is the decision', description: 'Reopen the decision first, then delete the option.' })
+          return
+        }
+        await deleteOption.mutateAsync(item.optionId)
+      }
+      setConfirmingDelete(false)
+      onClose()
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not delete', description: (err as Error).message })
     }
-    setConfirmingDelete(false)
-    onClose()
   }
 
   const stageBadge = {
@@ -238,7 +272,8 @@ export function PlanItemSheet({
                   variant={myVote ? 'primary' : 'secondary'}
                   size="sm"
                   onClick={handleVote}
-                  disabled={option.locked}
+                  disabled={!voteGate.ok}
+                  title={voteGate.reason ?? undefined}
                   isLoading={toggleVote.isPending}
                 >
                   {myVote
@@ -373,7 +408,12 @@ export function PlanItemSheet({
               toast for non-organizers. */}
           {isOrganizer && !item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && onScheduleIt && (
             <Button variant="secondary" fullWidth onClick={() => onScheduleIt(item)}>
-              📅 Schedule it
+              {scheduleClosesVote ? '📅 Close vote & schedule' : '📅 Schedule it'}
+            </Button>
+          )}
+          {canReopen && (
+            <Button variant="outline" fullWidth onClick={() => setReopenOpen(true)}>
+              ↩️ Reopen decision
             </Button>
           )}
 
@@ -427,15 +467,29 @@ export function PlanItemSheet({
 
       {booking && <BookingEditorSheet isOpen={editBookingOpen} onClose={() => setEditBookingOpen(false)} trip={trip} booking={booking} />}
 
+      <ReopenDecisionDialog
+        isOpen={reopenOpen}
+        onClose={() => setReopenOpen(false)}
+        tripId={tripId}
+        section={decisionSection ?? null}
+        decidedTitle={item.title}
+      />
+
       {confirmingDelete && (
         <Modal isOpen onClose={() => setConfirmingDelete(false)} size="sm" title={`Delete "${item.title}"?`}>
           <div className="space-y-4">
-            <p className="text-sm text-[var(--text-secondary)]">This can't be undone.</p>
+            {deletingDecidedOption ? (
+              <p className="text-sm text-[var(--text-secondary)]">
+                This option is the group's recorded decision. Reopen the decision first, then delete it -- otherwise the runner-up would silently become the decision.
+              </p>
+            ) : (
+              <p className="text-sm text-[var(--text-secondary)]">This can't be undone.</p>
+            )}
             <div className="flex justify-end gap-3">
               <Button variant="ghost" onClick={() => setConfirmingDelete(false)}>
                 Cancel
               </Button>
-              <Button variant="danger" onClick={handleDelete} isLoading={deleteEvent.isPending || deleteOption.isPending}>
+              <Button variant="danger" onClick={handleDelete} disabled={deletingDecidedOption} isLoading={deleteEvent.isPending || deleteOption.isPending}>
                 Delete
               </Button>
             </div>

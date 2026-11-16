@@ -14,9 +14,11 @@ import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGroupi
 import { MatrixView } from '../../decisions/components/MatrixView'
 import { SectionEditorSheet } from '../../decisions/components/SectionEditorSheet'
 import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcomePanel'
+import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
 import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
 import { votingInstruction, replaceableSiblingVoteIds, type VotingMethod } from '../../decisions/lib/voting'
 import { resolveDecidedOptionId } from '../../decisions/lib/closeDecision'
+import { canReopenDecision, canVoteOnOption, describeVoteError } from '../../decisions/lib/resolveDecision'
 import { computeQuestionState } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
 import { ConsolidatedTravelRow } from './ConsolidatedTravelRow'
@@ -119,6 +121,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const [creatingStarters, setCreatingStarters] = useState(false)
   const [matrixSectionId, setMatrixSectionId] = useState<string | null>(null)
   const [sectionSettingsId, setSectionSettingsId] = useState<string | null>(null)
+  const [reopenSectionId, setReopenSectionId] = useState<string | null>(null)
   const [orderFormSectionId, setOrderFormSectionId] = useState<string | null>(null)
   const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
   const [expandedPicksSectionIds, setExpandedPicksSectionIds] = useState<Set<string>>(() => new Set())
@@ -318,7 +321,11 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     if (!user || !item.optionId || !item.vote) return
     const optionSection = (sections || []).find((s) => s.id === item.sectionId)
     const option = optionSection?.options.find((o) => o.id === item.optionId)
-    if (option?.locked) return
+    const gate = canVoteOnOption(optionSection, option)
+    if (!gate.ok) {
+      if (gate.reason) showToast({ type: 'error', message: gate.reason })
+      return
+    }
     if (item.vote.myVote.voted) {
       onOpenItem(item)
       return
@@ -338,7 +345,10 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
       : []
     toggleVote.mutate(
       { optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title },
-      { onSettled: () => setVotingId(null) }
+      {
+        onSettled: () => setVotingId(null),
+        onError: (err) => showToast({ type: 'error', message: 'Could not save your vote', description: describeVoteError(err) }),
+      }
     )
   }
 
@@ -466,6 +476,11 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                           isOrganizer gate): wires the previously-unreachable
                           SectionEditorSheet (voting method/deadline/quorum/
                           decision shape) into the live tray. */}
+                      {isOrganizer && canReopenDecision(section) && !isPersonalOrder && (
+                        <Button variant="ghost" size="sm" onClick={() => setReopenSectionId(section.id)}>
+                          Reopen
+                        </Button>
+                      )}
                       {isOrganizer && (
                         <Button
                           variant="ghost"
@@ -790,6 +805,20 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
         tripId={trip.id}
         section={(sections || []).find((s) => s.id === sectionSettingsId) ?? null}
       />
+
+      {(() => {
+        const reopenSection = (sections || []).find((s) => s.id === reopenSectionId) ?? null
+        const decidedId = reopenSection ? resolveDecidedOptionId(reopenSection, votes || []) : null
+        return (
+          <ReopenDecisionDialog
+            isOpen={!!reopenSection}
+            onClose={() => setReopenSectionId(null)}
+            tripId={trip.id}
+            section={reopenSection}
+            decidedTitle={reopenSection?.options.find((o) => o.id === decidedId)?.title ?? null}
+          />
+        )
+      })()}
 
       {/* Personal order form (UX_REDESIGN.md Part 5, shape 2): the "Fill in
           your order"/"Edit your order" affordance above opens this instead

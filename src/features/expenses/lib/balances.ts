@@ -144,6 +144,60 @@ export function partitionCarryovers(
   return { usable, excludedCurrency, excludedParticipant }
 }
 
+/**
+ * Everyone whose money actually moves in the ledger: payers, split members,
+ * itemized claimants, parties to a REAL (non-pending) settlement and to a
+ * carryover. Expenses with no resolvable FX rate are skipped because they
+ * contribute nothing to the numbers. Used so that someone who left the trip
+ * (trip_participants.active = false) with expense history still gets a
+ * balance row -- otherwise their share silently vanishes and the remaining
+ * balances stop summing to zero.
+ */
+export function collectMoneyUserIds(
+  expenses: ExpenseWithDetails[],
+  settlements: Settlement[],
+  baseCurrency: string,
+  carryovers: SettlementCarryover[] = []
+): string[] {
+  const ids = new Set<string>()
+  for (const expense of expenses) {
+    if (resolveExpenseRate(expense, baseCurrency) == null) continue
+    ids.add(expense.paid_by)
+    const isItemized = !!expense.ai_parsed && !!expense.status && expense.line_items.length > 0
+    if (isItemized) for (const c of expense.claims) ids.add(c.user_id)
+    else for (const sp of expense.splits) ids.add(sp.user_id)
+  }
+  for (const st of settlements) {
+    if (st.status === 'suggested' || st.status === 'marked_paid') continue
+    ids.add(st.from_user_id)
+    ids.add(st.to_user_id)
+  }
+  for (const c of carryovers) {
+    if (c.currency !== baseCurrency) continue
+    ids.add(c.from_user_id)
+    ids.add(c.to_user_id)
+  }
+  return [...ids]
+}
+
+/** Roster ids plus everyone else who appears in the money (deduplicated, roster first). */
+export function withMoneyParticipants(
+  rosterUserIds: string[],
+  expenses: ExpenseWithDetails[],
+  settlements: Settlement[],
+  baseCurrency: string,
+  carryovers: SettlementCarryover[] = []
+): string[] {
+  return [...new Set([...rosterUserIds, ...collectMoneyUserIds(expenses, settlements, baseCurrency, carryovers)])]
+}
+
+/**
+ * `participantUserIds` is the set of people the ledger is computed over;
+ * money belonging to anyone NOT in it is dropped (and a carryover with a
+ * party outside it is excluded whole, see partitionCarryovers). To keep the
+ * ledger summing to zero, callers that present balances should pass
+ * `withMoneyParticipants(activeIds, ...)` rather than only active people.
+ */
 export function computeBalances(
   expenses: ExpenseWithDetails[],
   settlements: Settlement[],

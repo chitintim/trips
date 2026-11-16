@@ -1,7 +1,9 @@
-import { Suspense, useState } from 'react'
+import { Suspense, useMemo, useState } from 'react'
 import { Button, EmptyState, SegmentedControl, Skeleton } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
-import { useAuth } from '../../../hooks/useAuth'
+import { inScopeHeadcount } from '../../people/lib/inScopePeople'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { lazyWithRetry } from '../../../lib/lazyWithRetry'
 import { usePlanItems } from '../lib/usePlanItems'
@@ -35,7 +37,6 @@ export interface PlanTabProps {
  * shared across all of them.
  */
 export function PlanTab({ trip, onNavigate }: PlanTabProps) {
-  const { user } = useAuth()
   const { data: participants } = useParticipants(trip.id)
   const { items, isLoading, isError, refetch } = usePlanItems(trip.id)
 
@@ -51,9 +52,8 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
     setAddSheetOpen(true)
   }
 
-  const myParticipant = participants?.find((p) => p.user_id === user?.id)
-  const isOrganizer = myParticipant?.role === 'organizer'
-  const confirmedCount = (participants || []).filter((p) => p.confirmation_status === 'confirmed').length
+  const { canManageTrip: isOrganizer } = useTripPermissions(trip)
+  const headcount = useMemo(() => inScopeHeadcount(participants || [], isConfirmationEnabled(trip)), [participants, trip])
 
   const handleNavigateToExpense = (expenseId: string) => {
     setSelectedItem(null)
@@ -136,7 +136,7 @@ export function PlanTab({ trip, onNavigate }: PlanTabProps) {
         trip={trip}
         item={selectedItem}
         isOrganizer={isOrganizer}
-        confirmedCount={confirmedCount}
+        headcount={headcount}
         onNavigateToExpense={onNavigate ? handleNavigateToExpense : undefined}
         onScheduleIt={(item) => {
           setSelectedItem(null)

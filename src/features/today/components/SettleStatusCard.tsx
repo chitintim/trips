@@ -4,7 +4,7 @@ import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useSettlements, useSettlementCarryovers } from '../../../lib/queries/useSettlements'
-import { computeBalances, splitOwedAmounts } from '../../expenses'
+import { computeBalances, splitOwedAmounts, withMoneyParticipants } from '../../expenses'
 import { formatMoney } from '../../decisions/lib/costImpact'
 import type { Trip } from '../../../types'
 
@@ -36,7 +36,7 @@ export function SettleStatusCard({ trip, onNavigate, compact = false }: SettleSt
     const { balances } = computeBalances(
       expensesData?.expenses ?? [],
       settlements,
-      participants.map((p) => p.user_id),
+      withMoneyParticipants(participants.map((p) => p.user_id), expensesData?.expenses ?? [], settlements, trip.base_currency, carryovers),
       trip.base_currency,
       carryovers
     )

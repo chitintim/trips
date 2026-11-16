@@ -22,8 +22,10 @@ import type { Json } from '../../../types/database.types'
  */
 export type ActivityVerb =
   | 'rsvp_changed'
+  | 'confirmations_reset'
   | 'vote_cast'
   | 'poll_closed'
+  | 'decision_reopened'
   | 'option_added'
   | 'expense_added'
   | 'settlement_confirmed'
@@ -94,8 +96,10 @@ interface VerbTemplate {
 
 const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   rsvp_changed: { icon: '📝', phrase: (e) => `updated their RSVP${e ? ` to ${e}` : ''}` },
+  confirmations_reset: { icon: '🧹', phrase: (e) => `reset participation confirmations${e ? ` (${e} cleared)` : ''}` },
   vote_cast: { icon: '🗳️', phrase: (e) => `voted${e ? ` on "${e}"` : ''}` },
   poll_closed: { icon: '🏁', phrase: (e) => `closed the poll${e ? ` "${e}"` : ''}` },
+  decision_reopened: { icon: '↩️', phrase: (e) => `reopened the decision${e ? ` "${e}"` : ''}` },
   option_added: { icon: '💡', phrase: (e) => `added the option${e ? ` "${e}"` : ''}` },
   expense_added: { icon: '💰', phrase: (e) => `added the expense${e ? ` "${e}"` : ''}` },
   settlement_confirmed: { icon: '🤝', phrase: (e) => `confirmed a settlement${e ? ` (${e})` : ''}` },

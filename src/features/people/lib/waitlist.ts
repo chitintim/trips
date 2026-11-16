@@ -19,16 +19,18 @@ export interface WaitlistEntry {
 }
 
 /**
- * Order the waitlist by `updated_at` ascending (earliest to join the
- * waitlist goes first) — `updated_at` is bumped by the
- * enforce_capacity_limit trigger / any status change, which is the closest
- * proxy we have to "waitlisted since" without a dedicated column.
+ * Order the waitlist by `created_at` ascending, exactly as the auto-chase
+ * edge function does when it decides who gets the next freed-spot offer
+ * (supabase/functions/auto-chase/index.ts, waitlist lifecycle). Using the
+ * same column keeps the position shown on screen equal to who is actually
+ * emailed. (`updated_at` was used before, but any edit to a participant row
+ * bumps it, silently pushing people down the on-screen queue.)
  */
 export function getWaitlistQueue(participants: ParticipantWithUser[], now: number = Date.now()): WaitlistEntry[] {
   const waitlisted = participants
     .filter((p) => p.confirmation_status === 'waitlist')
     .slice()
-    .sort((a, b) => new Date(a.updated_at || a.created_at).getTime() - new Date(b.updated_at || b.created_at).getTime())
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
 
   return waitlisted.map((participant, i) => {
     const expiresAt = participant.waitlist_offer_expires_at

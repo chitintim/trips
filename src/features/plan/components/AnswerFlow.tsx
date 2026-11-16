@@ -1,9 +1,11 @@
 import { useState } from 'react'
-import { Modal, Button, Badge, Stepper, SelectionAvatars } from '../../../components/ui'
+import { Modal, Button, Badge, Stepper, SelectionAvatars, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { formatCostImpact, getTierSensitivityLine } from '../../decisions/lib/costImpact'
 import { votingInstruction, replaceableSiblingVoteIds, areVotesVisible, type VotingMethod } from '../../decisions/lib/voting'
+import { canVoteOnOption, describeVoteError } from '../../decisions/lib/resolveDecision'
+import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
 import { useOrderForm } from '../lib/useOrderForm'
 import { OrderFormFields } from './OrderFormFields'
 import type { SectionWithOptions, OptionVoteWithUser } from '../../../lib/queries/usePlanning'
@@ -18,7 +20,7 @@ export interface AnswerFlowProps {
   sections: SectionWithOptions[]
   votes: OptionVoteWithUser[]
   participants: ParticipantWithUser[]
-  confirmedCount: number
+  headcount: InScopeHeadcount
 }
 
 /**
@@ -28,7 +30,7 @@ export interface AnswerFlowProps {
  * Skip/Next, progress dots, and a completion screen. Replaces scrolling a
  * wall of every open question at once.
  */
-export function AnswerFlow({ isOpen, onClose, trip, sections, votes, participants, confirmedCount }: AnswerFlowProps) {
+export function AnswerFlow({ isOpen, onClose, trip, sections, votes, participants, headcount }: AnswerFlowProps) {
   const [index, setIndex] = useState(0)
   const [done, setDone] = useState(false)
 
@@ -75,7 +77,7 @@ export function AnswerFlow({ isOpen, onClose, trip, sections, votes, participant
               section={current}
               votes={votes}
               participants={participants}
-              confirmedCount={confirmedCount}
+              headcount={headcount}
               onSkip={goNext}
               onNext={goNext}
               isLast={index === total - 1}
@@ -92,13 +94,13 @@ interface QuestionStepProps {
   section: SectionWithOptions
   votes: OptionVoteWithUser[]
   participants: ParticipantWithUser[]
-  confirmedCount: number
+  headcount: InScopeHeadcount
   onSkip: () => void
   onNext: () => void
   isLast: boolean
 }
 
-function QuestionStep({ trip, section, votes, participants, confirmedCount, onSkip, onNext, isLast }: QuestionStepProps) {
+function QuestionStep({ trip, section, votes, participants, headcount, onSkip, onNext, isLast }: QuestionStepProps) {
   const isPersonalOrder = (() => {
     const m = section.metadata
     return !!m && typeof m === 'object' && !Array.isArray(m) && (m as Record<string, unknown>).decision_shape === 'personal'
@@ -114,7 +116,7 @@ function QuestionStep({ trip, section, votes, participants, confirmedCount, onSk
       {isPersonalOrder ? (
         <PersonalOrderStep trip={trip} section={section} participants={participants} onSkip={onSkip} onNext={onNext} isLast={isLast} />
       ) : (
-        <VoteStep section={section} votes={votes} confirmedCount={confirmedCount} onSkip={onSkip} onNext={onNext} isLast={isLast} />
+        <VoteStep section={section} votes={votes} headcount={headcount} onSkip={onSkip} onNext={onNext} isLast={isLast} />
       )}
     </div>
   )
@@ -160,20 +162,21 @@ function PersonalOrderStep({
 function VoteStep({
   section,
   votes,
-  confirmedCount,
+  headcount,
   onSkip,
   onNext,
   isLast,
 }: {
   section: SectionWithOptions
   votes: OptionVoteWithUser[]
-  confirmedCount: number
+  headcount: InScopeHeadcount
   onSkip: () => void
   onNext: () => void
   isLast: boolean
 }) {
   const { user } = useAuth()
   const toggleVote = useToggleVote(section.trip_id)
+  const { showToast } = useToast()
   const [votingOptionId, setVotingOptionId] = useState<string | null>(null)
 
   const votingMethod = (section.voting_method as VotingMethod) || 'single'
@@ -182,20 +185,26 @@ function VoteStep({
   // Same hide_votes_until_close gate every other voting surface uses
   // (voting.ts's areVotesVisible) — before that, nobody sees the
   // per-option breakdown, only their own vote.
-  const votesVisible = areVotesVisible({ vote_deadline: section.vote_deadline, hide_votes_until_close: section.hide_votes_until_close })
+  const votesVisible = areVotesVisible({ vote_deadline: section.vote_deadline, hide_votes_until_close: section.hide_votes_until_close, status: section.status })
 
   const handleVote = (optionId: string) => {
     if (!user) return
+    const gate = canVoteOnOption(section, section.options.find((o) => o.id === optionId))
+    if (!gate.ok) {
+      if (gate.reason) showToast({ type: 'error', message: gate.reason })
+      return
+    }
+    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your vote', description: describeVoteError(err) })
     const myVote = sectionVotes.find((v) => v.option_id === optionId && v.user_id === user.id)
     setVotingOptionId(optionId)
     if (myVote) {
-      toggleVote.mutate({ optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onSettled: () => setVotingOptionId(null) })
+      toggleVote.mutate({ optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onSettled: () => setVotingOptionId(null), onError })
     } else {
       // Radio semantics for single-choice polls: a new choice replaces any
       // vote I already have on a sibling option (see useToggleVote).
       const replaceVoteIds = replaceableSiblingVoteIds(optionIds, sectionVotes, user.id, optionId, votingMethod)
       const optionTitle = section.options.find((o) => o.id === optionId)?.title
-      toggleVote.mutate({ optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle }, { onSettled: () => setVotingOptionId(null) })
+      toggleVote.mutate({ optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle }, { onSettled: () => setVotingOptionId(null), onError })
     }
   }
 
@@ -216,7 +225,7 @@ function VoteStep({
           .filter((o) => o.status !== 'cancelled')
           .map((option) => {
             const myVote = sectionVotes.find((v) => v.option_id === option.id && v.user_id === user?.id)
-            const costImpactInput = { price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount, metadata: option.metadata }
+            const costImpactInput = { price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount: headcount.count, isEstimate: headcount.isEstimate, metadata: option.metadata }
             const costImpact = formatCostImpact(costImpactInput)
             const sensitivityLine = getTierSensitivityLine(costImpactInput)
             const optionVoters = votesVisible ? sectionVotes.filter((v) => v.option_id === option.id && v.user) : []
@@ -275,7 +284,7 @@ function VoteStep({
                   variant={myVote ? 'primary' : 'outline'}
                   size="sm"
                   onClick={() => handleVote(option.id)}
-                  disabled={option.locked}
+                  disabled={option.locked || section.status === 'completed'}
                   isLoading={votingOptionId === option.id}
                   className="shrink-0"
                   role={votingMethod === 'single' ? 'radio' : votingMethod === 'approval' ? 'checkbox' : undefined}

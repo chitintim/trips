@@ -4,10 +4,8 @@ import { useSetParticipantActive } from '../../../lib/queries/useConfirmations'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
-import { computeBalances } from '../../expenses/lib/balances'
+import { evaluateRemovalGuard } from '../lib/removalGuard'
 import { formatMoneyMinor } from '../../expenses/lib/formatMoney'
-import { balanceEpsilonMajor } from '../../expenses/settle-up/settleUpLogic'
-import { fromMinorUnits } from '../../../lib/money'
 
 interface ManageParticipantSheetProps {
   tripId: string
@@ -66,39 +64,31 @@ export function ManageParticipantSheet({
   const organizerCount = participants.filter((p) => p.role === 'organizer').length
   const isSoleOrganizer = participant.role === 'organizer' && organizerCount <= 1
 
-  const balance = expensesData
-    ? computeBalances(
-        expensesData.expenses,
-        expensesData.settlements,
-        participants.map((p) => p.user_id),
-        baseCurrency,
-        carryovers
-      ).balances.find((b) => b.userId === participant.user_id)
-    : undefined
-
-  // computeBalances only seeds paid/owed/settled sums for ACTIVE
-  // participants (balances.ts, frozen -- not touched here), so removing
-  // someone with a non-zero balance silently drops their share from
-  // everyone else's totals going forward. Block removal at the point of
-  // action instead: require the leaving participant's own balance to be
-  // ~0, and require no settlement row of theirs still in flight (a
-  // 'suggested' or 'marked_paid' row disappearing mid-flow would orphan
-  // that payment). This doesn't repair a trip where this already happened
-  // in the past, and it only checks the removed participant's own
-  // exposure, not every other participant's exposure to them -- see the
-  // settle-up review notes.
-  const hasOpenSettlement = (expensesData?.settlements ?? []).some(
-    (s) => (s.from_user_id === participant.user_id || s.to_user_id === participant.user_id) && s.status !== 'confirmed'
-  )
-  const blockingBalance = !!balance && Math.abs(fromMinorUnits(balance.netBalanceMinor, baseCurrency)) > balanceEpsilonMajor(baseCurrency)
-  const blockRemoval = blockingBalance || hasOpenSettlement
+  // Same rules as the server trigger guard_participant_removal (see
+  // removalGuard.ts). While the expense data is still loading the guard
+  // reports `loading` and removal stays blocked -- a missing balance must
+  // never read as "no balance".
+  const guard = evaluateRemovalGuard({
+    userId: participant.user_id,
+    expenses: expensesData?.expenses,
+    settlements: expensesData?.settlements,
+    carryovers,
+    activeUserIds: participants.map((p) => p.user_id),
+    baseCurrency,
+  })
+  const blockingBalance = guard.hasBalance
+  const hasOpenSettlement = guard.hasOpenSettlement
+  const balanceMinor = guard.netBalanceMinor ?? 0
+  const blockRemoval = guard.blocked
 
   const handleRemove = async () => {
     if (blockRemoval) {
       showToast({
         type: 'error',
-        message: `${name} still has an open balance`,
-        description: 'Settle up before removing them, or their contributions will be dropped from everyone else\'s totals.',
+        message: guard.loading ? 'Still checking balances' : `${name} can't be removed yet`,
+        description: guard.loading
+          ? 'Try again in a moment.'
+          : 'Settle up (and let any payment in progress finish) before removing them.',
       })
       return
     }
@@ -130,18 +120,28 @@ export function ManageParticipantSheet({
           </div>
         </div>
 
-        {blockingBalance && balance && (
+        {guard.loading && (
+          <div className="text-xs text-[var(--text-muted)]">Checking {name}&apos;s balance…</div>
+        )}
+        {blockingBalance && (
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
-            {balance.netBalanceMinor > 0
-              ? `${name} is owed ${formatMoneyMinor(balance.netBalanceMinor, baseCurrency)}`
-              : `${name} owes ${formatMoneyMinor(-balance.netBalanceMinor, baseCurrency)}`}
+            {balanceMinor > 0
+              ? `${name} is owed ${formatMoneyMinor(balanceMinor, baseCurrency)}`
+              : `${name} owes ${formatMoneyMinor(-balanceMinor, baseCurrency)}`}
             {' — settle up before removing them, or the group balances will no longer add up.'}
+          </div>
+        )}
+        {!blockingBalance && guard.hasUnconvertedExpenses && (
+          <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
+            {name} paid or shares expenses that have no exchange rate yet, so their balance can&apos;t be worked out.
+            Add the rate to those expenses before removing them.
           </div>
         )}
         {!blockingBalance && hasOpenSettlement && (
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
             {name} has a payment still in progress (marked paid but not yet confirmed, or still suggested) — let it
-            finish before removing them.
+            finish before removing them. If it is only an out-of-date suggestion, an organizer can unfreeze balances
+            on the Settle up tab and freeze again to refresh the suggestions.
           </div>
         )}
 

@@ -92,6 +92,12 @@ export function replaceableSiblingVoteIds(
   return votes.filter((v) => v.user_id === userId && v.option_id !== castOptionId && optionIds.has(v.option_id)).map((v) => v.id)
 }
 
+/**
+ * Raw tally leader. Ties resolve to the EARLIEST entry in `tallies` (the
+ * sort is stable), i.e. caller-supplied option order -- deterministic for a
+ * fixed input but not a decision rule. Anything that records or acts on a
+ * winner must use resolveWinner() in ./resolveDecision instead.
+ */
 export function getWinner(tallies: OptionTally[]): OptionTally | null {
   if (tallies.length === 0) return null
   const sorted = [...tallies].sort((a, b) => b.score - a.score)
@@ -128,12 +134,14 @@ export function checkAutoClose(
  * Vote visibility per plan §7 (hide_votes_until_close default true):
  * before close, a participant sees only their own vote + the total vote
  * count (not the breakdown); after close (deadline passed, organizer
- * closed, or hide_votes_until_close is false), full breakdown is visible.
+ * closed -- `status === 'completed'` -- or hide_votes_until_close is false),
+ * full breakdown is visible.
  */
 export function areVotesVisible(
-  section: { vote_deadline: string | null; hide_votes_until_close: boolean },
+  section: { vote_deadline: string | null; hide_votes_until_close: boolean; status?: string | null },
   now: number = Date.now()
 ): boolean {
+  if (section.status === 'completed') return true
   if (!section.hide_votes_until_close) return true
   if (section.vote_deadline && new Date(section.vote_deadline).getTime() <= now) return true
   return false

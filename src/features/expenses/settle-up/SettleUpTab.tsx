@@ -4,7 +4,8 @@ import { Card, Button, Badge, EmptyState, Skeleton, UserAvatar, useToast, Segmen
 import { AllSettled } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
-import { useParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
+import { useParticipants, useAllParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import {
   useSettlements,
   useSettlementCarryovers,
@@ -25,6 +26,7 @@ import {
   excludePendingPairs,
 } from './settleUpLogic'
 import { computeBalances, partitionCarryovers } from '../lib/balances'
+import { buildSettleUpPeople, LEFT_TRIP_SUFFIX } from './settleUpPeople'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
 import { PaymentDetailsSheet } from './PaymentDetailsSheet'
 import { MarkPaidSheet } from './MarkPaidSheet'
@@ -55,6 +57,8 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const queryClient = useQueryClient()
   const { data: expensesData, isLoading: expensesLoading } = useExpenses(trip.id)
   const { data: participants = [], isLoading: participantsLoading } = useParticipants(trip.id)
+  // Includes removed people (active=false) so anyone who left with expense history can still be named.
+  const { data: allParticipants = [], isLoading: allParticipantsLoading } = useAllParticipants(trip.id)
   const { data: settlements = [], isLoading: settlementsLoading } = useSettlements(trip.id)
   // Already-folded cross-trip carryovers for THIS trip (as fold target) --
   // wired into computeSuggestedPayments/computeBalances below so a folded
@@ -65,7 +69,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   // screen could render its balance-derived cards (which read participants/
   // settlements/currentUserRow too) with partially-loaded data on a slow
   // connection instead of the skeleton.
-  const isLoading = expensesLoading || participantsLoading || settlementsLoading || currentUserRowLoading
+  const isLoading = expensesLoading || participantsLoading || allParticipantsLoading || settlementsLoading || currentUserRowLoading
 
   const recordSettlement = useRecordSettlement(trip.id)
   const updateStatus = useUpdateSettlementStatus(trip.id)
@@ -83,16 +87,23 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
   const { data: carryoverCandidates = [] } = useCarryoverCandidates(trip.id, user?.id)
 
   const expenses = expensesData?.expenses ?? []
-  const people = participants.map((p) => ({ userId: p.user_id, name: p.user.full_name || p.user.email }))
+  // Everyone who appears in the money, not just the active roster: someone
+  // removed earlier (or via the API) with expense history keeps their
+  // balance and is shown as "left the trip", so the ledger always sums to zero.
+  const people = useMemo(
+    () => buildSettleUpPeople({ expenses, settlements, carryovers, baseCurrency: trip.base_currency, active: participants, all: allParticipants }),
+    [expenses, settlements, carryovers, trip.base_currency, participants, allParticipants]
+  )
+  const leftPeople = people.filter((p) => p.left)
 
-  // Freeze/unfreeze gated to organizers (mirrors the derived-milestone
-  // "Make it real" gating, commit a814b5e): a non-organizer's click used to
-  // insert a full batch of settlement rows via the (organizer-unrestricted)
-  // INSERT policy while the trips-row snapshot write silently no-op'd under
-  // RLS, leaving the trip showing "not frozen" with duplicate-looking rows
-  // underneath.
-  const myParticipant = participants.find((p) => p.user_id === user?.id)
-  const isOrganizer = myParticipant?.role === 'organizer'
+  // Freeze/unfreeze: trip organiser, creator or site admin (one shared rule,
+  // see useTripPermissions). The trips-row snapshot write is RLS-protected, so
+  // a non-manager's click used to insert a batch of settlement rows while the
+  // snapshot write silently no-op'd.
+  // NOTE: the settlements UPDATE and settlement_carryovers INSERT RLS policies use
+  // is_trip_organizer() only, so a site admin who is not on the roster can freeze but
+  // may be rejected on those writes; we deliberately do not add UI for them.
+  const { canManageTrip: isOrganizer } = useTripPermissions(trip)
 
   const isFrozen = !!trip.settlement_snapshot
   const legacySnapshot = useMemo(() => readLegacySnapshot(trip.settlement_snapshot), [trip.settlement_snapshot])
@@ -120,7 +131,7 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
     [settlements, liveSuggestedForComparison, trip.base_currency]
   )
 
-  const nameById = Object.fromEntries(people.map((p) => [p.userId, p.name]))
+  const nameById = Object.fromEntries(people.map((p) => [p.userId, p.left ? `${p.name}${LEFT_TRIP_SUFFIX}` : p.name]))
 
   // Same partition computeBalances/computeSuggestedPayments apply
   // internally -- recomputed here only to tell the user when folded rows
@@ -281,6 +292,15 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
           </Button>
         </div>
       </div>
+
+      {leftPeople.length > 0 && (
+        <Card variant="sunken" noPadding className="p-3.5">
+          <p className="text-sm text-[var(--text-secondary)]">
+            {leftPeople.map((p) => p.name).join(', ')} left the trip but {leftPeople.length === 1 ? 'is' : 'are'} still part of the
+            expenses and payments below, so balances stay complete.
+          </p>
+        </Card>
+      )}
 
       {legacySnapshot && !isFrozen && (
         <Card variant="sunken" noPadding className="p-3.5">

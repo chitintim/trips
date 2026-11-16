@@ -3,7 +3,8 @@ import { Card, StatCard, Skeleton, Badge } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
-import { useParticipants } from '../../../lib/queries/useTrip'
+import { useParticipants, useAllParticipants } from '../../../lib/queries/useTrip'
+import { buildSettleUpPeople, LEFT_TRIP_SUFFIX } from '../settle-up/settleUpPeople'
 import { formatMoney } from '../lib/formatMoney'
 import { computePersonalOverview, computeCategoryBreakdown, computeDayBreakdown, computePaidVsOwed } from './personalAnalytics'
 import { CategoryDonutChart } from './CategoryDonutChart'
@@ -25,20 +26,27 @@ export function MySpendingTab({ trip }: MySpendingTabProps) {
   const { user } = useAuth()
   const { data, isLoading, isError, refetch } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
+  const { data: allParticipants = [] } = useAllParticipants(trip.id)
   // Folded cross-trip carryovers move real money here -- without them the
   // "net balance" stat disagrees with the Money header/Settle Up.
   const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
-  const expenses = data?.expenses ?? []
-  const settlements = data?.settlements ?? []
-  const people = participants.map((p) => ({ userId: p.user_id, name: p.user.full_name || p.user.email }))
+  const expenses = useMemo(() => data?.expenses ?? [], [data])
+  const settlements = useMemo(() => data?.settlements ?? [], [data])
+  // Same people set as Settle Up: roster plus anyone who left but is still in the money.
+  const people = useMemo(
+    () =>
+      buildSettleUpPeople({ expenses, settlements, carryovers, baseCurrency: trip.base_currency, active: participants, all: allParticipants }).map(
+        (p) => (p.left ? { ...p, name: `${p.name}${LEFT_TRIP_SUFFIX}` } : p)
+      ),
+    [expenses, settlements, carryovers, trip.base_currency, participants, allParticipants]
+  )
 
   const overview = useMemo(
     () =>
       user
         ? computePersonalOverview(expenses, settlements, people.map((p) => p.userId), user.id, trip.base_currency, trip.start_date, trip.end_date, carryovers)
         : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [expenses, settlements, people, user, trip.base_currency, trip.start_date, trip.end_date, carryovers]
   )
 
@@ -54,7 +62,6 @@ export function MySpendingTab({ trip }: MySpendingTabProps) {
 
   const paidVsOwed = useMemo(
     () => computePaidVsOwed(expenses, settlements, people, trip.base_currency, carryovers),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [expenses, settlements, people, trip.base_currency, carryovers]
   )
 

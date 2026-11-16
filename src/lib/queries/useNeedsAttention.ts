@@ -6,7 +6,7 @@ import { useTrip, useParticipants } from './useTrip'
 import { useSections, useVotes } from './usePlanning'
 import { useExpenses } from './useExpenses'
 import { useSettlements } from './useSettlements'
-import { useActions } from './useActions'
+import { useActions, useSectionVoters } from './useActions'
 import { getDecisionShape } from '../../features/decisions/lib/decisionShapes'
 import { isConfirmationEnabled } from '../tripStatus'
 import { daysUntilDue, isActionCompleteForUser, isOverdue } from '../../features/actions/lib/actionStatus'
@@ -52,6 +52,7 @@ export function useNeedsAttention(
   const { data: expensesData } = useExpenses(tripId)
   const { data: settlements } = useSettlements(tripId)
   const { data: actions } = useActions(tripId)
+  const sectionVoters = useSectionVoters(tripId)
 
   return useMemo(() => {
     if (!tripId || !user) return []
@@ -61,6 +62,9 @@ export function useNeedsAttention(
 
     // ---- Pending RSVP (only when the trip actually tracks confirmation) --
     const myParticipant = participants?.find((p) => p.user_id === user.id)
+    // Someone who declined or cancelled is out of the trip: no poll, claim or
+    // action nags for them (their RSVP state itself is not a nag either).
+    const isOut = myParticipant?.confirmation_status === 'declined' || myParticipant?.confirmation_status === 'cancelled'
     if (myParticipant && isConfirmationEnabled(trip)) {
       const isPending = myParticipant.confirmation_status === 'pending'
       const isDueConditional =
@@ -86,7 +90,8 @@ export function useNeedsAttention(
     // forever even after the participant has picked their items.
     const myVotedOptionIds = new Set((votes || []).filter((v) => v.user_id === user.id).map((v) => v.option_id))
     let openPollCount = 0
-    for (const section of sections || []) {
+    for (const section of isOut ? [] : sections || []) {
+      if (section.status === 'completed') continue // closed poll: nothing left to vote on
       if (!section.vote_deadline) continue
       if (new Date(section.vote_deadline).getTime() <= now) continue
       if ((section.options || []).length === 0) continue
@@ -107,7 +112,7 @@ export function useNeedsAttention(
 
     // ---- Unclaimed itemized expenses ---------------------------------
     let unclaimedCount = 0
-    for (const expense of expensesData?.expenses || []) {
+    for (const expense of isOut ? [] : expensesData?.expenses || []) {
       if (!expense.ai_parsed || !expense.status) continue
       if (expense.status === 'allocated' || expense.status === 'confirmed') continue
 
@@ -156,10 +161,10 @@ export function useNeedsAttention(
     // ---- Actions overdue or due within 48h, assigned to the user or a --
     // ---- group action they haven't confirmed yet -----------------------
     let urgentActionCount = 0
-    for (const action of actions || []) {
-      const isMine = action.assigned_to ? action.assigned_to === user.id : !isActionCompleteForUser(action, user.id)
+    for (const action of isOut ? [] : actions || []) {
+      const isMine = action.assigned_to ? action.assigned_to === user.id : !isActionCompleteForUser(action, user.id, sectionVoters)
       if (!isMine) continue
-      if (action.assigned_to && action.completed_at != null) continue // individual, already done
+      if (action.assigned_to && isActionCompleteForUser(action, user.id, sectionVoters)) continue // individual, already done (ticked, or voted / poll closed)
 
       const overdue = isOverdue(action, trip)
       const days = daysUntilDue(action, trip)
@@ -176,5 +181,5 @@ export function useNeedsAttention(
     }
 
     return items
-  }, [tripId, user, trip, participants, sections, votes, expensesData, settlements, actions, navigate, onNavigateTab])
+  }, [tripId, user, trip, participants, sections, votes, expensesData, settlements, actions, sectionVoters, navigate, onNavigateTab])
 }

@@ -119,6 +119,26 @@ const BASE_INPUT: ComposePlanItemsInput = {
 }
 
 describe('composePlanItems', () => {
+  it('open-vote tie: the same single option is the unscheduled winner whatever the array order, and the vote summary carries the section status', () => {
+    const mk = (order: string[]) =>
+      composePlanItems({
+        ...BASE_INPUT,
+        sections: [
+          section({
+            id: 's1',
+            title: 'Dinner',
+            status: 'in_progress',
+            options: order.map((id) => option({ id, section_id: 's1', title: id, order_index: id === 'a' ? 0 : 1 })),
+          }),
+        ],
+        votes: [vote({ option_id: 'a', user_id: 'u1' }), vote({ option_id: 'b', user_id: 'u2' })],
+      }).items
+    for (const items of [mk(['a', 'b']), mk(['b', 'a'])]) {
+      expect(items.filter((i) => i.isUnscheduledWinner).map((i) => i.optionId)).toEqual(['a'])
+      expect(items[0].vote?.sectionStatus).toBe('in_progress')
+    }
+  })
+
   it('makes a plain timeline event "decided"', () => {
     const { items } = composePlanItems({
       ...BASE_INPUT,
@@ -228,6 +248,41 @@ describe('composePlanItems', () => {
     expect(items[0].booking?.vendor).toBe('Booking.com')
   })
 
+  describe('cancelled bookings', () => {
+    const sec = section({ id: 's1', title: 'Accommodation', options: [option({ id: 'o1', section_id: 's1', title: 'Chalet A' })] })
+
+    it('does not show an option as booked when its only booking is cancelled', () => {
+      const { items } = composePlanItems({
+        ...BASE_INPUT,
+        sections: [sec],
+        bookings: [booking({ id: 'b1', title: 'x', option_id: 'o1', status: 'cancelled' })],
+      })
+      expect(items[0].stage).not.toBe('booked')
+      expect(items[0].booking?.cancelled).toBe(true)
+    })
+
+    it('prefers the newest live booking over a cancelled one, in either list order', () => {
+      const cancelled = booking({ id: 'old', title: 'x', option_id: 'o1', status: 'cancelled', created_at: '2026-01-01T00:00:00Z' })
+      const live = booking({ id: 'new', title: 'x', option_id: 'o1', status: 'paid', created_at: '2026-02-01T00:00:00Z' })
+      for (const bookings of [[live, cancelled], [cancelled, live]]) {
+        const { items } = composePlanItems({ ...BASE_INPUT, sections: [sec], bookings })
+        expect(items[0].stage).toBe('booked')
+        expect(items[0].bookingId).toBe('new')
+        expect(items[0].booking?.cancelled).toBe(false)
+      }
+    })
+
+    it('keeps an event decided (not booked) when its booking is cancelled', () => {
+      const { items } = composePlanItems({
+        ...BASE_INPUT,
+        events: [event({ id: 'e1', event_date: '2026-06-01', title: 'Villa' })],
+        bookings: [booking({ id: 'b1', title: 'x', timeline_event_id: 'e1', status: 'cancelled' })],
+      })
+      expect(items[0].stage).toBe('decided')
+      expect(items[0].booking?.cancelled).toBe(true)
+    })
+  })
+
   it('reads a proposed date from option metadata, overriding section metadata', () => {
     const { items } = composePlanItems({
       ...BASE_INPUT,
@@ -266,7 +321,7 @@ describe('composePlanItems', () => {
       ],
       votes: [vote({ option_id: 'o1', user_id: 'user-2' })],
     })
-    expect(items[0].costImpact).toEqual({ perPerson: 100, currency: 'GBP', isTiered: false, sensitivityLine: null })
+    expect(items[0].costImpact).toEqual({ perPerson: 100, currency: 'GBP', isTiered: false, sensitivityLine: null, isEstimate: false, headcount: 4 })
   })
 
   it('is tier-aware when an option carries price_tiers metadata (UX_REDESIGN.md Part 5 shape 3)', () => {
@@ -296,6 +351,8 @@ describe('composePlanItems', () => {
       currency: 'GBP',
       isTiered: true,
       sensitivityLine: '£50/pp if 6 · £37.50/pp if 12',
+      isEstimate: false,
+      headcount: 9,
     })
   })
 

@@ -4,8 +4,10 @@ import { supabase } from '../supabase'
 import { Tables, TablesInsert, TablesUpdate } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
-import { useOptions, useVotes } from './usePlanning'
-import { buildSectionVoters, type SectionVoterIds } from '../../features/actions/lib/actionStatus'
+import { useOptions, useSections, useVotes } from './usePlanning'
+import { useParticipants } from './useTrip'
+import { buildSectionVoters, withClosedSections, type SectionVoterIds } from '../../features/actions/lib/actionStatus'
+import { assertRowsAffected, throwIfError } from './assertRowsAffected'
 
 export type ActionCompletion = Pick<Tables<'trip_action_completions'>, 'user_id' | 'completed_at'>
 
@@ -24,7 +26,7 @@ export function useActions(tripId: string | undefined) {
         .select('*, trip_action_completions(user_id, completed_at)')
         .eq('trip_id', tripId as string)
         .order('created_at', { ascending: true })
-      if (error) throw error
+      throwIfError(error)
       return (data as ActionWithCompletions[]) || []
     },
     enabled: !!tripId,
@@ -42,7 +44,19 @@ export function useActions(tripId: string | undefined) {
 export function useSectionVoters(tripId: string | undefined): SectionVoterIds {
   const { data: options } = useOptions(tripId)
   const { data: votes } = useVotes(tripId)
-  return useMemo(() => buildSectionVoters(options ?? [], votes ?? []), [options, votes])
+  const { data: sections } = useSections(tripId)
+  const { data: participants } = useParticipants(tripId)
+  // A closed poll can no longer be voted in, so its linked action counts as
+  // done for everyone (see withClosedSections) rather than staying open forever.
+  return useMemo(
+    () =>
+      withClosedSections(
+        buildSectionVoters(options ?? [], votes ?? []),
+        sections ?? [],
+        (participants ?? []).map((p) => p.user_id)
+      ),
+    [options, votes, sections, participants]
+  )
 }
 
 export function useCreateAction(tripId: string) {
@@ -57,7 +71,7 @@ export function useCreateAction(tripId: string) {
         .insert({ trip_id: tripId, ...input })
         .select()
         .single()
-      if (error) throw error
+      throwIfError(error)
       return data
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) }),
@@ -68,8 +82,9 @@ export function useUpdateAction(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ id, update }: { id: string; update: TablesUpdate<'trip_actions'> }) => {
-      const { error } = await supabase.from('trip_actions').update(update).eq('id', id)
-      if (error) throw error
+      const { data, error } = await supabase.from('trip_actions').update(update).eq('id', id).select('id')
+      throwIfError(error)
+      assertRowsAffected(data, "You don't have permission to edit this action, or it no longer exists.")
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) }),
   })
@@ -80,8 +95,9 @@ export function useDeleteAction(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from('trip_actions').delete().eq('id', id)
-      if (error) throw error
+      const { data, error } = await supabase.from('trip_actions').delete().eq('id', id).select('id')
+      throwIfError(error)
+      assertRowsAffected(data, "You don't have permission to delete this action, or it no longer exists.")
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) }),
   })
@@ -114,26 +130,28 @@ export function useToggleActionDone(tripId: string) {
               { action_id: actionId, trip_id: tripId, user_id: userId, completed_at: new Date().toISOString() },
               { ignoreDuplicates: true }
             )
-          if (error) throw error
+          throwIfError(error)
         } else {
           const { error } = await supabase
             .from('trip_action_completions')
             .delete()
             .eq('action_id', actionId)
             .eq('user_id', userId)
-          if (error) throw error
+          throwIfError(error)
         }
         return
       }
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('trip_actions')
         .update({
           completed_at: done ? new Date().toISOString() : null,
           completed_by: done ? userId : null,
         })
         .eq('id', actionId)
-      if (error) throw error
+        .select('id')
+      throwIfError(error)
+      assertRowsAffected(data, "You don't have permission to update this action, or it no longer exists.")
     },
     queryKey: () => queryKeys.actions(tripId),
     updater: (actions, { actionId, isGroupAction, userId, done }) =>

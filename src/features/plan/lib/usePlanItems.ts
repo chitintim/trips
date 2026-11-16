@@ -2,8 +2,9 @@ import { useMemo } from 'react'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import { useSections, useVotes } from '../../../lib/queries/usePlanning'
 import { useBookings } from '../../../lib/queries/useBookings'
-import { useParticipants } from '../../../lib/queries/useTrip'
+import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useAuth } from '../../../hooks/useAuth'
+import { inScopeHeadcount } from '../../people/lib/inScopePeople'
 import { composePlanItems, type PlanItem } from './planItems'
 import type { Booking } from '../../../lib/queries/useBookings'
 
@@ -31,6 +32,7 @@ export function usePlanItems(tripId: string | undefined): UsePlanItemsResult {
   const votesQuery = useVotes(tripId)
   const bookingsQuery = useBookings(tripId)
   const participantsQuery = useParticipants(tripId)
+  const { data: trip } = useTrip(tripId)
 
   const { data: events, isLoading: eventsLoading, isError: eventsError } = eventsQuery
   const { data: sections, isLoading: sectionsLoading, isError: sectionsError } = sectionsQuery
@@ -38,10 +40,13 @@ export function usePlanItems(tripId: string | undefined): UsePlanItemsResult {
   const { data: bookings, isLoading: bookingsLoading, isError: bookingsError } = bookingsQuery
   const { data: participants, isLoading: participantsLoading, isError: participantsError } = participantsQuery
 
-  const confirmedCount = useMemo(
-    () => (participants || []).filter((p) => p.confirmation_status === 'confirmed').length,
-    [participants]
-  )
+  // In-scope headcount (people/lib/inScopePeople): confirmed people when
+  // RSVP tracking is on and anyone has confirmed, otherwise everyone still
+  // "in" — flagged as an estimate so cost labels say so.
+  const confirmationEnabled = trip?.confirmation_enabled === true
+  const headcount = useMemo(() => inScopeHeadcount(participants || [], confirmationEnabled), [participants, confirmationEnabled])
+  const confirmedCount = headcount.count
+  const headcountIsEstimate = headcount.isEstimate
 
   const result = useMemo(
     () =>
@@ -51,9 +56,10 @@ export function usePlanItems(tripId: string | undefined): UsePlanItemsResult {
         votes: votes || [],
         bookings: bookings || [],
         confirmedCount,
+        headcountIsEstimate,
         currentUserId: user?.id ?? null,
       }),
-    [events, sections, votes, bookings, confirmedCount, user?.id]
+    [events, sections, votes, bookings, confirmedCount, headcountIsEstimate, user?.id]
   )
 
   return {

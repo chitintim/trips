@@ -4,6 +4,7 @@ import { reportError } from '../reportError'
 import { Expense, ExpenseSplit, ExpenseInsert, ExpenseUpdate, User } from '../../types'
 import { Tables, TablesInsert } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
+import { assertRowsAffected } from './assertRowsAffected'
 
 export type ExpenseLineItem = Tables<'expense_line_items'>
 export type ExpenseItemClaim = Tables<'expense_item_claims'>
@@ -171,20 +172,6 @@ export function useExpenseSplits(expenseId: string | undefined) {
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
-
-/**
- * A bare `.update()`/`.delete()` with no `.select()` reports success even
- * when RLS matches zero rows -- the request didn't error, it just silently
- * didn't do anything. Chain `.select(cols)` on the mutation and pass the
- * result here so a blocked/gone target surfaces as a real error instead of
- * quietly discarding the user's change (this is exactly how one user's
- * header edits vanished with no error while the splits upsert failed loudly).
- */
-function assertRowsAffected<T>(rows: T[] | null | undefined, message: string): void {
-  if (!rows || rows.length === 0) {
-    throw new Error(message)
-  }
-}
 
 export interface SplitRow {
   user_id: string

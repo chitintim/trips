@@ -30,4 +30,9 @@ describe('defaultTaggedParticipantIds', () => {
     const participants = [fixture('a', 'confirmed'), fixture('b', 'pending')]
     expect(defaultTaggedParticipants(participants).map((p) => p.user_id)).toEqual(['a'])
   })
+
+  it('tags every active participant when RSVP tracking is off', () => {
+    const participants = [fixture('a', 'confirmed'), fixture('b', 'pending'), fixture('c', 'declined')]
+    expect(defaultTaggedParticipantIds(participants, false)).toEqual(['a', 'b', 'c'])
+  })
 })

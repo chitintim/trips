@@ -66,6 +66,35 @@ describe('computeBlockers', () => {
     expect(kinds.filter((k) => k.startsWith('d:'))).toHaveLength(0)
   })
 
+  it('does not flag non-voters on a poll that was closed early (status completed)', () => {
+    const sections = [
+      { id: 's1', title: 'Closed early', status: 'completed', vote_deadline: '2026-07-10T00:00:00Z', options: [{ id: 'o1' }] },
+    ] as unknown as SectionWithOptions[]
+    const result = computeBlockers(baseInput({ participants: [participant({ user_id: 'b' })], sections }))
+    expect(result.totalCount).toBe(0)
+  })
+
+  it('does not count declined or cancelled people as vote/claim blockers or escalations', () => {
+    const sections = [
+      { id: 's1', title: 'Dinner', status: 'in_progress', vote_deadline: '2026-07-10T00:00:00Z', options: [{ id: 'o1' }] },
+    ] as unknown as SectionWithOptions[]
+    const notifications = [1, 2, 3].map((n) => ({ id: `n${n}`, kind: 'unvoted_poll', entity_id: 's1', user_id: 'd' })) as unknown as Notification[]
+    const result = computeBlockers(
+      baseInput({
+        participants: [
+          participant({ user_id: 'd', confirmation_status: 'declined' }),
+          participant({ user_id: 'c', confirmation_status: 'cancelled' }),
+          participant({ user_id: 'p', confirmation_status: 'pending' }),
+        ],
+        sections,
+        notifications,
+      })
+    )
+    expect(result.people.map((p) => p.userId)).toEqual(['p'])
+    // The pending person is still chased for both the RSVP and the vote.
+    expect(result.people[0].blockers.map((b) => b.kind).sort()).toEqual(['pending_rsvp', 'unvoted_poll'])
+  })
+
   it('flags non-voters only on open deadline polls', () => {
     const sections = [
       {

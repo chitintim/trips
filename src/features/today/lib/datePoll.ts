@@ -1,5 +1,6 @@
 import type { Json } from '../../../types/database.types'
 import type { SectionWithOptions, OptionVote } from '../../../lib/queries/usePlanning'
+import { resolveWinner } from '../../decisions/lib/resolveDecision'
 
 /**
  * "Trip dates" date-poll conventions (UX_REDESIGN.md Part 2, trip-creation
@@ -61,6 +62,8 @@ export interface DatePollWinner {
   title: string
   range: DateRange
   votes: number
+  /** Where the answer came from (see resolveDecision.ts): recorded stamp, tally, tie rule, or no-votes fallback. */
+  source: 'stamp' | 'tally' | 'tie-break' | 'earliest-candidate'
 }
 
 /** True once voting on the section is over (deadline passed or section closed). */
@@ -71,27 +74,24 @@ export function isDatePollClosed(section: Pick<SectionWithOptions, 'status' | 'v
 }
 
 /**
- * Winning candidate range: most votes; ties break to the earliest start
- * date (predictable, and matches the wizard's "earliest candidate is the
- * placeholder" behavior). Null when no option carries a parseable range.
+ * Winning candidate range, via the shared resolver (decisions/lib/
+ * resolveDecision.ts): the organizer's recorded winner first (so an explicit
+ * tie-break is honoured), else the tally leader with the shared tie rule
+ * (candidates with date ranges tie-break to the earliest start). With no
+ * votes at all it falls back to the earliest candidate (the wizard's
+ * placeholder). Null when no option carries a parseable range.
  */
 export function computeDatePollWinner(section: SectionWithOptions, votes: OptionVote[]): DatePollWinner | null {
-  const counts = new Map<string, number>()
-  for (const v of votes) counts.set(v.option_id, (counts.get(v.option_id) || 0) + 1)
+  const candidates = (section.options ?? []).filter((o) => o.status !== 'cancelled' && optionDateRange(o.metadata))
+  if (candidates.length === 0) return null
 
-  let winner: DatePollWinner | null = null
-  for (const option of section.options ?? []) {
-    if (option.status === 'cancelled') continue
-    const range = optionDateRange(option.metadata)
-    if (!range) continue
-    const n = counts.get(option.id) || 0
-    if (
-      !winner ||
-      n > winner.votes ||
-      (n === winner.votes && range.start < winner.range.start)
-    ) {
-      winner = { optionId: option.id, title: option.title, range, votes: n }
-    }
+  const resolved = resolveWinner({ ...section, options: candidates }, votes, { honourStampWhenOpen: true })
+  let chosen = resolved.optionId ? candidates.find((o) => o.id === resolved.optionId) : undefined
+  let source: DatePollWinner['source'] = resolved.source === 'none' ? 'earliest-candidate' : resolved.source
+  if (!chosen) {
+    chosen = [...candidates].sort((a, b) => optionDateRange(a.metadata)!.start.localeCompare(optionDateRange(b.metadata)!.start))[0]
+    source = 'earliest-candidate'
   }
-  return winner
+  const count = votes.filter((v) => v.option_id === chosen!.id).length
+  return { optionId: chosen.id, title: chosen.title, range: optionDateRange(chosen.metadata)!, votes: count, source }
 }

@@ -67,7 +67,40 @@ describe('computeCostBand', () => {
       high: 500,
       currency: 'GBP',
       breakdown: [{ label: 'Accommodation (estimate)', amount: 500, currency: 'GBP' }],
+      headcount: 4,
+      isEstimate: false,
     })
+  })
+
+  it('splits a total_split option across the in-scope headcount and flags an estimate (tracking off / nobody confirmed)', () => {
+    const sections = [
+      section({
+        id: 's1',
+        title: 'Villa',
+        status: 'completed',
+        metadata: { decided_option_id: 'o1' },
+        options: [option({ id: 'o1', section_id: 's1', title: 'Villa A', price: 600, currency: 'GBP', price_type: 'total_split' })],
+      }),
+    ]
+    const band = computeCostBand(TRIP, sections, [], { count: 6, isEstimate: true })
+    expect(band).toMatchObject({ low: 100, high: 100, headcount: 6, isEstimate: true })
+  })
+
+  it('a closed poll that ended tied resolves with the shared tie-break (lowest order_index), not array order', () => {
+    const sections = [
+      section({
+        id: 's1',
+        title: 'Dinner',
+        status: 'completed',
+        options: [
+          option({ id: 'b', section_id: 's1', title: 'B', order_index: 1, price: 40, currency: 'GBP' }),
+          option({ id: 'a', section_id: 's1', title: 'A', order_index: 0, price: 20, currency: 'GBP' }),
+        ],
+      }),
+    ]
+    const votes = [vote({ option_id: 'a', user_id: 'u1' }), vote({ option_id: 'b', user_id: 'u2' })]
+    const band = computeCostBand(TRIP, sections, votes, 2)
+    expect(band).toMatchObject({ low: 20, high: 20 })
   })
 
   it('open vote section contributes a min/max spread across its active options', () => {

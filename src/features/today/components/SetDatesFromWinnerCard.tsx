@@ -4,6 +4,7 @@ import { useOptimisticUpdateTrip } from '../../../lib/queries/useTrip'
 import { useSections, useVotes, useUpdateSection } from '../../../lib/queries/usePlanning'
 import { useTripActivityLog } from '../../organizer'
 import { parseDatesPending, computeDatePollWinner, isDatePollClosed, mergeChaseSettingsJson, TRIP_DATES_SECTION_TITLE } from '../lib/datePoll'
+import { buildDecisionMetadata, readDecidedOptionId } from '../../decisions/lib/closeDecision'
 import type { Trip } from '../../../types'
 
 export interface SetDatesFromWinnerCardProps {
@@ -46,14 +47,25 @@ export function SetDatesFromWinnerCard({ trip }: SetDatesFromWinnerCardProps) {
 
   const apply = async () => {
     try {
+      // Record the decision FIRST (close + stamp in one write) so a failure
+      // here aborts before the trip dates change, and a later failure on the
+      // trip update can never leave a closed poll with no recorded winner.
+      // An organizer's existing stamp (explicit tie-break) is what `winner`
+      // already resolved to, so re-stamping it is a no-op.
+      if (section.status !== 'completed' || readDecidedOptionId(section.metadata) !== winner.optionId) {
+        await updateSection.mutateAsync({
+          id: section.id,
+          update: {
+            status: 'completed',
+            metadata: buildDecisionMetadata(section.metadata, { decided_option_id: winner.optionId }),
+          },
+        })
+      }
       await updateTrip.mutateAsync({
         start_date: winner.range.start,
         end_date: winner.range.end,
         chase_settings: mergeChaseSettingsJson(trip.chase_settings, { dates_pending: null, dates_section_id: null }),
       })
-      if (section.status !== 'completed') {
-        await updateSection.mutateAsync({ id: section.id, update: { status: 'completed' } })
-      }
       logActivity({
         verb: 'poll_closed',
         entity: { type: 'section', id: section.id, label: TRIP_DATES_SECTION_TITLE },

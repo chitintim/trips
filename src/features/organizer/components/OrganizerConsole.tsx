@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button, Card, EmptyState, SegmentedControl, Skeleton } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
 import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
-import { useAuth } from '../../../hooks/useAuth'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { BlockersBoard } from './BlockersBoard'
 import { OrganizerActionsPanel } from './OrganizerActionsPanel'
 import { BookingsTracker } from './BookingsTracker'
@@ -26,18 +26,17 @@ type ConsoleView = 'blockers' | 'actions' | 'bookings' | 'activity' | 'emails'
  * expose it.
  */
 export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
-  const { user } = useAuth()
   const { data: trip, isLoading: tripLoading, isError: tripError, refetch: refetchTrip } = useTrip(tripId)
   const {
-    data: participants,
     isLoading: participantsLoading,
     isError: participantsError,
     refetch: refetchParticipants,
   } = useParticipants(tripId)
   const [view, setView] = useState<ConsoleView>('blockers')
   const [chaseOpen, setChaseOpen] = useState(false)
+  const { canManageTrip, isLoading: permissionsLoading } = useTripPermissions(trip)
 
-  if (tripLoading || participantsLoading) {
+  if (tripLoading || participantsLoading || permissionsLoading) {
     return (
       <div className="space-y-3 p-1">
         <Skeleton variant="card" height={44} />
@@ -68,9 +67,7 @@ export function OrganizerConsole({ tripId }: OrganizerConsoleProps) {
     )
   }
 
-  const me = participants?.find((p) => p.user_id === user?.id)
-  const isOrganizer = me?.role === 'organizer' || trip.created_by === user?.id
-  if (!isOrganizer) {
+  if (!canManageTrip) {
     return (
       <Card variant="flat">
         <Card.Content>

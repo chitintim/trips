@@ -111,8 +111,13 @@ export function EmailsPanel({ tripId }: EmailsPanelProps) {
           {filtered.map((n) => {
             const recipient = usersById.get(n.user_id)
             const { icon, label } = describeNotificationKind(n.kind)
+            // The log stores only the action's id, so a reminder for an action
+            // that has since been deleted would otherwise render with a blank
+            // subject -- say so instead.
             const entityTitle =
-              n.entity_type === 'trip_action' && n.entity_id ? actionTitleById.get(n.entity_id) : undefined
+              n.entity_type === 'trip_action' && n.entity_id
+                ? (actionTitleById.get(n.entity_id) ?? '(action since deleted)')
+                : undefined
             return (
               <li key={n.id} className="flex items-start gap-3 py-2.5">
                 {recipient ? (

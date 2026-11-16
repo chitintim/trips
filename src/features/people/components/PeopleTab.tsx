@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { Card, Button, CapacityProgressBar, Deadline, Tabs, Skeleton, EmptyState } from '../../../components/ui'
 import { ErrorState } from '../../../components/ui/illustrations'
-import { useTrip, useParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
+import { useTrip, useParticipants } from '../../../lib/queries/useTrip'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
@@ -43,7 +44,6 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
     isError: participantsError,
     refetch: refetchParticipants,
   } = useParticipants(tripId)
-  const { data: currentUserRow } = useCurrentUserRow(user?.id)
 
   const { data: timelineEvents = [] } = useTimeline(tripId)
 
@@ -60,12 +60,8 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
     () => participants?.find((p) => p.user_id === user?.id) ?? null,
     [participants, user?.id]
   )
-  // Same definition TripDetail.tsx uses for its own isOrganizer: a system
-  // admin (users.role = 'admin') or the trip's creator can manage the
-  // roster even without an active 'organizer' participant row -- e.g. an
-  // admin helping out on a trip they didn't personally organize.
-  const isSystemAdmin = currentUserRow?.role === 'admin'
-  const isOrganizer = isSystemAdmin || myParticipant?.role === 'organizer' || trip?.created_by === user?.id
+  // One rule for "can run this trip" (organiser / creator / site admin).
+  const { canManageTrip: isOrganizer } = useTripPermissions(trip)
   const confirmationEnabled = isConfirmationEnabled(trip)
 
   const counts = useMemo(() => {

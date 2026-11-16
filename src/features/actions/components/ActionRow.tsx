@@ -1,7 +1,7 @@
 import { Badge, Button, LinkifiedText, SelectionAvatars, UserAvatar } from '../../../components/ui'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
-import { countdownBadgeVariant, countdownLabel, groupCompletedUserIds, isActionCompleteForUser, isGroupComplete } from '../lib/actionStatus'
+import { countdownBadgeVariant, countdownLabel, countsTowardActions, groupCompletedUserIds, isActionCompleteForUser, isGroupComplete } from '../lib/actionStatus'
 import type { SectionVoterIds, TripForActionStatus } from '../lib/actionStatus'
 
 export interface ActionRowProps {
@@ -13,6 +13,8 @@ export interface ActionRowProps {
   isOrganizer: boolean
   /** section_id -> voter ids, for actions linked to an open question (see actionStatus.ts). */
   sectionVoters?: SectionVoterIds
+  /** The action's linked question has been closed: nobody needs to do it any more (derived, no completion rows written). */
+  linkedSectionClosed?: boolean
   onToggle: (done: boolean) => void
   onEdit: () => void
   onDelete: () => void
@@ -33,6 +35,7 @@ export function ActionRow({
   currentUserId,
   isOrganizer,
   sectionVoters,
+  linkedSectionClosed = false,
   onToggle,
   onEdit,
   onDelete,
@@ -41,15 +44,19 @@ export function ActionRow({
   const assignee = action.assigned_to ? participants.find((p) => p.user_id === action.assigned_to) : null
   const assigneeName = isGroupAction ? 'Everyone' : assignee?.user?.full_name || assignee?.user?.email || 'Someone'
 
+  const countedParticipants = participants.filter(countsTowardActions)
   const myDone = currentUserId ? isActionCompleteForUser(action, currentUserId, sectionVoters) : false
   const groupDone = isGroupAction
     ? isGroupComplete(
         action,
-        participants.map((p) => p.user_id),
+        countedParticipants.map((p) => p.user_id),
         sectionVoters
       )
     : false
   const done = isGroupAction ? groupDone : myDone
+  // A closed linked question widens the voter set to everyone (withClosedSections), so the
+  // "Completed by" avatars would show people who did nothing. Say so honestly instead.
+  const noLongerNeeded = linkedSectionClosed && !!action.section_id
 
   const canDelete = isOrganizer || action.created_by === currentUserId
 
@@ -78,7 +85,9 @@ export function ActionRow({
     <li className="flex items-start gap-3 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-2.5">
       <DoneCircle
         checked={isGroupAction ? myDone : done}
-        onToggle={(next) => onToggle(next)}
+        onToggle={(next) => {
+          if (!noLongerNeeded) onToggle(next)
+        }}
         label={
           isGroupAction
             ? `Mark yours ${myDone ? 'not done' : 'done'} for "${action.title}"`
@@ -98,12 +107,16 @@ export function ActionRow({
         {action.notes && (
           <LinkifiedText as="p" text={action.notes} className="min-w-0 break-words text-xs text-[var(--text-secondary)]" />
         )}
-        {action.section_id && <p className="text-xs italic text-[var(--text-muted)]">🗳️ Ticks off when you vote</p>}
+        {action.section_id && (
+          <p className="text-xs italic text-[var(--text-muted)]">
+            {noLongerNeeded ? '🗳️ No longer needed — vote closed' : '🗳️ Ticks off when you vote'}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">
-          {isGroupAction ? (
+          {noLongerNeeded ? null : isGroupAction ? (
             <span className="flex items-center gap-1.5">
               <span className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
-                Completed by ({completionSelections.length}/{participants.length})
+                Completed by ({completionSelections.length}/{countedParticipants.length})
               </span>
               {myDone && !groupDone && <span className="text-success-600 dark:text-success-400">· yours done</span>}
               {completionSelections.length > 0 && (

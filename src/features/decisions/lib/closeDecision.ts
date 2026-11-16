@@ -14,7 +14,7 @@
  *
  * Pure (no React/Supabase) so the resolution rules are unit-testable.
  */
-import { tallyVotes, getWinner, type VotingMethod } from './voting'
+import { resolveWinner, resolveWinnerId, type ResolverOption } from './resolveDecision'
 import type { OptionVote } from '../../../lib/queries/usePlanning'
 import type { Json } from '../../../types/database.types'
 
@@ -52,33 +52,32 @@ export interface ResolvableSection {
   status: string
   metadata: Json | null
   voting_method: string | null
-  options: Array<{ id: string; status: string }>
+  options: ResolverOption[]
 }
 
 /**
- * The section's current tally leader (excluding cancelled options), or null
- * when nobody has voted. Used to pre-select the winner in the close sheet
- * and as the fallback outcome for sections closed before the explicit
- * decided_option_id stamp existed.
+ * Is the open tally tied at the top? `pickedOptionId` is the option the
+ * shared tie-break would choose (what the close sheet pre-selects) and
+ * `tiedOptionIds` every option sharing the top score, so the sheet can say
+ * "Tied: A, B, C. Tie-break picks A. Choose another if you prefer."
  */
-export function resolveTallyLeaderId(section: ResolvableSection, votes: OptionVote[]): string | null {
-  const optionIds = section.options.filter((o) => o.status !== 'cancelled').map((o) => o.id)
-  const sectionVotes = votes.filter((v) => optionIds.includes(v.option_id))
-  const winner = getWinner(tallyVotes(optionIds, sectionVotes, (section.voting_method as VotingMethod) || 'single'))
-  return winner?.optionId ?? null
+export function resolveTieInfo(
+  section: ResolvableSection,
+  votes: OptionVote[]
+): { tied: boolean; pickedOptionId: string | null; tiedOptionIds: string[] } {
+  const r = resolveWinner(section, votes, { ignoreStamp: true })
+  return { tied: r.tied, pickedOptionId: r.optionId, tiedOptionIds: r.tiedOptionIds }
 }
 
 /**
  * What a CLOSED section decided: the explicit metadata stamp when present
- * (organizer may have overridden the tally), else the tally leader (legacy
- * sections closed before the stamp existed). Null for open sections and for
- * closed sections with neither stamp nor votes.
+ * (organizer may have overridden the tally), else the tally leader under the
+ * shared tie rule (resolveDecision.ts). Null for open sections and for closed
+ * sections with neither stamp nor votes.
  */
 export function resolveDecidedOptionId(section: ResolvableSection, votes: OptionVote[]): string | null {
   if (section.status !== 'completed') return null
-  const stamped = readDecidedOptionId(section.metadata)
-  if (stamped && section.options.some((o) => o.id === stamped)) return stamped
-  return resolveTallyLeaderId(section, votes)
+  return resolveWinnerId(section, votes)
 }
 
 /** Default title for the follow-up action suggested when a decision closes. */

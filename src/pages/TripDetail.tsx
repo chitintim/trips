@@ -1,6 +1,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import { useTripPermissions } from '../hooks/useTripPermissions'
 import { useDocumentTitle } from '../hooks/useDocumentTitle'
 import { Button, Card, Spinner, EmptyState, Skeleton, Modal } from '../components/ui'
 import { AddParticipantModal } from '../components'
@@ -8,7 +9,7 @@ import { ErrorBoundary } from '../components/ErrorBoundary'
 import { AppShell, StageRail, NeedsAttentionStrip } from '../components/layout'
 import type { AppShellTabItem } from '../components/layout'
 import { getTripAccentStyle } from '../components/layout/tripAccent'
-import { useTrip, useParticipants, useCurrentUserRow } from '../lib/queries/useTrip'
+import { useTrip, useParticipants } from '../lib/queries/useTrip'
 import { CreateTripWizard } from '../features/dashboard'
 import { useTripRealtime } from '../lib/queries/useTripRealtime'
 import { useNeedsAttention } from '../lib/queries/useNeedsAttention'
@@ -79,7 +80,6 @@ export function TripDetail() {
   const { data: trip = null, isLoading: tripLoading } = useTrip(tripId)
   useDocumentTitle(trip?.name)
   const { data: participants = [], isLoading: participantsLoading } = useParticipants(tripId)
-  const { data: currentUserRow } = useCurrentUserRow(user?.id)
   const { data: expensesData } = useExpenses(tripId)
   const loading = tripLoading || participantsLoading
 
@@ -102,9 +102,7 @@ export function TripDetail() {
   })
 
   const myParticipant = participants.find((p) => p.user_id === user?.id) || null
-  const isSystemAdmin = currentUserRow?.role === 'admin'
-  const isTripOrganizer = myParticipant?.role === 'organizer'
-  const isOrganizer = isSystemAdmin || isTripOrganizer || trip?.created_by === user?.id
+  const { canManageTrip: isOrganizer } = useTripPermissions(trip)
 
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)

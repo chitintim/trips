@@ -17,6 +17,7 @@ import { generateLinkCode } from '../../../lib/receiptParsing'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { findDuplicateCandidates } from '../lib/duplicateDetection'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { defaultTaggedParticipantIds } from '../lib/participantDefaults'
 import { ReceiptLightbox } from '../components/ReceiptLightbox'
 import { DetailsStep } from './DetailsStep'
@@ -125,7 +126,7 @@ export function ExpenseEditorWizard({
             // Defaults to CONFIRMED participants (falling back to everyone
             // if nobody's confirmed yet) -- declined/pending people
             // shouldn't be pre-tagged into a new expense or auto-chased.
-            allParticipantIds: defaultTaggedParticipantIds(participants),
+            allParticipantIds: defaultTaggedParticipantIds(participants, isConfirmationEnabled(trip)),
           }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []

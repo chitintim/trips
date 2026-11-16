@@ -5,7 +5,7 @@ import {
   readDecidedOptionId,
   readFollowupActionId,
   resolveDecidedOptionId,
-  resolveTallyLeaderId,
+  resolveTieInfo,
   type ResolvableSection,
 } from './closeDecision'
 import type { OptionVote } from '../../../lib/queries/usePlanning'
@@ -49,7 +49,7 @@ describe('readDecidedOptionId / readFollowupActionId', () => {
   })
 })
 
-describe('resolveTallyLeaderId', () => {
+describe('resolveTieInfo', () => {
   it('returns the leading option and ignores cancelled options', () => {
     const s = section({
       status: 'in_progress',
@@ -59,11 +59,31 @@ describe('resolveTallyLeaderId', () => {
       ],
     })
     const votes = [vote({ option_id: 'a', user_id: 'u1' }), vote({ option_id: 'b', user_id: 'u2' }), vote({ option_id: 'b', user_id: 'u3' })]
-    expect(resolveTallyLeaderId(s, votes)).toBe('a')
+    expect(resolveTieInfo(s, votes)).toEqual({ tied: false, pickedOptionId: 'a', tiedOptionIds: ['a'] })
   })
 
   it('returns null when nobody has voted', () => {
-    expect(resolveTallyLeaderId(section(), [])).toBeNull()
+    expect(resolveTieInfo(section(), [])).toEqual({ tied: false, pickedOptionId: null, tiedOptionIds: [] })
+  })
+
+  it('flags a tie, reports the tied options and which one the tie-break picks (lowest order_index)', () => {
+    const s = section({
+      status: 'in_progress',
+      options: [
+        { id: 'b', status: 'available', order_index: 1 },
+        { id: 'a', status: 'available', order_index: 0 },
+      ],
+    })
+    const votes = [vote({ option_id: 'a', user_id: 'u1' }), vote({ option_id: 'b', user_id: 'u2' })]
+    const info = resolveTieInfo(s, votes)
+    expect(info.tied).toBe(true)
+    expect(info.pickedOptionId).toBe('a')
+    expect([...info.tiedOptionIds].sort()).toEqual(['a', 'b'])
+  })
+
+  it('ignores a recorded stamp (the sheet shows the live tally, not the old result)', () => {
+    const s = section({ status: 'completed', metadata: { decided_option_id: 'b' } })
+    expect(resolveTieInfo(s, [vote({ option_id: 'a', user_id: 'u1' })]).pickedOptionId).toBe('a')
   })
 })
 

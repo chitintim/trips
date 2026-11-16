@@ -122,7 +122,7 @@ export function PlanItemCard({
   // breakdown, only their own vote + total, so the card must stay silent
   // about voter identity too.
   const votesVisible = item.vote
-    ? areVotesVisible({ vote_deadline: item.vote.voteDeadline, hide_votes_until_close: item.vote.hideVotesUntilClose })
+    ? areVotesVisible({ vote_deadline: item.vote.voteDeadline, hide_votes_until_close: item.vote.hideVotesUntilClose, status: item.vote.sectionStatus })
     : false
 
   if (dense && isSolid) {
@@ -144,6 +144,11 @@ export function PlanItemCard({
         {item.stage === 'booked' && (
           <span className="shrink-0 text-xs" aria-hidden="true" title="Booked">
             🧾
+          </span>
+        )}
+        {item.booking?.cancelled && (
+          <span className="shrink-0 text-xs" aria-hidden="true" title="Booking cancelled — needs rebooking">
+            ⚠️
           </span>
         )}
         {item.costImpact?.perPerson != null && item.costImpact.currency && (
@@ -207,6 +212,11 @@ export function PlanItemCard({
                 🧾 Booked
               </Badge>
             )}
+            {item.booking?.cancelled && (
+              <Badge variant="error" size="sm" wrap>
+                ⚠️ Booking cancelled — needs rebooking
+              </Badge>
+            )}
             {isIdea && (
               <Badge variant="neutral" size="sm">
                 💡 Idea
@@ -237,8 +247,9 @@ export function PlanItemCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             {item.costImpact?.perPerson != null && item.costImpact.currency && (
               <Badge variant="info" size="sm">
-                {item.costImpact.isTiered ? '≈' : '+'}
+                {item.costImpact.isTiered || item.costImpact.isEstimate ? '≈' : '+'}
                 {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/person
+                {item.costImpact.isEstimate && item.costImpact.headcount > 0 ? ` across ${item.costImpact.headcount} ${item.costImpact.headcount === 1 ? 'person' : 'people'}` : ''}
               </Badge>
             )}
             {item.expenseId && (

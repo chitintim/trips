@@ -57,7 +57,16 @@ export function CostBandCard({ costBand, fullCostLink }: { costBand: CostBand | 
         // Honest range label (UX_REDESIGN.md Part 5 "Estimator integration"):
         // a spread means real uncertainty from open votes, not organizer
         // sloppiness -- say so rather than hiding it.
-        delta={costBand.low !== costBand.high ? 'depending on open votes' : undefined}
+        delta={
+          [
+            costBand.low !== costBand.high ? 'depending on open votes' : null,
+            costBand.isEstimate && costBand.headcount > 0
+              ? `≈ across ${costBand.headcount} ${costBand.headcount === 1 ? 'person' : 'people'}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(' · ') || undefined
+        }
       />
       {fullCostLink && (
         <a href={fullCostLink} target="_blank" rel="noreferrer" className="text-sm text-accent-700 hover:underline">

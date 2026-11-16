@@ -5,7 +5,7 @@
  * plus category/day breakdowns specific to this tab's charts.
  */
 import { toMinorUnits, fromMinorUnits } from '../../../lib/money'
-import { computeBalances } from '../lib/balances'
+import { computeBalances, withMoneyParticipants } from '../lib/balances'
 import { isItemizedExpense, type ExpenseCategory } from '../types'
 import { ALL_CATEGORIES } from '../lib/categoryStyle'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -37,7 +37,13 @@ export function computePersonalOverview(
   /** Folded cross-trip carryovers for this trip -- included so netBalanceMajor agrees with the Money header/Settle Up (a carryover-blind figure overshoots, even sign-flips, once a carryover-inclusive settlement is paid). */
   carryovers: SettlementCarryover[] = []
 ): PersonalOverviewStats {
-  const { balances, groupTotalMinor, expensesMissingRate } = computeBalances(expenses, settlements, allParticipantIds, baseCurrency, carryovers)
+  const { balances, groupTotalMinor, expensesMissingRate } = computeBalances(
+    expenses,
+    settlements,
+    withMoneyParticipants(allParticipantIds, expenses, settlements, baseCurrency, carryovers),
+    baseCurrency,
+    carryovers
+  )
   const mine = balances.find((b) => b.userId === userId)
 
   const totalPaidMajor = fromMinorUnits(mine?.totalPaidMinor ?? 0, baseCurrency)
@@ -173,7 +179,13 @@ export function computePaidVsOwed(
   /** Threaded through to computeBalances for input-shape consistency with every other money surface. Note the fields THIS function reads (totalPaid/totalOwed) are expense-derived and carryover-invariant -- carryovers only move the settlementsPaid/Received legs -- so today this changes nothing numerically, but keeping the inputs uniform means no surface silently diverges if this chart ever adds a net column. */
   carryovers: SettlementCarryover[] = []
 ): PaidVsOwedEntry[] {
-  const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), baseCurrency, carryovers)
+  const { balances } = computeBalances(
+    expenses,
+    settlements,
+    withMoneyParticipants(people.map((p) => p.userId), expenses, settlements, baseCurrency, carryovers),
+    baseCurrency,
+    carryovers
+  )
   return people.map((p) => {
     const b = balances.find((x) => x.userId === p.userId)
     return {

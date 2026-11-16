@@ -45,14 +45,38 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
 
   if (!item) return null
 
+  const section = item.optionId && item.sectionId ? (sections || []).find((s) => s.id === item.sectionId) : undefined
+  // Personal-order (shape 2) sections are never "won" by one option --
+  // scheduling one catalog item must not close the whole question.
+  const sectionToClose = section && section.status !== 'completed' && getDecisionShape(section.metadata) !== 'personal' ? section : null
+  const closesVote = !!sectionToClose
+
   const handleSchedule = async () => {
     if (!user || !date) {
       showToast({ type: 'error', message: 'Please pick a day' })
       return
     }
 
+    // Scheduling an option IS deciding its question: close the section and
+    // stamp the decided option (closeDecision.ts) in ONE write, BEFORE creating
+    // the event. Order matters: if closing fails we abort with nothing created;
+    // if the event insert then fails we put the question back as it was, so a
+    // failure can never leave a closed question without a recorded winner (or
+    // an absorbed leader on a still-open ballot).
+    const closing = closesVote ? sectionToClose : null
+    let closedSection = false
     try {
-      const created = await createEvent.mutateAsync({
+      if (closing) {
+        await updateSection.mutateAsync({
+          id: closing.id,
+          update: {
+            status: 'completed',
+            metadata: buildDecisionMetadata(closing.metadata, { decided_option_id: item.optionId! }),
+          },
+        })
+        closedSection = true
+      }
+      await createEvent.mutateAsync({
         trip_id: trip.id,
         created_by: user.id,
         title: item.title,
@@ -64,31 +88,18 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
         place_id: item.placeId,
         source_option_id: item.optionId,
       })
-      void created
-      // Scheduling an option IS deciding its question: mark the section
-      // completed and stamp the decided option (closeDecision.ts), so the
-      // tray/Decide lens render the outcome banner instead of a live ballot.
-      // Previously only the poll_closed activity row implied closure while
-      // the section stayed in_progress and losing options kept their vote UI.
-      if (item.optionId && item.sectionId) {
-        const section = (sections || []).find((s) => s.id === item.sectionId)
-        // Personal-order (shape 2) sections are never "won" by one option —
-        // scheduling one catalog item must not close the whole question.
-        if (section && section.status !== 'completed' && getDecisionShape(section.metadata) !== 'personal') {
-          await updateSection.mutateAsync({
-            id: section.id,
-            update: {
-              status: 'completed',
-              metadata: buildDecisionMetadata(section.metadata, { decided_option_id: item.optionId }),
-            },
-          })
-        }
-      }
-      logActivity({ verb: 'poll_closed', entity: { type: 'option', id: item.optionId ?? undefined, label: item.title } })
+      if (closedSection) logActivity({ verb: 'poll_closed', entity: { type: 'option', id: item.optionId ?? undefined, label: item.title } })
       logActivity({ verb: 'event_added', entity: { type: 'timeline_event', label: item.title } })
       showToast({ type: 'success', message: `"${item.title}" is on the plan` })
       onClose()
     } catch (err) {
+      if (closedSection && closing) {
+        try {
+          await updateSection.mutateAsync({ id: closing.id, update: { status: closing.status, metadata: closing.metadata } })
+        } catch {
+          /* best effort: the winner stamp is still recorded, so the question stays consistent */
+        }
+      }
       showToast({ type: 'error', message: 'Could not schedule this', description: (err as Error).message })
     }
   }
@@ -97,6 +108,11 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
     <Modal isOpen={isOpen} onClose={onClose} size="sm" title={`Schedule "${item.title}"`}>
       <div className="space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">Pick a day (and optionally a time) to put this on the plan.</p>
+        {closesVote && (
+          <p className="rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-2.5 text-sm text-[var(--text-secondary)]">
+            Voting on "{sectionToClose!.title}" is still open. Scheduling this will <strong>close the vote</strong> and record "{item.title}" as the decision.
+          </p>
+        )}
         {/* [&>*]:min-w-0 — grid items default to min-width:auto, and native
             date/time inputs have a large intrinsic min-content width, so
             without this the row overflows the sheet at 375px (same fix as
@@ -109,8 +125,8 @@ export function ScheduleItSheet({ isOpen, onClose, trip, item }: ScheduleItSheet
           <Button variant="ghost" onClick={onClose} disabled={createEvent.isPending}>
             Cancel
           </Button>
-          <Button onClick={handleSchedule} isLoading={createEvent.isPending}>
-            Put it on the plan
+          <Button onClick={handleSchedule} isLoading={createEvent.isPending || updateSection.isPending}>
+            {closesVote ? 'Close vote & schedule' : 'Put it on the plan'}
           </Button>
         </div>
       </div>

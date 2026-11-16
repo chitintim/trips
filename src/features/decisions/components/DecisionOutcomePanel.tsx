@@ -3,7 +3,10 @@ import { Badge, Button, Input, Modal, Select, SelectionAvatars, useToast } from 
 import { useAuth } from '../../../hooks/useAuth'
 import { useUpdateSection } from '../../../lib/queries/usePlanning'
 import { useActions, useCreateAction } from '../../../lib/queries/useActions'
-import { areVotesVisible, checkAutoClose, tallyVotes, getWinner, type VotingMethod } from '../lib/voting'
+import { useTrip } from '../../../lib/queries/useTrip'
+import { inScopePeople } from '../../people/lib/inScopePeople'
+import { areVotesVisible, checkAutoClose } from '../lib/voting'
+import { resolveWinner } from '../lib/resolveDecision'
 import { buildDecisionMetadata, followupActionTitle, readFollowupActionId, resolveDecidedOptionId } from '../lib/closeDecision'
 import { CloseDecisionSheet } from './CloseDecisionSheet'
 import type { OptionVoteWithUser, SectionWithOptions } from '../../../lib/queries/usePlanning'
@@ -52,12 +55,19 @@ export function DecisionOutcomePanel({
   const [followupOpen, setFollowupOpen] = useState(false)
   const { data: actions } = useActions(tripId)
 
-  const method = (section.voting_method as VotingMethod) || 'single'
   const activeOptions = useMemo(() => section.options.filter((o) => o.status !== 'cancelled'), [section.options])
+  const { data: trip } = useTrip(tripId)
+  const confirmationEnabled = trip?.confirmation_enabled === true
+  // Only active participants' votes count in displayed tallies ("N of M
+  // voted"); removed users' leftover rows are ignored. (`participants` is
+  // the active list; skip the filter while it is still empty/loading.)
   const sectionVotes = useMemo(() => {
     const optionIds = new Set(activeOptions.map((o) => o.id))
-    return votes.filter((v) => optionIds.has(v.option_id))
-  }, [activeOptions, votes])
+    const activeUserIds = new Set(participants.filter((p) => p.active !== false).map((p) => p.user_id))
+    return votes.filter((v) => optionIds.has(v.option_id) && (activeUserIds.size === 0 || activeUserIds.has(v.user_id)))
+  }, [activeOptions, votes, participants])
+  // Denominator: people who are "in" (shared rule with cost and splits).
+  const inScopeCount = useMemo(() => inScopePeople(participants, confirmationEnabled).length, [participants, confirmationEnabled])
   const distinctVoters = useMemo(() => new Set(sectionVotes.map((v) => v.user_id)).size, [sectionVotes])
 
   const isClosed = section.status === 'completed'
@@ -127,8 +137,8 @@ export function DecisionOutcomePanel({
 
   // ---- Open: outcome preview + organizer close entry point -----------------
   const votesVisible = areVotesVisible(section)
-  const leader = votesVisible ? getWinner(tallyVotes(activeOptions.map((o) => o.id), sectionVotes, method)) : null
-  const leaderOption = leader ? activeOptions.find((o) => o.id === leader.optionId) ?? null : null
+  const leader = votesVisible ? resolveWinner(section, sectionVotes) : null
+  const leaderOption = leader?.optionId ? activeOptions.find((o) => o.id === leader.optionId) ?? null : null
   const leaderVotes = leaderOption ? sectionVotes.filter((v) => v.option_id === leaderOption.id && v.user) : []
   const autoClose = checkAutoClose(section, distinctVoters)
 
@@ -138,8 +148,8 @@ export function DecisionOutcomePanel({
         <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">→ Once decided</p>
         <p className="min-w-0 break-words text-xs text-[var(--text-secondary)]">
           {leaderOption
-            ? `Leading: ${leaderOption.title}. `
-            : `${distinctVoters} of ${participants.length} voted${votesVisible ? '' : ' · results hidden until the vote closes'}. `}
+            ? `${leader?.tied ? 'Tied — leading by tie-break' : 'Leading'}: ${leaderOption.title}. `
+            : `${distinctVoters} of ${Math.max(inScopeCount, distinctVoters)} voted${votesVisible ? '' : ' · results hidden until the vote closes'}. `}
           {isOrganizer
             ? 'Close the vote to lock in the winner — it can then be scheduled and given a follow-up action.'
             : 'The organizer closes the vote, then the winner goes on the plan.'}

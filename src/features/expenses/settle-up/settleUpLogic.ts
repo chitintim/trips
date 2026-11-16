@@ -21,6 +21,8 @@ import type { Settlement, SettlementSnapshot, SettlementCarryover } from '../../
 export interface SettleUpPerson {
   userId: string
   name: string
+  /** Removed from the trip (active=false) but still appears in the money. */
+  left?: boolean
 }
 
 /**

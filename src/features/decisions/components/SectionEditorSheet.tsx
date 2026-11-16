@@ -4,6 +4,7 @@ import { useCreateSection, useUpdateSection } from '../../../lib/queries/usePlan
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useUnsavedChangesGuard } from '../../../lib/forms/useUnsavedChangesGuard'
 import { getDecisionShape, type DecisionShape } from '../lib/decisionShapes'
+import { mergeSectionMetadata } from '../lib/resolveDecision'
 import type { SectionWithOptions } from '../../../lib/queries/usePlanning'
 import type { VotingMethod } from '../lib/voting'
 
@@ -80,7 +81,8 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
     const update = {
       title: values.title.trim(),
       description: values.description.trim() || null,
-      metadata: { decision_shape: values.decisionShape },
+      // Merge, never replace: a closed poll's decided_option_id / followup_action_id live here.
+      metadata: mergeSectionMetadata(section?.metadata, { decision_shape: values.decisionShape }),
       voting_method: values.votingMethod,
       hide_votes_until_close: values.hideVotesUntilClose,
       vote_deadline: values.voteDeadline ? new Date(values.voteDeadline).toISOString() : null,

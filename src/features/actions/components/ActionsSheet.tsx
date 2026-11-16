@@ -9,7 +9,7 @@ import { useChecklists } from '../../../lib/queries/useChecklists'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { ChecklistTab, openBringCountForUser } from '../../checklists'
 import { ActionRow } from './ActionRow'
-import { isActionCompleteForUser, isGroupComplete, isOverdue, openActionCountForUser } from '../lib/actionStatus'
+import { countsTowardActions, isActionCompleteForUser, isGroupComplete, isOverdue, openActionCountForUser } from '../lib/actionStatus'
 import type { SectionVoterIds } from '../lib/actionStatus'
 import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import type { TablesUpdate } from '../../../types/database.types'
@@ -52,6 +52,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
   const { data: bringItems } = useChecklists(tripId)
   const { data: sections } = useSections(tripId)
   const sectionVoters = useSectionVoters(tripId)
+  const closedSectionIds = useMemo(() => new Set((sections ?? []).filter((s) => s.status === 'completed').map((s) => s.id)), [sections])
   const createAction = useCreateAction(tripId)
   const updateAction = useUpdateAction(tripId)
   const deleteAction = useDeleteAction(tripId)
@@ -231,6 +232,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
                       currentUserId={user?.id}
                       isOrganizer={isOrganizer}
                       sectionVoters={sectionVoters}
+                      linkedSectionClosed={!!action.section_id && closedSectionIds.has(action.section_id)}
                       onToggle={(done) => handleToggle(action, done)}
                       onEdit={() => openForEdit(action)}
                       onDelete={() =>
@@ -260,6 +262,7 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
                             currentUserId={user?.id}
                             isOrganizer={isOrganizer}
                             sectionVoters={sectionVoters}
+                            linkedSectionClosed={!!action.section_id && closedSectionIds.has(action.section_id)}
                             onToggle={(done) => handleToggle(action, done)}
                             onEdit={() => openForEdit(action)}
                             onDelete={() =>
@@ -353,11 +356,11 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
 function isActionFullyDone(
   action: ActionWithCompletions,
   trip: { start_date?: string | null } | null | undefined,
-  participants: { user_id: string; active?: boolean | null }[],
+  participants: { user_id: string; active?: boolean | null; confirmation_status?: string | null }[],
   sectionVoters: SectionVoterIds
 ): boolean {
   void trip
   if (action.assigned_to) return isActionCompleteForUser(action, action.assigned_to, sectionVoters)
-  const activeIds = participants.filter((p) => p.active !== false).map((p) => p.user_id)
+  const activeIds = participants.filter(countsTowardActions).map((p) => p.user_id)
   return isGroupComplete(action, activeIds, sectionVoters)
 }

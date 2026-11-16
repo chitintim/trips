@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeBalances, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from './balances'
+import { computeBalances, collectMoneyUserIds, withMoneyParticipants, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from './balances'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
@@ -377,5 +377,54 @@ describe('splitOwedAmounts', () => {
 
   it('handles zero-decimal currencies (JPY) without a decimal scale', () => {
     expect(splitOwedAmounts(5000, 'JPY')).toEqual({ youOwe: 0, owedToYou: 5000 })
+  })
+})
+
+describe('people who left the trip (money participants)', () => {
+  // Bob paid 600 and was removed; Alice and Carol owe 200 each, Bob 200.
+  const expenses = [
+    makeExpense({
+      id: 'villa',
+      amount: 600,
+      paid_by: 'bob',
+      splits: [makeSplit('alice', 200), makeSplit('bob', 200), makeSplit('carol', 200)],
+    }),
+  ]
+
+  it('active-only roster drops the leaver and no longer sums to zero (the bug)', () => {
+    const { balances } = computeBalances(expenses, [], ['alice', 'carol'], 'GBP')
+    expect(balances.reduce((s, b) => s + b.netBalanceMinor, 0)).toBe(-40000)
+  })
+
+  it('withMoneyParticipants adds payers, split members and settlement parties once, roster first', () => {
+    const settlements = [makeSettlement({ from_user_id: 'dave', to_user_id: 'alice', amount: 5 })]
+    const ids = withMoneyParticipants(['alice', 'carol'], expenses, settlements, 'GBP')
+    expect(ids).toEqual(['alice', 'carol', 'bob', 'dave'])
+  })
+
+  it('ignores pending settlements and unconvertible expenses when collecting', () => {
+    const pending = makeSettlement({ from_user_id: 'erin', to_user_id: 'alice', amount: 5, status: 'suggested' })
+    const noRate = makeExpense({ id: 'x', currency: 'EUR', fx_rate: null, paid_by: 'frank', splits: [makeSplit('gina', 1)] })
+    expect(collectMoneyUserIds([noRate], [pending], 'GBP')).toEqual([])
+  })
+
+  it('including the leaver keeps the ledger at zero and shows what they are owed', () => {
+    const ids = withMoneyParticipants(['alice', 'carol'], expenses, [], 'GBP')
+    const { balances } = computeBalances(expenses, [], ids, 'GBP')
+    expect(balances.reduce((s, b) => s + b.netBalanceMinor, 0)).toBe(0)
+    expect(balances.find((b) => b.userId === 'bob')?.netBalanceMinor).toBe(40000)
+  })
+
+  it('stays zero-sum across currencies, settlements and a carryover', () => {
+    const mixed = [
+      ...expenses,
+      makeExpense({ id: 'ski', amount: 12000, currency: 'JPY', fx_rate: 0.005, paid_by: 'carol', splits: [makeSplit('alice', 6000), makeSplit('bob', 6000)] }),
+    ]
+    const settlements = [makeSettlement({ from_user_id: 'alice', to_user_id: 'bob', amount: 50 })]
+    const carryovers = [makeCarryover({ from_user_id: 'bob', to_user_id: 'carol', amount: 10 })]
+    const ids = withMoneyParticipants(['alice'], mixed, settlements, 'GBP', carryovers)
+    const { balances } = computeBalances(mixed, settlements, ids, 'GBP', carryovers)
+    expect(balances.reduce((s, b) => s + b.netBalanceMinor, 0)).toBe(0)
+    expect(balances.map((b) => b.userId).sort()).toEqual(['alice', 'bob', 'carol'])
   })
 })

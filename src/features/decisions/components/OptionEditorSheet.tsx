@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
 import { Modal, Button, Input, TextArea, Select, SegmentedControl, useToast } from '../../../components/ui'
-import { useCreateOption, useUpdateOption, useDeleteOption } from '../../../lib/queries/usePlanning'
+import { useCreateOption, useUpdateOption, useDeleteOption, useSections, useVotes } from '../../../lib/queries/usePlanning'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useUnsavedChangesGuard } from '../../../lib/forms/useUnsavedChangesGuard'
 import { ConfirmDiscardSheet } from '../../../components/ui'
 import { useTripActivityLog } from '../../organizer/lib/activity'
+import { isDecidedOption } from '../lib/resolveDecision'
 import { readOptionPricing, readPriceTiers } from '../lib/decisionShapes'
 import type { DecisionShape } from '../lib/decisionShapes'
 import type { OptionMetadata } from '../lib/optionMetadata'
@@ -115,6 +116,8 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
   const createOption = useCreateOption(tripId)
   const updateOption = useUpdateOption(tripId)
   const deleteOption = useDeleteOption(tripId)
+  const { data: sections } = useSections(tripId)
+  const { data: votes } = useVotes(tripId)
   const logActivity = useTripActivityLog(tripId)
   const { showToast } = useToast()
 
@@ -244,6 +247,12 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
 
   const handleDelete = async () => {
     if (!option) return
+    // Deleting a closed question's decided option would silently promote the runner-up.
+    const parent = (sections || []).find((s) => s.id === sectionId)
+    if (parent && isDecidedOption(parent, votes || [], option.id)) {
+      showToast({ type: 'error', message: 'This option is the decision', description: 'Reopen the decision first, then delete the option.' })
+      return
+    }
     try {
       await deleteOption.mutateAsync(option.id)
       showToast({ type: 'success', message: 'Option deleted' })

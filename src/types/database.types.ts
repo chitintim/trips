@@ -2115,6 +2115,10 @@ export type Database = {
         Returns: string
       }
       generate_invitation_code: { Args: never; Returns: string }
+      reset_trip_confirmations: {
+        Args: { p_include_declined?: boolean; p_trip_id: string }
+        Returns: Json
+      }
       get_confirmation_summary: {
         Args: { p_trip_id: string }
         Returns: {

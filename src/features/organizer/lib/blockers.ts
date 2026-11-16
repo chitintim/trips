@@ -103,6 +103,10 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
   } = input
 
   const active = participants.filter((p) => p.active !== false)
+  // People who declined or cancelled are out of the trip: they are never
+  // chased to vote, pick, claim or answer, so they don't count as blockers
+  // for those. (Money blockers below deliberately keep using `active`.)
+  const chaseable = active.filter((p) => p.confirmation_status !== 'declined' && p.confirmation_status !== 'cancelled')
   const byUser = new Map<string, Blocker[]>()
   const push = (b: Blocker) => {
     const list = byUser.get(b.userId) ?? []
@@ -149,10 +153,11 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
   for (const section of sections) {
     if (!section.vote_deadline) continue
     if (new Date(section.vote_deadline).getTime() <= now) continue
+    if (section.status === 'completed') continue // closed poll: nothing left to vote on
     const options = section.options ?? []
     if (options.length === 0) continue
     const isPersonal = getDecisionShape(section.metadata) === 'personal'
-    for (const p of active) {
+    for (const p of chaseable) {
       if (isPersonal) {
         // Personal-picks sections never receive option_votes — a participant
         // is done when they have any selections row on the section's options.
@@ -192,12 +197,12 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
     if (expense.status === 'allocated' || expense.status === 'confirmed') continue
     const involved = expense.participant_ids?.length
       ? expense.participant_ids
-      : active.map((p) => p.user_id)
+      : chaseable.map((p) => p.user_id)
     const claimedBy = new Set((expense.claims ?? []).map((c) => c.user_id))
     for (const userId of involved) {
       if (claimedBy.has(userId)) continue
       if (userId === expense.paid_by) continue // the payer isn't chased on their own receipt
-      if (!active.some((p) => p.user_id === userId)) continue
+      if (!chaseable.some((p) => p.user_id === userId)) continue
       push({
         kind: 'unclaimed_items',
         userId,
@@ -261,7 +266,7 @@ export function computeBlockers(input: ComputeBlockersInput): BlockersBoardData 
   }
   for (const group of reminderCounts.values()) {
     if (group.count < maxReminders) continue
-    if (!active.some((p) => p.user_id === group.userId)) continue
+    if (!chaseable.some((p) => p.user_id === group.userId)) continue
     push({
       kind: 'escalation',
       userId: group.userId,

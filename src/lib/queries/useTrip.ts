@@ -3,6 +3,7 @@ import { supabase } from '../supabase'
 import { Trip, TripInsert, TripUpdate, TripParticipant, User } from '../../types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
+import { assertRowsAffected, throwIfError } from './assertRowsAffected'
 
 export interface ParticipantWithUser extends TripParticipant {
   user: User
@@ -29,7 +30,7 @@ export function useTrips() {
         .select('*')
         .order('start_date', { ascending: false })
 
-      if (error) throw error
+      throwIfError(error)
       if (!tripsData) return []
 
       const tripsWithCounts = await Promise.all(
@@ -67,7 +68,7 @@ export function useTrip(tripId: string | undefined) {
         .eq('id', tripId as string)
         .single()
 
-      if (error) throw error
+      throwIfError(error)
       return data
     },
     enabled: !!tripId,
@@ -85,7 +86,31 @@ export function useParticipants(tripId: string | undefined) {
         .eq('trip_id', tripId as string)
         .eq('active', true)
 
-      if (error) throw error
+      throwIfError(error)
+      return (data as unknown as ParticipantWithUser[]) || []
+    },
+    enabled: !!tripId,
+  })
+}
+
+/**
+ * Every participant row for the trip INCLUDING removed ones (active=false),
+ * with the user joined. Needed by Settle Up so that someone who left with
+ * expense history is still named and shown (marked "left the trip") rather
+ * than vanishing from the ledger. Relies on the same read policy as
+ * useParticipants; if RLS hides inactive rows the caller falls back to
+ * "Former member" for unknown ids.
+ */
+export function useAllParticipants(tripId: string | undefined) {
+  return useQuery({
+    queryKey: [...queryKeys.participants(tripId || ''), 'all'],
+    queryFn: async (): Promise<ParticipantWithUser[]> => {
+      const { data, error } = await supabase
+        .from('trip_participants')
+        .select(`*, user:user_id (*)`)
+        .eq('trip_id', tripId as string)
+
+      throwIfError(error)
       return (data as unknown as ParticipantWithUser[]) || []
     },
     enabled: !!tripId,
@@ -103,7 +128,7 @@ export function useCurrentUserRow(userId: string | undefined) {
         .eq('id', userId as string)
         .single()
 
-      if (error) throw error
+      throwIfError(error)
       return data
     },
     enabled: !!userId,
@@ -130,7 +155,7 @@ export function useCreateTrip() {
         p_status: input.status,
         p_is_public: input.is_public,
       })
-      if (error) throw error
+      throwIfError(error)
       return data as string // new trip id
     },
     onSuccess: () => {
@@ -144,8 +169,9 @@ export function useUpdateTrip(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (update: TripUpdate) => {
-      const { error } = await supabase.from('trips').update(update).eq('id', tripId)
-      if (error) throw error
+      const { data, error } = await supabase.from('trips').update(update).eq('id', tripId).select('id')
+      throwIfError(error)
+      assertRowsAffected(data, 'Could not save: you may not have permission to edit this trip.')
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.tripDetail(tripId) })
@@ -169,8 +195,9 @@ export function useOptimisticUpdateTrip(tripId: string) {
   const queryClient = useQueryClient()
   return useOptimisticMutation<void, TripUpdate, Trip | null>({
     mutationFn: async (update) => {
-      const { error } = await supabase.from('trips').update(update).eq('id', tripId)
-      if (error) throw error
+      const { data, error } = await supabase.from('trips').update(update).eq('id', tripId).select('id')
+      throwIfError(error)
+      assertRowsAffected(data, 'Could not save: you may not have permission to edit this trip.')
     },
     queryKey: () => queryKeys.tripDetail(tripId),
     updater: (trip, update) => (trip ? { ...trip, ...update } : null),

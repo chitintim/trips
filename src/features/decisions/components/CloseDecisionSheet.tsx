@@ -3,7 +3,7 @@ import { Badge, Button, Modal, SelectionAvatars, useToast } from '../../../compo
 import { useUpdateSection } from '../../../lib/queries/usePlanning'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { tallyVotes, votingInstruction, type VotingMethod } from '../lib/voting'
-import { buildDecisionMetadata, resolveTallyLeaderId } from '../lib/closeDecision'
+import { buildDecisionMetadata, resolveTieInfo } from '../lib/closeDecision'
 import type { OptionVoteWithUser, SectionWithOptions } from '../../../lib/queries/usePlanning'
 
 export interface CloseDecisionSheetProps {
@@ -52,7 +52,13 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
     return byOption
   }, [votes])
 
-  const leaderId = useMemo(() => resolveTallyLeaderId(section, votes), [section, votes])
+  const tie = useMemo(() => resolveTieInfo(section, votes), [section, votes])
+  const leaderId = tie.pickedOptionId
+  const tiedTitles = useMemo(
+    () => tie.tiedOptionIds.map((id) => activeOptions.find((o) => o.id === id)?.title).filter((t): t is string => !!t),
+    [tie.tiedOptionIds, activeOptions]
+  )
+  const tiePickTitle = activeOptions.find((o) => o.id === tie.pickedOptionId)?.title
   const [selectedId, setSelectedId] = useState<string | null>(leaderId)
 
   useEffect(() => {
@@ -92,6 +98,17 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
           everyone and ends voting.
         </p>
 
+        {tie.tied && (
+          <div role="status" className="rounded-[var(--radius-md)] border border-warning-300 bg-warning-50 dark:bg-warning-900/30 p-2.5 text-sm text-[var(--text-primary)]">
+            <p className="font-medium">Tied vote</p>
+            <p className="mt-0.5 break-words text-xs text-[var(--text-secondary)]">
+              {tiedTitles.join(', ')} are level.{' '}
+              {tiePickTitle ? `The automatic tie-break picks "${tiePickTitle}". ` : ''}
+              Choose a different option below if you would rather decide it yourself.
+            </p>
+          </div>
+        )}
+
         <div role="radiogroup" aria-label="Winning option" className="space-y-2">
           {activeOptions.map((option) => {
             const tally = tallies.get(option.id)
@@ -124,10 +141,16 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
                         ? `${tally?.score ?? 0} point${(tally?.score ?? 0) === 1 ? '' : 's'}`
                         : `${tally?.score ?? 0} vote${(tally?.score ?? 0) === 1 ? '' : 's'}`}
                     </span>
-                    {isLeader && (
-                      <Badge variant="info" size="sm">
-                        Leading
+                    {tie.tied && tie.tiedOptionIds.includes(option.id) ? (
+                      <Badge variant="warning" size="sm">
+                        {isLeader ? 'Tied · tie-break pick' : 'Tied'}
                       </Badge>
+                    ) : (
+                      isLeader && (
+                        <Badge variant="info" size="sm">
+                          Leading
+                        </Badge>
+                      )
                     )}
                     {(votersByOption.get(option.id) || []).length > 0 && (
                       <SelectionAvatars

@@ -22,10 +22,10 @@ function participant(overrides: Partial<ParticipantWithUser> & { user_id: string
 }
 
 describe('getWaitlistQueue', () => {
-  it('orders by updated_at ascending (earliest waitlisted first)', () => {
+  it('orders by created_at ascending, matching what auto-chase offers first, and ignores updated_at', () => {
     const participants = [
-      participant({ user_id: 'b', updated_at: '2026-02-02T00:00:00Z' }),
-      participant({ user_id: 'a', updated_at: '2026-02-01T00:00:00Z' }),
+      participant({ user_id: 'b', created_at: '2026-02-02T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' }),
+      participant({ user_id: 'a', created_at: '2026-02-01T00:00:00Z', updated_at: '2026-03-01T00:00:00Z' }),
     ]
     const queue = getWaitlistQueue(participants)
     expect(queue.map((e) => e.participant.user_id)).toEqual(['a', 'b'])
@@ -57,7 +57,7 @@ describe('getWaitlistQueue', () => {
 
 describe('getNextWaitlistOffer', () => {
   it('returns the first person in queue when nobody has an active offer', () => {
-    const queue = getWaitlistQueue([participant({ user_id: 'a' }), participant({ user_id: 'b', updated_at: '2026-02-02T00:00:00Z' })])
+    const queue = getWaitlistQueue([participant({ user_id: 'a' }), participant({ user_id: 'b', created_at: '2026-02-02T00:00:00Z' })])
     expect(getNextWaitlistOffer(queue)?.participant.user_id).toBe('a')
   })
 
@@ -70,8 +70,8 @@ describe('getNextWaitlistOffer', () => {
   it('skips past an expired offer to the next unresolved person', () => {
     const past = new Date(Date.now() - 60_000).toISOString()
     const queue = getWaitlistQueue([
-      participant({ user_id: 'a', waitlist_offer_expires_at: past, updated_at: '2026-02-01T00:00:00Z' }),
-      participant({ user_id: 'b', updated_at: '2026-02-02T00:00:00Z' }),
+      participant({ user_id: 'a', waitlist_offer_expires_at: past, created_at: '2026-02-01T00:00:00Z' }),
+      participant({ user_id: 'b', created_at: '2026-02-02T00:00:00Z' }),
     ])
     expect(getNextWaitlistOffer(queue)?.participant.user_id).toBe('b')
   })

@@ -304,3 +304,77 @@ export function useRemoveDuplicateSettlement(tripId: string, baseCurrency: strin
     onSettled: () => invalidateSettlementState(queryClient, tripId),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Settle on their behalf (organiser / trip creator / site admin).
+// ---------------------------------------------------------------------------
+
+export interface SettleOnBehalfVars {
+  settlement: Settlement
+  to: 'marked_paid' | 'confirmed'
+  actorId: string
+  payerName: string
+  receiverName: string
+  /** True when part of "Mark everything as settled". */
+  batch?: boolean
+}
+
+/**
+ * Move ONE payment forward on the parties' behalf, from the status the caller
+ * saw (so a double tap or a stale screen matches zero rows instead of
+ * re-applying), then write the attribution row to the activity feed.
+ *
+ * Server: the live settlements UPDATE policy + guard_settlement_party_update
+ * already let an organiser on the roster do this directly (no RPC); a creator
+ * or admin who is not on the roster is refused, which surfaces as the
+ * "couldn't be updated" error for that row. amount, parties and currency are
+ * never sent. Nothing here is optimistic: the cache is patched only after the
+ * server accepted the row.
+ */
+export function useSettleOnBehalf(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ settlement, to, actorId, payerName, receiverName, batch }: SettleOnBehalfVars): Promise<{ row: Settlement; logged: boolean }> => {
+      const from = settlement.status
+      const { data, error } = await supabase
+        .from('settlements')
+        .update({ status: to })
+        .eq('id', settlement.id)
+        .eq('status', from)
+        .select()
+        .maybeSingle()
+      if (error) throw toRpcError(error, 'Could not record this payment')
+      if (!data) {
+        const { data: current, error: readError } = await supabase.from('settlements').select().eq('id', settlement.id).maybeSingle()
+        if (readError) throw readError
+        if (current && current.status === to) return { row: current, logged: true } // already done elsewhere
+        throw new Error("This payment couldn't be updated: it may have changed, or you don't have permission.")
+      }
+      const currency = data.currency ?? ''
+      const { error: logError } = await supabase.from('activity_feed').insert({
+        trip_id: tripId,
+        actor: actorId,
+        verb: 'settlement_recorded_on_behalf',
+        entity: { type: 'settlement', id: data.id, label: `${payerName} → ${receiverName}` } as Json,
+        metadata: {
+          payer_id: data.from_user_id,
+          receiver_id: data.to_user_id,
+          payer_name: payerName,
+          receiver_name: receiverName,
+          amount: data.amount,
+          currency,
+          from_status: from,
+          to_status: to,
+          batch: !!batch,
+        } as Json,
+      })
+      return { row: data, logged: !logError }
+    },
+    onSuccess: ({ row }) => {
+      queryClient.setQueryData<Settlement[]>(queryKeys.settlements(tripId), (old) => (old ? old.map((s) => (s.id === row.id ? row : s)) : old))
+    },
+    // Settle up, the Money header, Waiting on and the to-do list all read the settlements query.
+    onSettled: () => invalidateSettlementState(queryClient, tripId),
+    scope: { id: `settlement-status-${tripId}` },
+  })
+}

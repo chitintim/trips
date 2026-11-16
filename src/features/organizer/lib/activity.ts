@@ -33,6 +33,7 @@ export type ActivityVerb =
   | 'settlement_confirmed'
   | 'settlement_marked_paid'
   | 'settlement_duplicate_removed'
+  | 'settlement_recorded_on_behalf'
   | 'booking_added'
   | 'booking_updated'
   | 'event_added'
@@ -110,6 +111,7 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   settlement_confirmed: { icon: '🤝', phrase: (e) => `confirmed a payment${e ? ` (${e})` : ''}` },
   settlement_marked_paid: { icon: '💸', phrase: (e) => `marked a payment as paid${e ? ` (${e})` : ''}` },
   settlement_duplicate_removed: { icon: '🧹', phrase: (e) => `removed a duplicate payment${e ? ` (${e})` : ''}` },
+  settlement_recorded_on_behalf: { icon: '🛟', phrase: (e) => `recorded a payment as settled on someone's behalf${e ? ` (${e})` : ''}` },
   booking_added: { icon: '🧾', phrase: (e) => `marked${e ? ` "${e}"` : ' an item'} as booked` },
   booking_updated: { icon: '🧾', phrase: (e) => `updated the booking details${e ? ` for "${e}"` : ''}` },
   event_added: { icon: '📅', phrase: (e) => `added${e ? ` "${e}"` : ' something'} to the plan` },

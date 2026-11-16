@@ -14,9 +14,11 @@ import {
   useFreezeSettlements,
   useUnfreezeSettlements,
   useCreateSettlementCarryover,
+  useSettleOnBehalf,
 } from '../../../lib/queries/useSettlements'
 import { queryKeys } from '../../../lib/queries/queryKeys'
 import { useTripActivityLog } from '../../organizer/lib/activity'
+import { useActivityFeed } from '../../../lib/queries/useActivityFeed'
 import { formatMoney } from '../lib/formatMoney'
 import {
   computeSuggestedPayments,
@@ -33,6 +35,19 @@ import { buildFreezeSuggestions, knownPaidIds, FREEZE_BLOCKED_BY_DUPLICATES, UNF
 import { computeBalances, partitionCarryovers } from '../lib/balances'
 import { buildSettleUpPeople, LEFT_TRIP_SUFFIX } from './settleUpPeople'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
+import {
+  onBehalfActions,
+  buildSettleAllList,
+  canOfferSettleAll,
+  isEverythingSettled,
+  onBehalfRecordsBySettlement,
+  onBehalfLabel,
+  summariseBatch,
+  type BatchOutcome,
+  type OnBehalfAction,
+} from './settleOnBehalf'
+import { OnBehalfMenu } from './OnBehalfMenu'
+import { SettleAllDialog } from './SettleAllDialog'
 import { PaymentDetailsSheet } from './PaymentDetailsSheet'
 import { MarkPaidSheet } from './MarkPaidSheet'
 import { parsePaymentDetails, formatPaymentDetailsForCopy } from './paymentDetails'
@@ -109,11 +124,16 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   const unfreezeSettlements = useUnfreezeSettlements(trip.id)
   const createCarryover = useCreateSettlementCarryover(trip.id)
   const logTypedActivity = useTripActivityLog(trip.id)
+  const settleOnBehalf = useSettleOnBehalf(trip.id)
+  const { data: activityEntries = [] } = useActivityFeed(trip.id)
 
   const [simplify, setSimplify] = useState(true)
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false)
   const [markPaidTargetId, setMarkPaidTargetId] = useState<string | null>(null)
   const [isFreezing, setIsFreezing] = useState(false)
+  const [settleAllOpen, setSettleAllOpen] = useState(false)
+  const [settleAllRunning, setSettleAllRunning] = useState(false)
+  const [settleAllOutcome, setSettleAllOutcome] = useState<BatchOutcome | null>(null)
   const [isUnfreezing, setIsUnfreezing] = useState(false)
   const { data: carryoverCandidates = [] } = useCarryoverCandidates(trip.id, user?.id)
 
@@ -168,6 +188,67 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   )
 
   const nameById = Object.fromEntries(people.map((p) => [p.userId, p.left ? `${p.name}${LEFT_TRIP_SUFFIX}` : p.name]))
+
+  const settleAllList = useMemo(
+    () => buildSettleAllList(settlements, (id) => nameById[id] ?? 'Someone', trip.base_currency),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [settlements, trip.base_currency, people]
+  )
+  const onBehalfRecords = useMemo(() => onBehalfRecordsBySettlement(activityEntries), [activityEntries])
+  const everythingSettled = isEverythingSettled(settlements) && (isFrozen || suggested.length === 0)
+
+  const recordOnBehalf = async (s: Settlement, to: 'marked_paid' | 'confirmed', batch = false) => {
+    if (!user) throw new Error('Not signed in')
+    return settleOnBehalf.mutateAsync({
+      settlement: s,
+      to,
+      actorId: user.id,
+      payerName: nameById[s.from_user_id] ?? 'Someone',
+      receiverName: nameById[s.to_user_id] ?? 'someone',
+      batch,
+    })
+  }
+
+  const handleOnBehalf = async (s: Settlement, action: OnBehalfAction) => {
+    try {
+      const res = await recordOnBehalf(s, action.to)
+      showToast(
+        res.logged
+          ? { type: 'success', message: 'Payment recorded', description: 'Logged under your name.' }
+          : { type: 'warning', message: 'Payment recorded', description: "It couldn't be written to the activity log." }
+      )
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not record this payment', description: err instanceof Error ? err.message : undefined })
+    }
+  }
+
+  const handleSettleAll = async () => {
+    setSettleAllRunning(true)
+    const outcome: BatchOutcome = { done: [], failed: [] }
+    try {
+      // Re-read first so the list acted on is the live one, not a stale screen.
+      const fresh = await fetchSettlements(trip.id)
+      queryClient.setQueryData(queryKeys.settlements(trip.id), fresh)
+      if (unresolvedDuplicateGroups(fresh, trip.base_currency).length > 0) throw new Error(FREEZE_BLOCKED_BY_DUPLICATES)
+      for (const s of fresh.filter((r) => r.status === 'suggested' || r.status === 'marked_paid')) {
+        try {
+          await recordOnBehalf(s, 'confirmed', true)
+          outcome.done.push(s.id)
+        } catch (err) {
+          outcome.failed.push({ id: s.id, message: err instanceof Error ? err.message : 'Failed' })
+        }
+      }
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not settle the payments', description: err instanceof Error ? err.message : undefined })
+      setSettleAllRunning(false)
+      return
+    }
+    setSettleAllRunning(false)
+    setSettleAllOutcome(outcome)
+    const summary = summariseBatch(outcome)
+    showToast({ type: summary.tone, message: summary.message })
+    if (outcome.failed.length === 0) setSettleAllOpen(false)
+  }
 
   // Same partition computeBalances/computeSuggestedPayments apply
   // internally -- recomputed here only to tell the user when folded rows
@@ -341,6 +422,26 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
               {UNFREEZE_BLOCKED_BY_DUPLICATES}
             </p>
           )}
+          {canOfferSettleAll({ canManageTrip: isOrganizer, isFrozen, unfinishedCount: settleAllList.count }) && (
+            <div className="pt-1">
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={freezeBlockedByDuplicates}
+                onClick={() => {
+                  setSettleAllOutcome(null)
+                  setSettleAllOpen(true)
+                }}
+              >
+                Mark everything as settled…
+              </Button>
+              {freezeBlockedByDuplicates && (
+                <p className="text-xs text-[var(--text-muted)] mt-1" role="status">
+                  Sort out the payments recorded twice first (see the notice below).
+                </p>
+              )}
+            </div>
+          )}
         </Card>
       ) : (
         <Card noPadding className="p-4 space-y-3">
@@ -371,7 +472,17 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
         </Card>
       )}
 
-      {suggested.length === 0 && !isFrozen && (
+      {everythingSettled && (
+        <Card variant="sunken" noPadding className="p-4 flex items-center gap-3">
+          <AllSettled className="w-20 h-14 text-success-500 shrink-0" />
+          <div>
+            <p className="text-sm font-semibold text-[var(--text-primary)]">Everything is settled ✓</p>
+            <p className="text-xs text-[var(--text-muted)]">Every payment has been paid and confirmed.</p>
+          </div>
+        </Card>
+      )}
+
+      {suggested.length === 0 && !isFrozen && !everythingSettled && (
         <EmptyState
           icon={<AllSettled className="w-32 h-24 text-success-500" />}
           title="All settled up"
@@ -418,6 +529,15 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
           const toName = nameById[s.to_user_id] ?? 'someone'
           const paidDate = new Date(s.settled_at).toLocaleDateString()
           const mismatchAmount = pendingMismatchByPair.get(s.id)
+          const behalfActions = onBehalfActions(s, { canManageTrip: isOrganizer, viewerId: user?.id, receiverName: toName })
+          const rec = onBehalfRecords.get(s.id)
+          const behalfLabel = onBehalfLabel(
+            s,
+            rec,
+            rec?.actorId ? nameById[rec.actorId] ?? 'an organizer' : 'an organizer',
+            toName,
+            (iso) => new Date(iso).toLocaleDateString()
+          )
 
           // Bug #14: a bare status badge told nobody what it meant or whose
           // turn it was next. One caption per status/viewer, mirroring the
@@ -483,6 +603,12 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
                     Confirm received
                   </Button>
                 )}
+                <OnBehalfMenu
+                  paymentLabel={`${fromName} to ${toName}`}
+                  actions={behalfActions}
+                  disabled={settleOnBehalf.isPending || settleAllRunning}
+                  onSelect={(a) => handleOnBehalf(s, a)}
+                />
               </div>
 
               {(s.payment_method || s.notes) && s.status !== 'suggested' && (
@@ -492,7 +618,11 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
                 </p>
               )}
 
-              {caption && <p className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">{caption}</p>}
+              {behalfLabel ? (
+                <p className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">{behalfLabel}</p>
+              ) : (
+                caption && <p className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">{caption}</p>
+              )}
 
               {s.status === 'marked_paid' && mismatchAmount !== undefined && (
                 <p className="text-xs text-warn-700 dark:text-warn-300 pl-9 pt-0.5">
@@ -614,6 +744,15 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
         isOpen={paymentDetailsOpen}
         onClose={() => setPaymentDetailsOpen(false)}
         currentPaymentDetails={currentUserRow?.payment_details}
+      />
+
+      <SettleAllDialog
+        isOpen={settleAllOpen}
+        onClose={() => setSettleAllOpen(false)}
+        list={settleAllList}
+        isWorking={settleAllRunning}
+        outcome={settleAllOutcome}
+        onConfirm={handleSettleAll}
       />
 
       <MarkPaidSheet

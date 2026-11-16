@@ -193,6 +193,19 @@ otp_expiry = 3600
 # admin_email = "admin@email.com"
 # sender_name = "Admin"
 
+# Code-only emails: the login screen and invitation signup both type a 6-digit code
+# (supabase.auth.verifyOtp type 'email'), so these templates must show {{ .Token }} and
+# must NOT include {{ .ConfirmationURL }} (mail scanners prefetch the link and burn the
+# one-time token). Hosted project: paste the same HTML in Dashboard > Auth > Email Templates
+#.
+[auth.email.template.magic_link]
+subject = "{{ .Token }} is your Trips login code"
+content_path = "./supabase/templates/magic_link.html"
+
+[auth.email.template.confirmation]
+subject = "{{ .Token }} is your Trips verification code"
+content_path = "./supabase/templates/confirmation.html"
+
 # Uncomment to customize email template
 # [auth.email.template.invite]
 # subject = "You have been invited"

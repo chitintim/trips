@@ -13,13 +13,18 @@ import { hasVotedInSection, type SectionVoterIds } from '../_shared/actionComple
  * `trip_action_completions` row (`completedBy`) AND no vote cast in the
  * action's linked section (`sectionId` + `sectionVoters`). Precedence
  * matches the frontend: derived-vote OR manual-tick = complete, so anyone
- * satisfying either is dropped, never chased.
+ * satisfying either is dropped, never chased. If the linked section is in
+ * `closedSectionIds` (status 'completed') nobody is outstanding.
  */
 export function outstandingTargets(
   targets: string[],
   sectionId: string | null,
   completedBy: Set<string>,
-  sectionVoters: SectionVoterIds
+  sectionVoters: SectionVoterIds,
+  closedSectionIds?: Set<string>
 ): string[] {
+  // A vote-linked action whose question is closed is no longer required of
+  // anyone: nobody can vote any more, so nobody is chased for it.
+  if (sectionId && closedSectionIds?.has(sectionId)) return []
   return targets.filter((uid) => !completedBy.has(uid) && !hasVotedInSection(sectionId, uid, sectionVoters))
 }

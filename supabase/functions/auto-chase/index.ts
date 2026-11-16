@@ -93,6 +93,7 @@ import {
   type VoteForSectionVoters,
 } from '../_shared/actionCompletion/sectionVoters.ts'
 import { outstandingTargets } from './outstandingTargets.ts'
+import { chaseScopes, isChaseableParticipant, isSectionClosed, isTripOpenForReminders, joinedAfterDueDate } from './chaseScope.ts'
 import { actionRemindersGateOpen, DEFAULT_SETTINGS, inQuietHours, parseChaseSettings } from './chaseSettings.ts'
 import { decideEmailSuppression } from './emailSuppression.ts'
 
@@ -201,6 +202,13 @@ async function fetchSectionVoters(admin: SupabaseClient, sectionIds: string[]): 
   return buildSectionVoters(options, votes)
 }
 
+/** Ids among `sectionIds` whose planning_sections.status is 'completed' (closed). */
+async function fetchClosedSectionIds(admin: SupabaseClient, sectionIds: string[]): Promise<Set<string>> {
+  if (sectionIds.length === 0) return new Set()
+  const { data } = await admin.from('planning_sections').select('id, status').in('id', sectionIds)
+  return new Set((data ?? []).filter((s) => isSectionClosed(s)).map((s) => s.id as string))
+}
+
 Deno.serve(async (req) => {
   const preflight = handleCorsPreflight(req)
   if (preflight) return preflight
@@ -276,6 +284,11 @@ Deno.serve(async (req) => {
 
     for (const trip of chaseTrips) {
       const tripLink = `${APP_BASE_URL}/${trip.id}`
+      // Finished trips (completed, or end date passed) get no more
+      // planning-phase chases (votes, picks, RSVP, arrival details). Money
+      // reminders -- unclaimed items (a) and settlements (f) -- are NOT
+      // gated on this: settling up happens exactly after the trip ends.
+      const { planning: tripOpen, money: moneyOpen } = chaseScopes(trip, now)
 
       // Active participants (used by several loops below).
       const { data: participants } = await admin
@@ -284,10 +297,18 @@ Deno.serve(async (req) => {
         .eq('trip_id', trip.id)
         .eq('active', true)
       const activeParticipants = participants ?? []
-      const participantIds = activeParticipants.map((p) => p.user_id)
+      // Declined/cancelled people are out of scope for every chase that asks
+      // them to DO something (vote, pick, claim, add arrival details).
+      // RSVP / waitlist / conditional kinds below still read
+      // `activeParticipants` since those statuses are exactly their trigger.
+      const chaseableParticipants = activeParticipants.filter(isChaseableParticipant)
+      const participantIds = chaseableParticipants.map((p) => p.user_id)
+      // Money reminders (a) keep their pre-existing audience: every active
+      // participant, exactly as before the scope changes.
+      const allActiveIds = activeParticipants.map((p) => p.user_id)
 
       // ---- a. Unclaimed items on itemized expenses past threshold ----
-      {
+      if (moneyOpen) {
         const { data: expenses } = await admin
           .from('expenses')
           .select('id, description, amount, currency, paid_by, participant_ids, created_at, expense_item_claims(user_id), expense_allocation_links(code)')
@@ -298,7 +319,7 @@ Deno.serve(async (req) => {
         for (const e of expenses ?? []) {
           // Chase only tagged people when participant_ids is set (plan §14
           // "itemized receipts chase only tagged people"), else everyone.
-          const targets: string[] = (e.participant_ids && e.participant_ids.length > 0 ? e.participant_ids : participantIds)
+          const targets: string[] = (e.participant_ids && e.participant_ids.length > 0 ? e.participant_ids : allActiveIds)
             .filter((uid: string) => uid !== e.paid_by)
           // deno-lint-ignore no-explicit-any
           const claimedBy = new Set((e.expense_item_claims ?? []).map((c: any) => c.user_id))
@@ -328,15 +349,17 @@ Deno.serve(async (req) => {
       // check here would nag everyone forever with the wrong "vote"
       // wording; see UX_REDESIGN.md Part 5 / decisionShapes.ts's
       // getDecisionShape convention: metadata.decision_shape, absent = 'vote'). ----
-      {
+      if (tripOpen) {
         const { data: sections } = await admin
           .from('planning_sections')
-          .select('id, title, vote_deadline, metadata, options(id, option_votes(user_id), selections(user_id))')
+          .select('id, title, status, vote_deadline, metadata, options(id, option_votes(user_id), selections(user_id))')
           .eq('trip_id', trip.id)
+          .neq('status', 'completed') // closed polls / finished decisions are never chased
           .not('vote_deadline', 'is', null)
           .gt('vote_deadline', now.toISOString())
           .lt('vote_deadline', hoursAheadIso(48, now))
         for (const s of sections ?? []) {
+          if (isSectionClosed(s)) continue // belt and braces for the .neq above
           // deno-lint-ignore no-explicit-any
           const meta = s.metadata as any
           const isPersonal = !!meta && typeof meta === 'object' && meta.decision_shape === 'personal'
@@ -382,7 +405,7 @@ Deno.serve(async (req) => {
       }
 
       // ---- c. Pending RSVPs near the confirmation deadline ----
-      if (trip.confirmation_deadline) {
+      if (tripOpen && trip.confirmation_deadline) {
         const deadline = new Date(trip.confirmation_deadline)
         const within72h = deadline.getTime() - now.getTime() < 72 * 3600_000 && deadline.getTime() > now.getTime()
         if (within72h) {
@@ -404,7 +427,7 @@ Deno.serve(async (req) => {
       }
 
       // ---- d. Stated-date conditionals: conditional_date arrived ----
-      {
+      if (tripOpen) {
         const todayStr = now.toISOString().split('T')[0]
         for (const p of activeParticipants) {
           if (
@@ -428,7 +451,7 @@ Deno.serve(async (req) => {
       }
 
       // ---- e. Waitlist lifecycle (feature-detected) ----
-      if (hasWaitlistColumn && trip.capacity_limit) {
+      if (tripOpen && hasWaitlistColumn && trip.capacity_limit) {
         const confirmedCount = activeParticipants.filter((p) => p.confirmation_status === 'confirmed').length
         const freeSpots = trip.capacity_limit - confirmedCount
         if (freeSpots > 0) {
@@ -476,7 +499,7 @@ Deno.serve(async (req) => {
       }
 
       // ---- f. Settlements 'suggested'/'marked_paid' older than N days ----
-      {
+      if (moneyOpen) {
         const staleDays = 3
         const { data: settlements } = await admin
           .from('settlements')
@@ -526,7 +549,7 @@ Deno.serve(async (req) => {
       // ---- g. t30_no_transport: T-30, no flight/transport booking or plan
       // item exists yet -> organizer-only nudge (a trip-wide gap, not a
       // per-person one; a single flight/transport item covers everyone). ----
-      if (daysUntilStart != null && daysUntilStart <= 30 && daysUntilStart >= 0) {
+      if (tripOpen && daysUntilStart != null && daysUntilStart <= 30 && daysUntilStart >= 0) {
         const { data: transportEvents } = await admin
           .from('trip_timeline_events')
           .select('id')
@@ -564,7 +587,7 @@ Deno.serve(async (req) => {
       // ---- h. t14_missing_arrival: T-14, per participant with no travel-
       // details event (category flight/transfer) tagged to them. An event
       // with participant_ids = null covers everyone. ----
-      if (daysUntilStart != null && daysUntilStart <= 14 && daysUntilStart >= 0) {
+      if (tripOpen && daysUntilStart != null && daysUntilStart <= 14 && daysUntilStart >= 0) {
         const { data: travelEvents } = await admin
           .from('trip_timeline_events')
           .select('participant_ids')
@@ -574,7 +597,7 @@ Deno.serve(async (req) => {
         const everyoneCovered = events.some((e) => e.participant_ids === null)
         if (!everyoneCovered) {
           const coveredIds = new Set(events.flatMap((e) => e.participant_ids ?? []))
-          for (const p of activeParticipants) {
+          for (const p of chaseableParticipants) {
             if (coveredIds.has(p.user_id)) continue
             items.push({
               tripId: trip.id,
@@ -592,7 +615,7 @@ Deno.serve(async (req) => {
 
       // ---- i. t1_checkin: T-1, flight bookings with a confirmation_ref
       // (something to actually check in for) -> nudge whoever booked it. ----
-      if (daysUntilStart === 1) {
+      if (tripOpen && daysUntilStart === 1) {
         const { data: flightBookings } = await admin
           .from('bookings')
           .select('id, title, booked_by, confirmation_ref, option_id, options(section_type)')
@@ -630,7 +653,7 @@ Deno.serve(async (req) => {
       const { data: actionTrips, error: actionTripsError } = await admin
         .from('trips')
         .select(
-          'id, name, start_date, chase_settings, trip_actions!inner(id, title, assigned_to, deadline_kind, due_date, completed_at, section_id, trip_action_completions(user_id))'
+          'id, name, status, start_date, end_date, chase_settings, trip_actions!inner(id, title, assigned_to, deadline_kind, due_date, completed_at, section_id, trip_action_completions(user_id))'
         )
         .is('trip_actions.completed_at', null)
       if (actionTripsError) throw actionTripsError
@@ -640,6 +663,10 @@ Deno.serve(async (req) => {
         // reminders, or during configured quiet hours -- both apply even
         // when the bundled chase engine (`enabled`) is off.
         if (!actionRemindersGateOpen(parseChaseSettings(trip.chase_settings), now)) continue
+        // Finished trips (completed, or end date passed) get no more
+        // deadline reminders -- previously overdue "before trip" actions
+        // kept emailing people on ongoing and finished trips.
+        if (!isTripOpenForReminders(trip, now)) continue
         const tripLink = `${APP_BASE_URL}/${trip.id}`
 
         // deno-lint-ignore no-explicit-any
@@ -658,10 +685,12 @@ Deno.serve(async (req) => {
 
         const { data: actionParticipants } = await admin
           .from('trip_participants')
-          .select('user_id')
+          .select('user_id, created_at, confirmation_status, active')
           .eq('trip_id', trip.id)
           .eq('active', true)
-        const actionParticipantIds = (actionParticipants ?? []).map((p) => p.user_id)
+        const chaseableActionParticipants = (actionParticipants ?? []).filter(isChaseableParticipant)
+        const actionParticipantIds = chaseableActionParticipants.map((p) => p.user_id)
+        const joinedAtByUser = new Map(chaseableActionParticipants.map((p) => [p.user_id, p.created_at as string | null]))
 
         // Everything already sent for these actions, in one query per trip.
         const { data: sentRows } = await admin
@@ -678,6 +707,9 @@ Deno.serve(async (req) => {
         // the sections any staged action here links to.
         const sectionIds = [...new Set(staged.map((s) => s.action.section_id as string | null).filter((id): id is string => !!id))]
         const sectionVoters = await fetchSectionVoters(admin, sectionIds)
+        // A vote-linked action whose question is closed is no longer
+        // required of anyone (nobody can vote any more) -- never chase it.
+        const closedSectionIds = await fetchClosedSectionIds(admin, sectionIds)
 
         for (const { action: a, dueDate, stage } of staged) {
           // deno-lint-ignore no-explicit-any
@@ -688,8 +720,11 @@ Deno.serve(async (req) => {
           const chipLabel = actionDueChipLabel(dueDate, now)
           const deadlineLabel = formatDueDate(dueDate, a.deadline_kind)
 
-          for (const uid of outstandingTargets(targets, a.section_id, completedBy, sectionVoters)) {
+          for (const uid of outstandingTargets(targets, a.section_id, completedBy, sectionVoters, closedSectionIds)) {
             if (alreadySent.has(`${a.id}:${uid}:${stage}`)) continue
+            // Late joiners: no "Overdue" email for a deadline that had
+            // already passed before they were on the trip.
+            if (stage === 'overdue' && joinedAfterDueDate(joinedAtByUser.get(uid), dueDate)) continue
             items.push({
               tripId: trip.id,
               tripName: trip.name,
@@ -968,13 +1003,14 @@ async function handleTestDigest(
   // that section, even without a trip_action_completions row.
   const sectionIds = [...new Set((actions ?? []).map((a) => a.section_id).filter((id): id is string => !!id))]
   const sectionVoters = await fetchSectionVoters(admin, sectionIds)
+  const closedSectionIds = await fetchClosedSectionIds(admin, sectionIds)
 
   const rows: Array<{ dueDate: string; row: DigestActionRow }> = []
   for (const a of actions ?? []) {
     if (a.assigned_to && a.assigned_to !== user_id) continue
     // deno-lint-ignore no-explicit-any
     const completedBy = new Set<string>((a.trip_action_completions ?? []).map((c: any) => c.user_id))
-    if (outstandingTargets([user_id], a.section_id, completedBy, sectionVoters).length === 0) continue
+    if (outstandingTargets([user_id], a.section_id, completedBy, sectionVoters, closedSectionIds).length === 0) continue
     const dueDate = effectiveActionDueDate({
       deadline_kind: a.deadline_kind,
       due_date: a.due_date,

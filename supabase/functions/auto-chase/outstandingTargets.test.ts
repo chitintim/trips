@@ -57,3 +57,13 @@ Deno.test('outstandingTargets: a retracted vote (rebuilt sectionVoters no longer
   assertEquals(outstandingTargets(['u1'], 'sec1', new Set(), beforeRetraction), [])
   assertEquals(outstandingTargets(['u1'], 'sec1', new Set(), afterRetraction), ['u1'])
 })
+
+Deno.test('outstandingTargets: closed linked section means nobody is chased', () => {
+  const result = outstandingTargets(['u1', 'u2'], 'sec1', new Set(), new Map(), new Set(['sec1']))
+  assertEquals(result, [])
+})
+
+Deno.test('outstandingTargets: a different section being closed does not matter', () => {
+  const result = outstandingTargets(['u1'], 'sec1', new Set(), new Map(), new Set(['sec2']))
+  assertEquals(result, ['u1'])
+})

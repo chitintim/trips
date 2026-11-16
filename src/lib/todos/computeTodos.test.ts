@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { OWN_CHOICE_WITHOUT_DEADLINE_IS_TODO } from '../answers/answers'
-import { computeTodos, computeWaitingOn, compareTodos, canAnswerAll, isActionDoneFor } from './computeTodos'
+import { computeTodos, computeInfo, computeWaitingOn, compareTodos, canAnswerAll, isActionDoneFor } from './computeTodos'
 import { answerAllLabel, closesLabel, formatMoney, todoCountLabel, DEEP_LINKS } from './copy'
 import type { SnapshotParticipant, SnapshotSection, TripSnapshot } from './types'
 
@@ -232,22 +231,50 @@ describe('Sicily: finished trip with money owed and long-overdue group actions',
     expect(computeTodos(gone, 'chai', NOW)[0].title).toBe('Pay Alex £20')
   })
 
-  it('never frozen: the participant is told an organiser must finalise, the organiser gets a freeze to-do, no dead-end Pay', () => {
+  it('never frozen: the participant has NO to-do (an info line instead), the organiser gets ONE freeze to-do', () => {
     const unfrozen = snap({ ...sicily, trip: { ...sicily.trip, settlement_snapshot: null } })
-    const sam = computeTodos(unfrozen, 'sam', NOW)
-    expect(sam).toHaveLength(1)
-    expect(sam[0]).toMatchObject({ kind: 'pay', actionLabel: 'View', link: '?open=settle' })
-    expect(sam[0].title).toContain('once balances are finalized')
-    expect(sam[0].subtitle).toBe('An organizer needs to finalize the balances first')
-    // stale suggested rows from an earlier freeze do not produce a Pay row
-    expect(computeTodos(unfrozen, 'chai', NOW).every((t) => !t.id.startsWith('pay:st1'))).toBe(true)
+    expect(computeTodos(unfrozen, 'sam', NOW)).toEqual([])
+    expect(computeTodos(unfrozen, 'chai', NOW)).toEqual([])
+    const info = computeInfo(unfrozen, 'sam', NOW)
+    expect(info).toHaveLength(1)
+    expect(info[0].text).toBe("You'll be able to settle up (you owe £4,698.61) once the organizer finalizes balances")
+    expect(computeInfo(sicily, 'sam', NOW)).toEqual([]) // frozen: it is a real Pay to-do instead
+    expect(computeInfo(unfrozen, 'tim', NOW)).toEqual([]) // owes nothing
     const tim = computeTodos(unfrozen, 'tim', NOW)
     expect(tim.map((t) => t.id)).toEqual(['org_setup:freeze'])
-    expect(tim[0]).toMatchObject({ group: 'organiser', title: 'Freeze balances so people can settle', link: '?open=settle' })
+    expect(tim[0]).toMatchObject({ group: 'organiser', title: 'Freeze balances so people can settle', link: '?open=settle', unblocks: 3 })
+    // Waiting on: only the organiser, one item, "Unblocks 3 people", never the participants
+    const wo = computeWaitingOn(unfrozen, NOW)
+    expect(wo.byPerson.map((p) => p.userId)).toEqual(['tim'])
+    expect(wo.byItem).toHaveLength(1)
+    expect(wo.byItem[0]).toMatchObject({ id: 'org_setup:' + unfrozen.trip.id + ':freeze', detail: 'Unblocks 3 people', userIds: ['tim'] })
     // nobody owes anything: no freeze to-do
     expect(computeTodos(snap({ ...unfrozen, balances: { tim: 0, sam: 0 } }), 'tim', NOW)).toEqual([])
     // a non-organiser never gets it
     expect(computeTodos(unfrozen, 'sam', NOW).some((t) => t.id === 'org_setup:freeze')).toBe(false)
+  })
+
+  it('Waiting on groups several receivers confirming payments from one payer into one item', () => {
+    const crew = [person('tim', 'Tim', { role: 'organizer' }), person('a', 'Ann'), person('b', 'Bob'), person('c', 'Cat')]
+    const mk = (rows: Array<[string, string]>) =>
+      snap({
+        ...sicily,
+        participants: crew,
+        balances: {},
+        settlements: rows.map(([id, to]) => ({ id, from_user_id: 'tim', to_user_id: to, amount: 619.18, currency: 'GBP', status: 'marked_paid' })),
+      })
+    const wo = computeWaitingOn(mk([['s1', 'a'], ['s2', 'b'], ['s3', 'c']]), NOW)
+    const items = wo.byItem.filter((i) => i.kind === 'confirm_payment')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ title: 'Confirm payment from Tim', detail: '3 payments to confirm' })
+    expect(items[0].userIds.sort()).toEqual(['a', 'b', 'c'])
+    expect(items[0].todoIds.a).toBe('confirm_payment:s1')
+    // each receiver still has exactly their own to-do (counts unchanged)
+    expect(wo.byPerson.map((p) => p.count)).toEqual([1, 1, 1])
+    // a single payment keeps its own descriptive row
+    const single = computeWaitingOn(mk([['s1', 'a']]), NOW).byItem.filter((i) => i.kind === 'confirm_payment')
+    expect(single).toHaveLength(1)
+    expect(single[0].title).toBe('Confirm Tim paid you £619.18')
   })
 
   it('an upcoming trip with the same actions would owe them (control)', () => {
@@ -312,13 +339,24 @@ describe('tasks', () => {
     expect(own.shape).toBe('own')
   })
 
-  it('D2: an Own-choice question with no deadline is not a to-do (until passes exist); with a deadline it is', () => {
-    expect(OWN_CHOICE_WITHOUT_DEADLINE_IS_TODO).toBe(false)
-    expect(computeTodos(base, 'sam', NOW).some((t) => t.id === 'answer:own')).toBe(false)
-    // and it never blocks an organiser's "all answered"
-    const ownOnly = snap({ sections: [question('own', 'Ski rental', { metadata: { decision_shape: 'personal' } })] })
-    expect(computeTodos(ownOnly, 'sam', NOW)).toEqual([])
-    expect(computeWaitingOn(ownOnly, NOW).byPerson.every((p) => p.todos.every((t) => t.kind !== 'answer'))).toBe(true)
+  it('D2: an Own-choice question with no deadline is a to-do only when passes are available, and "None for me" clears it', () => {
+    const ownTodo = (sn: TripSnapshot, who = 'sam') => computeTodos(sn, who, NOW).some((t) => t.id === 'answer:own')
+    // Conservative default (passesAvailable omitted/false): not a to-do.
+    expect(ownTodo(base)).toBe(false)
+    expect(ownTodo(snap({ ...base, passesAvailable: false }))).toBe(false)
+    // Passes available: a to-do for everyone who has not answered.
+    const avail = snap({ ...base, passesAvailable: true })
+    expect(ownTodo(avail)).toBe(true)
+    const passed = snap({ ...base, passesAvailable: true, passes: [{ section_id: 'own', user_id: 'sam', kind: 'none_for_me' }] })
+    expect(ownTodo(passed)).toBe(false)
+    expect(ownTodo(passed, 'tim')).toBe(true) // others still owe it
+  })
+
+  it('an Own-choice question WITH a deadline is a to-do whether or not passes are available', () => {
+    const withDeadline = (passesAvailable: boolean) =>
+      snap({ ...base, passesAvailable, sections: [question('own', 'Ski rental', { metadata: { decision_shape: 'personal' }, vote_deadline: new Date(2026, 11, 20, 12).toISOString() })] })
+    expect(computeTodos(withDeadline(false), 'sam', NOW).some((t) => t.id === 'answer:own')).toBe(true)
+    expect(computeTodos(withDeadline(true), 'sam', NOW).some((t) => t.id === 'answer:own')).toBe(true)
   })
 
   it('isActionDoneFor matches the completion rules', () => {

@@ -447,7 +447,7 @@ export function planItemEditTarget(item: Pick<PlanItem, 'idKind'>, isOrganizer: 
   return null
 }
 
-/** Only open votables (proposals with a vote summary), sorted by deadline (nulls last) — the Decide lens. */
+/** Only open votables (proposals with a vote summary), sorted by deadline (nulls last) — the old Decide lens, now the Questions lens. */
 export function getOpenVotables(items: PlanItem[]): PlanItem[] {
   return items
     .filter((item) => item.stage === 'proposal' && item.vote != null)

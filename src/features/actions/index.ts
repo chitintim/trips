@@ -1,13 +1,15 @@
 /**
- * Public surface of the Actions feature — shared travel to-dos ("book
- * flights", "get visa"), individual or whole-group, plus the packing/bring
- * list (reused from features/checklists) as a segment of the same launched
- * sheet.
+ * Public surface of the To-dos feature — shared travel to-dos ("book flights",
+ * "get visa") and the bring list as ONE grouped sheet (Yours / Everyone / With
+ * others / Up for grabs / Done), each with an explicit Who: Everyone, a named
+ * person, or Anyone (first to grab it).
  */
 export { ActionsSheet } from './components/ActionsSheet'
 export type { ActionsSheetProps } from './components/ActionsSheet'
-export { ActionRow } from './components/ActionRow'
-export type { ActionRowProps } from './components/ActionRow'
+export { TodoRow } from './components/TodoRow'
+export type { TodoRowProps } from './components/TodoRow'
+export { buildTodoViews, groupTodos, actionWhoMode } from './lib/todoModel'
+export type { TodoView, TodoGroups } from './lib/todoModel'
 
 export {
   resolveDueDate,

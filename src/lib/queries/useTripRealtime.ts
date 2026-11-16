@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { queryKeys } from './queryKeys'
+import { questionPassesKey, useQuestionPasses } from './usePlanning'
 
 /**
  * Tables that affect this trip's cached queries, and the query-key branch
@@ -106,6 +107,7 @@ const DEBOUNCE_MS = 200
  */
 export function useTripRealtime(tripId: string | undefined) {
   const queryClient = useQueryClient()
+  useQuestionPassesRealtime(tripId)
   const pendingKeysRef = useRef<Set<string>>(new Set())
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -150,4 +152,49 @@ export function useTripRealtime(tripId: string | undefined) {
       supabase.removeChannel(channel)
     }
   }, [tripId, queryClient])
+}
+
+/**
+ * "No preference" / "None for me" answers (question_passes) live on their OWN
+ * channel, and only once useQuestionPasses has proved the table exists. A
+ * postgres_changes binding for a table that does not exist (migration not yet
+ * applied) makes the whole channel fail, which on the shared trip channel
+ * would silently stop every other live update. Here a failure only ever kills
+ * this one channel: it is removed and not retried, and passes keep refreshing
+ * on the person's own writes, on focus and on reconnect.
+ */
+export function useQuestionPassesRealtime(tripId: string | undefined) {
+  const queryClient = useQueryClient()
+  const { available } = useQuestionPasses(tripId)
+
+  useEffect(() => {
+    if (!tripId || !available) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let channel: ReturnType<typeof supabase.channel> | null = null
+    try {
+      const ch = supabase.channel(`trip_question_passes:${tripId}`)
+      channel = ch
+      // No trip_id column on this table: subscribe unfiltered; the debounced flush only invalidates this trip's passes.
+      ch.on('postgres_changes', { event: '*', schema: 'public', table: 'question_passes' }, () => {
+        if (timer) clearTimeout(timer)
+        timer = setTimeout(() => {
+          timer = null
+          queryClient.invalidateQueries({ queryKey: questionPassesKey(tripId) })
+        }, DEBOUNCE_MS)
+      })
+      ch.subscribe((status) => {
+        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          // Swallow: drop this channel only.
+          supabase.removeChannel(ch).catch(() => undefined)
+          if (channel === ch) channel = null
+        }
+      })
+    } catch {
+      channel = null
+    }
+    return () => {
+      if (timer) clearTimeout(timer)
+      if (channel) supabase.removeChannel(channel).catch(() => undefined)
+    }
+  }, [tripId, available, queryClient])
 }

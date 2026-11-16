@@ -38,23 +38,52 @@ export function tallyVotes(optionIds: string[], votes: OptionVote[], method: Vot
     })
   }
 
-  // Ranked: need the max rank any voter used, to compute Borda weights per voter.
+  // Ranked: every voter's votes get an effective rank. Legacy ranked votes were saved with
+  // `rank = null` (nothing assigned ranks); those count in the order they were cast, after any
+  // explicitly ranked ones, instead of scoring zero. Borda weights then use each voter's max rank.
+  const effectiveRank = effectiveRanks(votes)
   const voterMaxRank = new Map<string, number>()
   for (const v of votes) {
-    if (v.rank == null) continue
-    voterMaxRank.set(v.user_id, Math.max(voterMaxRank.get(v.user_id) || 0, v.rank))
+    const r = effectiveRank.get(v)
+    if (r == null) continue
+    voterMaxRank.set(v.user_id, Math.max(voterMaxRank.get(v.user_id) || 0, r))
   }
 
   return optionIds.map((optionId) => {
     const optionVotes = byOption.get(optionId) || []
     let score = 0
     for (const v of optionVotes) {
-      if (v.rank == null) continue
-      const maxRank = voterMaxRank.get(v.user_id) || v.rank
-      score += maxRank - v.rank + 1
+      const rank = effectiveRank.get(v)
+      if (rank == null) continue
+      const maxRank = voterMaxRank.get(v.user_id) || rank
+      score += maxRank - rank + 1
     }
     return { optionId, score, voterIds: optionVotes.map((v) => v.user_id) }
   })
+}
+
+/**
+ * Effective rank per ranked vote: the stored rank when there is one, otherwise
+ * the next free number after that voter's highest stored rank, in cast order
+ * (created_at, then array order). A voter with no stored ranks at all gets 1..n.
+ */
+function effectiveRanks(votes: OptionVote[]): Map<OptionVote, number> {
+  const out = new Map<OptionVote, number>()
+  const byVoter = new Map<string, OptionVote[]>()
+  for (const v of votes) {
+    if (!byVoter.has(v.user_id)) byVoter.set(v.user_id, [])
+    byVoter.get(v.user_id)!.push(v)
+  }
+  for (const list of byVoter.values()) {
+    let next = 0
+    for (const v of list) if (v.rank != null) { out.set(v, v.rank); next = Math.max(next, v.rank) }
+    const unranked = list
+      .map((v, i) => ({ v, i }))
+      .filter(({ v }) => v.rank == null)
+      .sort((a, b) => (a.v.created_at ?? '').localeCompare(b.v.created_at ?? '') || a.i - b.i)
+    for (const { v } of unranked) out.set(v, ++next)
+  }
+  return out
 }
 
 /**

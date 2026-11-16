@@ -1,10 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Modal, Button, Input, TextArea, SegmentedControl, useToast, ConfirmDiscardSheet } from '../../../components/ui'
-import { useCreateSection, useUpdateSection } from '../../../lib/queries/usePlanning'
+import { useCreateSection, useQuestionPasses, useUpdateSection, useVotes } from '../../../lib/queries/usePlanning'
+import { answersFor } from '../../../lib/answers/answers'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useUnsavedChangesGuard } from '../../../lib/forms/useUnsavedChangesGuard'
 import { getDecisionShape, type DecisionShape } from '../lib/decisionShapes'
 import { mergeSectionMetadata } from '../lib/resolveDecision'
+import { HIDE_OWN_CHOICE_ANSWERS_KEY, NEW_QUESTION_HIDE_RESULTS_DEFAULT, ownChoiceAnswersHidden } from '../lib/answerModel'
+import { answerKindChangeWarning } from '../lib/manageActions'
 import type { SectionWithOptions } from '../../../lib/queries/usePlanning'
 import type { VotingMethod } from '../lib/voting'
 
@@ -14,6 +17,8 @@ interface SectionFormValues {
   decisionShape: DecisionShape
   votingMethod: VotingMethod
   hideVotesUntilClose: boolean
+  /** Own choice only: metadata key `hide_own_choice_answers` (default off: people see who chose what). */
+  hideOwnChoiceAnswers: boolean
   voteDeadline: string
   quorum: string
 }
@@ -23,7 +28,9 @@ const EMPTY_VALUES: SectionFormValues = {
   description: '',
   decisionShape: 'vote',
   votingMethod: 'single',
-  hideVotesUntilClose: true,
+  // New questions show results as people answer (owner decision); existing ones keep their stored value.
+  hideVotesUntilClose: NEW_QUESTION_HIDE_RESULTS_DEFAULT,
+  hideOwnChoiceAnswers: false,
   voteDeadline: '',
   quorum: '',
 }
@@ -36,6 +43,7 @@ function fromSection(section: SectionWithOptions | null): SectionFormValues {
     decisionShape: getDecisionShape(section.metadata),
     votingMethod: (section.voting_method as VotingMethod) || 'single',
     hideVotesUntilClose: section.hide_votes_until_close,
+    hideOwnChoiceAnswers: ownChoiceAnswersHidden(section.metadata),
     voteDeadline: section.vote_deadline ? section.vote_deadline.slice(0, 16) : '',
     quorum: section.quorum?.toString() || '',
   }
@@ -68,6 +76,33 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
   }, [isOpen, section?.id])
 
   const seed = fromSection(section)
+
+  // Changing the kind or the way people answer once answers exist: warn, and
+  // require an explicit tick before saving. Old answers are never deleted.
+  const votesQuery = useVotes(tripId)
+  const passesQuery = useQuestionPasses(tripId)
+  const answerCount = useMemo(() => {
+    if (!section) return 0
+    let n = 0
+    for (const a of answersFor(section, { votes: votesQuery.data ?? [], passes: passesQuery.passes }).values()) {
+      if (a.optionIds.size > 0 || a.passed) n++
+    }
+    return n
+  }, [section, votesQuery.data, passesQuery.passes])
+  const kindWarning = isEditing
+    ? answerKindChangeWarning({
+        answerCount,
+        oldKind: seed.decisionShape,
+        newKind: values.decisionShape,
+        oldMethod: seed.votingMethod,
+        newMethod: values.votingMethod,
+      })
+    : null
+  const [ackKindChange, setAckKindChange] = useState(false)
+  useEffect(() => {
+    if (!kindWarning) setAckKindChange(false)
+  }, [kindWarning])
+
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
@@ -78,11 +113,22 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
       return
     }
 
+    if (kindWarning && !ackKindChange) {
+      showToast({ type: 'error', message: 'Please confirm the change to how people answer' })
+      return
+    }
+
     const update = {
       title: values.title.trim(),
       description: values.description.trim() || null,
       // Merge, never replace: a decided question's decided_option_id / followup_action_id live here.
-      metadata: mergeSectionMetadata(section?.metadata, { decision_shape: values.decisionShape }),
+      // The own-choice hide key is written only when turned on (or to switch an existing one off); group choice leaves it alone.
+      metadata: mergeSectionMetadata(section?.metadata, {
+        decision_shape: values.decisionShape,
+        ...(values.decisionShape === 'personal' && (values.hideOwnChoiceAnswers || ownChoiceAnswersHidden(section?.metadata))
+          ? { [HIDE_OWN_CHOICE_ANSWERS_KEY]: values.hideOwnChoiceAnswers }
+          : {}),
+      }),
       voting_method: values.votingMethod,
       hide_votes_until_close: values.hideVotesUntilClose,
       vote_deadline: values.voteDeadline ? new Date(values.voteDeadline).toISOString() : null,
@@ -117,7 +163,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
         <TextArea label="Description (optional)" value={values.description} onChange={(e) => updateField('description', e.target.value)} rows={2} />
 
         <div>
-          <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Question type</label>
+          <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Kind of question</label>
           <SegmentedControl
             fullWidth
             size="sm"
@@ -134,6 +180,17 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
               : 'Each person chooses for themselves (rental gear, lessons). Add options with pricing after saving.'}
           </p>
         </div>
+
+        {kindWarning && (
+          <div role="alert" className="space-y-2 rounded-[var(--radius-md)] border border-warning-300 bg-warning-50 p-3 text-sm text-[var(--text-primary)] dark:bg-warning-900/30">
+            <p className="font-medium">Change how people answer?</p>
+            <p className="break-words text-xs text-[var(--text-secondary)]">{kindWarning}</p>
+            <label className="flex cursor-pointer items-start gap-3">
+              <input type="checkbox" checked={ackKindChange} onChange={(e) => setAckKindChange(e.target.checked)} className="mt-0.5 h-5 w-5 accent-accent-600" />
+              <span className="text-xs">I understand. Change it anyway.</span>
+            </label>
+          </div>
+        )}
 
         {values.decisionShape === 'vote' && (
           <>
@@ -176,27 +233,46 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
                 className="mt-1 w-5 h-5 accent-accent-600"
               />
               <span className="text-sm text-[var(--text-primary)]">
-                Hide answers until it's decided (recommended — stops people following the crowd)
+                Hide answers until it's decided
+                <span className="block text-xs text-[var(--text-muted)]">
+                  Stops people following the crowd. Otherwise everyone sees results as they come in.
+                </span>
               </span>
             </label>
           </>
         )}
 
         {values.decisionShape === 'personal' && (
-          <Input
-            label="Answer by (optional)"
-            type="datetime-local"
-            value={values.voteDeadline}
-            onChange={(e) => updateField('voteDeadline', e.target.value)}
-            helperText="Shown to the group as when answers close."
-          />
+          <>
+            <Input
+              label="Answer by (optional)"
+              type="datetime-local"
+              value={values.voteDeadline}
+              onChange={(e) => updateField('voteDeadline', e.target.value)}
+              helperText="Shown to the group as when answers close."
+            />
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={values.hideOwnChoiceAnswers}
+                onChange={(e) => updateField('hideOwnChoiceAnswers', e.target.checked)}
+                className="mt-1 w-5 h-5 accent-accent-600"
+              />
+              <span className="text-sm text-[var(--text-primary)]">
+                Hide results until it's decided
+                <span className="block text-xs text-[var(--text-muted)]">
+                  Off by default: everyone can see who chose what. Turn on to keep choices private until you decide.
+                </span>
+              </span>
+            </label>
+          </>
         )}
 
         <div className="flex justify-end gap-3 pt-4 border-t border-[var(--border-subtle)]">
           <Button variant="outline" onClick={handleClose} disabled={createSection.isPending || updateSection.isPending}>
             Cancel
           </Button>
-          <Button onClick={handleSave} isLoading={createSection.isPending || updateSection.isPending}>
+          <Button onClick={handleSave} isLoading={createSection.isPending || updateSection.isPending} disabled={!!kindWarning && !ackKindChange}>
             {isEditing ? 'Save' : 'Create question'}
           </Button>
         </div>

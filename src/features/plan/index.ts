@@ -25,17 +25,13 @@ export type { PlanBoardProps } from './components/PlanBoard'
 // exception the places barrel makes for PlaceMapThumb).
 export type { PlanMapLensProps } from './components/PlanMapLens'
 
-export { PlanDecideLens } from './components/PlanDecideLens'
-export type { PlanDecideLensProps } from './components/PlanDecideLens'
+export { QuestionsView } from './components/QuestionsView'
+export type { QuestionsViewProps } from './components/QuestionsView'
 
 export { AnswerFlow } from './components/AnswerFlow'
 export type { AnswerFlowProps } from './components/AnswerFlow'
 
-export { OrderFormSheet } from './components/OrderFormSheet'
-export type { OrderFormSheetProps } from './components/OrderFormSheet'
 
-export { ConsolidatedOrdersSheet } from './components/ConsolidatedOrdersSheet'
-export type { ConsolidatedOrdersSheetProps } from './components/ConsolidatedOrdersSheet'
 
 export {
   computeQuestionStates,

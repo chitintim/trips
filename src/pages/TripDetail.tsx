@@ -13,7 +13,7 @@ import { useTrip, useParticipants, type ParticipantWithUser } from '../lib/queri
 import { CreateTripWizard } from '../features/dashboard'
 import { useTripRealtime } from '../lib/queries/useTripRealtime'
 import { useTodos } from '../lib/queries/useTodos'
-import { useSections, useVotes } from '../lib/queries/usePlanning'
+import { useSections } from '../lib/queries/usePlanning'
 import { useTimeline } from '../lib/queries/useTimeline'
 import { answerTodoList } from '../lib/todos/computeTodos'
 import { isTripFinished } from '../lib/answers/answers'
@@ -21,11 +21,12 @@ import { useExpenses } from '../lib/queries/useExpenses'
 import { useSettlements } from '../lib/queries/useSettlements'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../lib/queries/queryKeys'
-import { getTripStatusLabel, isConfirmationEnabled } from '../lib/tripStatus'
+import { getTripStatusLabel } from '../lib/tripStatus'
 import { effectiveTripStage } from '../lib/tripStage'
 import { daysUntil } from '../lib/dates'
 import {
   planDeepLink,
+  fallbackDeepLinkPlan,
   resolveOpenParam,
   stripDeepLinkParams,
   type DeepLinkContext,
@@ -37,7 +38,6 @@ import {
 import { todayTabConfig } from '../features/today'
 import { planTabConfig, AddToPlanSheet, AnswerFlow } from '../features/plan'
 import type { PlanFocus } from '../features/plan'
-import { inScopeHeadcount } from '../features/people/lib/inScopePeople'
 import { peopleTabConfig, StatusModal, TravelDetailsSheet } from '../features/people'
 import { OPEN_QUICK_CAPTURE_EVENT } from '../features/timeline'
 import { OrganizerConsole } from '../features/organizer'
@@ -87,6 +87,9 @@ const LEGACY_TAB_TO_SPACE: Record<string, SpaceId> = {
 /** DOM id Today puts on its "Your to-dos" card (read by the todos deep link and the Today button). */
 const YOUR_TODOS_ANCHOR_ID = 'your-todos'
 
+/** How long a pending ?open= waits for the trip's data before giving up with a toast. */
+const DEEP_LINK_DATA_TIMEOUT_MS = 8000
+
 const DEEP_LINK_UNKNOWN_TOAST = "That link didn't open anything."
 
 export function TripDetail() {
@@ -120,10 +123,9 @@ export function TripDetail() {
   })
   // One to-do engine for the whole screen: the header pill, the FAB and the
   // ?open= router all read this, so they can never disagree with Today.
-  const { todos, count: todoCount, hasOverdue: todosOverdue, isLoading: todosLoading, snapshot } = useTodos(tripId)
+  const { todos, count: todoCount, hasOverdue: todosOverdue, isLoading: todosLoading, isError: todosError, snapshot } = useTodos(tripId)
   const { showToast } = useToast()
   const { data: sectionsData } = useSections(tripId)
-  const { data: votesData } = useVotes(tripId)
   const { data: timelineData } = useTimeline(tripId)
   // ?open= target parsed from the URL, waiting for the trip's data to load
   // before it is routed (a stale-id check against half-loaded data would
@@ -153,6 +155,8 @@ export function TripDetail() {
   const [rsvpOpen, setRsvpOpen] = useState(false)
   const [travelDetailsOpen, setTravelDetailsOpen] = useState(false)
   const [addToPlanOpen, setAddToPlanOpen] = useState(false)
+  // Organiser setup "Ask the group your first question" opens the sheet in vote mode.
+  const [addToPlanAsQuestion, setAddToPlanAsQuestion] = useState(false)
   const [quickCaptureOpenCount, setQuickCaptureOpenCount] = useState(0)
   const [quickCaptureOpen, setQuickCaptureOpen] = useState(false)
   const overflowRef = useRef<HTMLDivElement>(null)
@@ -272,6 +276,9 @@ export function TripDetail() {
         setAddParticipantModalOpen(true)
         break
       case 'add-to-plan':
+        // Participants cannot save to the plan, so the link opens nothing for them.
+        if (!isOrganizer) break
+        setAddToPlanAsQuestion(sheet.asQuestion === true)
         setAddToPlanOpen(true)
         break
       case 'scroll-todos':
@@ -288,6 +295,23 @@ export function TripDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingOpen, deepLinkContext, todosLoading])
 
+  // The link must never fail silently: if the data errors or never finishes
+  // loading (the router above waits for ALL of it), land on Today with a toast.
+  useEffect(() => {
+    if (!pendingOpen) return
+    const fallback = () => {
+      setPendingOpen(null)
+      applyDeepLinkPlan(fallbackDeepLinkPlan(pendingOpen))
+    }
+    if (todosError) {
+      fallback()
+      return
+    }
+    const timer = setTimeout(fallback, DEEP_LINK_DATA_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingOpen, todosError])
+
   // "Your to-dos": scroll Today's card into view. Today renders it under
   // id="your-todos" (hook-up for slice 1C); until that anchor exists on the
   // page, fall back to the to-dos sheet so the pill always opens something.
@@ -299,6 +323,17 @@ export function TripDetail() {
       const el = document.getElementById(YOUR_TODOS_ANCHOR_ID)
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        // Brief highlight so the link gives feedback even when already in view or empty.
+        const prev = {
+          shadow: el.style.boxShadow,
+          transition: el.style.transition,
+        }
+        el.style.transition = 'box-shadow 300ms ease'
+        el.style.boxShadow = '0 0 0 3px rgba(59, 130, 246, 0.55)'
+        setTimeout(() => {
+          el.style.boxShadow = prev.shadow
+          setTimeout(() => (el.style.transition = prev.transition), 350)
+        }, 1500)
         return
       }
       // Today shows a skeleton until its data loads, so allow a few seconds.
@@ -397,7 +432,17 @@ export function TripDetail() {
   const fabForSpace = (): { icon: string; label: string; onClick: () => void } | null => {
     switch (activeSpace) {
       case 'plan':
-        return { icon: '➕', label: 'Add', onClick: () => setAddToPlanOpen(true) }
+        // Only organizers can save to the plan (RLS), so everyone else gets no Add entry (until Phase 4 rewrites it).
+        return !isOrganizer
+          ? null
+          : {
+              icon: '➕',
+              label: 'Add',
+              onClick: () => {
+                setAddToPlanAsQuestion(false)
+                setAddToPlanOpen(true)
+              },
+            }
       case 'money':
         return { icon: '📷', label: 'Scan receipt', onClick: openQuickCapture }
       case 'people':
@@ -665,9 +710,6 @@ export function TripDetail() {
           onClose={() => setAnswerSectionIds(null)}
           trip={trip}
           sections={(sectionsData ?? []).filter((sec) => answerSectionIds.includes(sec.id))}
-          votes={votesData ?? []}
-          participants={participants}
-          headcount={inScopeHeadcount(participants, isConfirmationEnabled(trip))}
         />
       )}
 
@@ -683,7 +725,7 @@ export function TripDetail() {
       )}
 
       {/* FAB targets */}
-      <AddToPlanSheet isOpen={addToPlanOpen} onClose={() => setAddToPlanOpen(false)} trip={trip} />
+      {isOrganizer && <AddToPlanSheet isOpen={addToPlanOpen} onClose={() => setAddToPlanOpen(false)} trip={trip} defaultIsVote={addToPlanAsQuestion} />}
 
       {myParticipant && (
         <StatusModal

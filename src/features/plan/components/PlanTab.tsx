@@ -5,18 +5,32 @@ import { inScopeHeadcount } from '../../people/lib/inScopePeople'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { useParticipants } from '../../../lib/queries/useTrip'
+import { useCreateSection } from '../../../lib/queries/usePlanning'
 import { lazyWithRetry } from '../../../lib/lazyWithRetry'
 import { usePlanItems } from '../lib/usePlanItems'
 import type { PlanItem } from '../lib/planItems'
 import { PlanBoard } from './PlanBoard'
-import { PlanDecideLens } from './PlanDecideLens'
+import { QuestionsView } from './QuestionsView'
+import { useQuestionList } from '../lib/useQuestionList'
+import { daysBannerText, defaultLens, type PlanLens } from '../lib/questionsModel'
 import { PlanItemSheet } from './PlanItemSheet'
 import { AddToPlanSheet } from './AddToPlanSheet'
 import { ScheduleItSheet } from './ScheduleItSheet'
 import { OrganizeSheet } from './OrganizeSheet'
 import type { Trip } from '../../../types'
 
-type Lens = 'list' | 'map' | 'decide'
+/**
+ * Starter questions offered to organizers on a completely empty plan
+ * (section machinery stays hidden: users see the questions).
+ */
+const STARTER_QUESTIONS: Array<{
+  title: string
+  section_type: 'accommodation' | 'transport' | 'activities'
+}> = [
+  { title: 'Where are we staying?', section_type: 'accommodation' },
+  { title: 'How are we getting there?', section_type: 'transport' },
+  { title: 'What do we want to do?', section_type: 'activities' },
+]
 
 // The Map lens pulls in react-leaflet/leaflet (~2.7MB). Now that the Plan
 // space is wired eagerly into TripDetail (v2.1 four-space nav), the lens is
@@ -40,16 +54,27 @@ export interface PlanTabProps {
 }
 
 /**
- * The unified Plan surface (UX_REDESIGN.md §2): one PlanItem[] composed by
- * usePlanItems, rendered through three lenses (List/Map/Decide) via a
- * sticky segmented control, with one detail sheet and one creation sheet
- * shared across all of them.
+ * The unified Plan surface: Questions · Days · Map via a sticky segmented
+ * control, with one detail sheet and one creation sheet shared across them.
+ * Questions is the opening lens while the viewer owes an answer, otherwise
+ * Days (chosen once per mount, so answering the last question does not yank
+ * the viewer off the list).
  */
 export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
   const { data: participants } = useParticipants(trip.id)
   const { items, isLoading, isError, refetch } = usePlanItems(trip.id)
 
-  const [lens, setLens] = useState<Lens>('list')
+  const questionList = useQuestionList(trip)
+  const createSection = useCreateSection(trip.id)
+  const [creatingStarters, setCreatingStarters] = useState(false)
+  const [lensChoice, setLensChoice] = useState<PlanLens | null>(null)
+  const questionsReady = !questionList.isLoading
+  // First settled data picks the opening lens; after that only the viewer (or a deep link) changes it.
+  const lens: PlanLens = lensChoice ?? (questionsReady ? defaultLens(questionList.groups) : 'days')
+  useEffect(() => {
+    if (lensChoice === null && questionsReady) setLensChoice(defaultLens(questionList.groups))
+  }, [lensChoice, questionsReady, questionList.groups])
+  const setLens = setLensChoice
   const [selectedItem, setSelectedItem] = useState<PlanItem | null>(null)
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [addSheetDefaultIsVote, setAddSheetDefaultIsVote] = useState(false)
@@ -57,18 +82,18 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
   const [organizeOpen, setOrganizeOpen] = useState(false)
 
   // Deep link -> item: open its sheet once the plan has loaded. A question
-  // target needs the List lens, where its card lives (PlanBoard highlights it).
+  // target needs the Questions lens, where its card lives (QuestionsView highlights it).
   const [handledNonce, setHandledNonce] = useState(0)
   useEffect(() => {
     if (!focus || isLoading || focus.nonce === handledNonce) return
     setHandledNonce(focus.nonce)
     if (focus.kind === 'question') {
-      setLens('list')
+      setLens('questions')
       return
     }
     const match = items.find((i) => i.id === focus.id || i.optionId === focus.id || i.eventId === focus.id)
     if (match) setSelectedItem(match)
-  }, [focus, isLoading, items, handledNonce])
+  }, [focus, isLoading, items, handledNonce, setLens])
 
   const openAddSheet = (defaultIsVote = false) => {
     setAddSheetDefaultIsVote(defaultIsVote)
@@ -78,12 +103,36 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
   const { canManageTrip: isOrganizer } = useTripPermissions(trip)
   const headcount = useMemo(() => inScopeHeadcount(participants || [], isConfirmationEnabled(trip)), [participants, trip])
 
+  const handleCreateStarterQuestions = async () => {
+    setCreatingStarters(true)
+    try {
+      for (const [i, q] of STARTER_QUESTIONS.entries()) {
+        await createSection.mutateAsync({
+          title: q.title,
+          section_type: q.section_type,
+          status: 'in_progress',
+          order_index: i,
+        })
+      }
+    } finally {
+      setCreatingStarters(false)
+    }
+  }
+
+  // "Put it on the plan" from a question's Manage sheet: find the decided option's plan item and open the scheduler.
+  const handleScheduleOption = (_sectionId: string, optionId: string) => {
+    const match = items.find((i) => i.optionId === optionId)
+    if (!match) return
+    setSelectedItem(null)
+    setScheduleItem(match)
+  }
+
   const handleNavigateToExpense = (expenseId: string) => {
     setSelectedItem(null)
     onNavigate?.('money', { expenseId })
   }
 
-  if (isLoading) {
+  if (isLoading || (lensChoice === null && !questionsReady)) {
     return (
       <div className="p-4 space-y-3">
         <Skeleton variant="card" height={48} />
@@ -110,6 +159,9 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
     )
   }
 
+  const needsAnswer = questionList.groups.needsAnswerCount
+  const banner = daysBannerText(needsAnswer)
+
   return (
     <div className="relative space-y-4 p-4 max-w-3xl mx-auto">
       <div className="sticky top-0 z-30 -mx-4 px-4 pb-2 bg-[var(--surface-page)]/95 backdrop-blur-sm flex items-center justify-between gap-3">
@@ -117,41 +169,49 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
           value={lens}
           onChange={(v) => setLens(v)}
           options={[
-            { value: 'list', label: 'List', icon: '📋' },
-            { value: 'map', label: 'Map', icon: '🗺️' },
-            { value: 'decide', label: 'Decide', icon: '🗳️' },
+            { value: 'questions', label: 'Questions', badge: needsAnswer },
+            { value: 'days', label: 'Days' },
+            { value: 'map', label: 'Map' },
           ]}
         />
-        <div className="flex items-center gap-2">
-          {isOrganizer && (
-            <Button size="sm" variant="secondary" onClick={() => setOrganizeOpen(true)}>
-              ✨ Organize
-            </Button>
-          )}
-          <Button size="sm" onClick={() => openAddSheet(false)}>
-            + Add
+        {isOrganizer && (
+          <Button size="sm" variant="secondary" onClick={() => setOrganizeOpen(true)}>
+            ✨ Organize
           </Button>
-        </div>
+        )}
       </div>
 
-      {lens === 'list' && (
-        <PlanBoard
+      {lens === 'questions' && (
+        <QuestionsView
           trip={trip}
-          items={items}
-          isOrganizer={isOrganizer}
-          onOpenItem={setSelectedItem}
-          onScheduleIt={setScheduleItem}
-          onNewQuestion={() => openAddSheet(true)}
+          list={questionList}
+          canManage={isOrganizer}
+          onSchedule={handleScheduleOption}
           highlight={focus?.kind === 'question' ? { id: focus.id, nonce: focus.nonce } : null}
+          onAsk={() => openAddSheet(true)}
+          onCreateStarters={handleCreateStarterQuestions}
+          creatingStarters={creatingStarters}
+          starterTitles={STARTER_QUESTIONS.map((q) => q.title)}
         />
+      )}
+      {lens === 'days' && (
+        <>
+          {banner && (
+            <button
+              type="button"
+              onClick={() => setLens('questions')}
+              className="w-full text-left rounded-[var(--radius-lg)] border border-accent-300 bg-accent-50 dark:bg-accent-950/30 px-3 py-2 text-sm font-medium text-accent-700 dark:text-accent-400"
+            >
+              {banner}
+            </button>
+          )}
+          <PlanBoard trip={trip} items={items} isOrganizer={isOrganizer} onOpenItem={setSelectedItem} />
+        </>
       )}
       {lens === 'map' && (
         <Suspense fallback={<Skeleton variant="card" height={420} />}>
           <LazyPlanMapLens trip={trip} items={items} onOpenItem={setSelectedItem} />
         </Suspense>
-      )}
-      {lens === 'decide' && (
-        <PlanDecideLens trip={trip} items={items} isOrganizer={isOrganizer} onScheduleIt={setScheduleItem} />
       )}
 
       <PlanItemSheet
@@ -162,18 +222,14 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
         isOrganizer={isOrganizer}
         headcount={headcount}
         onNavigateToExpense={onNavigate ? handleNavigateToExpense : undefined}
+        onScheduleOption={handleScheduleOption}
         onScheduleIt={(item) => {
           setSelectedItem(null)
           setScheduleItem(item)
         }}
       />
 
-      <AddToPlanSheet
-        isOpen={addSheetOpen}
-        onClose={() => setAddSheetOpen(false)}
-        trip={trip}
-        defaultIsVote={addSheetDefaultIsVote}
-      />
+      {isOrganizer && <AddToPlanSheet isOpen={addSheetOpen} onClose={() => setAddSheetOpen(false)} trip={trip} defaultIsVote={addSheetDefaultIsVote} />}
 
       <ScheduleItSheet isOpen={!!scheduleItem} onClose={() => setScheduleItem(null)} trip={trip} item={scheduleItem} />
 

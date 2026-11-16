@@ -1,33 +1,21 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
-import { Button, Badge, Deadline, EmptyState, Modal, useToast, SelectionAvatars } from '../../../components/ui'
+import { useMemo, useState } from 'react'
+import { EmptyState, useToast } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
-import { useSections, useCreateSection, useVotes } from '../../../lib/queries/usePlanning'
-import type { OptionVoteWithUser } from '../../../lib/queries/usePlanning'
+import { useSections } from '../../../lib/queries/usePlanning'
 import { useAuth } from '../../../hooks/useAuth'
-import { useToggleVote } from '../../../lib/queries/usePlanning'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useTimeline, useMaterializeMilestone } from '../../../lib/queries/useTimeline'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
-import { MatrixView } from '../../decisions/components/MatrixView'
-import { SectionEditorSheet } from '../../decisions/components/SectionEditorSheet'
-import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcomePanel'
-import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
-import { getDecisionShape } from '../../decisions/lib/decisionShapes'
-import { votingInstruction, replaceableSiblingVoteIds, type VotingMethod } from '../../decisions/lib/voting'
-import { resolveDecidedOptionId } from '../../decisions/lib/closeDecision'
-import { canReopenDecision, canVoteOnOption, describeVoteError } from '../../decisions/lib/resolveDecision'
-import { computeQuestionStates } from '../lib/responseState'
 import { PlanItemCard } from './PlanItemCard'
 import { ConsolidatedTravelRow } from './ConsolidatedTravelRow'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
 import { CompanionSuggestionCard } from './CompanionSuggestionCard'
-import { OrderFormSheet } from './OrderFormSheet'
-import { ConsolidatedOrdersSheet } from './ConsolidatedOrdersSheet'
 import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
-import { groupPlanItemsByDate, groupUndatedBySection } from '../lib/planItems'
+import { groupPlanItemsByDate } from '../lib/planItems'
+import { selectDaysItems } from '../lib/questionsModel'
 import {
   groupTravelForDay,
   mergeDayEntries,
@@ -76,57 +64,32 @@ function scrollToDay(date: string) {
 export interface PlanBoardProps {
   trip: Trip
   items: PlanItem[]
+  /** Gates organiser-only chrome on this lens (making a derived milestone a real event). */
   isOrganizer?: boolean
   onOpenItem: (item: PlanItem) => void
-  onScheduleIt: (item: PlanItem) => void
-  /** "New question" affordance in the Open questions tray (organizer only, UX_REDESIGN.md Part 4). */
-  onNewQuestion?: () => void
-  /** Question card to scroll to and briefly highlight (`?open=question:<id>` on a decided question). */
-  highlight?: { id: string; nonce: number } | null
 }
 
 /**
- * Starter questions offered to organizers on a completely empty plan
- * (UX_REDESIGN.md Part 2 "guided setup" + Part 4 "questions, not sections":
- * section machinery stays hidden — users see the questions).
- */
-const STARTER_QUESTIONS: Array<{ title: string; section_type: 'accommodation' | 'transport' | 'activities' }> = [
-  { title: 'Where are we staying?', section_type: 'accommodation' },
-  { title: 'How are we getting there?', section_type: 'transport' },
-  { title: 'What do we want to do?', section_type: 'activities' },
-]
-
-/**
- * The List lens (default view, plan §2): a day-by-day board from trip
- * start..end with sticky day headers, plus the Undecided tray pinned above
- * day 1 for anything without a date yet, grouped by its planning section.
+ * The Days lens (proposal 5.1): what is happening, day by day from trip
+ * start..end with sticky day headers. Questions (open or decided) live in the
+ * Questions lens, not here; decided-but-unscheduled items sit in a small
+ * "Not scheduled yet" group. There is no vote-casting on this lens.
  *
  * Layering rule (UX_REDESIGN.md "Systemic layering"): sticky day headers
  * use z-20 (well under the z-30 ceiling for in-content sticky elements)
  * and live inside this component's own scroll container, never escaping
  * into the app chrome's stacking context.
  */
-export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onScheduleIt, onNewQuestion, highlight = null }: PlanBoardProps) {
+export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: PlanBoardProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const { data: places } = usePlaces(trip.id)
   const { data: sections } = useSections(trip.id)
   const { data: bookings } = useBookings(trip.id)
   const { data: events } = useTimeline(trip.id)
-  const { data: votes } = useVotes(trip.id)
   const { data: participants } = useParticipants(trip.id)
-  const toggleVote = useToggleVote(trip.id)
-  const createSection = useCreateSection(trip.id)
   const materializeMilestone = useMaterializeMilestone(trip.id)
   const logActivity = useTripActivityLog(trip.id)
-  const [votingId, setVotingId] = useState<string | null>(null)
-  const [creatingStarters, setCreatingStarters] = useState(false)
-  const [matrixSectionId, setMatrixSectionId] = useState<string | null>(null)
-  const [sectionSettingsId, setSectionSettingsId] = useState<string | null>(null)
-  const [reopenSectionId, setReopenSectionId] = useState<string | null>(null)
-  const [orderFormSectionId, setOrderFormSectionId] = useState<string | null>(null)
-  const [consolidatedOrdersSectionId, setConsolidatedOrdersSectionId] = useState<string | null>(null)
-  const [expandedPicksSectionIds, setExpandedPicksSectionIds] = useState<Set<string>>(() => new Set())
   // A Set (not a single string) so two different rows materializing at once
   // each keep their own spinner/disabled state instead of the second click
   // clobbering the first row's in-flight indicator.
@@ -136,98 +99,26 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const [dismissedSuggestionKeys, setDismissedSuggestionKeys] = useState<Set<string>>(() => loadDismissedKeys(trip.id))
   const [acceptingSuggestion, setAcceptingSuggestion] = useState<CompanionSuggestion | null>(null)
 
-  const handleCreateStarterQuestions = async () => {
-    setCreatingStarters(true)
-    try {
-      for (const [i, q] of STARTER_QUESTIONS.entries()) {
-        await createSection.mutateAsync({
-          title: q.title,
-          section_type: q.section_type,
-          status: 'in_progress',
-          allow_multiple_selections: q.section_type === 'activities',
-          order_index: i,
-        })
-      }
-    } finally {
-      setCreatingStarters(false)
-    }
-  }
-
   const placesById = useMemo(() => new Map((places || []).map((p) => [p.id, p])), [places])
 
-  // option_id -> its voters (with user embedded), for the "voted for this"
-  // avatar row on each proposal card — computed once here rather than
-  // filtering the whole trip's votes on every PlanItemCard render.
-  const votesByOptionId = useMemo(() => {
-    const map = new Map<string, OptionVoteWithUser[]>()
-    for (const v of votes || []) {
-      const arr = map.get(v.option_id)
-      if (arr) arr.push(v)
-      else map.set(v.option_id, [v])
-    }
-    return map
-  }, [votes])
+  // What is happening: events, booked items and decided winners. Options of
+  // open questions never show here.
+  const days = useMemo(() => {
+    const decidedIds = new Set((sections || []).filter((s) => s.status === 'completed').map((s) => s.id))
+    return selectDaysItems(items, decidedIds)
+  }, [items, sections])
+  const shown = days.scheduled
 
   const dayDates = useMemo(() => {
-    const eventDates = items.filter((i) => i.date).map((i) => i.date as string)
+    const eventDates = shown.filter((i) => i.date).map((i) => i.date as string)
     if (eventDates.length === 0) return generateDateRange(trip.start_date, trip.end_date)
     const minDate = [trip.start_date, ...eventDates].sort()[0]
     const maxDate = [trip.end_date, ...eventDates].sort().pop()!
     return generateDateRange(minDate, maxDate)
-  }, [items, trip.start_date, trip.end_date])
+  }, [shown, trip.start_date, trip.end_date])
 
-  // Chips and "N of M answered" come from the one shared answers helper
-  // (selections count, finished trips never say "Needs your answer").
-  const questionStates = useMemo(
-    () =>
-      computeQuestionStates({
-        sections: sections || [],
-        votes: votes || [],
-        userId: user?.id ?? null,
-        trip,
-        participants: participants || [],
-      }),
-    [sections, votes, participants, user?.id, trip]
-  )
 
-  // Scroll to and flash the question card named by a deep link.
-  const highlightId = highlight?.id
-  const highlightNonce = highlight?.nonce
-  const sectionsReady = !!sections
-  useEffect(() => {
-    if (!highlightId || !sectionsReady) return
-    let off: ReturnType<typeof setTimeout> | undefined
-    let el: HTMLElement | null = null
-    const ring = ['ring-2', 'ring-accent-500']
-    const on = setTimeout(() => {
-      el = document.getElementById(`question-${highlightId}`)
-      if (!el) return
-      el.scrollIntoView({ block: 'center', behavior: 'smooth' })
-      el.classList.add(...ring)
-      off = setTimeout(() => el?.classList.remove(...ring), 2200)
-    }, 200)
-    return () => {
-      clearTimeout(on)
-      clearTimeout(off)
-      el?.classList.remove(...ring)
-    }
-  }, [highlightId, highlightNonce, sectionsReady])
-
-  const byDate = useMemo(() => groupPlanItemsByDate(items), [items])
-  const undatedBySection = useMemo(() => groupUndatedBySection(items), [items])
-  const hasUndated = undatedBySection.size > 0
-  // The tray holds every undated question, but a question whose vote has been
-  // closed (section.status 'completed') is DECIDED, not open -- it keeps its
-  // card (outcome + Reopen) under its own "Decided" heading so the "Open
-  // questions (N)" count only ever counts questions still awaiting an answer.
-  const { trayGroups, openCount, decidedCount, firstDecidedIndex } = useMemo(() => {
-    const decided = (sectionId: string | null) => !!sectionId && (sections || []).find((s) => s.id === sectionId)?.status === 'completed'
-    const entries = Array.from(undatedBySection.entries())
-    const open = entries.filter(([id]) => !decided(id))
-    const closed = entries.filter(([id]) => decided(id))
-    return { trayGroups: [...open, ...closed], openCount: open.length, decidedCount: closed.length, firstDecidedIndex: open.length }
-  }, [undatedBySection, sections])
-
+  const byDate = useMemo(() => groupPlanItemsByDate(shown), [shown])
   // Same-flight/same-minute travel consolidation (travelGrouping.ts):
   // display-level only — the per-person DB rows are untouched, each day
   // just swaps N near-identical "X arrives" cards for one grouped row.
@@ -275,7 +166,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     return [...transferSuggestions, ...accommodationSuggestions].filter((s) => !dismissedSuggestionKeys.has(s.key))
   }, [bookings, items, flightTimesByBookingId, materializedKeys, trip.end_date, dismissedSuggestionKeys])
 
-  const timeClashFlags = useMemo(() => detectTimeClashes(items), [items])
+  const timeClashFlags = useMemo(() => detectTimeClashes(shown), [shown])
   const clashedIds = useMemo(() => clashedItemIds(timeClashFlags), [timeClashFlags])
 
   const handleDismissSuggestion = (suggestion: CompanionSuggestion) => {
@@ -324,19 +215,6 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     }
   }
 
-  // "Who picked what" expansion (UX_REDESIGN.md Part 5 + the legacy-data
-  // migration): personal-order questions collapse to one summary line in
-  // the tray; this reveals a per-option avatar stack of who's committed —
-  // the same mechanism the new order-form questions use, auto-presented for
-  // pre-v3 sections too since they're now decision_shape 'personal'.
-  const togglePicksExpanded = (sectionId: string) => {
-    setExpandedPicksSectionIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(sectionId)) next.delete(sectionId)
-      else next.add(sectionId)
-      return next
-    })
-  }
 
   const toggleWeekCollapse = (index: number) => {
     setCollapsedWeeks((prev) => {
@@ -362,311 +240,39 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
     })
   }
 
-  // The board's inline vote button only supports casting a fresh vote
-  // (one tap = vote/approve). Un-voting requires the vote row's id, which
-  // isn't loaded at board scope — that's a deliberate "do it in the detail
-  // sheet" affordance, so a second tap on an already-voted card just opens
-  // the item sheet instead of silently no-op'ing.
-  const handleVote = (item: PlanItem) => {
-    if (!user || !item.optionId || !item.vote) return
-    const optionSection = (sections || []).find((s) => s.id === item.sectionId)
-    const option = optionSection?.options.find((o) => o.id === item.optionId)
-    const gate = canVoteOnOption(optionSection, option)
-    if (!gate.ok) {
-      if (gate.reason) showToast({ type: 'error', message: gate.reason })
-      return
-    }
-    if (item.vote.myVote.voted) {
-      onOpenItem(item)
-      return
-    }
-    setVotingId(item.id)
-    // Radio semantics for single-choice polls: casting on this option
-    // replaces any vote I already have on a sibling option in the section
-    // (see useToggleVote's replaceVoteIds).
-    const replaceVoteIds = optionSection
-      ? replaceableSiblingVoteIds(
-          optionSection.options.map((o) => o.id),
-          votes || [],
-          user.id,
-          item.optionId,
-          (optionSection.voting_method as VotingMethod) || 'single'
-        )
-      : []
-    toggleVote.mutate(
-      { optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title },
-      {
-        onSettled: () => setVotingId(null),
-        onError: (err) => showToast({ type: 'error', message: 'Could not save your answer', description: describeVoteError(err) }),
-      }
-    )
-  }
 
   // Milestones (arrival/departure/etc.) are system rows, not "plan items" —
   // an otherwise-empty plan still shows them rather than falling through to
   // the empty state, since they're always meaningful (every trip has an
   // arrival day).
-  if (items.length === 0 && milestones.length === 0) {
-    const planCompletelyEmpty = sections !== undefined && (sections || []).length === 0
-    if (isOrganizer && planCompletelyEmpty) {
-      return (
-        <EmptyState
-          icon={<EmptyPlan className="w-32 h-24 text-accent-500" />}
-          title="Start with the big questions"
-          description="Most trips begin by answering three things — set them up as questions in one tap, or add your own with the + button."
-          action={
-            <div className="space-y-2 text-left">
-              <ul className="text-sm text-[var(--text-secondary)] space-y-1">
-                {STARTER_QUESTIONS.map((q) => (
-                  <li key={q.section_type}>• {q.title}</li>
-                ))}
-              </ul>
-              <Button onClick={handleCreateStarterQuestions} isLoading={creatingStarters} fullWidth>
-                Set up these questions
-              </Button>
-            </div>
-          }
-        />
-      )
-    }
+  if (shown.length === 0 && days.notScheduled.length === 0 && milestones.length === 0) {
     return (
       <EmptyState
         icon={<EmptyPlan className="w-32 h-24 text-[var(--text-muted)]" />}
-        title="Nothing on the plan yet"
-        description="Add a question, an option, or a dated event with the + button to get started."
+        title="Nothing planned."
+        description="Events and decided plans show up here, day by day. Open questions are in the Questions tab."
       />
     )
   }
 
   return (
     <div className="relative space-y-4">
-      {hasUndated && (
-        /* Readability pass (principal feedback): the tray used to be one
-           accent-tinted block with every question inside it — two questions
-           read as one crowded pile on the trip color. Now the accent stays on
-           the section HEADER only (with an explicit count), and each question
-           renders as its own raised card on the neutral surface below. */
-        <section aria-label={openCount > 0 ? `Open questions (${openCount})` : `Decided (${decidedCount})`} className="space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            {openCount > 0 ? (
-              <h3 className="text-sm font-semibold text-accent-700 dark:text-accent-400">❔ Open questions ({openCount})</h3>
-            ) : (
-              <h3 className="text-sm font-semibold text-[var(--text-primary)]">🏁 Decided ({decidedCount})</h3>
-            )}
-            {isOrganizer && onNewQuestion && (
-              <Button variant="ghost" size="sm" onClick={onNewQuestion}>
-                + New question
-              </Button>
-            )}
-          </div>
-          {trayGroups.map(([sectionId, sectionItems], groupIndex) => {
-            const section = sectionId ? (sections || []).find((s) => s.id === sectionId) : undefined
-            const isMatrix = sectionItems.some((i) => i.isMatrixSection)
-            const isPersonalOrder = section ? getDecisionShape(section.metadata) === 'personal' : false
-            const questionState = section ? questionStates.get(section.id) ?? null : null
-            const optionsWithPicks = section ? section.options.filter((o) => o.selections.length > 0) : []
-            const picksExpanded = section ? expandedPicksSectionIds.has(section.id) : false
-            // Questions, not sections (UX_REDESIGN.md Part 4 "Decisions:
-            // questions, not sections"): the section's TITLE renders as the
-            // question itself ("Where are we staying?"), with a plain
-            // "N options · closes <date>" meta line -- no section_type
-            // badge/chrome, no uppercase label treatment. Sections remain
-            // the storage grouping only.
-            return (
-              <Fragment key={sectionId ?? 'none'}>
-              {/* Decided questions follow the open ones under their own heading
-                  (the heading above already says "Decided" when none are open). */}
-              {openCount > 0 && groupIndex === firstDecidedIndex && (
-                <h3 className="pt-1 text-sm font-semibold text-[var(--text-primary)]">🏁 Decided ({decidedCount})</h3>
-              )}
-              {/* One raised card per question: neutral surface + real border +
-                 shadow so adjacent questions can never read as one block. */}
-              <div
-                id={sectionId ? `question-${sectionId}` : undefined}
-                className="min-w-0 scroll-mt-20 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--surface-raised)] shadow-[var(--shadow-sm)] p-3.5 space-y-2.5 transition-shadow"
-              >
-                {section && (
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className="min-w-0 break-words text-sm font-semibold leading-snug text-[var(--text-primary)]">
-                          {section.title}
-                        </h4>
-                        {questionState?.label && (
-                          <Badge variant={questionState.tone ?? 'neutral'} size="sm">
-                            {questionState.label}
-                          </Badge>
-                        )}
-                      </div>
-                      <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                        <p className="text-xs leading-relaxed text-[var(--text-muted)]">
-                          {isPersonalOrder
-                            ? questionState?.countLabel
-                            : section.status === 'completed'
-                              ? `${section.options.length} option${section.options.length === 1 ? '' : 's'}`
-                              : /* Choose-one vs choose-many + answer progress made
-                                   explicit on the question itself. */
-                                `${section.options.length} option${section.options.length === 1 ? '' : 's'} · ${votingInstruction(
-                                  (section.voting_method as VotingMethod) || 'single'
-                                )} · ${questionState?.countLabel ?? ''}`}
-                        </p>
-                        {section.vote_deadline && section.status !== 'completed' && (
-                          <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {isMatrix && (
-                        <Button variant="ghost" size="sm" onClick={() => setMatrixSectionId(section.id)}>
-                          Grid view
-                        </Button>
-                      )}
-                      {/* Question settings (organizer-only, mirrors delete's
-                          isOrganizer gate): wires the previously-unreachable
-                          SectionEditorSheet (voting method/deadline/quorum/
-                          decision shape) into the live tray. */}
-                      {isOrganizer && canReopenDecision(section) && !isPersonalOrder && (
-                        <Button variant="ghost" size="sm" onClick={() => setReopenSectionId(section.id)}>
-                          Reopen
-                        </Button>
-                      )}
-                      {isOrganizer && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setSectionSettingsId(section.id)}
-                          aria-label={`Question settings for ${section.title}`}
-                          title="Question settings"
-                        >
-                          ⚙️
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {isPersonalOrder && section ? (
-                  // Personal-order (shape 2) questions collapse to one line —
-                  // no per-catalog-item cards here (UX_REDESIGN.md Part 5's
-                  // "Plan tray question rows collapse to one line each");
-                  // full editing happens in the order form itself. "Who
-                  // picked what" is a lightweight read-only expansion right
-                  // here, reusing SelectionAvatars — this is what makes
-                  // legacy multi-select sections (ski rental etc.) read like
-                  // the new order-form questions with zero migration beyond
-                  // the decision_shape stamp.
-                  <div className="space-y-2">
-                    <div className="flex gap-2 flex-wrap">
-                      <Button variant="secondary" size="sm" onClick={() => setOrderFormSectionId(section.id)}>
-                        {questionState?.state === 'answered' ? 'Edit your answer' : 'Answer'}
-                      </Button>
-                      {isOrganizer && (
-                        <Button variant="outline" size="sm" onClick={() => setConsolidatedOrdersSectionId(section.id)}>
-                          View answers
-                        </Button>
-                      )}
-                      {optionsWithPicks.length > 0 && (
-                        <Button variant="ghost" size="sm" onClick={() => togglePicksExpanded(section.id)}>
-                          {picksExpanded ? 'Hide who answered ▲' : 'Who answered ▾'}
-                        </Button>
-                      )}
-                    </div>
-                    {picksExpanded && (
-                      /* Sunken (not raised) now that the question card itself
-                         is the raised surface — keeps the expansion visually
-                         nested inside its own card. */
-                      <div className="space-y-1.5 rounded-[var(--radius-md)] border border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2.5">
-                        {optionsWithPicks.map((option) => (
-                          <div key={option.id} className="flex items-center justify-between gap-2">
-                            <span className="min-w-0 truncate text-xs text-[var(--text-secondary)]">
-                              {option.title}
-                              {option.status === 'booked' && (
-                                <Badge variant="success" size="sm" className="ml-1.5">
-                                  🧾 Booked
-                                </Badge>
-                              )}
-                            </span>
-                            <SelectionAvatars
-                              selections={option.selections.map((s) => ({
-                                id: s.id,
-                                selected_at: s.selected_at ?? undefined,
-                                user: s.user
-                                  ? {
-                                      full_name: s.user.full_name ?? undefined,
-                                      email: s.user.email ?? undefined,
-                                      avatar_url: s.user.avatar_url ?? undefined,
-                                      avatar_data: (s.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
-                                    }
-                                  : undefined,
-                              }))}
-                              maxAvatars={4}
-                              size="sm"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  (() => {
-                    // A closed question stops presenting the full ballot: only
-                    // the decided option's card remains (no vote affordance),
-                    // with the outcome banner underneath carrying the
-                    // consequences (schedule/follow-up).
-                    const isClosedVote = !!section && section.status === 'completed'
-                    const decidedId = isClosedVote && section ? resolveDecidedOptionId(section, votes || []) : null
-                    const visibleItems = isClosedVote ? sectionItems.filter((i) => i.optionId === decidedId) : sectionItems
-                    return (
-                      <div className="space-y-2">
-                        {visibleItems.map((item) => (
-                          <PlanItemCard
-                            key={item.id}
-                            item={item}
-                            place={item.placeId ? placesById.get(item.placeId) : undefined}
-                            onOpen={onOpenItem}
-                            onVote={!isClosedVote && item.vote ? handleVote : undefined}
-                            isVoting={votingId === item.id}
-                            myVoted={item.vote?.myVote.voted}
-                            voters={item.optionId ? votesByOptionId.get(item.optionId) : undefined}
-                            compact
-                          />
-                        ))}
-                      </div>
-                    )
-                  })()
-                )}
-                {/* Options → outcome separation (voting-clarity ask): the
-                    choices above, then one clearly-delineated box for "what
-                    happens once this is decided". Replaces the old bare
-                    "Schedule ..." button, which also overflowed its container
-                    on 375px screens for long option titles. */}
-                {section ? (
-                  !isPersonalOrder && (
-                    <DecisionOutcomePanel
-                      tripId={trip.id}
-                      section={section}
-                      votes={votes || []}
-                      participants={participants || []}
-                      isOrganizer={isOrganizer}
-                      events={events || []}
-                      onScheduleOption={(optionId) => {
-                        const target = items.find((i) => i.optionId === optionId)
-                        if (target) onScheduleIt(target)
-                      }}
-                    />
-                  )
-                ) : (
-                  /* Organizer-gated to match RLS: creating the timeline event
-                     behind "Schedule it" is organizer-only server-side
-                     (trip_timeline_events INSERT policy), so non-organizers
-                     must not see a button that would only error. */
-                  isOrganizer && <ScheduleWinnerAffordance items={sectionItems} onScheduleIt={onScheduleIt} />
-                )}
-              </div>
-              </Fragment>
-            )
-          })}
+      {days.notScheduled.length > 0 && (
+        <section aria-label={`Not scheduled yet (${days.notScheduled.length})`} className="space-y-2">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">Not scheduled yet ({days.notScheduled.length})</h3>
+          {days.notScheduled.map((item) => (
+            <PlanItemCard
+              trip={trip}
+              key={item.id}
+              item={item}
+              place={item.placeId ? placesById.get(item.placeId) : undefined}
+              onOpen={onOpenItem}
+              compact
+            />
+          ))}
         </section>
       )}
+
 
       {/* Span banners (multi-day accommodation etc.) render ONCE, above the
           day list, rather than being repeated into every covered day
@@ -734,13 +340,10 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                   ) : (
                     <div key={entry.item.id} className="stagger-item">
                       <PlanItemCard
+                        trip={trip}
                         item={entry.item}
                         place={entry.item.placeId ? placesById.get(entry.item.placeId) : undefined}
                         onOpen={onOpenItem}
-                        onVote={entry.item.vote ? handleVote : undefined}
-                        isVoting={votingId === entry.item.id}
-                        myVoted={entry.item.vote?.myVote.voted}
-                        voters={entry.item.optionId ? votesByOptionId.get(entry.item.optionId) : undefined}
                         outsideTripDates={isOutsideTripDates(entry.item, trip.start_date, trip.end_date)}
                         timeClash={clashedIds.has(entry.item.id)}
                         dense={dense && isDensifiableStage(entry.item.stage)}
@@ -768,6 +371,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                   const globalIndex = i * 7 + j
                   return (
                     <PlanDaySection
+                      trip={trip}
                       key={date}
                       date={date}
                       dayItems={byDate.get(date) || []}
@@ -777,9 +381,6 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                       nextDate={dayDates[globalIndex + 1]}
                       placesById={placesById}
                       onOpenItem={onOpenItem}
-                      onVote={handleVote}
-                      votingId={votingId}
-                      votesByOptionId={votesByOptionId}
                       isLast={globalIndex === dayDates.length - 1}
                       tripStartDate={trip.start_date}
                       tripEndDate={trip.end_date}
@@ -803,6 +404,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
         <div className="space-y-3">
           {dayDates.map((date, i) => (
             <PlanDaySection
+              trip={trip}
               key={date}
               date={date}
               dayItems={byDate.get(date) || []}
@@ -812,9 +414,6 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
               nextDate={dayDates[i + 1]}
               placesById={placesById}
               onOpenItem={onOpenItem}
-              onVote={handleVote}
-              votingId={votingId}
-              votesByOptionId={votesByOptionId}
               isLast={i === dayDates.length - 1}
               tripStartDate={trip.start_date}
               tripEndDate={trip.end_date}
@@ -832,77 +431,6 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
         </div>
       )}
 
-      {/* Matrix/grid view, portal-rendered via the shared Modal (layering
-          rule: overlays never nest inside content, always use the token
-          z-scale via Modal rather than an ad-hoc fixed/z-* div). */}
-      <Modal isOpen={!!matrixSectionId} onClose={() => setMatrixSectionId(null)} size="lg" title="Grid view">
-        {matrixSectionId && (
-          <MatrixView
-            tripId={trip.id}
-            options={(sections || []).find((s) => s.id === matrixSectionId)?.options || []}
-            currency={trip.base_currency}
-          />
-        )}
-      </Modal>
-
-      {/* Question settings (UX_REDESIGN.md Part 5 / the vote-shape editing gap):
-          wires the previously-unreachable SectionEditorSheet in with the
-          real section record — voting method, deadline, quorum, decision
-          shape are all editable from here now. */}
-      <SectionEditorSheet
-        isOpen={!!sectionSettingsId}
-        onClose={() => setSectionSettingsId(null)}
-        tripId={trip.id}
-        section={(sections || []).find((s) => s.id === sectionSettingsId) ?? null}
-      />
-
-      {(() => {
-        const reopenSection = (sections || []).find((s) => s.id === reopenSectionId) ?? null
-        const decidedId = reopenSection ? resolveDecidedOptionId(reopenSection, votes || []) : null
-        return (
-          <ReopenDecisionDialog
-            isOpen={!!reopenSection}
-            onClose={() => setReopenSectionId(null)}
-            tripId={trip.id}
-            section={reopenSection}
-            decidedTitle={reopenSection?.options.find((o) => o.id === decidedId)?.title ?? null}
-          />
-        )
-      })()}
-
-      {/* Personal order form (UX_REDESIGN.md Part 5, shape 2): the "Fill in
-          your order"/"Edit your order" affordance above opens this instead
-          of a vote UI — catalog items, dates, quantities, live total. */}
-      {orderFormSectionId &&
-        (() => {
-          const orderSection = (sections || []).find((s) => s.id === orderFormSectionId)
-          if (!orderSection) return null
-          return (
-            <OrderFormSheet
-              isOpen
-              onClose={() => setOrderFormSectionId(null)}
-              trip={trip}
-              section={orderSection}
-              participants={participants || []}
-            />
-          )
-        })()}
-
-      {/* Organizer's consolidated orders matrix + "Copy order sheet". */}
-      {consolidatedOrdersSectionId &&
-        (() => {
-          const orderSection = (sections || []).find((s) => s.id === consolidatedOrdersSectionId)
-          if (!orderSection) return null
-          return (
-            <ConsolidatedOrdersSheet
-              isOpen
-              onClose={() => setConsolidatedOrdersSectionId(null)}
-              section={orderSection}
-              participants={participants || []}
-              fallbackCurrency={trip.base_currency}
-            />
-          )
-        })()}
 
       {/* Companion suggestion "accept" (UX_REDESIGN.md Part 3 "Ambient AI"
           #3): opens the same create-event sheet everything else uses,
@@ -937,20 +465,9 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   )
 }
 
-/** "Schedule it" affordance for undated items that are already decided/won but not yet on the timeline. */
-function ScheduleWinnerAffordance({ items, onScheduleIt }: { items: PlanItem[]; onScheduleIt: (item: PlanItem) => void }) {
-  const schedulable = items.find((i) => i.isUnscheduledWinner)
-  if (!schedulable) return null
-  return (
-    // max-w-full on the button + truncate on the label: long item titles
-    // used to push this button wider than its container on mobile.
-    <Button variant="secondary" size="sm" onClick={() => onScheduleIt(schedulable)} className="max-w-full">
-      <span className="min-w-0 truncate">📅 Schedule "{schedulable.title}"</span>
-    </Button>
-  )
-}
 
 interface PlanDaySectionProps {
+  trip: Trip
   date: string
   dayItems: PlanItem[]
   /** Date-derived system rows anchored to this exact day (span banners are rendered separately, once, by the caller). */
@@ -960,10 +477,6 @@ interface PlanDaySectionProps {
   nextDate?: string
   placesById: Map<string, Tables<'places'>>
   onOpenItem: (item: PlanItem) => void
-  onVote: (item: PlanItem) => void
-  votingId: string | null
-  /** option_id -> voters (with user embedded), for each PlanItemCard's "voted for this" row — see PlanBoard's own votesByOptionId. */
-  votesByOptionId: Map<string, OptionVoteWithUser[]>
   isLast: boolean
   tripStartDate: string
   tripEndDate: string
@@ -994,6 +507,7 @@ interface PlanDaySectionProps {
  * call.
  */
 function PlanDaySection({
+  trip,
   date,
   dayItems,
   milestones,
@@ -1002,9 +516,6 @@ function PlanDaySection({
   nextDate,
   placesById,
   onOpenItem,
-  onVote,
-  votingId,
-  votesByOptionId,
   isLast,
   tripStartDate,
   tripEndDate,
@@ -1068,19 +579,16 @@ function PlanDaySection({
           />
         ))}
         {dayItems.length === 0 && milestones.length === 0 ? (
-          <p className="text-xs text-[var(--text-muted)] pl-1">Nothing planned yet</p>
+          <p className="text-xs text-[var(--text-muted)] pl-1">Nothing planned.</p>
         ) : (
           <>
             {attentionItems.map((item) => (
               <div key={item.id} className="stagger-item">
                 <PlanItemCard
+                  trip={trip}
                   item={item}
                   place={item.placeId ? placesById.get(item.placeId) : undefined}
                   onOpen={onOpenItem}
-                  onVote={item.vote ? onVote : undefined}
-                  isVoting={votingId === item.id}
-                  myVoted={item.vote?.myVote.voted}
-                  voters={item.optionId ? votesByOptionId.get(item.optionId) : undefined}
                   outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
                   timeClash={clashedIds.has(item.id)}
                 />
@@ -1106,13 +614,10 @@ function PlanDaySection({
                   ) : (
                     <div key={entry.item.id} className="stagger-item">
                       <PlanItemCard
+                        trip={trip}
                         item={entry.item}
                         place={entry.item.placeId ? placesById.get(entry.item.placeId) : undefined}
                         onOpen={onOpenItem}
-                        onVote={entry.item.vote ? onVote : undefined}
-                        isVoting={votingId === entry.item.id}
-                        myVoted={entry.item.vote?.myVote.voted}
-                        voters={entry.item.optionId ? votesByOptionId.get(entry.item.optionId) : undefined}
                         outsideTripDates={isOutsideTripDates(entry.item, tripStartDate, tripEndDate)}
                         timeClash={clashedIds.has(entry.item.id)}
                         dense={dense}

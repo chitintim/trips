@@ -12,7 +12,7 @@ import type { Json } from '../../../types/database.types'
  *  - Call sites inside COMPLETED features are the coordinator's to wire
  *    (this workstream must not edit them). Suggested wiring:
  *      rsvp_changed          -> useUpdateConfirmationStatus (useConfirmations.ts)
- *      vote_cast             -> useToggleVote (usePlanning.ts)
+ *      vote_cast             -> useAnswer (usePlanning.ts)
  *      poll_closed           -> the decisions feature's auto/manual close path
  *      expense_added         -> QuickCaptureSheet / ExpenseEditorWizard submit
  *      settlement_confirmed  -> useUpdateSettlementStatus (status -> 'confirmed')
@@ -26,6 +26,7 @@ export type ActivityVerb =
   | 'vote_cast'
   | 'poll_closed'
   | 'decision_reopened'
+  | 'question_deleted'
   | 'option_added'
   | 'expense_added'
   | 'settlement_confirmed'
@@ -100,6 +101,7 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   vote_cast: { icon: '🗳️', phrase: (e) => `answered${e ? ` "${e}"` : ' a question'}` },
   poll_closed: { icon: '🏁', phrase: (e) => `closed the question${e ? ` "${e}"` : ''}` },
   decision_reopened: { icon: '↩️', phrase: (e) => `reopened the question${e ? ` "${e}"` : ''}` },
+  question_deleted: { icon: '🗑️', phrase: (e) => `deleted the question${e ? ` "${e}"` : ''}` },
   option_added: { icon: '💡', phrase: (e) => `added the option${e ? ` "${e}"` : ''}` },
   expense_added: { icon: '💰', phrase: (e) => `added the expense${e ? ` "${e}"` : ''}` },
   settlement_confirmed: { icon: '🤝', phrase: (e) => `confirmed a payment${e ? ` (${e})` : ''}` },

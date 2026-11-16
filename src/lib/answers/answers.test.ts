@@ -10,6 +10,8 @@ import {
   isOwnChoice,
   isQuestionOpen,
   isTripFinished,
+  isAnswerTodoCandidate,
+  passKindFor,
   questionAnswerState,
   type AnswerSection,
 } from './answers'
@@ -32,13 +34,13 @@ describe('answersFor / hasAnswered', () => {
     const inputs = {
       votes: [{ option_id: 'o1', user_id: 'voter', rank: 2 }],
       selections: [{ option_id: 'o1', user_id: 'flat' }],
-      passes: [{ section_id: 's1', user_id: 'passer', kind: 'none_for_me' as const }],
+      passes: [{ section_id: 's1', user_id: 'passer', kind: 'no_preference' as const }],
     }
     const a = answersFor(s, inputs)
     expect([...a.keys()].sort()).toEqual(['flat', 'passer', 'sel', 'voter'])
     expect(a.get('voter')?.ranks.get('o1')).toBe(2)
     expect(a.get('passer')?.passed).toBe(true)
-    expect(a.get('passer')?.passKind).toBe('none_for_me')
+    expect(a.get('passer')?.passKind).toBe('no_preference')
     expect(a.get('sel')?.sources.has('selection')).toBe(true)
     expect(hasAnswered(s, 'nobody', inputs)).toBe(false)
   })
@@ -127,6 +129,72 @@ describe('buildAnsweredSectionVoters', () => {
       passes: [{ section_id: 's1', user_id: 'p', kind: 'no_preference' }],
     })
     expect([...(voters.get('s1') ?? [])].sort()).toEqual(['p', 'sel', 'v'])
+  })
+})
+
+describe('passes: real answer wins, and the pass kind follows the shape', () => {
+  it('a person holding both an option answer and a pass row is answered, not passed', () => {
+    const a = answersFor(section(), {
+      votes: [{ option_id: 'o1', user_id: 'x' }],
+      passes: [{ section_id: 's1', user_id: 'x', kind: 'no_preference' }],
+    }).get('x')!
+    expect(a.passed).toBe(false)
+    expect(a.passKind).toBeNull()
+    expect(a.sources.has('pass')).toBe(false)
+    expect([...a.optionIds]).toEqual(['o1'])
+  })
+
+  it('a pass alone still counts as answered', () => {
+    const s = section()
+    expect(hasAnswered(s, 'p', { votes: [], passes: [{ section_id: 's1', user_id: 'p', kind: 'no_preference' }] })).toBe(true)
+  })
+
+  it('passKindFor: "No preference" on a Group choice, "None for me" on an Own choice', () => {
+    expect(passKindFor({ metadata: null })).toBe('no_preference')
+    expect(passKindFor({ metadata: { decision_shape: 'personal' } })).toBe('none_for_me')
+  })
+
+  it('isAnswerTodoCandidate: Own choice with no deadline is a to-do only when passes are available', () => {
+    const own = { metadata: { decision_shape: 'personal' }, vote_deadline: null }
+    expect(isAnswerTodoCandidate(own, false)).toBe(false)
+    expect(isAnswerTodoCandidate(own, true)).toBe(true)
+    // a deadline makes it a to-do either way
+    expect(isAnswerTodoCandidate({ ...own, vote_deadline: '2026-12-01T00:00:00Z' }, false)).toBe(true)
+    expect(isAnswerTodoCandidate({ ...own, vote_deadline: '2026-12-01T00:00:00Z' }, true)).toBe(true)
+    // Group choices are always to-dos
+    expect(isAnswerTodoCandidate({ metadata: null, vote_deadline: null }, false)).toBe(true)
+  })
+})
+
+describe('answered is derived from the current shape of the question', () => {
+  const own = { decision_shape: 'personal' }
+  const noSel = (over: Partial<AnswerSection> = {}) =>
+    section({ options: [{ id: 'o1', status: 'available', selections: [] }, { id: 'o2', status: 'available', selections: [] }], ...over })
+
+  it('a vote left on a question that is now Own choice does not count', () => {
+    const s = noSel({ metadata: own })
+    expect(hasAnswered(s, 'u', { votes: [{ option_id: 'o1', user_id: 'u' }] })).toBe(false)
+    expect(buildAnsweredSectionVoters([s], { votes: [{ option_id: 'o1', user_id: 'u' }] }).has('s1')).toBe(false)
+  })
+
+  it('an Own choice counts selections and its own-kind pass', () => {
+    const s = noSel({ metadata: own })
+    expect(hasAnswered(s, 'u', { votes: [], selections: [{ option_id: 'o1', user_id: 'u' }] })).toBe(true)
+    expect(hasAnswered(s, 'u', { votes: [], passes: [{ section_id: 's1', user_id: 'u', kind: 'none_for_me' }] })).toBe(true)
+  })
+
+  it('a pass of the wrong kind does not count, on either shape', () => {
+    expect(hasAnswered(noSel({ metadata: own }), 'u', { votes: [], passes: [{ section_id: 's1', user_id: 'u', kind: 'no_preference' }] })).toBe(false)
+    expect(hasAnswered(noSel(), 'u', { votes: [], passes: [{ section_id: 's1', user_id: 'u', kind: 'none_for_me' }] })).toBe(false)
+  })
+
+  it('a Group choice counts votes and its group-kind pass', () => {
+    expect(hasAnswered(noSel(), 'u', { votes: [{ option_id: 'o1', user_id: 'u' }] })).toBe(true)
+    expect(hasAnswered(noSel(), 'u', { votes: [], passes: [{ section_id: 's1', user_id: 'u', kind: 'no_preference' }] })).toBe(true)
+  })
+
+  it('legacy: a selection left on a Group choice still counts (the answer model shows it as an approval)', () => {
+    expect(hasAnswered(noSel(), 'u', { votes: [], selections: [{ option_id: 'o1', user_id: 'u' }] })).toBe(true)
   })
 })
 

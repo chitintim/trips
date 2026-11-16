@@ -6,6 +6,7 @@
  */
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import {
+  addPassesToSectionVoters,
   answerTodoId,
   claimChaseOpen,
   claimEmailLink,
@@ -18,6 +19,8 @@ import {
   toEngineSections,
   travelTodoId,
 } from './chaseEngine.ts'
+import type { AnswerPass } from '../_shared/answers/answers.ts'
+import { outstandingTargets } from './outstandingTargets.ts'
 import { buildSectionVoters } from '../_shared/actionCompletion/sectionVoters.ts'
 
 const NOW = new Date('2026-11-16T10:00:00Z')
@@ -178,4 +181,69 @@ Deno.test('claim reminders: not once balances are frozen; no code falls back to 
   assertEquals(claimEmailLink('https://app.test', 't1', 'abc'), 'https://app.test/claim/abc')
   assertEquals(claimEmailLink('https://app.test', 't1', undefined), 'https://app.test/t1?open=settle')
   assertEquals(claimEmailLink('https://app.test', 't1', ''), 'https://app.test/t1?open=settle')
+})
+
+// ---- passes ("No preference" / "None for me") count as answered ----
+
+function owedWithPasses(rows: ChaseSectionRow[], users: string[], passes?: AnswerPass[]) {
+  const { sections, votes } = toEngineSections(rows)
+  return engineTodoIds({ trip, participants: users.map((u) => person(u)), sections, votes, passes }, users, NOW)
+}
+
+Deno.test('passes: unvoted_poll (group) - a person with a no_preference pass is not a recipient; others still are', () => {
+  const r = owedWithPasses([section()], ['u1', 'u2'], [{ section_id: 's1', user_id: 'u1', kind: 'no_preference' }])
+  assertEquals(r.get('u1')!.has(answerTodoId('s1')), false)
+  assertEquals(r.get('u2')!.has(answerTodoId('s1')), true)
+})
+
+Deno.test('passes: unfilled_order (own choice) - a none_for_me pass removes the recipient', () => {
+  const own = section({ metadata: { decision_shape: 'personal' } })
+  const r = owedWithPasses([own], ['u1', 'u2'], [{ section_id: 's1', user_id: 'u1', kind: 'none_for_me' }])
+  assertEquals(r.get('u1')!.has(answerTodoId('s1')), false)
+  assertEquals(r.get('u2')!.has(answerTodoId('s1')), true)
+})
+
+Deno.test('passes: a pass of the wrong kind for the question shape does not count', () => {
+  const own = section({ metadata: { decision_shape: 'personal' } })
+  const wrongOnOwn = owedWithPasses([own], ['u1'], [{ section_id: 's1', user_id: 'u1', kind: 'no_preference' }])
+  assertEquals(wrongOnOwn.get('u1')!.has(answerTodoId('s1')), true)
+  const wrongOnGroup = owedWithPasses([section()], ['u1'], [{ section_id: 's1', user_id: 'u1', kind: 'none_for_me' }])
+  assertEquals(wrongOnGroup.get('u1')!.has(answerTodoId('s1')), true)
+})
+
+Deno.test('passes: without passes (undefined, [] or other sections) the result is identical to before', () => {
+  const rows = [section(), section({ id: 's2', metadata: { decision_shape: 'personal' }, options: [{ id: 'o9', status: 'proposed', option_votes: [], selections: [{ user_id: 'u2' }] }] })]
+  const users = ['u1', 'u2', 'u3']
+  const base = owedWithPasses(rows, users)
+  const none = owedWithPasses(rows, users, [])
+  const elsewhere = owedWithPasses(rows, users, [{ section_id: 'other', user_id: 'u1', kind: 'no_preference' }])
+  for (const u of users) {
+    assertEquals([...none.get(u)!].sort(), [...base.get(u)!].sort())
+    assertEquals([...elsewhere.get(u)!].sort(), [...base.get(u)!].sort())
+  }
+})
+
+Deno.test('passes: an own-choice question with no deadline is still not a to-do for email (conservative)', () => {
+  const own = section({ metadata: { decision_shape: 'personal' }, vote_deadline: null })
+  const r = owedWithPasses([own], ['u1'])
+  assertEquals(r.get('u1')!.has(answerTodoId('s1')), false)
+})
+
+Deno.test('passes: section-linked action reminders skip people who passed on the linked question', () => {
+  const voters = buildSectionVoters([{ id: 'o1', section_id: 's1' }], [{ option_id: 'o1', user_id: 'u1' }])
+  const meta = new Map([['s1', null], ['s2', { decision_shape: 'personal' }]])
+  const withPasses = addPassesToSectionVoters(
+    voters,
+    [
+      { section_id: 's1', user_id: 'u2', kind: 'no_preference' },
+      { section_id: 's1', user_id: 'u3', kind: 'none_for_me' }, // wrong kind for a group question: ignored
+      { section_id: 's2', user_id: 'u3', kind: 'none_for_me' },
+    ],
+    meta
+  )
+  assertEquals(outstandingTargets(['u1', 'u2', 'u3'], 's1', new Set(), withPasses), ['u3'])
+  assertEquals(outstandingTargets(['u1', 'u2', 'u3'], 's2', new Set(), withPasses), ['u1', 'u2'])
+  // No passes: the very same map comes back untouched.
+  assertEquals(addPassesToSectionVoters(voters, [], meta), voters)
+  assertEquals(outstandingTargets(['u1', 'u2', 'u3'], 's1', new Set(), voters), ['u2', 'u3'])
 })

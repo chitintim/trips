@@ -4,11 +4,12 @@ import { supabase } from '../supabase'
 import { Tables, TablesInsert, TablesUpdate } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
-import { useSections, useVotes } from './usePlanning'
+import { useQuestionPasses, useSections, useVotes } from './usePlanning'
 import { useParticipants } from './useTrip'
 import { withClosedSections, type SectionVoterIds } from '../../features/actions/lib/actionStatus'
 import { buildAnsweredSectionVoters } from '../answers/answers'
 import { assertRowsAffected, throwIfError } from './assertRowsAffected'
+import { callClaimTodo, claimTodoExists } from './claimTodo'
 
 export type ActionCompletion = Pick<Tables<'trip_action_completions'>, 'user_id' | 'completed_at'>
 
@@ -46,18 +47,41 @@ export function useSectionVoters(tripId: string | undefined): SectionVoterIds {
   const { data: votes } = useVotes(tripId)
   const { data: sections } = useSections(tripId)
   const { data: participants } = useParticipants(tripId)
+  // "No preference" / "None for me" count as answered. Fails soft: no table yet = no passes.
+  const { passes } = useQuestionPasses(tripId)
   // A closed poll can no longer be voted in, so its linked action counts as
   // done for everyone (see withClosedSections) rather than staying open forever.
   return useMemo(
     () =>
       withClosedSections(
         // Answered = vote OR selection (OR pass, Phase 2): see lib/answers/answers.ts.
-        buildAnsweredSectionVoters(sections ?? [], { votes: votes ?? [] }),
+        buildAnsweredSectionVoters(sections ?? [], { votes: votes ?? [], passes }),
         sections ?? [],
         (participants ?? []).map((p) => p.user_id)
       ),
-    [votes, sections, participants]
+    [votes, sections, participants, passes]
   )
+}
+
+/**
+ * Whether 20261117100000_todo_who_mode.sql is applied (the `who_mode` column, the optional due date and
+ * the `claim_todo` RPC). Probed once per session with a zero-row select that errors if the column is
+ * missing, plus a harmless RPC call on a made-up id; FAILS SOFT to `false`, which makes the To-dos sheet behave exactly as before the
+ * migration (no Anyone for general to-dos, a required deadline, claims only for creator/organizer).
+ */
+export function useTodoWhoSupport(): boolean {
+  const query = useQuery({
+    queryKey: ['todoWhoSupport'],
+    queryFn: async (): Promise<boolean> => {
+      const { error } = await supabase.from('trip_actions').select('who_mode').limit(0)
+      if (error) return false
+      // Claiming goes through the claim_todo RPC; without it the old front end behaviour is kept.
+      return claimTodoExists()
+    },
+    staleTime: Infinity,
+    retry: false,
+  })
+  return query.data === true
 }
 
 export function useCreateAction(tripId: string) {
@@ -113,6 +137,8 @@ export interface ToggleActionDoneVars {
   userId: string
   /** Target completion state: true to mark done, false to clear. */
   done: boolean
+  /** An Anyone (claimed) to-do: ticked through the claim_todo RPC when it exists. */
+  anyone?: boolean
 }
 
 /**
@@ -122,7 +148,11 @@ export interface ToggleActionDoneVars {
  */
 export function useToggleActionDone(tripId: string) {
   return useOptimisticMutation<void, ToggleActionDoneVars, ActionWithCompletions[]>({
-    mutationFn: async ({ actionId, isGroupAction, userId, done }) => {
+    mutationFn: async ({ actionId, isGroupAction, userId, done, anyone }) => {
+      if (!isGroupAction && anyone) {
+        const rpc = await callClaimTodo('action', actionId, done ? 'tick' : 'untick')
+        if (!rpc.missing) return
+      }
       if (isGroupAction) {
         if (done) {
           const { error } = await supabase
@@ -175,5 +205,38 @@ export function useToggleActionDone(tripId: string) {
           completed_by: done ? userId : null,
         }
       }),
+  })
+}
+
+export interface ClaimActionVars {
+  id: string
+  userId: string
+  /** true = "I'll do it"; false = give it back. */
+  claim: boolean
+}
+
+/**
+ * Claim / give back an Anyone to-do. The claim only matches while nobody holds it
+ * (`assigned_to IS NULL`), so two people tapping at once resolve on the server: the
+ * loser gets a clear message instead of silently stealing it.
+ */
+export function useClaimAction(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, userId, claim }: ClaimActionVars) => {
+      const rpc = await callClaimTodo('action', id, claim ? 'claim' : 'give_back')
+      if (!rpc.missing) return
+      // claim_todo is not deployed yet: the pre-migration direct update (creator / organizer only).
+      const base = supabase.from('trip_actions')
+      const { data, error } = claim
+        ? await base.update({ assigned_to: userId }).eq('id', id).is('assigned_to', null).select('id')
+        : await base.update({ assigned_to: null, completed_at: null, completed_by: null }).eq('id', id).eq('assigned_to', userId).select('id')
+      throwIfError(error)
+      assertRowsAffected(
+        data,
+        claim ? 'Someone else just took this one, or it is no longer up for grabs.' : "You can't give this one back, or it no longer exists."
+      )
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) }),
   })
 }

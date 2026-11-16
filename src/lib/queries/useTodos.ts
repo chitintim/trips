@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useAuth } from '../../hooks/useAuth'
 import { useTrip, useParticipants, useAllParticipants } from './useTrip'
-import { useSections, useVotes } from './usePlanning'
+import { useSections, useVotes, useQuestionPasses } from './usePlanning'
 import { useActions } from './useActions'
 import { useChecklists } from './useChecklists'
 import { useExpenses } from './useExpenses'
@@ -13,7 +13,7 @@ import { fromMinorUnits } from '../money'
 import { isTripFinished } from '../answers/answers'
 import { computeWaitingOn } from '../todos/computeTodos'
 import { todoSurfaceCore } from './todoSurfaces'
-import type { Todo, TripSnapshot, WaitingOn } from '../todos/types'
+import type { Todo, TodoInfo, TripSnapshot, WaitingOn } from '../todos/types'
 
 /**
  * Hooks over the to-dos engine (src/lib/todos/computeTodos.ts).
@@ -39,10 +39,10 @@ type Loaded<T> = { [K in keyof T]: T[K] | undefined | null }
  * (a snapshot built from partial data would show a wrong count). `balances` is
  * legitimately absent except on Finished trips.
  */
-export function assembleSnapshot(inputs: Loaded<Required<Omit<TripSnapshot, 'passes' | 'balances'>>> & { balances?: TripSnapshot['balances'] }): TripSnapshot | null {
-  const { trip, participants, allParticipants, sections, votes, actions, checklists, expenses, settlements, travelEvents, bookings, balances } = inputs
+export function assembleSnapshot(inputs: Loaded<Required<Omit<TripSnapshot, 'passes' | 'passesAvailable' | 'balances'>>> & { balances?: TripSnapshot['balances']; passes?: TripSnapshot['passes']; passesAvailable?: boolean }): TripSnapshot | null {
+  const { trip, participants, allParticipants, sections, votes, actions, checklists, expenses, settlements, travelEvents, bookings, balances, passes, passesAvailable } = inputs
   if (!trip || !participants || !allParticipants || !sections || !votes || !actions || !checklists || !expenses || !settlements || !travelEvents || !bookings) return null
-  return { trip, participants, allParticipants, sections, votes, actions, checklists, expenses, settlements, balances, travelEvents, bookings }
+  return { trip, participants, allParticipants, sections, votes, passes, passesAvailable, actions, checklists, expenses, settlements, balances, travelEvents, bookings }
 }
 
 /** Assemble the engine's snapshot from the TanStack cache. */
@@ -52,6 +52,10 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
   const allParticipants = useAllParticipants(tripId)
   const sections = useSections(tripId)
   const votes = useVotes(tripId)
+  // Passes ("No preference" / "None for me") count as answered. Fails soft: if the
+  // table is not there yet this is [] and never blocks the snapshot; only the
+  // first in-flight load does, so a pass can't flash a to-do that is already done.
+  const questionPasses = useQuestionPasses(tripId)
   const actions = useActions(tripId)
   const checklists = useChecklists(tripId)
   const expenses = useExpenses(tripId)
@@ -93,14 +97,21 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
     return Object.fromEntries(result.map((b) => [b.userId, fromMinorUnits(b.netBalanceMinor, base)]))
   }, [tripData, participantData, expenseList, settlementList, carryoverData])
 
+  const passesPending = questionPasses.isPending
+  const passList = questionPasses.passes
+  const passesAvailable = questionPasses.available
   const snapshot = useMemo<TripSnapshot | null>(
     () =>
-      assembleSnapshot({
+      passesPending
+        ? null
+        : assembleSnapshot({
         trip: tripData,
         participants: participantData,
         allParticipants: allParticipantData,
         sections: sectionData,
         votes: voteData,
+        passes: passList,
+        passesAvailable,
         actions: actionData,
         checklists: checklistData,
         expenses: expenseList,
@@ -109,7 +120,7 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
         travelEvents: timelineData,
         bookings: bookingData,
       }),
-    [tripData, participantData, allParticipantData, sectionData, voteData, actionData, checklistData, expenseList, settlementList, balances, timelineData, bookingData]
+    [passesPending, passList, passesAvailable, tripData, participantData, allParticipantData, sectionData, voteData, actionData, checklistData, expenseList, settlementList, balances, timelineData, bookingData]
   )
 
   return { snapshot, isLoading: !snapshot && !isError && !!tripId, isError }
@@ -118,6 +129,8 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
 export interface UseTodosResult {
   /** Ordered to-dos for the signed-in user (personal group first, then "For you as organiser"). Empty while loading. */
   todos: Todo[]
+  /** Informational lines outside the count (e.g. "You'll be able to settle up once..."). */
+  info: TodoInfo[]
   /** `todos.length`, or `undefined` while loading / failed: never 0 and never a partial number. */
   count: number | undefined
   /** True if any to-do is overdue (red header pill). False while loading. */
@@ -134,7 +147,7 @@ export function useTodos(tripId: string | undefined): UseTodosResult {
   const { user } = useAuth()
   const { snapshot, isLoading, isError } = useTripSnapshot(tripId)
   return useMemo(() => {
-    if (!snapshot) return { todos: [], count: undefined, hasOverdue: false, isLoading, isError, snapshot: null }
+    if (!snapshot) return { todos: [], info: [], count: undefined, hasOverdue: false, isLoading, isError, snapshot: null }
     const core = todoSurfaceCore(snapshot, user?.id)
     return { ...core, isLoading, isError, snapshot }
   }, [snapshot, user, isLoading, isError])

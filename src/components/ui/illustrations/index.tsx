@@ -85,7 +85,7 @@ export const JoinCover: IllustrationComponent = (p) => (
   </svg>
 )
 
-/** Decide lens empty state ("nothing to decide"): a calm checklist, all ticked. */
+/** Questions lens empty state ("nothing to decide"): a calm checklist, all ticked. */
 export const NothingToDecide: IllustrationComponent = (p) => (
   <svg {...base(p)}>
     <rect x="46" y="24" width="108" height="96" rx="10" fill="currentColor" opacity="0.06" />

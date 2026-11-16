@@ -1,249 +1,125 @@
-import { useState } from 'react'
-import { createPortal } from 'react-dom'
-import { useRef, useEffect } from 'react'
-import { useAuth } from '../../../hooks/useAuth'
 import { SelectionAvatars } from '../../../components/ui'
-import { useToggleSelection } from '../../../lib/queries/usePlanning'
 import type { OptionWithSelections } from '../../../lib/queries/usePlanning'
 import { readOptionMetadata, getMatrixAxes } from '../lib/optionMetadata'
 
 interface MatrixViewProps {
-  tripId: string
+  /** Kept so existing callers compile; the grid no longer writes anything. */
+  tripId?: string
   options: OptionWithSelections[]
   currency?: string
 }
 
-/**
- * Matrix/grid view for tiered options (the ski-rental-matrix pattern from
- * PLANNING_IMPROVEMENTS.md), rebuilt onto the new ui kit. Cells use
- * `selections` (the committed choice, one per person) rather than votes —
- * matrix options represent "what you're actually renting/taking", not a
- * poll.
- */
-export function MatrixView({ tripId, options, currency = 'GBP' }: MatrixViewProps) {
-  const { user } = useAuth()
-  const toggleSelection = useToggleSelection(tripId)
-  const [activeCell, setActiveCell] = useState<{ option: OptionWithSelections; anchor: DOMRect; triggerEl: HTMLElement } | null>(null)
+function isOptOut(title: string): boolean {
+  const t = title.toLowerCase()
+  return t.includes('not renting') || t.includes('own equipment')
+}
 
+/**
+ * "Everyone's answers" grid for tiered / grid-layout own-choice questions
+ * (the legacy ski-rental pattern): rows x columns of options, each cell
+ * showing how many people picked it and who. READ-ONLY. It is a view for the
+ * organiser inside the Manage sheet; people answer with the one AnswerControl
+ * (the old tap-a-cell-to-pick popover wrote `selections` directly and is
+ * gone). There never was an "answer on someone's behalf" control here, so none
+ * is offered.
+ */
+export function MatrixView({ options, currency = 'GBP' }: MatrixViewProps) {
   const { rows, columns } = getMatrixAxes(options)
   const cellMap = new Map<string, OptionWithSelections>()
   options.forEach((opt) => {
     const meta = readOptionMetadata(opt.metadata)
     if (meta.grid_row && meta.grid_column) cellMap.set(`${meta.grid_row}|${meta.grid_column}`, opt)
   })
-
-  const mySelectedOptionId = options.find((opt) => opt.selections.some((s) => s.user_id === user?.id))?.id
-  const notRentingOption = options.find(
-    (opt) => opt.title.toLowerCase().includes('not renting') || opt.title.toLowerCase().includes('own equipment')
-  )
-
-  const handleSelect = (option: OptionWithSelections) => {
-    if (!user) return
-    const existing = option.selections.find((s) => s.user_id === user.id)
-    if (existing) {
-      toggleSelection.mutate({ optionId: option.id, userId: user.id, action: 'remove', selectionId: existing.id })
-    } else {
-      toggleSelection.mutate({ optionId: option.id, userId: user.id, action: 'add', user: undefined })
-    }
-    setActiveCell(null)
-  }
+  const optOut = options.find((opt) => isOptOut(opt.title))
 
   return (
-    <div className="overflow-x-auto -mx-4 px-4">
-      <table className="w-full min-w-[400px] border-collapse">
-        <thead>
-          <tr>
-            <th className="text-left text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide p-2 bg-[var(--surface-sunken)] rounded-tl-[var(--radius-md)]">
-              Level
-            </th>
-            {columns.map((col, i) => (
-              <th
-                key={col}
-                className={`text-center text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide p-2 bg-[var(--surface-sunken)] ${
-                  i === columns.length - 1 ? 'rounded-tr-[var(--radius-md)]' : ''
-                }`}
-              >
-                {col}
+    <div className="min-w-0 space-y-3">
+      <div className="overflow-x-auto" tabIndex={0} role="region" aria-label="Everyone's answers, grid">
+        <table className="w-full min-w-[400px] border-collapse">
+          <caption className="sr-only">Number of people who chose each option, by row and column</caption>
+          <thead>
+            <tr>
+              <th scope="col" className="rounded-tl-[var(--radius-md)] bg-[var(--surface-sunken)] p-2 text-left text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+                Level
               </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row}>
-              <td className="text-sm font-medium text-[var(--text-primary)] p-2 bg-[var(--surface-sunken)] border-t border-[var(--border-subtle)]">
-                {row}
-              </td>
-              {columns.map((col) => {
-                const option = cellMap.get(`${row}|${col}`)
-                if (!option) {
+              {columns.map((col, i) => (
+                <th
+                  key={col}
+                  scope="col"
+                  className={`bg-[var(--surface-sunken)] p-2 text-center text-xs font-medium uppercase tracking-wide text-[var(--text-muted)] ${i === columns.length - 1 ? 'rounded-tr-[var(--radius-md)]' : ''}`}
+                >
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row}>
+                <th scope="row" className="border-t border-[var(--border-subtle)] bg-[var(--surface-sunken)] p-2 text-left text-sm font-medium text-[var(--text-primary)]">
+                  {row}
+                </th>
+                {columns.map((col) => {
+                  const option = cellMap.get(`${row}|${col}`)
+                  if (!option) {
+                    return (
+                      <td key={col} className="border-t border-[var(--border-subtle)] p-1">
+                        <div className="p-2 text-center text-xs text-[var(--text-muted)]" aria-label="Not offered">
+                          —
+                        </div>
+                      </td>
+                    )
+                  }
+                  const n = option.selections.length
                   return (
-                    <td key={col} className="p-1 border-t border-[var(--border-subtle)]">
-                      <div className="text-center text-[var(--text-muted)] text-xs p-2">—</div>
+                    <td key={col} className="border-t border-[var(--border-subtle)] p-1">
+                      <div className="rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--surface-raised)] p-2 text-center">
+                        <div className="sr-only">{option.title}</div>
+                        {option.price != null && (
+                          <div className="text-sm font-semibold text-[var(--text-primary)]">
+                            {option.currency || currency} {option.price.toFixed(0)}
+                          </div>
+                        )}
+                        <div className={`text-xs ${n > 0 ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>
+                          {n === 0 ? 'No one' : n === 1 ? '1 person' : `${n} people`}
+                        </div>
+                        {n > 0 && (
+                          <div className="mt-1 flex justify-center">
+                            <SelectionAvatars selections={toAvatars(option)} maxAvatars={3} size="sm" entityLabel="chose this" />
+                          </div>
+                        )}
+                      </div>
                     </td>
                   )
-                }
-                const isSelected = option.id === mySelectedOptionId
-                return (
-                  <td key={col} className="p-1 border-t border-[var(--border-subtle)]">
-                    <button
-                      type="button"
-                      onClick={(e) =>
-                        setActiveCell({
-                          option,
-                          anchor: e.currentTarget.getBoundingClientRect(),
-                          triggerEl: e.currentTarget,
-                        })
-                      }
-                      className={`w-full p-2 rounded-[var(--radius-md)] text-center transition-all ${
-                        isSelected
-                          ? 'bg-accent-50 border-2 border-accent-500 shadow-sm'
-                          : 'bg-[var(--surface-raised)] border border-[var(--border-default)] hover:border-accent-300'
-                      }`}
-                    >
-                      {option.price != null && (
-                        <div className={`text-sm font-semibold ${isSelected ? 'text-accent-700' : 'text-[var(--text-primary)]'}`}>
-                          {currency} {option.price.toFixed(0)}
-                        </div>
-                      )}
-                      {option.selections.length > 0 && (
-                        <div className="flex justify-center mt-1">
-                          <SelectionAvatars
-                            selections={option.selections.map((s) => ({
-                              id: s.id,
-                              user: s.user
-                                ? {
-                                    full_name: s.user.full_name ?? undefined,
-                                    email: s.user.email ?? undefined,
-                                    avatar_url: s.user.avatar_url ?? undefined,
-                                    avatar_data: (s.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
-                                  }
-                                : undefined,
-                            }))}
-                            maxAvatars={3}
-                            size="sm"
-                          />
-                        </div>
-                      )}
-                      {isSelected && <div className="text-[10px] text-accent-600 font-medium mt-1">✓ You</div>}
-                    </button>
-                  </td>
-                )
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
-      {notRentingOption && (
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() => handleSelect(notRentingOption)}
-            className={`w-full p-3 rounded-[var(--radius-md)] text-left flex items-center justify-between transition-all ${
-              notRentingOption.id === mySelectedOptionId
-                ? 'bg-[var(--surface-sunken)] border-2 border-[var(--border-default)]'
-                : 'bg-[var(--surface-raised)] border border-[var(--border-default)] hover:border-[var(--border-subtle)]'
-            }`}
-          >
-            <span className="text-sm font-medium text-[var(--text-primary)]">{notRentingOption.title}</span>
-            {notRentingOption.id === mySelectedOptionId && (
-              <span className="text-xs text-[var(--text-secondary)] font-medium">✓ Selected</span>
-            )}
-          </button>
+      {optOut && (
+        <div className="flex min-w-0 items-center justify-between gap-3 rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--surface-raised)] p-3">
+          <span className="min-w-0 break-words text-sm font-medium text-[var(--text-primary)]">{optOut.title}</span>
+          <span className="shrink-0 text-xs text-[var(--text-secondary)]">
+            {optOut.selections.length === 1 ? '1 person' : `${optOut.selections.length} people`}
+          </span>
         </div>
-      )}
-
-      {activeCell && (
-        <CellPopover
-          option={activeCell.option}
-          anchor={activeCell.anchor}
-          triggerEl={activeCell.triggerEl}
-          onClose={() => setActiveCell(null)}
-          onSelect={() => handleSelect(activeCell.option)}
-          isSelected={activeCell.option.id === mySelectedOptionId}
-          currency={currency}
-        />
       )}
     </div>
   )
 }
 
-function CellPopover({
-  option,
-  anchor,
-  triggerEl,
-  onClose,
-  onSelect,
-  isSelected,
-  currency,
-}: {
-  option: OptionWithSelections
-  anchor: DOMRect
-  /** The matrix cell button that opened this popover — focus returns here on close (a11y, UPGRADE_MASTER_PLAN.md audit item 6). */
-  triggerEl: HTMLElement
-  onClose: () => void
-  onSelect: () => void
-  isSelected: boolean
-  currency: string
-}) {
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const handleClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [onClose])
-
-  // Escape-to-close + focus trap/restore (this popover previously had
-  // neither): move focus into the popover on open so keyboard users land
-  // somewhere sensible, close on Escape, and always hand focus back to the
-  // triggering cell on unmount — whether closed via Escape, the outside-
-  // click handler above, or a successful select.
-  useEffect(() => {
-    ref.current?.focus()
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      triggerEl.focus()
-    }
-  }, [onClose, triggerEl])
-
-  const top = Math.min(anchor.bottom + 8, window.innerHeight - 220)
-  const left = Math.min(anchor.left, window.innerWidth - 296)
-
-  return createPortal(
-    <div
-      ref={ref}
-      role="dialog"
-      aria-label={`${option.title} details`}
-      tabIndex={-1}
-      className="fixed z-popover bg-[var(--surface-raised)] rounded-[var(--radius-md)] shadow-xl border border-[var(--border-default)] p-4 w-72 focus:outline-none"
-      style={{ top, left }}
-    >
-      <h4 className="font-semibold text-[var(--text-primary)] text-sm mb-2">{option.title}</h4>
-      {option.description && <p className="text-sm text-[var(--text-secondary)] mb-2">{option.description}</p>}
-      {option.price != null && (
-        <p className="text-lg font-bold text-[var(--text-primary)] mb-3">
-          {option.currency || currency} {option.price.toFixed(2)}
-        </p>
-      )}
-      <button
-        type="button"
-        onClick={onSelect}
-        disabled={option.locked}
-        className={`w-full py-2 px-4 rounded-[var(--radius-md)] text-sm font-medium transition-colors ${
-          isSelected ? 'bg-accent-100 text-accent-700 border border-accent-300' : 'bg-accent-600 text-white hover:bg-accent-700'
-        } ${option.locked ? 'opacity-50 cursor-not-allowed' : ''}`}
-      >
-        {option.locked ? '🔒 Locked' : isSelected ? '✓ Selected' : 'Select this'}
-      </button>
-    </div>,
-    document.body
-  )
+function toAvatars(option: OptionWithSelections) {
+  return option.selections.map((s) => ({
+    id: s.id,
+    user: s.user
+      ? {
+          full_name: s.user.full_name ?? undefined,
+          email: s.user.email ?? undefined,
+          avatar_url: s.user.avatar_url ?? undefined,
+          avatar_data: (s.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
+        }
+      : undefined,
+  }))
 }

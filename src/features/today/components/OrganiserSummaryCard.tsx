@@ -6,7 +6,7 @@ import { WAITING_ON_EMPTY, organiserSummary } from '../../../lib/todos/copy'
 import { doneCountLabel } from '../../actions/lib/todoLabels'
 
 /**
- * Organiser-only compact card (proposal 3.6): "As organiser: waiting on 6
+ * Organiser-only compact card (proposal 3.6): "As organizer: waiting on 6
  * people · 2 to decide · 1 to book" + the top things people still owe, with a
  * link into the Console. The organiser's own to-dos sit in Your to-dos.
  */
@@ -37,7 +37,7 @@ export function OrganiserSummaryCard({ tripId, onOpenConsole }: { tripId: string
       <Card.Content className="space-y-2 py-3">
         <div className="flex items-center justify-between gap-3">
           <p className="text-sm font-medium text-[var(--text-primary)]">
-            {nothing ? `As organiser: ${WAITING_ON_EMPTY}` : organiserSummary(summary.people, summary.toDecide, summary.toBook)}
+            {nothing ? `As organizer: ${WAITING_ON_EMPTY}` : organiserSummary(summary.people, summary.toDecide, summary.toBook)}
           </p>
           <Button size="sm" variant="secondary" onClick={onOpenConsole} className="shrink-0">
             Open console

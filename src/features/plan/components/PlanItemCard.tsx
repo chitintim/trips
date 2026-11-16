@@ -1,11 +1,13 @@
-import { Badge, Button, Deadline, SelectionAvatars } from '../../../components/ui'
+import { Badge, Deadline, SelectionAvatars } from '../../../components/ui'
+import { useSections } from '../../../lib/queries/usePlanning'
+import { useQuestionAnswers } from '../../decisions'
+import { planItemStatus } from '../lib/itemSheet'
 import { PlaceChip } from '../../places/components/PlaceChip'
 import { CATEGORY_CONFIG, formatTimeRange } from '../../timeline/lib/categoryConfig'
 import { formatMoney, splitAcrossNote } from '../../decisions/lib/costImpact'
-import { areVotesVisible } from '../../decisions/lib/voting'
 import type { PlanItem } from '../lib/planItems'
-import type { OptionVoteWithUser } from '../../../lib/queries/usePlanning'
 import type { Tables } from '../../../types/database.types'
+import type { Trip } from '../../../types'
 
 /** "Chosen by Alex & Sarah" / "Chosen by Alex, Sarah +3" — a compact summary of who committed to this option (planItems.ts rule 7's `selections`), used for both legacy pre-v3 picks and any new-era option that happens to carry selections. */
 function formatChosenBy(selections: PlanItem['selections']): string {
@@ -29,47 +31,59 @@ function toAvatarSelections(selections: PlanItem['selections']) {
   }))
 }
 
-/** "Alex & Sarah answered" / "Alex, Sarah +3 answered" — same compact-summary shape as formatChosenBy above, but for `option_votes` rather than `selections`, so the two mechanisms read as clearly distinct affordances when a card happens to carry both. */
-function formatVotedBy(voters: OptionVoteWithUser[]): string {
-  const names = voters.map((v) => v.user?.full_name || v.user?.email || 'Someone')
-  if (names.length <= 2) return `${names.join(' & ')} answered`
-  return `${names.slice(0, 2).join(', ')} +${names.length - 2} answered`
+/**
+ * The ONE place the card states money (Phase 3 swaps this for the shared
+ * PriceTag): the per-person cost badge. Returns null when the item has none.
+ */
+function ItemCost({ item }: { item: PlanItem }) {
+  if (item.costImpact?.perPerson == null || !item.costImpact.currency) return null
+  return (
+    <Badge variant="info" size="sm">
+      {item.costImpact.isEstimate ? '≈ ' : item.costImpact.isTiered ? '≈' : '+'}
+      {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}
+      {item.costImpact.isEstimate && item.costImpact.headcount > 0 ? ` per person (${splitAcrossNote(item.costImpact.headcount)})` : '/person'}
+    </Badge>
+  )
 }
 
-function toAvatarVotes(voters: OptionVoteWithUser[]) {
-  return voters
-    .filter((v) => v.user)
-    .map((v) => ({
-      id: v.id,
-      selected_at: v.created_at ?? undefined,
-      user: v.user
-        ? {
-            full_name: v.user.full_name ?? undefined,
-            email: v.user.email ?? undefined,
-            avatar_url: v.user.avatar_url ?? undefined,
-            avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
-          }
-        : undefined,
-    }))
+/** Compact cost text for the one-line dense row (same slot, shorter form). */
+function denseCostText(item: PlanItem): string | null {
+  if (item.costImpact?.perPerson == null || !item.costImpact.currency) return null
+  return `${formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/pp`
+}
+
+/**
+ * "Needs your answer" / "Answered ✓" straight from the answers engine, so it
+ * always equals the question card and the to-do. Mounted only for open
+ * option-backed items when the caller passes `trip`.
+ */
+function AnswerChip({ trip, sectionId }: { trip: Trip; sectionId: string }) {
+  const { data: sections } = useSections(trip.id)
+  const section = (sections || []).find((s) => s.id === sectionId)
+  if (!section) return null
+  return <AnswerChipInner trip={trip} section={section} />
+}
+
+function AnswerChipInner({ trip, section }: { trip: Trip; section: NonNullable<ReturnType<typeof useSections>['data']>[number] }) {
+  const { card } = useQuestionAnswers(trip, section)
+  if (!card.chip || card.stage !== 'open') return null
+  return (
+    <Badge variant={card.chip.tone} size="sm">
+      {card.chip.label}
+    </Badge>
+  )
 }
 
 export interface PlanItemCardProps {
   item: PlanItem
   place?: Tables<'places'>
   onOpen: (item: PlanItem) => void
-  onVote?: (item: PlanItem) => void
-  isVoting?: boolean
-  myVoted?: boolean
   /**
-   * `option_votes` rows (with the voting user embedded) cast for THIS
-   * item's option — the "voted for this" affordance, distinct from
-   * `item.selections`' "Chosen by" affordance above. Gated by
-   * `areVotesVisible` below (hide_votes_until_close), never by
-   * isOrganizer/isAdmin: any participant who can see the vote button can
-   * see who else voted, once votes are visible at all.
+   * The trip, so an open question's item can show the engine's answers chip
+   * ("Needs your answer" / "Answered ✓"). Optional: without it no chip shows.
    */
-  voters?: OptionVoteWithUser[]
-  /** Compact rendering for dense contexts (Undecided tray, Decide lens list). */
+  trip?: Trip
+  /** Compact rendering for dense contexts (Undecided tray). */
   compact?: boolean
   /**
    * One-line variant (UPGRADE_MASTER_PLAN.md §13 build brief, "display
@@ -93,19 +107,15 @@ export interface PlanItemCardProps {
 }
 
 /**
- * One plan item card, styled by stage (plan §2): solid for decided/booked,
- * inline voting card for proposals, muted for ideas. Shared between
- * PlanBoard's day rows/tray and the Decide lens so stage styling stays
- * consistent everywhere the item appears.
+ * One plan item card. State shows with the approved statuses only
+ * (Open / Decided / Booked / Done); answering happens in the item sheet or the
+ * question card, never on this card.
  */
 export function PlanItemCard({
   item,
   place,
   onOpen,
-  onVote,
-  isVoting,
-  myVoted,
-  voters = [],
+  trip,
   compact = false,
   dense = false,
   outsideTripDates = false,
@@ -115,15 +125,8 @@ export function PlanItemCard({
   const timeRange = !item.allDay && item.startTime ? formatTimeRange(item.allDay, item.startTime, item.endTime) : item.allDay ? 'All day' : null
 
   const isSolid = item.stage === 'decided' || item.stage === 'booked'
-  const isProposal = item.stage === 'proposal'
-  const isIdea = item.stage === 'idea'
-  // Same hide_votes_until_close gate the item sheet uses (voting.ts's
-  // areVotesVisible) — before that, nobody (organizer included) sees the
-  // breakdown, only their own vote + total, so the card must stay silent
-  // about voter identity too.
-  const votesVisible = item.vote
-    ? areVotesVisible({ vote_deadline: item.vote.voteDeadline, hide_votes_until_close: item.vote.hideVotesUntilClose, status: item.vote.sectionStatus })
-    : false
+  const status = planItemStatus(item)
+  const showAnswerChip = !!trip && !!item.sectionId && !isSolid
 
   if (dense && isSolid) {
     return (
@@ -151,11 +154,7 @@ export function PlanItemCard({
             ⚠️
           </span>
         )}
-        {item.costImpact?.perPerson != null && item.costImpact.currency && (
-          <span className="shrink-0 text-xs text-[var(--text-muted)]">
-            {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/pp
-          </span>
-        )}
+        {denseCostText(item) && <span className="shrink-0 text-xs text-[var(--text-muted)]">{denseCostText(item)}</span>}
         {outsideTripDates && (
           <span className="shrink-0 text-xs" aria-hidden="true" title="Outside trip dates">
             ⚠️
@@ -171,21 +170,12 @@ export function PlanItemCard({
   }
 
   return (
-    // Non-interactive container (UPGRADE_MASTER_PLAN.md audit item 5): this
-    // used to be div[role=button] wrapping a real vote/approve Button —
-    // invalid interactive-in-interactive nesting with a double tab stop, on
-    // the board's most-repeated component. The single focusable "open"
-    // affordance now lives on the inner content wrapper below; the vote
-    // Button is a sibling of it, outside the interactive region. Hover/
-    // stage styling stays on this outer box so the whole card still reacts
-    // to hover exactly as before.
+    // Non-interactive container; the single focusable "open" affordance is the inner content wrapper.
     <div
       className={`w-full rounded-[var(--radius-lg)] border p-3 transition-colors ${
         isSolid
           ? 'border-[var(--border-default)] bg-[var(--surface-raised)] hover:border-accent-300'
-          : isProposal
-            ? 'border-accent-300 bg-accent-50 dark:bg-accent-950/30 hover:border-accent-400'
-            : 'border-dashed border-[var(--border-subtle)] bg-[var(--surface-sunken)] opacity-80 hover:opacity-100'
+          : 'border-accent-300 bg-accent-50 dark:bg-accent-950/30 hover:border-accent-400'
       }`}
     >
       <div className="flex items-start justify-between gap-2">
@@ -207,19 +197,16 @@ export function PlanItemCard({
                 {category.emoji} {category.label}
               </span>
             )}
-            {item.stage === 'booked' && (
-              <Badge variant="success" size="sm">
-                🧾 Booked
+            {status && (
+              <Badge variant={status.variant} size="sm">
+                {status.label === 'Booked' ? '🧾 ' : ''}
+                {status.label}
               </Badge>
             )}
+            {showAnswerChip && <AnswerChip trip={trip!} sectionId={item.sectionId!} />}
             {item.booking?.cancelled && (
               <Badge variant="error" size="sm" wrap>
                 ⚠️ Booking cancelled — needs rebooking
-              </Badge>
-            )}
-            {isIdea && (
-              <Badge variant="neutral" size="sm">
-                💡 Idea
               </Badge>
             )}
             {outsideTripDates && (
@@ -234,7 +221,7 @@ export function PlanItemCard({
             )}
           </div>
 
-          <h4 className={`mt-1 font-medium ${isSolid ? 'text-[var(--text-primary)]' : 'text-[var(--text-primary)]'} ${!compact ? '' : 'text-sm'}`}>
+          <h4 className={`mt-1 font-medium text-[var(--text-primary)] ${compact ? 'text-sm' : ''}`}>
             {item.title}
           </h4>
 
@@ -245,21 +232,13 @@ export function PlanItemCard({
           )}
 
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            {item.costImpact?.perPerson != null && item.costImpact.currency && (
-              <Badge variant="info" size="sm">
-                {item.costImpact.isEstimate ? '≈ ' : item.costImpact.isTiered ? '≈' : '+'}
-                {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}
-                {item.costImpact.isEstimate && item.costImpact.headcount > 0
-                  ? ` per person (${splitAcrossNote(item.costImpact.headcount)})`
-                  : '/person'}
-              </Badge>
-            )}
+            <ItemCost item={item} />
             {item.expenseId && (
               <Badge variant="neutral" size="sm">
                 💵 Linked expense
               </Badge>
             )}
-            {isProposal && item.vote?.voteDeadline && <Deadline date={item.vote.voteDeadline} kind="vote" compact size="sm" />}
+            {status?.label === 'Open' && item.vote?.voteDeadline && <Deadline date={item.vote.voteDeadline} kind="vote" compact size="sm" />}
           </div>
           {item.costImpact?.sensitivityLine && (
             <p className="mt-1 text-xs text-[var(--text-muted)]">{item.costImpact.sensitivityLine}</p>
@@ -274,34 +253,7 @@ export function PlanItemCard({
               <span className="text-xs text-[var(--text-muted)]">{formatChosenBy(item.selections)}</span>
             </div>
           )}
-
-          {/* Who's voted for this option — right where the vote is cast
-              (feedback: "when I vote for something I can't see others
-              voted what as well"), not just in the detail sheet. Uses
-              entityLabel="answered with this" (vs. the default "selected
-              this" above) so the popover header never reads as the same
-              affordance as "Chosen by" if a card somehow carries both. */}
-          {isProposal && item.vote && votesVisible && voters.length > 0 && (
-            <div className="mt-1.5 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-              <SelectionAvatars selections={toAvatarVotes(voters)} maxAvatars={4} size="sm" entityLabel="answered with this" />
-              <span className="text-xs text-[var(--text-muted)]">{formatVotedBy(voters)}</span>
-            </div>
-          )}
         </div>
-
-        {/* Sibling of the interactive content wrapper above, not nested
-            inside it — no stopPropagation needed since there's no parent
-            click handler to bubble into. */}
-        {isProposal && onVote && (
-          <Button
-            variant={myVoted ? 'primary' : 'secondary'}
-            size="sm"
-            isLoading={isVoting}
-            onClick={() => onVote(item)}
-          >
-            {myVoted ? 'Answered ✓' : item.vote?.votingMethod === 'ranked' ? 'Rank' : 'Answer'}
-          </Button>
-        )}
       </div>
     </div>
   )

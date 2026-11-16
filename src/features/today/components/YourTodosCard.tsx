@@ -48,7 +48,7 @@ function TodoRow({ todo, onOpen }: { todo: Todo; onOpen: (todo: Todo) => void })
  */
 export function YourTodosCard({ tripId }: { tripId: string }) {
   const navigate = useNavigate()
-  const { todos, isLoading, isError } = useTodos(tripId)
+  const { todos, info, isLoading, isError } = useTodos(tripId)
   const [expanded, setExpanded] = useState(false)
 
   if (isLoading) return <Skeleton variant="card" height={120} />
@@ -115,6 +115,17 @@ export function YourTodosCard({ tripId }: { tripId: string }) {
                 ))}
               </ul>
             </div>
+          )}
+
+          {/* Not to-dos: blocked on someone else, so never counted. */}
+          {info.length > 0 && (
+            <ul className="space-y-1 pt-2">
+              {info.map((line) => (
+                <li key={line.id} className="text-xs text-[var(--text-muted)]">
+                  ℹ️ {line.text}
+                </li>
+              ))}
+            </ul>
           )}
         </Card.Content>
       </Card>

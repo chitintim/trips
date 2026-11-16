@@ -109,7 +109,10 @@ import { outstandingTargets } from './outstandingTargets.ts'
 import { chaseScopes, isChaseableParticipant, isSectionClosed, isTripOpenForReminders, joinedAfterDueDate } from './chaseScope.ts'
 import { actionRemindersGateOpen, DEFAULT_SETTINGS, inQuietHours, parseChaseSettings } from './chaseSettings.ts'
 import { decideEmailSuppression } from './emailSuppression.ts'
+import { type AnswerPass } from '../_shared/answers/answers.ts'
+import type { Json } from '../_shared/todos/deps/json.ts'
 import {
+  addPassesToSectionVoters,
   answerTodoId,
   type ChaseSectionRow,
   claimChaseOpen,
@@ -240,7 +243,61 @@ async function fetchSectionVoters(admin: SupabaseClient, sectionIds: string[]): 
   const votes: VoteForSectionVoters[] = rows.flatMap((o) =>
     [...(o.option_votes ?? []), ...(o.selections ?? [])].map((v) => ({ option_id: o.id, user_id: v.user_id }))
   )
-  return buildSectionVoters(options, votes)
+  const voters = buildSectionVoters(options, votes)
+  // A pass ("No preference" / "None for me") is an answer too. Fail-soft.
+  const passes = await fetchQuestionPasses(admin, sectionIds)
+  if (passes.length === 0) return voters
+  const { data: secs } = await admin.from('planning_sections').select('id, metadata').in('id', sectionIds)
+  const metadata = new Map<string, Json | null>(
+    ((secs ?? []) as { id: string; metadata: Json | null }[]).map((r) => [r.id, r.metadata])
+  )
+  return addPassesToSectionVoters(voters, passes, metadata)
+}
+
+/**
+ * `question_passes` rows for `sectionIds`. Fail-soft: until the migration is
+ * applied the table does not exist; any error means "no passes" (logged as a
+ * warning at most), so the emails behave exactly as before passes existed.
+ * Passes only ever remove recipients.
+ */
+async function fetchQuestionPasses(admin: SupabaseClient, sectionIds: string[]): Promise<AnswerPass[]> {
+  if (sectionIds.length === 0) return []
+  try {
+    const { data, error } = await admin
+      .from('question_passes')
+      .select('section_id, user_id, kind')
+      .in('section_id', sectionIds)
+    if (error) {
+      console.warn('auto-chase: question_passes unavailable, treating as none:', error.message)
+      return []
+    }
+    return (data ?? []) as AnswerPass[]
+  } catch (e) {
+    console.warn('auto-chase: question_passes fetch failed, treating as none:', e instanceof Error ? e.message : e)
+    return []
+  }
+}
+
+/**
+ * Ids (among `actionIds`) of Anyone to-dos nobody has claimed yet. An unclaimed
+ * Anyone item is nobody's to-do, so it never earns a reminder (and this can only
+ * remove recipients, never add any). Fail-soft: until the who_mode migration is
+ * applied the column does not exist, the query errors and nothing is skipped.
+ */
+async function fetchUnclaimedAnyoneActionIds(admin: SupabaseClient, actionIds: string[]): Promise<Set<string>> {
+  if (actionIds.length === 0) return new Set()
+  try {
+    const { data, error } = await admin
+      .from('trip_actions')
+      .select('id')
+      .in('id', actionIds)
+      .eq('who_mode', 'anyone')
+      .is('assigned_to', null)
+    if (error) return new Set()
+    return new Set((data ?? []).map((r: { id: string }) => r.id))
+  } catch {
+    return new Set()
+  }
 }
 
 /** Ids among `sectionIds` whose planning_sections.status is 'completed' (closed). */
@@ -414,8 +471,9 @@ Deno.serve(async (req) => {
         // selections, a question with live options, an in-scope person).
         const sectionRows = (sections ?? []) as unknown as ChaseSectionRow[]
         const { sections: engineSections, votes: engineVotes } = toEngineSections(sectionRows)
+        const enginePasses = await fetchQuestionPasses(admin, sectionRows.map((r) => r.id))
         const owed = engineTodoIds(
-          { trip, participants: activeParticipants, sections: engineSections, votes: engineVotes },
+          { trip, participants: activeParticipants, sections: engineSections, votes: engineVotes, passes: enginePasses },
           participantIds,
           now
         )
@@ -743,6 +801,7 @@ Deno.serve(async (req) => {
           return stage ? [{ action: a, dueDate, stage }] : []
         })
         if (staged.length === 0) continue
+        const unclaimedAnyone = await fetchUnclaimedAnyoneActionIds(admin, staged.map((x) => x.action.id as string))
 
         const { data: actionParticipants } = await admin
           .from('trip_participants')
@@ -775,6 +834,7 @@ Deno.serve(async (req) => {
         for (const { action: a, dueDate, stage } of staged) {
           // deno-lint-ignore no-explicit-any
           const completedBy = new Set<string>((a.trip_action_completions ?? []).map((c: any) => c.user_id))
+          if (unclaimedAnyone.has(a.id)) continue
           if (a.assigned_to && !actionParticipantIds.includes(a.assigned_to)) continue
           const targets: string[] = a.assigned_to ? [a.assigned_to] : actionParticipantIds
 
@@ -1078,8 +1138,10 @@ async function handleTestDigest(
   const sectionVoters = await fetchSectionVoters(admin, sectionIds)
   const closedSectionIds = await fetchClosedSectionIds(admin, sectionIds)
 
+  const unclaimedAnyone = await fetchUnclaimedAnyoneActionIds(admin, (actions ?? []).map((a) => a.id))
   const rows: Array<{ dueDate: string; row: DigestActionRow }> = []
   for (const a of actions ?? []) {
+    if (unclaimedAnyone.has(a.id)) continue
     if (a.assigned_to && a.assigned_to !== user_id) continue
     // deno-lint-ignore no-explicit-any
     const completedBy = new Set<string>((a.trip_action_completions ?? []).map((c: any) => c.user_id))

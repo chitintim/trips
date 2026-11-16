@@ -14,7 +14,7 @@ export interface ReopenDecisionDialogProps {
 }
 
 /**
- * Organizer/admin "Reopen decision": sets the question back to open, clears
+ * Organizer/admin "Reopen": sets the question back to open, clears
  * the recorded winner (and its follow-up link) and KEEPS all votes. Anything
  * already created from the outcome (a scheduled event, a booking, a follow-up
  * action) is deliberately NOT touched -- the confirm copy says so.
@@ -34,7 +34,7 @@ export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decided
         entity: { type: 'section', id: section.id, label: section.title },
         metadata: { previous_option: decidedTitle ?? null },
       })
-      showToast({ type: 'success', message: 'Question reopened', description: 'The question is open again; existing answers were kept.' })
+      showToast({ type: 'success', message: 'Question reopened', description: 'It is open again and existing answers were kept.' })
       onClose()
     } catch (err) {
       showToast({ type: 'error', message: 'Could not reopen the question', description: (err as Error).message })
@@ -49,7 +49,7 @@ export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decided
           The question opens again and everyone's existing answers are kept.
         </p>
         <p className="text-sm text-[var(--text-secondary)]">
-          Anything already created from this decision -- a scheduled event, a booking, a follow-up action -- is{' '}
+          Anything already created from the answer, like something on the plan, a booking or a to-do, is{' '}
           <strong>not undone automatically</strong>. Remove or update those yourself if they no longer apply.
         </p>
         <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
@@ -57,7 +57,7 @@ export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decided
             Cancel
           </Button>
           <Button onClick={handleReopen} isLoading={updateSection.isPending}>
-            Reopen decision
+            Reopen question
           </Button>
         </div>
       </div>

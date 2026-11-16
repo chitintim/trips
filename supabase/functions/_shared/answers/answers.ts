@@ -39,16 +39,6 @@ import { getDecisionShape } from '../todos/deps/decisionShapes.ts'
 import type { InScopeCandidate } from '../todos/deps/inScopePeople.ts'
 import type { SectionVoterIds } from '../actionCompletion/sectionVoters.ts'
 
-/**
- * PHASE 2 SWITCH. Until "No preference" / "None for me" passes exist, a person
- * who wants nothing from an Own-choice question has no way to clear it, so an
- * Own-choice question WITHOUT a deadline is not a to-do (it stays answerable in
- * Plan and keeps its chip). One with a deadline still is. When
- * `question_passes` and its UI land, set this to `true` and Own-choice
- * questions become to-dos with or without a deadline.
- */
-export const OWN_CHOICE_WITHOUT_DEADLINE_IS_TODO = false
-
 // ---------------------------------------------------------------------------
 // Input shapes (structural, so generated DB rows and query results fit as-is)
 // ---------------------------------------------------------------------------
@@ -139,7 +129,19 @@ export function answersFor(section: AnswerSection, inputs: AnswerInputs): Map<st
     return a
   }
 
+  // "Answered" is derived from the question's CURRENT shape, so changing the
+  // kind of a question never leaves stale answers counted:
+  //   - Own choice: selections + an own-kind pass ("None for me"). Votes left
+  //     over from when it was a Group choice are ignored.
+  //   - Group choice: votes + leftover selections (legacy approvals, which the
+  //     answer model still shows as the person's answer) + a group-kind pass
+  //     ("No preference").
+  // A pass of the other kind is ignored too.
+  const own = isOwnChoice(section)
+  const acceptedPassKind = passKindFor(section)
+
   for (const v of inputs.votes) {
+    if (own) break
     if (!optionIds.has(v.option_id)) continue
     const a = get(v.user_id)
     a.optionIds.add(v.option_id)
@@ -161,10 +163,21 @@ export function answersFor(section: AnswerSection, inputs: AnswerInputs): Map<st
 
   for (const p of inputs.passes ?? []) {
     if (p.section_id !== section.id) continue
+    if (p.kind !== acceptedPassKind) continue
     const a = get(p.user_id)
     a.passed = true
     a.passKind = p.kind
     a.sources.add('pass')
+  }
+
+  // A real answer wins: if a pass row and an option answer exist together
+  // (a race between two devices) the person has chosen, not passed.
+  for (const a of result.values()) {
+    if (a.optionIds.size > 0 && a.passed) {
+      a.passed = false
+      a.passKind = null
+      a.sources.delete('pass')
+    }
   }
 
   return result
@@ -212,6 +225,26 @@ export function buildAnsweredSectionVoters(
 /** Own choice = `decision_shape: 'personal'` (each person picks for themselves); everything else is a Group choice. */
 export function isOwnChoice(section: Pick<AnswerSection, 'metadata'>): boolean {
   return getDecisionShape(section.metadata) === 'personal'
+}
+
+/** The only pass a question accepts: "No preference" on a Group choice, "None for me" on an Own choice. */
+export function passKindFor(section: Pick<AnswerSection, 'metadata'>): PassKind {
+  return isOwnChoice(section) ? 'none_for_me' : 'no_preference'
+}
+
+/**
+ * Whether an unanswered question is a to-do at all. Own-choice questions with
+ * no deadline are a to-do only when passes are available ("None for me" can
+ * clear them); before the `question_passes` table exists a person who wants
+ * nothing could never clear it, so it is not a to-do. A deadline always makes
+ * it one. Group choices are always to-dos. The email side passes `false`.
+ */
+export function isAnswerTodoCandidate(
+  section: Pick<AnswerSection, 'metadata'> & { vote_deadline?: string | null },
+  passesAvailable: boolean
+): boolean {
+  if (isOwnChoice(section) && !section.vote_deadline && !passesAvailable) return false
+  return true
 }
 
 /** Options that can still be answered (not cancelled). */

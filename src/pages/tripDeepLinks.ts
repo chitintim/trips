@@ -123,7 +123,7 @@ export type DeepLinkSheet =
   | { sheet: 'settle-up' }
   | { sheet: 'claim'; code: string }
   | { sheet: 'add-participant' }
-  | { sheet: 'add-to-plan' }
+  | { sheet: 'add-to-plan'; asQuestion?: boolean }
   | { sheet: 'scroll-todos' }
 
 export interface DeepLinkPlan {
@@ -133,8 +133,11 @@ export interface DeepLinkPlan {
   toast?: string
 }
 
+/** Shown when a link points at something that no longer exists, or the data never loaded. */
+export const DEEP_LINK_GONE_TOAST = "That's no longer available."
+
 export const DEEP_LINK_TOASTS = {
-  question: "That question isn't open any more.",
+  question: DEEP_LINK_GONE_TOAST,
   noAnswers: "You're all set ✓ Nothing needs your answer.",
   todo: "That to-do isn't on the list any more.",
   bring: "That packing item isn't on the list any more.",
@@ -146,6 +149,15 @@ export const DEEP_LINK_TOASTS = {
 } as const
 
 const soft = (toast: string): DeepLinkPlan => ({ space: 'today', toast })
+
+/**
+ * Plan used when the trip's data can't be loaded (error or timeout) so the
+ * normal table can't be consulted. A link must never fail silently: land on
+ * Today and say so. `todos` still just scrolls to the card.
+ */
+export function fallbackDeepLinkPlan(target: OpenTarget): DeepLinkPlan {
+  return target.kind === 'todos' ? { space: 'today', open: { sheet: 'scroll-todos' } } : soft(DEEP_LINK_GONE_TOAST)
+}
 
 /** Where a parsed `?open=` target lands, given the current data. Pure; unknown/stale ids fail soft to Today + toast. */
 export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLinkPlan {
@@ -159,9 +171,10 @@ export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLink
     case 'question': {
       const section = ctx.sections.find((s) => s.id === target.id)
       if (!section) return soft(DEEP_LINK_TOASTS.question)
-      // A decided / closed / option-less question has nothing left to answer:
-      // show it on the Plan, where its card lives.
-      if (section.status === 'completed' || ctx.tripFinished || !section.hasLiveOptions) return { space: 'plan', open: { sheet: 'plan-question', id: section.id } }
+      // A decided / closed / option-less question, or one this person has already
+      // answered (or is not asked), has nothing left to answer: show it on the
+      // Plan's Questions list, where its card lives (scrolled to and highlighted).
+      if (section.status === 'completed' || ctx.tripFinished || !section.hasLiveOptions || !ctx.answerSectionIds.includes(section.id)) return { space: 'plan', open: { sheet: 'plan-question', id: section.id } }
       return { space: 'plan', open: { sheet: 'answer', sectionIds: [section.id] } }
     }
 
@@ -219,7 +232,7 @@ export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLink
     case 'setup': {
       if (!ctx.isOrganizer) return { space: 'today' }
       if (ctx.participantCount < 2) return { space: 'today', open: { sheet: 'add-participant' } }
-      if (ctx.sections.length === 0) return { space: 'plan', open: { sheet: 'add-to-plan' } }
+      if (ctx.sections.length === 0) return { space: 'plan', open: { sheet: 'add-to-plan', asQuestion: true } }
       return { space: 'today' }
     }
   }

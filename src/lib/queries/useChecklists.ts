@@ -4,6 +4,8 @@ import { supabase } from '../supabase'
 import { Tables, TablesInsert } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
+import { assertRowsAffected, throwIfError } from './assertRowsAffected'
+import { callClaimTodo } from './claimTodo'
 
 export type ChecklistItem = Tables<'trip_checklists'>
 
@@ -35,6 +37,47 @@ export function useCreateChecklistItem(tripId: string) {
   })
 }
 
+export function useUpdateChecklistItem(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, update }: { id: string; update: { title: string; assigned_to: string | null } }) => {
+      const { data, error } = await supabase.from('trip_checklists').update(update).eq('id', id).select('id')
+      throwIfError(error)
+      assertRowsAffected(data, "You don't have permission to edit this to-do, or it no longer exists.")
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.checklists(tripId) }),
+  })
+}
+
+export interface ClaimChecklistItemVars {
+  id: string
+  userId: string
+  /** true = "I'll bring it"; false = give it back. */
+  claim: boolean
+}
+
+/** Claim / give back a bring item. A claim only matches while nobody holds it, so the first tap wins. */
+export function useClaimChecklistItem(tripId: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, userId, claim }: ClaimChecklistItemVars) => {
+      const rpc = await callClaimTodo('checklist', id, claim ? 'claim' : 'give_back')
+      if (!rpc.missing) return
+      // claim_todo is not deployed yet: the pre-migration direct update (creator / organizer only).
+      const base = supabase.from('trip_checklists')
+      const { data, error } = claim
+        ? await base.update({ assigned_to: userId }).eq('id', id).is('assigned_to', null).select('id')
+        : await base.update({ assigned_to: null, done: false, done_at: null, done_by: null }).eq('id', id).eq('assigned_to', userId).select('id')
+      throwIfError(error)
+      assertRowsAffected(
+        data,
+        claim ? 'Someone else just took this one, or it is no longer up for grabs.' : "You can't give this one back, or it no longer exists."
+      )
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.checklists(tripId) }),
+  })
+}
+
 export interface ToggleChecklistItemVars {
   id: string
   done: boolean
@@ -53,11 +96,16 @@ const TOGGLE_MUTATION_KEY = 'toggleChecklistItem'
 export function useToggleChecklistItem(tripId: string) {
   return useOptimisticMutation<void, ToggleChecklistItemVars, ChecklistItem[]>({
     mutationFn: async ({ id, done, doneBy }) => {
-      const { error } = await supabase
+      const rpc = await callClaimTodo('checklist', id, done ? 'tick' : 'untick')
+      if (!rpc.missing) return
+      const { data, error } = await supabase
         .from('trip_checklists')
         .update({ done, done_at: done ? new Date().toISOString() : null, done_by: done ? doneBy : null })
         .eq('id', id)
-      if (error) throw error
+        .select('id')
+      throwIfError(error)
+      // A refused update (RLS) returns no error and no rows: say so instead of silently reverting.
+      assertRowsAffected(data, "You can't tick this one off, or it no longer exists.")
     },
     queryKey: () => queryKeys.checklists(tripId),
     updater: (items, { id, done, doneBy }) =>

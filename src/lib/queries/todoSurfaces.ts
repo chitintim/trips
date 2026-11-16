@@ -1,5 +1,5 @@
-import { computeTodos, hasOverdue, organiserOnlyTodos, personalTodos } from '../todos/computeTodos'
-import type { Todo, TripSnapshot } from '../todos/types'
+import { computeInfo, computeTodos, hasOverdue, organiserOnlyTodos, personalTodos } from '../todos/computeTodos'
+import type { Todo, TodoInfo, TripSnapshot } from '../todos/types'
 
 /**
  * Pure cores behind the surfaces that show "how many to-dos": the trip header
@@ -14,13 +14,15 @@ export interface TodoSurfaceCore {
   /** The one number every surface shows. `undefined` while loading (no snapshot / no user): never 0. */
   count: number | undefined
   hasOverdue: boolean
+  /** Non-counting lines (blocked on someone else). Never part of `count`. */
+  info: TodoInfo[]
 }
 
 /** What `useTodos` / `useTodoCount` return for a signed-in user on one trip. */
 export function todoSurfaceCore(snapshot: TripSnapshot | null, userId: string | null | undefined, now?: Date): TodoSurfaceCore {
-  if (!snapshot || !userId) return { todos: [], count: undefined, hasOverdue: false }
+  if (!snapshot || !userId) return { todos: [], count: undefined, hasOverdue: false, info: [] }
   const todos = computeTodos(snapshot, userId, now)
-  return { todos, count: todos.length, hasOverdue: hasOverdue(todos) }
+  return { todos, count: todos.length, hasOverdue: hasOverdue(todos), info: computeInfo(snapshot, userId, now) }
 }
 
 /** The dashboard trip-card badge: the same count as the header pill. */

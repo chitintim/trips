@@ -22,3 +22,26 @@ describe('todoLabels', () => {
     expect(TODOS_TITLE).toBe('To-dos')
   })
 })
+
+import { claimLabel, claimedByLabel, leftLabel, TODOS_EMPTY_BODY, TODOS_EMPTY_TITLE } from './todoLabels'
+
+describe('grouped sheet wording', () => {
+  it('uses one claim verb per kind', () => {
+    expect(claimLabel(false)).toBe("I'll do it")
+    expect(claimLabel(true)).toBe("I'll bring it")
+    expect(claimedByLabel('Sam', false, true)).toBe('Sam is bringing it')
+    expect(claimedByLabel(null, true, false)).toBe("You're on it")
+  })
+
+  it('lists who is left', () => {
+    expect(leftLabel([])).toBe('')
+    expect(leftLabel(['Sam'])).toBe('Left: Sam')
+    expect(leftLabel(['Sam', 'Priya'])).toBe('Left: Sam and Priya')
+    expect(leftLabel(['A', 'B', 'C', 'D', 'E'])).toBe('Left: A, B and 3 more')
+  })
+
+  it('keeps the 5.8 empty state', () => {
+    expect(TODOS_EMPTY_TITLE).toBe('No to-dos.')
+    expect(TODOS_EMPTY_BODY).toContain('Book the transfer')
+  })
+})

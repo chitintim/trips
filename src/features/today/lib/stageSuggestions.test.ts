@@ -72,6 +72,8 @@ describe('computeStageSuggestion', () => {
     })
     expect(s?.to).toBe('trip_completed')
     expect(s?.kind).toBe('sync')
+    expect(s?.title).toMatch(/^Tidy up/)
+    expect(s?.detail).toMatch(/already shown as finished/)
   })
 
   it('is silent when stored status already matches the effective stage endgame', () => {

@@ -4,6 +4,7 @@ import { useUpdateSection } from '../../../lib/queries/usePlanning'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { tallyVotes, votingInstruction, type VotingMethod } from '../lib/voting'
 import { buildDecisionMetadata, resolveTieInfo } from '../lib/closeDecision'
+import { isOwnChoice } from '../../../lib/answers/answers'
 import type { OptionVoteWithUser, SectionWithOptions } from '../../../lib/queries/usePlanning'
 
 export interface CloseDecisionSheetProps {
@@ -66,6 +67,20 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, section.id])
 
+  const own = isOwnChoice(section)
+
+  /** Own choice: there is no winner, "Decide" just stops taking answers. */
+  const handleCloseOwn = async () => {
+    try {
+      await updateSection.mutateAsync({ id: section.id, update: { status: 'completed' } })
+      logActivity({ verb: 'poll_closed', entity: { type: 'section', id: section.id, label: section.title } })
+      showToast({ type: 'success', message: `Answers closed: ${section.title}` })
+      onClose()
+    } catch (err) {
+      showToast({ type: 'error', message: 'Could not close this question', description: (err as Error).message })
+    }
+  }
+
   const handleConfirm = async () => {
     if (!selectedId) return
     const winner = activeOptions.find((o) => o.id === selectedId)
@@ -90,6 +105,27 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
     }
   }
 
+  if (own) {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} size="sm" title={`Close answers: "${section.title}"`}>
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--text-secondary)]">
+            Each person chooses for themselves, so there is no single winner. Closing stops anyone adding or changing their answer. Everything chosen so far is kept and
+            stays visible in "See everyone's answers". You can reopen the question later.
+          </p>
+          <div className="flex justify-end gap-3 border-t border-[var(--border-subtle)] pt-3">
+            <Button variant="ghost" onClick={onClose} disabled={updateSection.isPending}>
+              Cancel
+            </Button>
+            <Button onClick={handleCloseOwn} isLoading={updateSection.isPending}>
+              Close answers
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    )
+  }
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="md" title={`Decide "${section.title}"`}>
       <div className="space-y-4">
@@ -103,7 +139,7 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
             <p className="font-medium">Tied</p>
             <p className="mt-0.5 break-words text-xs text-[var(--text-secondary)]">
               {tiedTitles.join(', ')} are level.{' '}
-              {tiePickTitle ? `The automatic tie-break picks "${tiePickTitle}". ` : ''}
+              {tiePickTitle ? `The automatic tie-break chooses "${tiePickTitle}". ` : ''}
               Choose a different option below if you would rather decide it yourself.
             </p>
           </div>
@@ -143,7 +179,7 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
                     </span>
                     {tie.tied && tie.tiedOptionIds.includes(option.id) ? (
                       <Badge variant="warning" size="sm">
-                        {isLeader ? 'Tied · tie-break pick' : 'Tied'}
+                        {isLeader ? 'Tied · tie-break choice' : 'Tied'}
                       </Badge>
                     ) : (
                       isLeader && (
@@ -185,7 +221,7 @@ export function CloseDecisionSheet({ isOpen, onClose, tripId, section, votes, on
             Cancel
           </Button>
           <Button onClick={handleConfirm} isLoading={updateSection.isPending} disabled={!selectedId}>
-            🏁 Decide
+            Decide
           </Button>
         </div>
       </div>

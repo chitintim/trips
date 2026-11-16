@@ -208,18 +208,3 @@ export function canReopenDecision(section: { status: string }): boolean {
 export function isDecidedOption(section: ResolverSection, votes: ResolverVote[], optionId: string): boolean {
   return section.status === 'completed' && resolveWinnerId(section, votes) === optionId
 }
-
-/** May a vote be cast/withdrawn on this option? Closed questions and locked options say no. */
-export function canVoteOnOption(section: { status: string } | undefined | null, option: { locked?: boolean | null } | undefined | null): { ok: boolean; reason: string | null } {
-  if (section && section.status === 'completed') return { ok: false, reason: 'This question has been answered.' }
-  if (option?.locked) return { ok: false, reason: 'This option is locked.' }
-  return { ok: true, reason: null }
-}
-
-/** Friendly text for a failed vote write (server trigger or RLS). */
-export function describeVoteError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : typeof err === 'object' && err && 'message' in err ? String((err as { message: unknown }).message) : ''
-  if (/voting is closed|voting_closed/i.test(msg)) return 'This question has already been answered, so your answer was not saved.'
-  if (/row-level security|permission/i.test(msg)) return "You don't have permission to vote here."
-  return msg || 'Your vote could not be saved.'
-}

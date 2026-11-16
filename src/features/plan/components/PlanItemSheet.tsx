@@ -1,37 +1,32 @@
-import { useMemo, useState } from 'react'
-import { Modal, Badge, Button, Chip, UserAvatar, TextArea, SelectionAvatars, useToast } from '../../../components/ui'
-import { useAuth } from '../../../hooks/useAuth'
+import { useState } from 'react'
+import { Modal, Badge, Button, SelectionAvatars, useToast } from '../../../components/ui'
 import { usePlaces } from '../../../lib/queries/usePlaces'
-import { useParticipants } from '../../../lib/queries/useTrip'
-import {
-  useSections,
-  useVotes,
-  useReactions,
-  useComments,
-  useToggleVote,
-  useToggleReaction,
-  useCreateComment,
-} from '../../../lib/queries/usePlanning'
+import { useSections, useVotes, useDeleteOption } from '../../../lib/queries/usePlanning'
 import { useTimeline, useDeleteTimelineEvent } from '../../../lib/queries/useTimeline'
-import { useDeleteOption } from '../../../lib/queries/usePlanning'
 import { PlaceChip } from '../../places/components/PlaceChip'
 import { PlaceMapThumb } from '../../places/components/PlaceMapThumb'
 import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
 import { BookingEditorSheet } from '../../organizer/components/BookingEditorSheet'
 import { useBookings } from '../../../lib/queries/useBookings'
-import { areVotesVisible, votingInstruction, replaceableSiblingVoteIds } from '../../decisions/lib/voting'
 import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
 import { formatCostImpact } from '../../decisions/lib/costImpact'
 import { OptionEditorSheet } from '../../decisions/components/OptionEditorSheet'
-import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
-import { canReopenDecision, canVoteOnOption, describeVoteError, isDecidedOption, resolveWinnerId } from '../../decisions/lib/resolveDecision'
+import { QuestionCard, QuestionManageSheet } from '../../decisions'
+import { isDecidedOption } from '../../decisions/lib/resolveDecision'
 import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import { formatTimeRange, CATEGORY_CONFIG } from '../../timeline/lib/categoryConfig'
 import { planItemEditTarget } from '../lib/planItems'
 import type { PlanItem } from '../lib/planItems'
+import { planItemStatus, bookingSummaryText, liveBookedOptionIds, itemMenuActions, sheetBody, type ItemMenuAction } from '../lib/itemSheet'
 import type { Trip } from '../../../types'
 
-const QUICK_REACTIONS = ['🙌', '😬', '💸', '❤️', '👀']
+const MENU_LABEL: Record<ItemMenuAction, string> = {
+  edit_event: 'Edit',
+  edit_option: 'Edit option',
+  edit_booking: 'Edit booking',
+  schedule: '📅 Schedule it',
+  delete: 'Delete',
+}
 
 export interface PlanItemSheetProps {
   isOpen: boolean
@@ -45,13 +40,18 @@ export interface PlanItemSheetProps {
   onNavigateToExpense?: (expenseId: string) => void
   /** "Schedule it" — opens a day/time picker to place a decided-but-undated item onto the timeline. */
   onScheduleIt?: (item: PlanItem) => void
+  /** "Put it on the plan" from the question's Manage sheet (decided option). Omitted = not offered. */
+  onScheduleOption?: (sectionId: string, optionId: string) => void
 }
 
 /**
- * One detail sheet for any PlanItem, regardless of stage (plan §2 "Item
- * detail sheet unifies everything about one item"). Reuses decisions'
- * voting/reaction/comment internals for option-backed items (proposal/
- * idea), and the timeline/organizer editors for edit flows.
+ * One detail sheet for any PlanItem. For an option that belongs to a question
+ * it shows that question's card (open: the shared AnswerControl; decided: the
+ * outcome; booked: the booking state), so there is no separate Vote button.
+ * Organiser actions for the QUESTION sit behind the card's "⋯ Manage"; the
+ * item-level ones (edit, booking, schedule, delete) sit behind one "⋯" menu.
+ * Reactions and comments are hidden (both tables are empty; the redesign
+ * retires them).
  */
 export function PlanItemSheet({
   isOpen,
@@ -62,33 +62,25 @@ export function PlanItemSheet({
   headcount,
   onNavigateToExpense,
   onScheduleIt,
+  onScheduleOption,
 }: PlanItemSheetProps) {
   const tripId = trip.id
-  const { user } = useAuth()
   const { showToast } = useToast()
   const { data: places } = usePlaces(tripId)
-  const { data: participants } = useParticipants(tripId)
   const { data: sections } = useSections(tripId)
   const { data: votes } = useVotes(tripId)
-  const { data: reactions } = useReactions(tripId)
   const { data: events } = useTimeline(tripId)
   const { data: bookings } = useBookings(tripId)
-  const sectionIds = useMemo(() => (sections || []).map((s) => s.id), [sections])
-  const { data: comments } = useComments(tripId, sectionIds)
 
-  const toggleVote = useToggleVote(tripId)
-  const toggleReaction = useToggleReaction(tripId)
-  const createComment = useCreateComment(tripId)
   const deleteOption = useDeleteOption(tripId)
   const deleteEvent = useDeleteTimelineEvent(tripId)
 
-  const [showComments, setShowComments] = useState(false)
-  const [commentDraft, setCommentDraft] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [manageOpen, setManageOpen] = useState(false)
   const [editEventOpen, setEditEventOpen] = useState(false)
   const [editOptionOpen, setEditOptionOpen] = useState(false)
   const [editBookingOpen, setEditBookingOpen] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
-  const [reopenOpen, setReopenOpen] = useState(false)
 
   if (!item) return null
 
@@ -98,20 +90,6 @@ export function PlanItemSheet({
   const event = item.eventId ? (events || []).find((e) => e.id === item.eventId) : undefined
   const booking = item.bookingId ? (bookings || []).find((b) => b.id === item.bookingId) : undefined
   const editTarget = planItemEditTarget(item, isOrganizer)
-
-  const optionVotes = item.optionId ? (votes || []).filter((v) => v.option_id === item.optionId) : []
-  const myVote = optionVotes.find((v) => v.user_id === user?.id)
-  const votesVisible = item.vote
-    ? areVotesVisible({ vote_deadline: item.vote.voteDeadline, hide_votes_until_close: item.vote.hideVotesUntilClose, status: section?.status })
-    : true
-
-  const optionReactions = item.optionId ? (reactions || []).filter((r) => r.option_id === item.optionId) : []
-  const reactionCounts = new Map<string, number>()
-  optionReactions.forEach((r) => reactionCounts.set(r.emoji, (reactionCounts.get(r.emoji) || 0) + 1))
-  const myReactions = new Set(optionReactions.filter((r) => r.user_id === user?.id).map((r) => r.emoji))
-  const optionComments = item.optionId ? (comments || []).filter((c) => c.option_id === item.optionId) : []
-
-  const byUserId = new Map((participants || []).map((p) => [p.user_id, p]))
 
   const costImpactLabel = option
     ? formatCostImpact({ price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount: headcount.count, isEstimate: headcount.isEstimate, metadata: option.metadata })
@@ -124,51 +102,23 @@ export function PlanItemSheet({
   // absorbed it (events carry source_option_id but no sectionId).
   const decisionSection = item.optionId ? (sections || []).find((s) => s.options.some((o) => o.id === item.optionId)) : undefined
   const decisionIsPersonal = decisionSection ? getDecisionShape(decisionSection.metadata) === 'personal' : false
-  const decidedOptionId = decisionSection && decisionSection.status === 'completed' ? resolveWinnerId(decisionSection, votes || []) : null
-  const canReopen = isOrganizer && !!decisionSection && !decisionIsPersonal && canReopenDecision(decisionSection) && decidedOptionId === item.optionId
-  const voteGate = canVoteOnOption(section, option)
+  const body = sheetBody({ item, section: decisionSection })
+  const questionOpen = !!decisionSection && decisionSection.status !== 'completed'
+  const status = planItemStatus(item)
+  const bookedIds = liveBookedOptionIds(bookings || [])
+  const bookedSummary = bookingSummaryText(item.booking)
   // "Schedule it" on a still-open vote closes it and records this option as the decision.
   const scheduleClosesVote = !!section && section.status !== 'completed' && !decisionIsPersonal
-
-  const handleVote = () => {
-    if (!user || !item.optionId) return
-    if (!voteGate.ok) {
-      if (voteGate.reason) showToast({ type: 'error', message: voteGate.reason })
-      return
-    }
-    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your answer', description: describeVoteError(err) })
-    if (myVote) {
-      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onError })
-    } else {
-      // Radio semantics for single-choice polls: casting here replaces any
-      // vote I already have on a sibling option (see useToggleVote).
-      const replaceVoteIds = section
-        ? replaceableSiblingVoteIds(
-            section.options.map((o) => o.id),
-            votes || [],
-            user.id,
-            item.optionId,
-            item.vote?.votingMethod ?? 'single'
-          )
-        : []
-      toggleVote.mutate({ optionId: item.optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle: option?.title }, { onError })
-    }
-  }
-
-  const handleReaction = (emoji: string) => {
-    if (!user || !item.optionId) return
-    const existing = optionReactions.find((r) => r.user_id === user.id && r.emoji === emoji)
-    if (existing) {
-      toggleReaction.mutate({ targetType: 'option', targetId: item.optionId, userId: user.id, emoji, action: 'remove', reactionId: existing.id })
-    } else {
-      toggleReaction.mutate({ targetType: 'option', targetId: item.optionId, userId: user.id, emoji, action: 'add' })
-    }
-  }
-
-  const handleAddComment = () => {
-    if (!user || !commentDraft.trim() || !item.optionId) return
-    createComment.mutate({ option_id: item.optionId, user_id: user.id, content: commentDraft.trim() })
-    setCommentDraft('')
+  const canSchedule = !item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && !!onScheduleIt
+  // Organiser-only (RLS: timeline INSERT, booking edits and deletes are organiser-only server-side).
+  const menuActions = itemMenuActions({ isOrganizer, editTarget, hasBooking: !!booking, canSchedule })
+  const runMenuAction = (action: ItemMenuAction) => {
+    setMenuOpen(false)
+    if (action === 'edit_event') setEditEventOpen(true)
+    else if (action === 'edit_option') setEditOptionOpen(true)
+    else if (action === 'edit_booking') setEditBookingOpen(true)
+    else if (action === 'schedule') onScheduleIt?.(item)
+    else if (action === 'delete') setConfirmingDelete(true)
   }
 
   // Deleting the option a closed question decided would silently promote the
@@ -194,22 +144,14 @@ export function PlanItemSheet({
     }
   }
 
-  // No chip for options still being answered (no "Idea" / "Proposal" badges).
-  const stageBadge =
-    item.stage === 'decided'
-      ? { variant: 'success' as const, label: 'Decided' }
-      : item.stage === 'booked'
-        ? { variant: 'success' as const, label: 'Booked' }
-        : null
-
   return (
     <>
       <Modal isOpen={isOpen} onClose={onClose} size="md" title={item.title}>
         <div className="space-y-4">
           <div className="flex flex-wrap items-center gap-2">
-            {stageBadge && (
-              <Badge variant={stageBadge.variant} size="sm">
-                {stageBadge.label}
+            {status && (
+              <Badge variant={status.variant} size="sm">
+                {status.label}
               </Badge>
             )}
             {item.date && (
@@ -225,14 +167,37 @@ export function PlanItemSheet({
             )}
             {item.sectionTitle && <Badge variant="neutral" size="sm">{item.sectionTitle}</Badge>}
             {costImpactLabel && <Badge variant="info" size="sm">{costImpactLabel}</Badge>}
+            {menuActions.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                aria-expanded={menuOpen}
+                aria-haspopup="true"
+                aria-label="More actions for this item"
+                onClick={() => setMenuOpen((v) => !v)}
+              >
+                ⋯
+              </Button>
+            )}
           </div>
+
+          {menuOpen && menuActions.length > 0 && (
+            <div role="group" aria-label="Item actions" className="flex flex-wrap gap-2 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-2">
+              {menuActions.map((action) => (
+                <Button key={action} variant={action === 'delete' ? 'danger' : 'secondary'} size="sm" onClick={() => runMenuAction(action)}>
+                  {action === 'schedule' && scheduleClosesVote ? '📅 Close question & schedule' : MENU_LABEL[action]}
+                </Button>
+              ))}
+            </div>
+          )}
 
           {item.description && <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">{item.description}</p>}
 
           {/* Who's committed to this option (planItems.ts rule 7): covers
               both pre-v3 legacy picks and any decided/personal-order option
               carrying `selections`. */}
-          {item.selections.length > 0 && (
+          {body === 'plain' && item.selections.length > 0 && (
             <div className="flex items-center gap-2">
               <SelectionAvatars
                 selections={item.selections.map((s) => ({
@@ -263,108 +228,19 @@ export function PlanItemSheet({
             </div>
           )}
 
-          {/* Voting (option-backed items only) */}
-          {item.vote && option && (
-            <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
-              {/* Pick-one vs pick-multiple, spelled out (voting-clarity ask). */}
-              <p className="text-xs font-medium text-[var(--text-secondary)]">
-                {item.vote.votingMethod === 'approval' ? '☑️' : '🔘'} {votingInstruction(item.vote.votingMethod)}
-              </p>
-              <div className="flex items-center gap-3 flex-wrap">
-                <Button
-                  variant={myVote ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={handleVote}
-                  disabled={!voteGate.ok}
-                  title={voteGate.reason ?? undefined}
-                  isLoading={toggleVote.isPending}
-                >
-                  {myVote
-                    ? item.vote.votingMethod === 'ranked'
-                      ? `Ranked #${myVote.rank ?? 1}`
-                      : item.vote.votingMethod === 'approval'
-                        ? 'Answered ✓'
-                        : 'Answered ✓'
-                    : item.vote.votingMethod === 'approval'
-                      ? 'Approve'
-                      : item.vote.votingMethod === 'ranked'
-                        ? 'Tap to rank next'
-                        : 'Answer'}
-                </Button>
-                {votesVisible ? (
-                  <div className="flex items-center gap-2">
-                    <SelectionAvatars
-                      selections={optionVotes
-                        .filter((v) => v.user)
-                        .map((v) => ({
-                          id: v.id,
-                          selected_at: v.created_at ?? undefined,
-                          user: v.user
-                            ? {
-                                full_name: v.user.full_name ?? undefined,
-                                email: v.user.email ?? undefined,
-                                avatar_url: v.user.avatar_url ?? undefined,
-                                avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
-                              }
-                            : undefined,
-                        }))}
-                      maxAvatars={4}
-                      size="sm"
-                      entityLabel="answered with this"
-                    />
-                    <span className="text-sm text-[var(--text-secondary)]">
-                      {item.vote.totalVotes} answer{item.vote.totalVotes === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                ) : (
-                  <span className="text-xs text-[var(--text-muted)]">Answers hidden until the question closes</span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {QUICK_REACTIONS.map((emoji) => {
-                  const count = reactionCounts.get(emoji) || 0
-                  const mine = myReactions.has(emoji)
-                  return (
-                    <Chip key={emoji} size="sm" selected={mine} onClick={() => handleReaction(emoji)}>
-                      {emoji} {count > 0 ? count : ''}
-                    </Chip>
-                  )
-                })}
-                <button
-                  type="button"
-                  onClick={() => setShowComments((s) => !s)}
-                  className="text-xs text-[var(--text-muted)] hover:text-[var(--text-secondary)] ml-1"
-                >
-                  💬 {optionComments.length > 0 ? optionComments.length : 'Comment'}
-                </button>
-              </div>
-
-              {showComments && (
-                <div className="space-y-2 pt-2 border-t border-[var(--border-subtle)]">
-                  {optionComments.map((c) => {
-                    const author = byUserId.get(c.user_id)
-                    return (
-                      <div key={c.id} className="flex items-start gap-2">
-                        <UserAvatar avatarData={author?.user} size="xs" />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-[var(--text-secondary)]">
-                            {author?.user?.full_name || author?.user?.email || 'Someone'}
-                          </p>
-                          <p className="text-sm text-[var(--text-primary)]">{c.content}</p>
-                        </div>
-                      </div>
-                    )
-                  })}
-                  <div className="flex gap-2">
-                    <TextArea value={commentDraft} onChange={(e) => setCommentDraft(e.target.value)} placeholder="Add a comment..." rows={1} fullWidth />
-                    <Button size="sm" onClick={handleAddComment} disabled={!commentDraft.trim()} isLoading={createComment.isPending}>
-                      Send
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
+          {/* The question this option belongs to: open -> the shared answer
+              control; decided -> the outcome; booked -> the booking state.
+              "⋯ Manage" (organisers) is the only entry to question-level actions. */}
+          {body === 'question' && decisionSection && (
+            <QuestionCard
+              trip={trip}
+              section={decisionSection}
+              defaultExpanded={questionOpen ? true : undefined}
+              focusOptionId={item.optionId}
+              bookedOptionIds={bookedIds}
+              bookedSummary={bookedSummary ? <>🧾 {bookedSummary}</> : undefined}
+              onManage={isOrganizer ? () => setManageOpen(true) : undefined}
+            />
           )}
 
           {/* Booking fields */}
@@ -383,11 +259,7 @@ export function PlanItemSheet({
                   </span>
                 )}
               </div>
-              {isOrganizer && (
-                <Button variant="ghost" size="sm" onClick={() => setEditBookingOpen(true)}>
-                  Edit booking
-                </Button>
-              )}
+              {item.booking.cancelled && <p className="font-medium text-[var(--text-primary)]">⚠️ Booking cancelled — needs rebooking</p>}
             </div>
           )}
 
@@ -403,52 +275,10 @@ export function PlanItemSheet({
             </button>
           )}
 
-          {/* Schedule it — decided-but-undated items (also booked-but-undated: a
-              legacy option can be status='booked' directly, with no dated
-              timeline event yet, per planItems.ts rule 6). Organizer-gated to
-              match RLS: trip_timeline_events INSERT is organizer-only
-              server-side, so showing this to everyone just produced an error
-              toast for non-organizers. */}
-          {isOrganizer && !item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && onScheduleIt && (
-            <Button variant="secondary" fullWidth onClick={() => onScheduleIt(item)}>
-              {scheduleClosesVote ? '📅 Close question & schedule' : '📅 Schedule it'}
+          <div className="flex justify-end border-t border-[var(--border-subtle)] pt-3">
+            <Button variant="ghost" size="sm" onClick={onClose}>
+              Close
             </Button>
-          )}
-          {canReopen && (
-            <Button variant="outline" fullWidth onClick={() => setReopenOpen(true)}>
-              ↩️ Reopen decision
-            </Button>
-          )}
-
-          {/* Edit/delete */}
-          <div className="flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
-            <div>
-              {isOrganizer && (
-                <Button variant="danger" size="sm" onClick={() => setConfirmingDelete(true)}>
-                  Delete
-                </Button>
-              )}
-            </div>
-            <div className="flex gap-2">
-              {editTarget === 'event' && (
-                <Button variant="secondary" size="sm" onClick={() => setEditEventOpen(true)}>
-                  Edit
-                </Button>
-              )}
-              {/* Vote-shape options were previously uneditable anywhere in the
-                  live app (OptionEditorSheet existed but was only mounted by
-                  the unreachable DecisionsTab) — this is the wiring that
-                  fixes it, gated the same organizer-only way delete already
-                  is above (see planItemEditTarget). */}
-              {editTarget === 'option' && option && (
-                <Button variant="secondary" size="sm" onClick={() => setEditOptionOpen(true)}>
-                  Edit
-                </Button>
-              )}
-              <Button variant="ghost" size="sm" onClick={onClose}>
-                Close
-              </Button>
-            </div>
           </div>
         </div>
       </Modal>
@@ -470,13 +300,9 @@ export function PlanItemSheet({
 
       {booking && <BookingEditorSheet isOpen={editBookingOpen} onClose={() => setEditBookingOpen(false)} trip={trip} booking={booking} />}
 
-      <ReopenDecisionDialog
-        isOpen={reopenOpen}
-        onClose={() => setReopenOpen(false)}
-        tripId={tripId}
-        section={decisionSection ?? null}
-        decidedTitle={item.title}
-      />
+      {isOrganizer && decisionSection && (
+        <QuestionManageSheet isOpen={manageOpen} onClose={() => setManageOpen(false)} tripId={tripId} sectionId={decisionSection.id} onSchedule={onScheduleOption} />
+      )}
 
       {confirmingDelete && (
         <Modal isOpen onClose={() => setConfirmingDelete(false)} size="sm" title={`Delete "${item.title}"?`}>

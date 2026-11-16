@@ -35,3 +35,53 @@ export function doneCountLabel(done: number, total: number): string {
 export function todoCountLabel(count: number): string {
   return `${count} ${count === 1 ? 'to-do' : 'to-dos'}`
 }
+
+// ---------------------------------------------------------------------------
+// Grouped To-dos sheet (slice 2E): section headings, claim wording, empty state.
+// One wording set for both tables; the only source-specific word is the verb
+// ("I'll do it" for a to-do, "I'll bring it" for something to bring).
+// ---------------------------------------------------------------------------
+
+export const SECTION_YOURS = 'Yours'
+export const SECTION_EVERYONE = 'Everyone'
+export const SECTION_OTHERS = 'With others'
+export const SECTION_GRABS = 'Up for grabs'
+export const SECTION_DONE = 'Done'
+/** Finished trips show to-dos as read-only history instead of as things to do. */
+export const SECTION_LEFT_OPEN = 'Left open'
+
+export const YOURS_EMPTY = 'Nothing for you right now.'
+export const GRABS_HINT = 'Nobody is on these yet. Take one and it moves to your list.'
+
+export const TODOS_EMPTY_TITLE = 'No to-dos.'
+export const TODOS_EMPTY_BODY = "Add one for the group — like 'Book the transfer' or 'Bring a speaker'."
+export const TODOS_FINISHED_NOTE = 'This trip has finished, so to-dos are shown as history.'
+export const NO_LONGER_NEEDED = '🗳️ No longer needed — the question is closed'
+export const TICKS_WHEN_ANSWERED = '🗳️ Ticks off when you answer'
+
+export const CLAIM_TODO = "I'll do it"
+export const CLAIM_BRING = "I'll bring it"
+export const UNCLAIM_LABEL = 'Give it back'
+
+export function claimLabel(isBring: boolean): string {
+  return isBring ? CLAIM_BRING : CLAIM_TODO
+}
+
+/** "Sam is on it" / "You're on it" for a claimed Anyone to-do. */
+export function claimedByLabel(name: string | null, isMe: boolean, isBring: boolean): string {
+  if (isMe) return isBring ? "You're bringing it" : "You're on it"
+  const who = name || 'Someone'
+  return isBring ? `${who} is bringing it` : `${who} is on it`
+}
+
+/** "Left: Sam, Priya and 2 more" — who still has to tick an Everyone to-do. */
+export function leftLabel(names: string[], max = 3): string {
+  if (names.length === 0) return ''
+  if (names.length <= max) {
+    if (names.length === 1) return `Left: ${names[0]}`
+    return `Left: ${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
+  }
+  const shown = names.slice(0, max - 1)
+  const more = names.length - shown.length
+  return `Left: ${shown.join(', ')} and ${more} more`
+}

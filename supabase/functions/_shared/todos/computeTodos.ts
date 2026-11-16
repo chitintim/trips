@@ -31,7 +31,7 @@ import {
   isOwnChoice,
   isQuestionOpen,
   questionAnswerState,
-  OWN_CHOICE_WITHOUT_DEADLINE_IS_TODO,
+  isAnswerTodoCandidate,
   type AnswerIndex,
   type AnswerInputs,
 } from '../answers/answers.ts'
@@ -58,9 +58,11 @@ import {
   payTitle,
   rsvpTitle,
   settleUpTitle,
-  settleUpWaitingTitle,
+  settleUpInfoText,
+  confirmPaymentGroupTitle,
+  confirmPaymentGroupDetail,
+  unblocksLabel,
   freezeBalancesTitle,
-  SETTLE_UP_WAITING_SUBTITLE,
   FREEZE_BALANCES_SUBTITLE,
   taskSubtitle,
   waitlistOfferTitle,
@@ -72,6 +74,7 @@ import type {
   SnapshotParticipant,
   SnapshotSection,
   Todo,
+  TodoInfo,
   TodoKind,
   TripSnapshot,
   WaitingOn,
@@ -244,9 +247,9 @@ function answerTodos(ctx: Ctx, userId: string): Todo[] {
   for (const section of ctx.s.sections) {
     if (questionAnswerState(section, userId, { index: ctx.index, tripFinished: ctx.finished }) !== 'needs_answer') continue
     const shape = isOwnChoice(section) ? 'own' : 'group'
-    // Phase 2 switch: without passes, an Own-choice question with no deadline
-    // cannot be cleared by someone who wants nothing, so it is not a to-do.
-    if (shape === 'own' && !section.vote_deadline && !OWN_CHOICE_WITHOUT_DEADLINE_IS_TODO) continue
+    // Without passes an Own-choice question with no deadline cannot be cleared
+    // by someone who wants nothing, so it is not a to-do (snapshot.passesAvailable).
+    if (!isAnswerTodoCandidate(section, ctx.s.passesAvailable === true)) continue
     const counts = answerCounts(section.id, ctx.index, ctx.s.participants, ctx.confirmationEnabled)
     out.push(
       finish(ctx, userId, {
@@ -279,6 +282,8 @@ function actionDue(action: SnapshotAction, tripStart: string): string | null {
 function taskTodos(ctx: Ctx, userId: string): Todo[] {
   const out: Todo[] = []
   for (const a of ctx.s.actions) {
+    // An unclaimed Anyone item is nobody's to-do; once claimed it counts for the claimer only.
+    if (a.who_mode === 'anyone' && !a.assigned_to) continue
     const mine = a.assigned_to ? a.assigned_to === userId : true
     if (!mine || isActionDoneFor(a, userId, ctx.sectionVoters)) continue
     const due = actionDue(a, ctx.s.trip.start_date)
@@ -330,27 +335,20 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
     )
   }
 
-  // Finished, nothing to pay yet: "Settle up: you owe £X". Frozen: it is a real
-  // payment to make (Settle up). Not frozen: nobody can mark anything paid
-  // until an organiser freezes balances, so say that instead of a dead end.
-  if (ctx.finished && suggestedFromMe.length === 0) {
-    const balance = ctx.s.balances?.[userId] ?? 0
-    // Only payments in the trip's base currency reduce a base-currency balance.
-    const awaitingConfirmation = settlements
-      .filter((st) => st.from_user_id === userId && st.status === 'marked_paid' && (st.currency ?? trip.base_currency) === trip.base_currency)
-      .reduce((sum, st) => sum + st.amount, 0)
-    const owed = -balance - awaitingConfirmation
+  // Finished and balances frozen, no per-payment row: "Settle up: you owe £X"
+  // is a real payment to make. NOT frozen: nobody can pay until an organiser
+  // freezes balances, so it is not this person's to-do (see `computeInfo`).
+  if (ctx.finished && ctx.frozen && suggestedFromMe.length === 0) {
+    const owed = settleOwed(ctx, userId)
     if (owed >= BALANCE_EPSILON) {
-      const amount = formatMoney(owed, trip.base_currency)
       out.push(
         finish(ctx, userId, {
           kind: 'pay',
           // One per person, so Waiting on never merges different people's payments.
           id: `pay:settle:${userId}`,
           entityId: `${trip.id}:${userId}`,
-          title: ctx.frozen ? settleUpTitle(amount) : settleUpWaitingTitle(amount),
-          subtitle: ctx.frozen ? null : SETTLE_UP_WAITING_SUBTITLE,
-          actionLabel: ctx.frozen ? 'Settle up' : 'View',
+          title: settleUpTitle(formatMoney(owed, trip.base_currency)),
+          actionLabel: 'Settle up',
           due: null,
           link: DEEP_LINKS.settle(),
         })
@@ -366,6 +364,7 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
         kind: 'confirm_payment',
         entityId: st.id,
         title: confirmPaymentTitle(firstName(ctx.namesById.get(st.from_user_id)), formatMoney(st.amount, st.currency ?? trip.base_currency)),
+        counterpartyId: st.from_user_id,
         due: null,
         link: DEEP_LINKS.payment(st.id),
       })
@@ -399,6 +398,17 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
   return out
 }
 
+/** What a person still owes on a finished trip (base currency, major units), net of payments awaiting confirmation. */
+function settleOwed(ctx: Ctx, userId: string): number {
+  const { settlements, trip } = ctx.s
+  const balance = ctx.s.balances?.[userId] ?? 0
+  // Only payments in the trip's base currency reduce a base-currency balance.
+  const awaitingConfirmation = settlements
+    .filter((st) => st.from_user_id === userId && st.status === 'marked_paid' && (st.currency ?? trip.base_currency) === trip.base_currency)
+    .reduce((sum, st) => sum + st.amount, 0)
+  return -balance - awaitingConfirmation
+}
+
 function hasUsableClaimLink(e: SnapshotExpense, now: Date): boolean {
   const link = e.allocation_link
   if (!link || !link.code) return false
@@ -408,8 +418,8 @@ function hasUsableClaimLink(e: SnapshotExpense, now: Date): boolean {
 /** Organiser: the trip is over and someone owes money, but balances are not frozen so nobody can pay yet. */
 function freezeTodos(ctx: Ctx, userId: string): Todo[] {
   if (!ctx.finished || ctx.frozen || !ctx.organiserIds.has(userId)) return []
-  const balances = ctx.s.balances ?? {}
-  if (!Object.values(balances).some((b) => b <= -BALANCE_EPSILON)) return []
+  const unblocks = ctx.s.participants.filter((p) => p.active !== false && settleOwed(ctx, p.user_id) >= BALANCE_EPSILON).length
+  if (unblocks === 0) return []
   return [
     finish(ctx, userId, {
       group: 'organiser',
@@ -419,6 +429,7 @@ function freezeTodos(ctx: Ctx, userId: string): Todo[] {
       title: freezeBalancesTitle,
       subtitle: FREEZE_BALANCES_SUBTITLE,
       actionLabel: 'Freeze',
+      unblocks,
       due: null,
       link: DEEP_LINKS.settle(),
     }),
@@ -602,6 +613,19 @@ function todosFor(ctx: Ctx, userId: string): Todo[] {
 }
 
 /**
+ * Non-counting lines for `userId`: things blocked on someone else, so not
+ * something THIS person can act on now. Never in the pill, Today's count,
+ * the dashboard, Waiting on, nudges or emails.
+ */
+export function computeInfo(snapshot: TripSnapshot, userId: string, now: Date = new Date()): TodoInfo[] {
+  const ctx = buildCtx(snapshot, now)
+  if (!ctx.byUser.has(userId) || !ctx.finished || ctx.frozen) return []
+  const owed = settleOwed(ctx, userId)
+  if (owed < BALANCE_EPSILON) return []
+  return [{ id: `info:settle_waiting:${userId}`, kind: 'settle_waiting', userId, text: settleUpInfoText(formatMoney(owed, snapshot.trip.base_currency)) }]
+}
+
+/**
  * The ordered to-dos `userId` owes on this trip, done-conditions already
  * applied. Empty means "You're all set". `now` defaults to the current time;
  * pass it in tests.
@@ -643,18 +667,45 @@ export function computeWaitingOn(snapshot: TripSnapshot, now: Date = new Date(),
   byPerson.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
 
   const items = new Map<string, WaitingOnItem>()
+  const confirmCounts = new Map<string, number>()
   for (const person of byPerson) {
     for (const t of person.todos) {
-      const key = `${t.kind}:${t.entityId}`
+      if (t.kind === 'confirm_payment' && t.counterpartyId) confirmCounts.set(t.counterpartyId, (confirmCounts.get(t.counterpartyId) ?? 0) + 1)
+    }
+  }
+  for (const person of byPerson) {
+    for (const t of person.todos) {
+      // Several people each confirming payments from the same payer read as one
+      // item ("Confirm payment from Tim"); a single one keeps its own row.
+      const grouped = t.kind === 'confirm_payment' && !!t.counterpartyId && (confirmCounts.get(t.counterpartyId) ?? 0) > 1
+      const entityId = grouped ? `from:${t.counterpartyId}` : t.entityId
+      const key = `${t.kind}:${entityId}`
       const existing = items.get(key)
-      if (existing) existing.userIds.push(person.userId)
-      else items.set(key, { id: key, kind: t.kind, group: t.group, entityId: t.entityId, title: t.title, link: t.link, due: t.due, overdue: t.overdue, userIds: [person.userId] })
+      if (existing) {
+        existing.userIds.push(person.userId)
+        existing.todoIds[person.userId] = t.id
+      } else {
+        items.set(key, {
+          id: key,
+          kind: t.kind,
+          group: t.group,
+          entityId,
+          title: grouped ? confirmPaymentGroupTitle(firstName(ctx.namesById.get(t.counterpartyId!))) : t.title,
+          link: grouped ? DEEP_LINKS.settle() : t.link,
+          due: t.due,
+          overdue: t.overdue,
+          userIds: [person.userId],
+          todoIds: { [person.userId]: t.id },
+          ...(t.unblocks != null ? { detail: unblocksLabel(t.unblocks) } : {}),
+        })
+      }
     }
   }
   const sectionById = new Map<string, SnapshotSection>(snapshot.sections.map((s) => [s.id, s]))
   const actionById = new Map(snapshot.actions.map((a) => [a.id, a]))
   const roster = snapshot.participants.filter((p) => !isOut(p))
   for (const item of items.values()) {
+    if (item.kind === 'confirm_payment' && item.entityId.startsWith('from:')) item.detail = confirmPaymentGroupDetail(item.userIds.length)
     if (item.kind === 'answer' && sectionById.has(item.entityId)) {
       const c = answerCounts(item.entityId, ctx.index, snapshot.participants, ctx.confirmationEnabled)
       item.title = sectionById.get(item.entityId)!.title
@@ -662,7 +713,7 @@ export function computeWaitingOn(snapshot: TripSnapshot, now: Date = new Date(),
       item.total = c.total
     } else if (item.kind === 'task') {
       const a = actionById.get(item.entityId)
-      if (a && !a.assigned_to) {
+      if (a && !a.assigned_to && a.who_mode !== 'anyone') {
         item.done = roster.filter((p) => isActionDoneFor(a, p.user_id, ctx.sectionVoters)).length
         item.total = roster.length
       }

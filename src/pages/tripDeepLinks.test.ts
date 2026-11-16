@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { DEEP_LINKS } from '../lib/todos/copy'
 import {
   DEEP_LINK_TOASTS,
+  fallbackDeepLinkPlan,
+  DEEP_LINK_GONE_TOAST,
   formatOpenParam,
   planDeepLink,
   resolveOpenParam,
@@ -153,6 +155,14 @@ describe('planDeepLink', () => {
       })
     })
 
+    it('a question the viewer has already answered (or is not asked) -> Questions list card, no flow', () => {
+      expect(planDeepLink({ kind: 'question', id: 'sec-open' }, ctx({ answerSectionIds: ['sec-open-2'] }))).toEqual({
+        space: 'plan',
+        open: { sheet: 'plan-question', id: 'sec-open' },
+      })
+      expect(planDeepLink({ kind: 'question', id: 'sec-open' }, ctx({ answerSectionIds: [] })).open).toEqual({ sheet: 'plan-question', id: 'sec-open' })
+    })
+
     it('unknown id fails soft to Today with a toast', () => {
       expect(planDeepLink({ kind: 'question', id: 'gone' }, ctx())).toEqual({ space: 'today', toast: DEEP_LINK_TOASTS.question })
     })
@@ -267,13 +277,23 @@ describe('planDeepLink', () => {
     it('organiser with people but no questions -> add-to-plan sheet', () => {
       expect(planDeepLink({ kind: 'setup' }, ctx({ isOrganizer: true, sections: [] }))).toEqual({
         space: 'plan',
-        open: { sheet: 'add-to-plan' },
+        open: { sheet: 'add-to-plan', asQuestion: true },
       })
     })
 
     it('already set up, or not an organiser -> Today', () => {
       expect(planDeepLink({ kind: 'setup' }, ctx({ isOrganizer: true }))).toEqual({ space: 'today' })
       expect(planDeepLink({ kind: 'setup' }, ctx({ participantCount: 1 }))).toEqual({ space: 'today' })
+    })
+  })
+
+  describe('fallbackDeepLinkPlan (data never loaded)', () => {
+    it('lands on Today with a toast for any link that needs data', () => {
+      expect(fallbackDeepLinkPlan({ kind: 'question', id: 'x' })).toEqual({ space: 'today', toast: DEEP_LINK_GONE_TOAST })
+      expect(fallbackDeepLinkPlan({ kind: 'payment', id: 'x' }).toast).toBe(DEEP_LINK_GONE_TOAST)
+    })
+    it('todos still scrolls to the card', () => {
+      expect(fallbackDeepLinkPlan({ kind: 'todos' })).toEqual({ space: 'today', open: { sheet: 'scroll-todos' } })
     })
   })
 })

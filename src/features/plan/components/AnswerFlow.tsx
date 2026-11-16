@@ -1,91 +1,99 @@
-import { useState } from 'react'
-import { Modal, Button, Badge, Stepper, SelectionAvatars, useToast } from '../../../components/ui'
-import { useAuth } from '../../../hooks/useAuth'
-import { useToggleVote } from '../../../lib/queries/usePlanning'
-import { hasAnswered } from '../../../lib/answers/answers'
-import { formatCostImpact, getTierSensitivityLine } from '../../decisions/lib/costImpact'
-import { votingInstruction, replaceableSiblingVoteIds, areVotesVisible, type VotingMethod } from '../../decisions/lib/voting'
-import { canVoteOnOption, describeVoteError } from '../../decisions/lib/resolveDecision'
-import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
-import { useOrderForm } from '../lib/useOrderForm'
-import { OrderFormFields } from './OrderFormFields'
-import type { SectionWithOptions, OptionVoteWithUser } from '../../../lib/queries/usePlanning'
-import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
+import { useCallback, useEffect, useState } from 'react'
+import { Modal, Button, Badge } from '../../../components/ui'
+import { AnswerControl, useQuestionAnswers } from '../../decisions'
+import { freezeFlowIds, resolveFlowSteps, progressLabel, canAdvance, summariseFlow, type StepRecord } from '../lib/answerFlow'
+import type { SectionWithOptions } from '../../../lib/queries/usePlanning'
 import type { Trip } from '../../../types'
-import { TODO_EMPTY_STATE } from '../../../lib/todos/copy'
 
 export interface AnswerFlowProps {
   isOpen: boolean
   onClose: () => void
   trip: Trip
-  /** Open questions (already filtered/sorted by the caller — PlanDecideLens), one screen each. */
+  /**
+   * Questions to step through (the caller filters/sorts them: the shell passes
+   * the viewer's answer to-dos, the Questions lens its "needs me" list). The list
+   * is frozen when the flow opens; each step then reads the live question from
+   * this prop by id.
+   */
   sections: SectionWithOptions[]
-  votes: OptionVoteWithUser[]
-  participants: ParticipantWithUser[]
-  headcount: InScopeHeadcount
 }
 
 /**
- * The focused answer flow (UX_REDESIGN.md Part 5, "glanceability fix"):
- * one question per full-screen step — vote UI for a group-vote question,
- * the personal order form inline for a personal-picks question — with
- * Skip/Next, progress dots, and a completion screen. Replaces scrolling a
- * wall of every open question at once.
+ * The step-through "answer all" flow (`?open=answer-all`, `?open=question:<id>`):
+ * one question per step using the one shared AnswerControl, with Back, Skip,
+ * the pass option (rendered by the control), "2 of 5" progress and a finish
+ * screen that says exactly what was and was not answered.
  */
-export function AnswerFlow({ isOpen, onClose, trip, sections, votes, participants, headcount }: AnswerFlowProps) {
+export function AnswerFlow({ isOpen, onClose, trip, sections }: AnswerFlowProps) {
+  if (!isOpen) return null
+  return <AnswerFlowSession onClose={onClose} trip={trip} sections={sections} />
+}
+
+function AnswerFlowSession({ onClose, trip, sections }: Pick<AnswerFlowProps, 'onClose' | 'trip' | 'sections'>) {
+  // Frozen at open: answering a question must not shorten the list.
+  const [ids] = useState(() => freezeFlowIds(sections))
+  const steps = resolveFlowSteps(ids, sections)
   const [index, setIndex] = useState(0)
   const [done, setDone] = useState(false)
+  const [records, setRecords] = useState<Record<string, StepRecord>>({})
 
-  const total = sections.length
-  const current = sections[index]
+  const total = steps.length
+  const current = steps[Math.min(index, Math.max(total - 1, 0))]
 
-  const reset = () => {
-    setIndex(0)
-    setDone(false)
-  }
-
-  const handleClose = () => {
-    reset()
-    onClose()
-  }
+  const record = useCallback((id: string, next: StepRecord) => {
+    setRecords((prev) => (prev[id]?.state === next.state && prev[id]?.closed === next.closed ? prev : { ...prev, [id]: next }))
+  }, [])
 
   const goNext = () => {
-    if (index >= total - 1) {
-      setDone(true)
-    } else {
-      setIndex((i) => i + 1)
-    }
+    if (index >= total - 1) setDone(true)
+    else setIndex((i) => i + 1)
   }
 
-  const steps = sections.map((s) => ({ key: s.id, label: s.title }))
+  const summary = summariseFlow(
+    steps.map((s) => s.id),
+    records
+  )
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} size="lg" title="Your answers">
+    <Modal isOpen onClose={onClose} size="lg" title="Your answers">
       {done || total === 0 ? (
-        <div className="py-10 text-center space-y-3">
-          <p className="text-4xl">🎉</p>
-          <h3 className="text-lg font-semibold text-[var(--text-primary)]">{TODO_EMPTY_STATE.headline}</h3>
-          <p className="text-sm text-[var(--text-secondary)]">Nothing else needs your answer.</p>
-          <Button onClick={handleClose}>Done</Button>
+        <div className="space-y-3 py-8 text-center" role="status">
+          <p className="text-4xl" aria-hidden="true">
+            {summary.skippedIds.length > 0 ? '👀' : '🎉'}
+          </p>
+          <h3 className="text-lg font-semibold text-[var(--text-primary)]">{summary.headline}</h3>
+          {summary.detail && <p className="text-sm text-[var(--text-secondary)]">{summary.detail}</p>}
+          <div className="flex flex-wrap justify-center gap-2 pt-2">
+            {summary.skippedIds.length > 0 && (
+              <Button
+                onClick={() => {
+                  setIndex(Math.max(0, steps.findIndex((s) => s.id === summary.skippedIds[0])))
+                  setDone(false)
+                }}
+              >
+                Answer {summary.skippedIds.length === 1 ? 'it' : 'them'} now
+              </Button>
+            )}
+            <Button variant={summary.skippedIds.length > 0 ? 'ghost' : 'primary'} onClick={onClose}>
+              {summary.skippedIds.length > 0 ? 'Later' : 'Done'}
+            </Button>
+          </div>
         </div>
       ) : (
-        <div className="space-y-5">
-          <Stepper steps={steps} current={index} size="sm" />
-
-          {current && (
-            <QuestionStep
-              key={current.id}
-              trip={trip}
-              section={current}
-              votes={votes}
-              participants={participants}
-              headcount={headcount}
-              onSkip={goNext}
-              onNext={goNext}
-              isLast={index === total - 1}
-            />
-          )}
-        </div>
+        current && (
+          <QuestionStep
+            key={current.id}
+            trip={trip}
+            section={current}
+            progress={progressLabel(index, total)}
+            fraction={(index + 1) / total}
+            isFirst={index === 0}
+            isLast={index === total - 1}
+            onRecord={record}
+            onBack={() => setIndex((i) => Math.max(0, i - 1))}
+            onNext={goNext}
+          />
+        )
       )}
     </Modal>
   )
@@ -94,274 +102,71 @@ export function AnswerFlow({ isOpen, onClose, trip, sections, votes, participant
 interface QuestionStepProps {
   trip: Trip
   section: SectionWithOptions
-  votes: OptionVoteWithUser[]
-  participants: ParticipantWithUser[]
-  headcount: InScopeHeadcount
-  onSkip: () => void
-  onNext: () => void
+  progress: string
+  fraction: number
+  isFirst: boolean
   isLast: boolean
+  onRecord: (id: string, record: StepRecord) => void
+  onBack: () => void
+  onNext: () => void
 }
 
-function QuestionStep({ trip, section, votes, participants, headcount, onSkip, onNext, isLast }: QuestionStepProps) {
-  const isPersonalOrder = (() => {
-    const m = section.metadata
-    return !!m && typeof m === 'object' && !Array.isArray(m) && (m as Record<string, unknown>).decision_shape === 'personal'
-  })()
+function QuestionStep({ trip, section, progress, fraction, isFirst, isLast, onRecord, onBack, onNext }: QuestionStepProps) {
+  const { control, card } = useQuestionAnswers(trip, section)
+  const state = control.myState
+  const closed = !control.gate.canAnswer
+
+  // Report this step's state up; the control itself keeps the data in sync.
+  useEffect(() => {
+    onRecord(section.id, { state, closed })
+  }, [onRecord, section.id, state, closed])
+
+  const advance = canAdvance({ state, closed })
+  const alreadyAnswered = state !== 'unanswered'
 
   return (
     <div className="space-y-4">
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium text-[var(--text-secondary)]" aria-live="polite">
+            {progress}
+          </p>
+          {card.chip && (
+            <Badge variant={card.chip.tone} size="sm">
+              {card.chip.label}
+            </Badge>
+          )}
+        </div>
+        <div className="h-1 w-full overflow-hidden rounded-full bg-[var(--surface-sunken)]" role="presentation">
+          <div className="h-full rounded-full bg-accent-500 transition-all" style={{ width: `${Math.round(fraction * 100)}%` }} />
+        </div>
+      </div>
+
       <div>
         <h3 className="text-base font-semibold text-[var(--text-primary)]">{section.title}</h3>
-        {section.description && <p className="text-sm text-[var(--text-secondary)] mt-0.5">{section.description}</p>}
+        {section.description && <p className="mt-0.5 text-sm text-[var(--text-secondary)]">{section.description}</p>}
+        <p className="mt-0.5 text-xs text-[var(--text-muted)]">{card.subtitle}</p>
       </div>
 
-      {isPersonalOrder ? (
-        <PersonalOrderStep trip={trip} section={section} participants={participants} onSkip={onSkip} onNext={onNext} isLast={isLast} />
-      ) : (
-        <VoteStep section={section} votes={votes} headcount={headcount} onSkip={onSkip} onNext={onNext} isLast={isLast} />
-      )}
-    </div>
-  )
-}
+      <AnswerControl trip={trip} section={section} />
 
-function PersonalOrderStep({
-  trip,
-  section,
-  participants,
-  onSkip,
-  onNext,
-  isLast,
-}: {
-  trip: Trip
-  section: SectionWithOptions
-  participants: ParticipantWithUser[]
-  onSkip: () => void
-  onNext: () => void
-  isLast: boolean
-}) {
-  const form = useOrderForm(trip, section)
-
-  const handleSaveAndNext = async () => {
-    const ok = await form.save()
-    if (ok) onNext()
-  }
-
-  return (
-    <div className="space-y-4">
-      <OrderFormFields section={section} participants={participants} form={form} />
-      <div className="flex justify-between gap-3 pt-2 border-t border-[var(--border-subtle)]">
-        <Button variant="ghost" onClick={onSkip}>
-          Skip for now
-        </Button>
-        <Button onClick={handleSaveAndNext} isLoading={form.isSaving}>
-          {isLast ? 'Save & finish' : 'Save & next'}
-        </Button>
-      </div>
-    </div>
-  )
-}
-
-function VoteStep({
-  section,
-  votes,
-  headcount,
-  onSkip,
-  onNext,
-  isLast,
-}: {
-  section: SectionWithOptions
-  votes: OptionVoteWithUser[]
-  headcount: InScopeHeadcount
-  onSkip: () => void
-  onNext: () => void
-  isLast: boolean
-}) {
-  const { user } = useAuth()
-  const toggleVote = useToggleVote(section.trip_id)
-  const { showToast } = useToast()
-  const [votingOptionId, setVotingOptionId] = useState<string | null>(null)
-
-  const votingMethod = (section.voting_method as VotingMethod) || 'single'
-  const optionIds = section.options.map((o) => o.id)
-  const sectionVotes = votes.filter((v) => optionIds.includes(v.option_id))
-  // Same hide_votes_until_close gate every other voting surface uses
-  // (voting.ts's areVotesVisible) — before that, nobody sees the
-  // per-option breakdown, only their own vote.
-  const votesVisible = areVotesVisible({ vote_deadline: section.vote_deadline, hide_votes_until_close: section.hide_votes_until_close, status: section.status })
-
-  const handleVote = (optionId: string) => {
-    if (!user) return
-    const gate = canVoteOnOption(section, section.options.find((o) => o.id === optionId))
-    if (!gate.ok) {
-      if (gate.reason) showToast({ type: 'error', message: gate.reason })
-      return
-    }
-    const onError = (err: unknown) => showToast({ type: 'error', message: 'Could not save your answer', description: describeVoteError(err) })
-    const myVote = sectionVotes.find((v) => v.option_id === optionId && v.user_id === user.id)
-    setVotingOptionId(optionId)
-    if (myVote) {
-      toggleVote.mutate({ optionId, userId: user.id, action: 'remove', voteId: myVote.id }, { onSettled: () => setVotingOptionId(null), onError })
-    } else {
-      // Radio semantics for single-choice polls: a new choice replaces any
-      // vote I already have on a sibling option (see useToggleVote).
-      const replaceVoteIds = replaceableSiblingVoteIds(optionIds, sectionVotes, user.id, optionId, votingMethod)
-      const optionTitle = section.options.find((o) => o.id === optionId)?.title
-      toggleVote.mutate({ optionId, userId: user.id, action: 'add', replaceVoteIds, optionTitle }, { onSettled: () => setVotingOptionId(null), onError })
-    }
-  }
-
-  const hasVoted = !!user && hasAnswered(section, user.id, { votes: sectionVotes })
-
-  return (
-    <div className="space-y-4">
-      {/* Pick-one vs pick-multiple, spelled out (voting-clarity ask). */}
-      <p className="text-xs font-medium text-[var(--text-secondary)]">
-        {votingMethod === 'approval' ? '☑️' : '🔘'} {votingInstruction(votingMethod)}
-      </p>
-      <div
-        role={votingMethod === 'single' ? 'radiogroup' : 'group'}
-        aria-label={votingInstruction(votingMethod)}
-        className="space-y-2"
-      >
-        {section.options
-          .filter((o) => o.status !== 'cancelled')
-          .map((option) => {
-            const myVote = sectionVotes.find((v) => v.option_id === option.id && v.user_id === user?.id)
-            const costImpactInput = { price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount: headcount.count, isEstimate: headcount.isEstimate, metadata: option.metadata }
-            const costImpact = formatCostImpact(costImpactInput)
-            const sensitivityLine = getTierSensitivityLine(costImpactInput)
-            const optionVoters = votesVisible ? sectionVotes.filter((v) => v.option_id === option.id && v.user) : []
-            return (
-              <div
-                key={option.id}
-                className={`rounded-[var(--radius-lg)] border p-3 flex items-start justify-between gap-3 transition-colors ${
-                  myVote ? 'border-accent-400 bg-accent-50 dark:bg-accent-950/30' : 'border-[var(--border-default)]'
-                }`}
-              >
-                <div className="min-w-0 flex items-start gap-2.5">
-                  {/* Control semantics made visible: radio dot for
-                      single-choice, checkbox square for approval, rank number
-                      for ranked. */}
-                  <SelectionIndicator method={votingMethod} selected={!!myVote} rank={myVote?.rank ?? null} />
-                  <div className="min-w-0">
-                    <p className="font-medium text-[var(--text-primary)] break-words">{option.title}</p>
-                    {option.description && <p className="text-xs text-[var(--text-secondary)] mt-0.5 break-words">{option.description}</p>}
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      {costImpact && (
-                        <Badge variant="info" size="sm">
-                          {costImpact}
-                        </Badge>
-                      )}
-                    </div>
-                    {sensitivityLine && <p className="mt-1 text-xs text-[var(--text-muted)]">{sensitivityLine}</p>}
-                    {/* Who's voted for this option, right where the vote is
-                        cast (feedback: "when I vote for something I can't
-                        see others voted what as well") — entityLabel
-                        distinguishes this from any "Chosen by" selections
-                        affordance elsewhere. */}
-                    {optionVoters.length > 0 && (
-                      <div className="mt-1.5">
-                        <SelectionAvatars
-                          selections={optionVoters.map((v) => ({
-                            id: v.id,
-                            selected_at: v.created_at ?? undefined,
-                            user: v.user
-                              ? {
-                                  full_name: v.user.full_name ?? undefined,
-                                  email: v.user.email ?? undefined,
-                                  avatar_url: v.user.avatar_url ?? undefined,
-                                  avatar_data: (v.user.avatar_data as { emoji: string; bgColor: string } | null) ?? undefined,
-                                }
-                              : undefined,
-                          }))}
-                          maxAvatars={4}
-                          size="sm"
-                          entityLabel="answered with this"
-                        />
-                      </div>
-                    )}
-                  </div>
-                </div>
-                <Button
-                  variant={myVote ? 'primary' : 'outline'}
-                  size="sm"
-                  onClick={() => handleVote(option.id)}
-                  disabled={option.locked || section.status === 'completed'}
-                  isLoading={votingOptionId === option.id}
-                  className="shrink-0"
-                  role={votingMethod === 'single' ? 'radio' : votingMethod === 'approval' ? 'checkbox' : undefined}
-                  aria-checked={votingMethod === 'ranked' ? undefined : !!myVote}
-                >
-                  {/* Ranked-vote wording matches PlanItemSheet's VoteStep
-                      equivalent (UPGRADE_MASTER_PLAN.md audit item 4) — a
-                      ranked question previously fell through to the plain
-                      'Vote'/'✓ Voted' labels here, losing the ranked signal. */}
-                  {myVote
-                    ? votingMethod === 'ranked'
-                      ? `Ranked #${myVote.rank ?? 1}`
-                      : votingMethod === 'approval'
-                        ? '✓ Approved'
-                        : '✓ Your choice'
-                    : votingMethod === 'approval'
-                      ? 'Approve'
-                      : votingMethod === 'ranked'
-                        ? 'Tap to rank next'
-                        : 'Choose'}
-                </Button>
-              </div>
-            )
-          })}
-      </div>
-
-      <div className="flex justify-between gap-3 pt-2 border-t border-[var(--border-subtle)]">
-        <Button variant="ghost" onClick={onSkip}>
-          Skip for now
-        </Button>
-        <Button onClick={onNext} disabled={!hasVoted} title={hasVoted ? undefined : 'Answer to continue, or skip'}>
+      <div className="flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
+        <div className="flex gap-1">
+          {!isFirst && (
+            <Button variant="ghost" onClick={onBack}>
+              Back
+            </Button>
+          )}
+          {!alreadyAnswered && !closed && (
+            <Button variant="ghost" onClick={onNext}>
+              Skip for now
+            </Button>
+          )}
+        </div>
+        <Button onClick={onNext} disabled={!advance} title={advance ? undefined : 'Answer to continue, or skip'}>
           {isLast ? 'Finish' : 'Next'}
         </Button>
       </div>
     </div>
-  )
-}
-
-/**
- * Visual control-semantics marker for a vote option row: radio dot
- * (single), checkbox square (approval), rank number (ranked). Purely
- * presentational — the adjacent Button is the interactive control and
- * carries the aria state.
- */
-function SelectionIndicator({ method, selected, rank }: { method: VotingMethod; selected: boolean; rank: number | null }) {
-  if (method === 'ranked') {
-    return (
-      <span
-        aria-hidden="true"
-        className={`mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 text-[10px] font-semibold flex items-center justify-center ${
-          selected ? 'border-accent-600 bg-accent-600 text-white' : 'border-[var(--border-default)] text-transparent'
-        }`}
-      >
-        {selected ? rank ?? 1 : ''}
-      </span>
-    )
-  }
-  if (method === 'approval') {
-    return (
-      <span
-        aria-hidden="true"
-        className={`mt-0.5 h-5 w-5 shrink-0 rounded-[var(--radius-sm)] border-2 text-xs text-white flex items-center justify-center ${
-          selected ? 'border-accent-600 bg-accent-600' : 'border-[var(--border-default)]'
-        }`}
-      >
-        {selected ? '✓' : ''}
-      </span>
-    )
-  }
-  return (
-    <span
-      aria-hidden="true"
-      className={`mt-0.5 h-5 w-5 shrink-0 rounded-full border-2 ${
-        selected ? 'border-accent-600 bg-accent-600 shadow-[inset_0_0_0_3px_var(--surface-raised)]' : 'border-[var(--border-default)]'
-      }`}
-    />
   )
 }

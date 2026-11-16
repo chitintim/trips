@@ -79,6 +79,8 @@ export interface SnapshotAction {
   id: string
   title: string
   assigned_to: string | null
+  /** 'anyone' = up for grabs (no assignee until someone claims it). Absent until the who_mode migration is applied. */
+  who_mode?: string | null
   deadline_kind: string
   due_date: string | null
   completed_at: string | null
@@ -142,6 +144,12 @@ export interface TripSnapshot {
   votes: ReadonlyArray<SnapshotVote>
   /** Phase 2 extension point (`question_passes`). Omit until it exists. */
   passes?: ReadonlyArray<AnswerPass>
+  /**
+   * True when the `question_passes` table is reachable, so "None for me" can
+   * clear an Own-choice question. Omitted/false = conservative: an Own-choice
+   * question with no deadline is not a to-do. The email side never sets it.
+   */
+  passesAvailable?: boolean
   actions: ReadonlyArray<SnapshotAction>
   checklists: ReadonlyArray<SnapshotChecklistItem>
   expenses: ReadonlyArray<SnapshotExpense>
@@ -209,6 +217,22 @@ export interface Todo {
   shape?: 'group' | 'own'
   /** For `answer`: "N of M answered", with the single in-scope denominator. */
   progress?: { done: number; total: number }
+  /** For the organiser's freeze to-do: how many people it unblocks. */
+  unblocks?: number
+  /** For `confirm_payment`: the person who paid (the other party). */
+  counterpartyId?: string
+}
+
+/**
+ * A line shown to a person that is NOT a to-do: it never counts in the pill,
+ * Today, the dashboard or Waiting on, can never be nudged or emailed. Used for
+ * things that are blocked on someone else.
+ */
+export interface TodoInfo {
+  id: string
+  kind: 'settle_waiting'
+  userId: string
+  text: string
 }
 
 export interface WaitingOnPerson {
@@ -232,6 +256,10 @@ export interface WaitingOnItem {
   overdue: boolean
   /** People who still owe this item. */
   userIds: string[]
+  /** userId -> that person's `Todo.id` for this item (an item can group different to-do ids). */
+  todoIds: Record<string, string>
+  /** Optional secondary line ("Unblocks 9 people", "4 payments to confirm"). */
+  detail?: string
   /** Present for answers and "Everyone" to-dos: "7 of 9 answered" / "8 of 10 done". */
   done?: number
   total?: number

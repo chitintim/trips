@@ -7,8 +7,6 @@ import {
   buildReopenUpdate,
   canReopenDecision,
   isDecidedOption,
-  canVoteOnOption,
-  describeVoteError,
   type ResolverSection,
 } from './resolveDecision'
 import { areVotesVisible } from './voting'
@@ -145,22 +143,6 @@ describe('isDecidedOption (delete-winner guard)', () => {
     expect(isDecidedOption(s, [], 'a')).toBe(true)
     expect(isDecidedOption(s, [], 'b')).toBe(false)
     expect(isDecidedOption({ ...s, status: 'in_progress' }, [], 'a')).toBe(false)
-  })
-})
-
-describe('canVoteOnOption (vote gating)', () => {
-  it('blocks closed questions and locked options', () => {
-    expect(canVoteOnOption({ status: 'completed' }, { locked: false }).ok).toBe(false)
-    expect(canVoteOnOption({ status: 'in_progress' }, { locked: true }).ok).toBe(false)
-    expect(canVoteOnOption({ status: 'in_progress' }, { locked: false })).toEqual({ ok: true, reason: null })
-    expect(canVoteOnOption(undefined, undefined).ok).toBe(true)
-  })
-})
-
-describe('describeVoteError', () => {
-  it('explains a server-side closed rejection', () => {
-    expect(describeVoteError(new Error('Voting is closed for this question'))).toMatch(/already been answered/)
-    expect(describeVoteError({ message: 'new row violates row-level security policy' })).toMatch(/permission/)
   })
 })
 

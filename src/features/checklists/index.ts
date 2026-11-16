@@ -1,10 +1,7 @@
 /**
- * Shared checklist feature. v2.1: the standalone Checklist TAB is dead —
- * "who's bringing what" is a people thing (UX_REDESIGN §4), so ChecklistTab
- * renders inside the People space's Checklist section and this barrel no
- * longer exports a tab config.
+ * Shared checklist ("bring list") feature. Since the To-dos redesign (UX 2.3)
+ * bring items are rendered by the one To-dos sheet (features/actions), grouped
+ * with the other to-dos; this folder keeps only the table's Who-mode mapping.
  */
-export { ChecklistTab } from './components/ChecklistTab'
-export type { ChecklistTabProps } from './components/ChecklistTab'
-export { isBringItemOpenForUser, openBringCountForUser } from './lib/checklistStatus'
-export type { ChecklistItemStatusRef } from './lib/checklistStatus'
+export { checklistWhoMode, checklistCanStore, checklistAssigneeFor } from './lib/checklistWho'
+export type { ChecklistWhoRow } from './lib/checklistWho'

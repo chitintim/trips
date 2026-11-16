@@ -1161,6 +1161,42 @@ export type Database = {
           },
         ]
       }
+      question_passes: {
+        Row: {
+          created_at: string
+          kind: string
+          section_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          kind: string
+          section_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          kind?: string
+          section_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "question_passes_section_id_fkey"
+            columns: ["section_id"]
+            isOneToOne: false
+            referencedRelation: "planning_sections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "question_passes_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       rate_limits: {
         Row: {
           feature: string
@@ -1532,6 +1568,8 @@ export type Database = {
           section_id: string | null
           title: string
           trip_id: string
+          /** NULL = derive from assigned_to; 'anyone' = up for grabs. Optional until 20261117100000_todo_who_mode.sql is applied. */
+          who_mode?: string | null
         }
         Insert: {
           assigned_to?: string | null
@@ -1546,6 +1584,7 @@ export type Database = {
           section_id?: string | null
           title: string
           trip_id: string
+          who_mode?: string | null
         }
         Update: {
           assigned_to?: string | null
@@ -1560,6 +1599,7 @@ export type Database = {
           section_id?: string | null
           title?: string
           trip_id?: string
+          who_mode?: string | null
         }
         Relationships: [
           {
@@ -2071,6 +2111,10 @@ export type Database = {
         Args: { p_invitation_id: string; p_user_id: string }
         Returns: boolean
       }
+      claim_todo: {
+        Args: { p_source: string; p_id: string; p_action: string }
+        Returns: Json
+      }
       can_view_trip: {
         Args: { p_trip_id: string; p_user_id: string }
         Returns: boolean
@@ -2115,6 +2159,10 @@ export type Database = {
         Returns: string
       }
       generate_invitation_code: { Args: never; Returns: string }
+      delete_question: {
+        Args: { p_section_id: string }
+        Returns: Json
+      }
       reset_trip_confirmations: {
         Args: { p_include_declined?: boolean; p_trip_id: string }
         Returns: Json

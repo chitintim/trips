@@ -1,3 +1,4 @@
+import { rsvpButtonLabel } from '../lib/rsvpButtonLabel'
 import { useEffect, useMemo, useState } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
@@ -157,7 +158,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
 
             {myParticipant && (
               <Button fullWidth onClick={() => setStatusModalParticipant(myParticipant)}>
-                {myParticipant.confirmation_status === 'confirmed' ? 'View my answer' : 'Update my answer'}
+                {rsvpButtonLabel(myParticipant.confirmation_status)}
               </Button>
             )}
           </Card.Content>

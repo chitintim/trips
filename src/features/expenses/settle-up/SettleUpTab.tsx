@@ -545,6 +545,9 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
       {carryoverCandidates.length > 0 && (
         <Card noPadding className="p-4 space-y-3">
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">Unsettled from other trips</h3>
+          <p className="text-xs text-[var(--text-muted)]">
+            Balances left over on earlier trips. They are not part of this trip&apos;s balances or to-dos unless you fold them in.
+          </p>
           {carryoverCandidates.map((c, i) => (
             <div key={i} className="flex items-center justify-between gap-3">
               <div className="min-w-0">
@@ -552,7 +555,7 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
                   {c.otherUserName} · {c.sourceTripName}
                 </p>
                 <p className="text-xs text-[var(--text-muted)]">
-                  {c.netAmount >= 0 ? 'Owed to you' : 'You owe'}: {formatMoney(Math.abs(c.netAmount), c.currency)}
+                  Carried from {c.sourceTripName}: {c.netAmount >= 0 ? 'owed to you' : 'you owe'} {formatMoney(Math.abs(c.netAmount), c.currency)}, not in this trip&apos;s balances yet
                 </p>
               </div>
               <Button

@@ -39,8 +39,8 @@ export function computeStageSuggestion(input: StageSuggestionInput): StageSugges
       return {
         key: `sync-${storedStatus}-trip_ongoing`,
         to: 'trip_ongoing',
-        title: 'Mark the trip as ongoing',
-        detail: 'The trip dates have started — updating the status keeps reminders and the dashboard accurate.',
+        title: 'Tidy up: save the trip as ongoing',
+        detail: 'The trip is already shown as under way because its dates have started. This just updates the saved status to match.',
         kind: 'sync',
       }
     }
@@ -48,8 +48,8 @@ export function computeStageSuggestion(input: StageSuggestionInput): StageSugges
       return {
         key: `sync-${storedStatus}-trip_completed`,
         to: 'trip_completed',
-        title: 'Mark the trip as completed',
-        detail: 'The trip dates have passed — marking it completed unlocks the recap and settle-up flow everywhere.',
+        title: 'Tidy up: save the trip as completed',
+        detail: 'The trip is already shown as finished because its dates have passed. This just updates the saved status to match.',
         kind: 'sync',
       }
     }

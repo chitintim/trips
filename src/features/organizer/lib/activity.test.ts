@@ -12,6 +12,7 @@ describe('describeNotificationKind', () => {
     const e = (verb: string, label: string) => ({ verb, entity: { label }, actor: null }) as never
     expect(renderActivity(e('vote_cast', 'Where to stay'), 'Sam').text).toBe('Sam answered "Where to stay"')
     expect(renderActivity(e('decision_reopened', 'Where to stay'), 'Sam').text).toBe('Sam reopened the question "Where to stay"')
+    expect(renderActivity(e('question_deleted', 'Where to stay'), 'Sam').text).toBe('Sam deleted the question "Where to stay"')
     expect(renderActivity(e('confirmations_reset', '3'), 'Sam').text).toBe('Sam reset replies to Are you coming? (3 cleared)')
   })
 

@@ -123,7 +123,7 @@ export function estimateAnswerMinutes(openCount: number): number {
   return Math.max(1, Math.round(openCount * 0.5))
 }
 
-/** "3 questions need your answer · ~2 min" for the Decide lens entry card, or a calm all-done message when nothing's open. */
+/** "3 questions need your answer · ~2 min" for the Questions lens entry card, or a calm all-done message when nothing's open. */
 export function formatEntryCardLabel(openCount: number): string {
   if (openCount <= 0) return TODO_EMPTY_STATE.headline
   const minutes = estimateAnswerMinutes(openCount)

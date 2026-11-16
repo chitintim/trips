@@ -14,6 +14,30 @@ describe('tallyVotes', () => {
     expect(tallies.find((t) => t.optionId === 'y')?.score).toBe(1)
   })
 
+  it('legacy ranked votes saved with a null rank score in the order they were cast instead of as zero', () => {
+    const at = (n: number) => `2026-01-0${n}T00:00:00Z`
+    // Voter 1 cast x, then y, then z with no ranks: x=1st, y=2nd, z=3rd. Voter 2 ranked z=1, y=2 explicitly.
+    const votes = [
+      vote({ option_id: 'y', user_id: '1', created_at: at(2) }),
+      vote({ option_id: 'x', user_id: '1', created_at: at(1) }),
+      vote({ option_id: 'z', user_id: '1', created_at: at(3) }),
+      vote({ option_id: 'z', user_id: '2', rank: 1 }),
+      vote({ option_id: 'y', user_id: '2', rank: 2 }),
+    ]
+    const score = Object.fromEntries(tallyVotes(['x', 'y', 'z'], votes, 'ranked').map((t) => [t.optionId, t.score]))
+    // voter 1 (max 3): x=3 y=2 z=1; voter 2 (max 2): z=2 y=1
+    expect(score).toEqual({ x: 3, y: 3, z: 3 })
+  })
+
+  it('a ranked voter with some stored ranks keeps them and the null-rank votes follow', () => {
+    const votes = [
+      vote({ option_id: 'x', user_id: '1', rank: 1 }),
+      vote({ option_id: 'y', user_id: '1', rank: null }),
+    ]
+    const score = Object.fromEntries(tallyVotes(['x', 'y'], votes, 'ranked').map((t) => [t.optionId, t.score]))
+    expect(score).toEqual({ x: 2, y: 1 })
+  })
+
   it('tallies ranked votes with a Borda-style weighting (lower rank = more points)', () => {
     // voter 1 ranks x=1, y=2 (max rank 2) -> x gets 2 pts, y gets 1 pt
     const votes = [vote({ option_id: 'x', user_id: '1', rank: 1 }), vote({ option_id: 'y', user_id: '1', rank: 2 })]

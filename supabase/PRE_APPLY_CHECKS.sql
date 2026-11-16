@@ -180,3 +180,214 @@ WHERE pronamespace = 'public'::regnamespace
     'reset_action_reminders_on_trip_start_change'
   )
 ORDER BY 1;
+
+-- ===========================================================================
+-- Migration 20261117090000_question_passes.sql (Phase 2 slice 2A). All read-only.
+-- ===========================================================================
+
+-- 11a. Name collisions.
+--      Safe: no rows from either query.
+--      Gates: question_passes.
+SELECT to_regclass('public.question_passes') AS existing_table;
+SELECT proname, pg_get_function_identity_arguments(oid) AS args
+FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace
+  AND proname IN ('question_pass_trip_id', 'guard_question_passes_closed_question');
+
+-- 11b. The helper signatures the policies call.
+--      Safe: is_admin(uuid), is_trip_organizer(uuid, uuid), is_trip_participant(uuid, uuid),
+--      all returning boolean, prosecdef true. The argument ORDER is (trip_id, user_id);
+--      confirm from the body if unsure.
+--      Gates: question_passes policies.
+SELECT proname, pg_get_function_identity_arguments(oid) AS args,
+       pg_get_function_result(oid) AS result, prosecdef
+FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace
+  AND proname IN ('is_admin', 'is_trip_organizer', 'is_trip_participant')
+ORDER BY 1;
+
+-- 11c. Parent columns and the section status type.
+--      Safe: planning_sections.id uuid, trip_id uuid, status = section_status;
+--      users.id uuid.
+--      Gates: question_passes FKs, guard trigger.
+SELECT table_name, column_name, data_type, udt_name
+FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND ((table_name = 'planning_sections' AND column_name IN ('id', 'trip_id', 'status'))
+    OR (table_name = 'users' AND column_name = 'id'))
+ORDER BY 1, 2;
+
+-- 11d. The Phase 1 closed-question guard is applied (same message and carve-outs).
+--      Safe: one row whose prosrc contains 'Voting is closed for this question'.
+--      If missing, apply 20261116100000 first (the pass guard is meant to match it).
+--      Gates: question_passes guard.
+SELECT proname, prosrc LIKE '%Voting is closed for this question%' AS same_message
+FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace AND proname = 'guard_option_votes_closed_question';
+
+-- 11e. Which answer tables are in the realtime publication.
+--      Safe: informational. The migration adds question_passes only if
+--      option_votes is listed here. If it is not, realtime for votes is not
+--      published either, and passes simply refresh on the user's own actions
+--      and on window focus.
+--      Gates: question_passes realtime.
+SELECT tablename FROM pg_publication_tables
+WHERE pubname = 'supabase_realtime' AND schemaname = 'public'
+  AND tablename IN ('option_votes', 'selections', 'planning_sections', 'question_passes')
+ORDER BY 1;
+
+-- 11f. Default privileges on new public tables (what the REVOKE/GRANT overrides).
+--      Safe: informational.
+--      Gates: question_passes grants.
+SELECT defaclrole::regrole AS owner, defaclobjtype, defaclacl
+FROM pg_default_acl
+WHERE defaclnamespace = 'public'::regnamespace;
+
+-- 11g. AFTER applying: table privileges and policies.
+--      Safe: anon has none; authenticated has exactly DELETE, INSERT, SELECT;
+--      three policies (select, insert_own, delete_own) exist; RLS is on.
+SELECT grantee, string_agg(privilege_type, ',' ORDER BY privilege_type) AS privs
+FROM information_schema.role_table_grants
+WHERE table_schema = 'public' AND table_name = 'question_passes'
+GROUP BY 1 ORDER BY 1;
+SELECT policyname, cmd, roles, qual, with_check
+FROM pg_policies WHERE schemaname = 'public' AND tablename = 'question_passes' ORDER BY 1;
+SELECT relrowsecurity FROM pg_class WHERE oid = 'public.question_passes'::regclass;
+
+-- ============================================================================
+-- 12. 20261117100000_todo_who_mode.sql  (To-dos "Who" modes, slice 2E)
+-- ============================================================================
+
+-- 12a. The column does not exist yet (the migration adds it).
+--      Safe: zero rows before applying, one row after.
+--      Gates: who_mode column.
+SELECT column_name, data_type, is_nullable, column_default
+FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'trip_actions' AND column_name = 'who_mode';
+
+-- 12b. The constraint the migration drops (a "fixed" to-do must have a due date).
+--      Safe: EXACTLY ONE row now (trip_actions_due_when_fixed); zero rows after applying.
+--      The migration fails loudly (RAISE EXCEPTION) if this row is missing on a first apply.
+--      If it is not exactly one row, STOP and find the live name before applying.
+--      Gates: optional due date.
+SELECT conname, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE conrelid = 'public.trip_actions'::regclass AND conname = 'trip_actions_due_when_fixed';
+
+-- 12c. Everything that can already touch these two tables: ALL policies (every command),
+--      ALL triggers (non-internal) and ALL constraints. The migration changes no policy; it
+--      only drops four claim policies that should not exist yet (a no-op here).
+--      Safe: informational. Expect NO policy whose name contains 'up-for-grabs', and the
+--      creator/assignee/organizer UPDATE policy on each table.
+--      Gates: claim / give back.
+SELECT 'policy' AS kind, tablename AS tbl, policyname AS name, cmd AS detail, coalesce(qual, '') || ' || ' || coalesce(with_check, '') AS definition
+FROM pg_policies
+WHERE schemaname = 'public' AND tablename IN ('trip_actions', 'trip_checklists')
+UNION ALL
+SELECT 'trigger', c.relname, t.tgname, '', pg_get_triggerdef(t.oid)
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+WHERE c.oid IN ('public.trip_actions'::regclass, 'public.trip_checklists'::regclass) AND NOT t.tgisinternal
+UNION ALL
+SELECT 'constraint', c.relname, k.conname, k.contype::text, pg_get_constraintdef(k.oid)
+FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
+WHERE k.conrelid IN ('public.trip_actions'::regclass, 'public.trip_checklists'::regclass)
+ORDER BY 1, 2, 3;
+
+-- 12c-2. claim_todo must not exist yet (the migration creates it).
+--      Safe: zero rows before applying.
+SELECT p.oid::regprocedure AS existing_function
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public' AND p.proname = 'claim_todo';
+
+-- 12d. Existing rows keep their meaning: who_mode is added NULL, so every action with no
+--      assignee is still "Everyone" and every checklist item with none is still "Anyone".
+--      Safe: informational counts (live at schema time: 17 actions, 9 checklist items).
+SELECT 'trip_actions: everyone (no assignee)' AS bucket, count(*) FROM public.trip_actions WHERE assigned_to IS NULL
+UNION ALL SELECT 'trip_actions: named person', count(*) FROM public.trip_actions WHERE assigned_to IS NOT NULL
+UNION ALL SELECT 'trip_checklists: anyone (no assignee)', count(*) FROM public.trip_checklists WHERE assigned_to IS NULL
+UNION ALL SELECT 'trip_checklists: named person', count(*) FROM public.trip_checklists WHERE assigned_to IS NOT NULL;
+
+-- 12e. AFTER applying: all existing rows still have who_mode NULL, no claim policy exists,
+--      and claim_todo is SECURITY DEFINER with a fixed search_path, callable by signed-in users only.
+--      Safe: 0 non-null rows; zero 'up-for-grabs' policies; one claim_todo row with
+--      prosecdef = true, has_search_path = true, anon_can_execute = false, authenticated_can_execute = true.
+SELECT count(*) FILTER (WHERE who_mode IS NOT NULL) AS non_null_who_mode, count(*) AS total FROM public.trip_actions;
+SELECT tablename, policyname FROM pg_policies
+WHERE schemaname = 'public' AND tablename IN ('trip_actions', 'trip_checklists') AND policyname ILIKE '%up-for-grabs%'
+ORDER BY 1, 2;
+SELECT p.oid::regprocedure AS fn,
+       p.prosecdef,
+       coalesce(p.proconfig::text ILIKE '%search_path%', false) AS has_search_path,
+       has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_can_execute,
+       has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_can_execute
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public' AND p.proname = 'claim_todo';
+
+-- ============================================================================
+-- 13. 20261117110000_delete_question.sql  (delete a question atomically + selections guard)
+-- ============================================================================
+
+-- 13a. Name clashes: nothing called delete_question / guard_selections_closed_question
+--      exists yet, and there is no trigger named selections_guard_closed_question.
+--      Safe: zero rows from all three.
+--      Gates: name clash.
+SELECT proname, oidvectortypes(proargtypes) AS args FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace
+  AND proname IN ('delete_question', 'guard_selections_closed_question');
+SELECT tgname FROM pg_trigger
+WHERE tgrelid = 'public.selections'::regclass AND tgname = 'selections_guard_closed_question';
+
+-- 13b. Delete actions of every FK that references planning_sections or options
+--      (confdeltype: a = NO ACTION, r = RESTRICT, c = CASCADE, n = SET NULL, d = SET DEFAULT).
+--      The function does not rely on any of them (it NULLs out / deletes explicitly), so this
+--      is informational. Confirmed live earlier: option_votes.option_id c, bookings.option_id n,
+--      trip_actions.section_id n. Check question_passes.section_id is c (if that table exists).
+--      Safe: informational.
+--      Gates: nothing; documents what the explicit steps replace.
+SELECT conrelid::regclass AS referrer, conname, confrelid::regclass AS referenced,
+       confdeltype AS on_delete, pg_get_constraintdef(oid) AS definition
+FROM pg_constraint
+WHERE contype = 'f'
+  AND confrelid IN ('public.planning_sections'::regclass, 'public.options'::regclass)
+ORDER BY 3, 1, 2;
+
+-- 13c. Existing triggers on selections (the migration adds selections_guard_closed_question).
+--      Safe: informational; expect none (or only ones you recognise).
+--      Gates: an unexpected trigger that interacts with the new BEFORE trigger.
+SELECT tgname, tgenabled, pg_get_triggerdef(t.oid) AS def
+FROM pg_trigger t
+WHERE NOT tgisinternal AND tgrelid = 'public.selections'::regclass
+ORDER BY 1;
+
+-- 13d. LEGACY-DATA RISK: completed sections that have selections. After applying, signed-in
+--      users can no longer add, change or remove selections on these (service role still can).
+--      "own_choice" = decision_shape 'personal' (order forms, opt-in lists), where people may
+--      have kept editing after the section was marked completed. Reopen any section that
+--      should stay editable BEFORE applying.
+--      Safe: you recognise every row as genuinely finished (live had 18 completed sections,
+--      6 trips with status trip_completed).
+--      Gates: the selections guard.
+SELECT t.id AS trip_id, t.name, t.status AS trip_status, ps.id AS section_id, ps.title,
+       COALESCE(ps.metadata ->> 'decision_shape', '(none: vote)') AS decision_shape,
+       count(sel.id) AS selections, max(sel.selected_at) AS last_selection_at
+FROM public.planning_sections ps
+JOIN public.trips t ON t.id = ps.trip_id
+JOIN public.options o ON o.section_id = ps.id
+JOIN public.selections sel ON sel.option_id = o.id
+WHERE ps.status = 'completed'
+GROUP BY t.id, t.name, t.status, ps.id, ps.title, ps.metadata
+ORDER BY (t.status = 'trip_completed'), t.name, ps.title;
+
+-- 13e. AFTER applying: the function is callable by signed-in users only, the trigger
+--      function by nobody, and the trigger exists.
+--      Safe: delete_question anon_can = false, authenticated_can = true;
+--      guard_selections_closed_question both false; one row from the trigger query.
+SELECT 'delete_question' AS fn,
+       has_function_privilege('anon', 'public.delete_question(uuid)', 'EXECUTE') AS anon_can,
+       has_function_privilege('authenticated', 'public.delete_question(uuid)', 'EXECUTE') AS authenticated_can
+UNION ALL
+SELECT 'guard_selections_closed_question',
+       has_function_privilege('anon', 'public.guard_selections_closed_question()', 'EXECUTE'),
+       has_function_privilege('authenticated', 'public.guard_selections_closed_question()', 'EXECUTE');
+SELECT tgname, tgenabled, pg_get_triggerdef(oid) AS def FROM pg_trigger
+WHERE tgrelid = 'public.selections'::regclass AND tgname = 'selections_guard_closed_question';

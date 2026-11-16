@@ -8,6 +8,7 @@ import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useNotifications } from '../../../lib/queries/useNotifications'
 import { useWaitingOn } from '../../../lib/queries/useTodos'
+import { isTripFinished } from '../../../lib/answers/answers'
 import { WAITING_ON_EMPTY, todoCountLabel, formatDayMonth } from '../../../lib/todos/copy'
 import type { Todo, WaitingOnItem } from '../../../lib/todos/types'
 import { ActionsSheet } from '../../actions/components/ActionsSheet'
@@ -16,6 +17,7 @@ import {
   escalatedUserIds,
   isOrganiserOwn,
   lastRemindedByUser,
+  showLastReminded,
   todoToBlocker,
   upcomingCancellationDeadlines,
   type Blocker,
@@ -126,6 +128,7 @@ export function WaitingOnBoard({ trip }: WaitingOnBoardProps) {
   const startNudge = (userId: string, todo: Todo) => setNudge({ userId, name: nameOf(userId), blocker: todoToBlocker(todo) })
   const canNudge = (userId: string, todo: Todo) => canManageTrip && !isOrganiserOwn(todo) && userId !== user?.id
   const nothing = waitingOn.byPerson.length === 0
+  const tripFinished = isTripFinished(trip)
 
   return (
     <div className="space-y-4">
@@ -185,7 +188,7 @@ export function WaitingOnBoard({ trip }: WaitingOnBoardProps) {
                       <p className="text-xs text-[var(--text-muted)]">
                         {todoCountLabel(person.count)}
                         {person.overdueCount > 0 && ` · ${person.overdueCount} overdue`}
-                        {reminded && ` · Last reminded ${formatDistanceToNow(new Date(reminded), { addSuffix: true })}`}
+                        {reminded && showLastReminded(reminded, tripFinished) && ` · Last reminded ${formatDistanceToNow(new Date(reminded), { addSuffix: true })}`}
                         {isEscalated && ' · needs a personal nudge'}
                       </p>
                     </div>
@@ -239,7 +242,7 @@ export function WaitingOnBoard({ trip }: WaitingOnBoardProps) {
               key={item.id}
               item={item}
               nameOf={nameOf}
-              todoFor={(userId) => waitingOn.byUser.get(userId)?.find((t) => `${t.kind}:${t.entityId}` === item.id)}
+              todoFor={(userId) => waitingOn.byUser.get(userId)?.find((t) => t.id === item.todoIds[userId])}
               canNudge={canNudge}
               onNudge={startNudge}
               onEdit={canManageTrip ? () => setTodosOpen(true) : undefined}
@@ -296,8 +299,8 @@ function ItemRow({
                 {KIND_ICON[item.kind]} {item.title}
               </p>
               <p className="mt-0.5 text-xs text-[var(--text-muted)]">
-                {[progress, item.due && !item.overdue ? `due ${formatDayMonth(item.due)}` : null].filter(Boolean).join(' · ') ||
-                  todoCountLabel(item.userIds.length)}
+                {[progress, item.detail, item.due && !item.overdue ? `due ${formatDayMonth(item.due)}` : null].filter(Boolean).join(' · ') ||
+                  (item.userIds.length > 1 ? `${item.userIds.length} people` : '')}
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2">

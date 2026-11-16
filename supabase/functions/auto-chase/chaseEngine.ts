@@ -22,7 +22,8 @@
 import { computeTodos } from '../_shared/todos/computeTodos.ts'
 import { DEEP_LINKS } from '../_shared/todos/copy.ts'
 import type { SnapshotSection, SnapshotTravelEvent, SnapshotVote, TripSnapshot } from '../_shared/todos/types.ts'
-import { isOwnChoice } from '../_shared/answers/answers.ts'
+import { isOwnChoice, passKindFor, type AnswerPass } from '../_shared/answers/answers.ts'
+import type { SectionVoterIds } from '../_shared/actionCompletion/sectionVoters.ts'
 import type { Json } from '../_shared/todos/deps/json.ts'
 
 export { DEEP_LINKS }
@@ -98,6 +99,12 @@ export interface EngineInput {
   participants: EngineParticipantRow[]
   sections?: SnapshotSection[]
   votes?: SnapshotVote[]
+  /**
+   * `question_passes` rows ("No preference" / "None for me") for the sections
+   * above. A pass counts as answered, exactly as in the app. Omit (or []) when
+   * the table is missing: the result is then identical to before passes existed.
+   */
+  passes?: AnswerPass[]
   travelEvents?: SnapshotTravelEvent[]
 }
 
@@ -128,6 +135,10 @@ export function engineTodoIds(input: EngineInput, userIds: string[], now: Date):
     })),
     sections: input.sections ?? [],
     votes: input.votes ?? [],
+    passes: input.passes ?? [],
+    // passesAvailable stays unset on purpose: the email side stays conservative,
+    // so an Own-choice question without a deadline is never emailed (the
+    // candidate loops require a deadline anyway).
     actions: [],
     checklists: [],
     expenses: [],
@@ -151,4 +162,28 @@ export function claimChaseOpen(settlementSnapshot: unknown): boolean {
  */
 export function claimEmailLink(appBaseUrl: string, tripId: string, claimCode: string | null | undefined): string {
   return claimCode ? `${appBaseUrl}/claim/${encodeURIComponent(claimCode)}` : emailLink(appBaseUrl, tripId, DEEP_LINKS.settle())
+}
+
+/**
+ * Add pass-answers to a section -> answered-user-ids map (the action
+ * auto-tick input), so a person who passed on a question is not chased for a
+ * to-do linked to it. Only a pass of the kind the question accepts counts
+ * (`passKindFor`), as in the app. Pure; can only ADD answered people, so the
+ * set of recipients can only shrink. `sectionMetadata` maps section id -> its
+ * `metadata`; sections missing from it are treated as Group choices.
+ */
+export function addPassesToSectionVoters(
+  voters: SectionVoterIds,
+  passes: ReadonlyArray<AnswerPass>,
+  sectionMetadata: ReadonlyMap<string, Json | null>
+): SectionVoterIds {
+  if (passes.length === 0) return voters
+  const out: SectionVoterIds = new Map([...voters].map(([k, v]) => [k, new Set(v)]))
+  for (const p of passes) {
+    if (p.kind !== passKindFor({ metadata: sectionMetadata.get(p.section_id) ?? null })) continue
+    const set = out.get(p.section_id)
+    if (set) set.add(p.user_id)
+    else out.set(p.section_id, new Set([p.user_id]))
+  }
+  return out
 }

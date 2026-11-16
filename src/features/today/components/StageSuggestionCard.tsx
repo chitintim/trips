@@ -75,7 +75,7 @@ export function StageSuggestionCard({ trip, effectiveStage }: StageSuggestionCar
         </div>
         <div className="flex gap-2">
           <Button size="sm" onClick={apply} isLoading={updateTrip.isPending}>
-            {suggestion.kind === 'sync' ? 'Sync status' : 'Move it forward'}
+            {suggestion.kind === 'sync' ? 'Save status' : 'Move it forward'}
           </Button>
           <Button size="sm" variant="ghost" onClick={dismiss}>
             Not now

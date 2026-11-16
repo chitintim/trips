@@ -3,6 +3,9 @@ import { computeWaitingOn } from '../todos/computeTodos'
 import { todoCountLabel } from '../todos/copy'
 import type { SnapshotParticipant, SnapshotSection, SnapshotTrip, TripSnapshot } from '../todos/types'
 import { todayListModel, todoSurfaceCore, tripCardBadgeCount } from './todoSurfaces'
+import { buildAnsweredSectionVoters } from '../answers/answers'
+import { buildTodoViews, groupTodos } from '../../features/actions/lib/todoModel'
+import type { ActionWithCompletions } from '../../features/actions/lib/actionStatus'
 
 /**
  * THE INVARIANT (UX redesign 3.5): for any trip and any person, the header
@@ -85,6 +88,11 @@ const FIXTURES: Record<string, TripSnapshot> = {
     ],
     actions: [{ id: 'act', title: 'Book flights', assigned_to: null, deadline_kind: 'fixed', due_date: '2026-01-01', completed_at: null, section_id: null }],
   }),
+  // Finished, balances NEVER frozen: participants have no to-do (info line only), the organiser has ONE freeze to-do.
+  unfrozen: snap({
+    trip: { ...baseTrip, id: 'unfrozen', status: 'trip_completed', start_date: '2025-06-01', end_date: '2025-06-08', settlement_snapshot: null },
+    balances: { tim: 5000, sam: -4698.61, chai: -301.39, ana: 0, out: -50 },
+  }),
   // Finished, money owed, one payment awaiting confirmation.
   sicily: snap({
     trip: { ...baseTrip, id: 'sicily', status: 'trip_completed', start_date: '2025-06-01', end_date: '2025-06-08' },
@@ -131,8 +139,108 @@ describe('one count on every surface', () => {
   })
 
   it('loading (no snapshot) or nobody signed in shows no count at all, never 0', () => {
-    expect(todoSurfaceCore(null, 'sam', NOW)).toEqual({ todos: [], count: undefined, hasOverdue: false })
+    expect(todoSurfaceCore(null, 'sam', NOW)).toEqual({ todos: [], count: undefined, hasOverdue: false, info: [] })
     expect(todoSurfaceCore(FIXTURES.japow, null, NOW).count).toBeUndefined()
     expect(tripCardBadgeCount(null, 'sam', NOW)).toBeUndefined()
+  })
+
+  it('blocked items are info, not to-dos: never counted on any surface', () => {
+    const s = FIXTURES.unfrozen
+    const sam = todoSurfaceCore(s, 'sam', NOW)
+    expect(sam.count).toBe(0)
+    expect(sam.info).toHaveLength(1)
+    expect(tripCardBadgeCount(s, 'sam', NOW)).toBe(0)
+    expect(computeWaitingOn(s, NOW).byPerson.map((p) => p.userId)).toEqual(['tim'])
+    expect(todoSurfaceCore(s, 'tim', NOW).count).toBe(1)
+  })
+})
+
+/**
+ * Today's "Your to-dos" (the engine) and the To-dos sheet's "Yours" group
+ * (todoModel) are built by different code, so pin that they agree for the
+ * task-type items, including Anyone items (unclaimed = nobody's, claimed = the
+ * claimer's), Everyone items and a "No preference"/"None for me" pass that
+ * ticks a linked to-do.
+ */
+describe('Today count = the To-dos sheet "Yours" group, for task-type items', () => {
+  const act = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    title: id,
+    assigned_to: null as string | null,
+    who_mode: null as string | null,
+    deadline_kind: 'fixed',
+    due_date: '2026-12-01' as string | null,
+    completed_at: null as string | null,
+    section_id: null as string | null,
+    trip_action_completions: [] as Array<{ user_id: string }>,
+    ...over,
+  })
+  const trip = snap({
+    sections: [question('q1', 'Where to eat'), question('q2', 'Ski rental', { metadata: { decision_shape: 'personal' } })],
+    votes: [{ option_id: 'q1-a', user_id: 'sam' }],
+    passes: [{ section_id: 'q2', user_id: 'ana', kind: 'none_for_me' }],
+    actions: [
+      act('everyone'),
+      act('everyone-undated', { due_date: null }),
+      act('everyone-ticked-by-sam', { trip_action_completions: [{ user_id: 'sam' }] }),
+      act('person-sam', { assigned_to: 'sam' }),
+      act('person-sam-done', { assigned_to: 'sam', completed_at: '2026-11-01T00:00:00Z' }),
+      act('anyone-unclaimed', { who_mode: 'anyone' }),
+      act('anyone-claimed-sam', { who_mode: 'anyone', assigned_to: 'sam' }),
+      act('anyone-claimed-tim', { who_mode: 'anyone', assigned_to: 'tim', due_date: null }),
+      act('linked-to-q1', { section_id: 'q1' }),
+      act('linked-to-q2', { section_id: 'q2' }),
+    ],
+    checklists: [
+      { id: 'bring-unclaimed', title: 'Speaker', assigned_to: null, done: false },
+      { id: 'bring-sam', title: 'Charger', assigned_to: 'sam', done: false },
+      { id: 'bring-sam-done', title: 'Tent', assigned_to: 'sam', done: true },
+    ],
+  })
+
+  const yoursFor = (userId: string) => {
+    const sectionVoters = buildAnsweredSectionVoters(trip.sections as never, { votes: trip.votes as never, passes: trip.passes as never })
+    const views = buildTodoViews({
+      actions: trip.actions as unknown as ActionWithCompletions[],
+      checklists: trip.checklists.map((c) => ({ ...c, created_by: 'tim' })),
+      participants: trip.participants.map((p) => ({ user_id: p.user_id, active: p.active, confirmation_status: p.confirmation_status })),
+      userId,
+      trip: { start_date: trip.trip.start_date },
+      sectionVoters,
+      closedSectionIds: new Set(),
+      finished: false,
+    })
+    const me = trip.participants.find((p) => p.user_id === userId)
+    const inScope = !!me && me.active !== false && me.confirmation_status !== 'declined' && me.confirmation_status !== 'cancelled'
+    return groupTodos(views, { userId, finished: false, viewerInScope: inScope })
+  }
+
+  for (const id of ['tim', 'sam', 'chai', 'ana']) {
+    it(`${id}: task to-dos on Today equal the sheet's Yours group`, () => {
+      const tasks = todoSurfaceCore(trip, id, NOW).todos.filter((t) => t.kind === 'task')
+      const yours = yoursFor(id).yours
+      expect(tasks.map((t) => t.entityId).sort()).toEqual(yours.map((v) => v.id).sort())
+    })
+  }
+
+  it('unclaimed Anyone items are nobody\'s to-do; claimed ones count for the claimer only', () => {
+    const ids = (u: string) => todoSurfaceCore(trip, u, NOW).todos.filter((t) => t.kind === 'task').map((t) => t.entityId)
+    for (const u of ['tim', 'sam', 'chai', 'ana']) expect(ids(u)).not.toContain('anyone-unclaimed')
+    expect(ids('sam')).toContain('anyone-claimed-sam')
+    expect(ids('tim')).not.toContain('anyone-claimed-sam')
+    expect(ids('tim')).toContain('anyone-claimed-tim')
+    // Everyone items still land on every in-scope person, a pass ticks the linked one.
+    expect(ids('chai')).toContain('everyone')
+    expect(ids('ana')).not.toContain('linked-to-q2')
+    expect(ids('chai')).toContain('linked-to-q2')
+  })
+
+  it('Waiting on shows done/total only for Everyone to-dos, never for Anyone items', () => {
+    const w = computeWaitingOn(trip, NOW)
+    const everyone = w.byItem.find((i) => i.entityId === 'everyone')
+    const claimed = w.byItem.find((i) => i.entityId === 'anyone-claimed-sam')
+    expect(everyone?.total).toBeGreaterThan(0)
+    expect(claimed?.total).toBeUndefined()
+    expect(w.byItem.some((i) => i.entityId === 'anyone-unclaimed')).toBe(false)
   })
 })

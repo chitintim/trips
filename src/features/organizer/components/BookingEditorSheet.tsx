@@ -79,6 +79,8 @@ export interface BookingEditorSheetProps {
   onClose: () => void
   trip: Trip
   booking: Booking | null
+  /** New bookings only: pre-select this option in "Linked option" (e.g. "Mark booked" on a decided question). */
+  initialOptionId?: string | null
 }
 
 /**
@@ -88,7 +90,7 @@ export interface BookingEditorSheetProps {
  * populates three systems consistently, via the shared src/lib/queries
  * hooks (never reaching into the expenses feature's internals).
  */
-export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEditorSheetProps) {
+export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOptionId = null }: BookingEditorSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const tripId = trip.id
@@ -133,11 +135,12 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
 
   useEffect(() => {
     if (isOpen) {
-      setValues(fromBooking(booking, baseCurrency))
+      const seeded = fromBooking(booking, baseCurrency)
+      setValues(!booking && initialOptionId ? { ...seeded, optionId: initialOptionId } : seeded)
       setPickedPlace(null)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, booking?.id])
+  }, [isOpen, booking?.id, initialOptionId])
 
   const seed = fromBooking(booking, baseCurrency)
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)

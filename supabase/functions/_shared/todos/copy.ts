@@ -150,8 +150,11 @@ export function taskSubtitle(who: 'Everyone' | 'You', due: string | null, overdu
 export const bringTitle = (item: string) => `🎒 Bring: ${item}`
 export const payTitle = (toName: string, amount: string) => `Pay ${toName} ${amount}`
 export const settleUpTitle = (amount: string) => `Settle up: you owe ${amount}`
-export const settleUpWaitingTitle = (amount: string) => `Settle up: you owe ${amount}, once balances are finalized`
-export const SETTLE_UP_WAITING_SUBTITLE = 'An organizer needs to finalize the balances first'
+/** Informational line (NOT a to-do): the person owes money but nobody can pay until balances are frozen. */
+export const settleUpInfoText = (amount: string) => `You'll be able to settle up (you owe ${amount}) once the organizer finalizes balances`
+export const confirmPaymentGroupTitle = (fromName: string) => `Confirm payment from ${fromName}`
+export const confirmPaymentGroupDetail = (n: number) => `${n} payments to confirm`
+export const unblocksLabel = (n: number) => `Unblocks ${n} ${n === 1 ? 'person' : 'people'}`
 export const freezeBalancesTitle = 'Freeze balances so people can settle'
 export const FREEZE_BALANCES_SUBTITLE = 'The trip is over and people owe money, but they cannot pay until you freeze balances'
 export const confirmPaymentTitle = (fromName: string, amount: string) => `Confirm ${fromName} paid you ${amount}`
@@ -168,7 +171,7 @@ export function orgDecideTitle(
     : `Decide: ${question} (all ${reason.total} answered)`
 }
 export const orgBookTitle = (option: string) => `Book: ${option}`
-export const orgTieTitle = (question: string) => `Tie: pick a winner for ${question}`
+export const orgTieTitle = (question: string) => `Tie: choose a winner for ${question}`
 export const ORG_SETUP_INVITE_TITLE = 'Invite people to the trip'
 export const ORG_SETUP_QUESTION_TITLE = 'Ask the group your first question'
 

@@ -175,6 +175,14 @@ export function todoToBlocker(todo: Todo): Blocker {
   }
 }
 
+const LAST_REMINDED_RECENT_DAYS = 14
+
+/** A reminder from months ago on a finished trip is noise: show it when recent, or while the trip is still live. */
+export function showLastReminded(remindedAt: string | Date, tripFinished: boolean, now: Date = new Date()): boolean {
+  if (!tripFinished) return true
+  return now.getTime() - new Date(remindedAt).getTime() <= LAST_REMINDED_RECENT_DAYS * 86_400_000
+}
+
 /** Latest reminder time per recipient, from the notifications log. */
 export function lastRemindedByUser(notifications: ReadonlyArray<Pick<Notification, 'user_id' | 'sent_at'>>): Map<string, string> {
   const out = new Map<string, string>()

@@ -10,7 +10,7 @@
  *   Booked                    chip "Booked"              strip ● ● ●
  *   (Finished trip, never decided) muted "Closed — no decision recorded", no chip, no strip
  *
- * Own choices read the same way, with their own wording ("Orders closed" once
+ * Own choices read the same way, with their own wording ("Answers closed" once
  * decided, "N of M done").
  */
 import { isIdeasBucket } from '../../../lib/ideasBucket'
@@ -89,7 +89,7 @@ export interface QuestionCardModel {
   strip: StripStep[] | null
   /** The winning option on Decided / Booked cards (group choices only). */
   decided: { optionId: string; title: string } | null
-  /** Own choices: "Orders closed" once decided. */
+  /** Own choices: "Answers closed" once decided. */
   ownClosedLabel: string | null
   /** Show the answer control open by default (only when this person still needs to answer). */
   defaultExpanded: boolean
@@ -195,7 +195,7 @@ export function buildQuestionCardModel(input: CardInput): QuestionCardModel {
     deadline,
     strip,
     decided,
-    ownClosedLabel: own && stage !== 'open' && stage !== 'closed' ? 'Orders closed' : null,
+    ownClosedLabel: own && stage !== 'open' && stage !== 'closed' ? 'Answers closed' : null,
     defaultExpanded: stage === 'open' && viewerState === 'needs_answer' && owed,
     answersClosed: stage !== 'open',
   }

@@ -129,3 +129,32 @@ describe('"Ask the group your first question" (organiser setup)', () => {
     expect(w.byItem.some((i) => i.id.includes('question') && i.kind === 'org_setup')).toBe(false)
   })
 })
+
+describe('finished trip, balances not frozen (Meribel): one organiser, ten participants', () => {
+  const ids = ['tim', ...Array.from({ length: 10 }, (_, i) => `p${i}`)]
+  const s = snap({
+    participants: ids.map((id) => person(id, id === 'tim' ? { role: 'organizer' } : {})),
+    balances: Object.fromEntries(ids.map((id) => [id, id === 'tim' ? 1000 : -100])),
+  })
+
+  it('By person: only the organiser holds the freeze to-do', () => {
+    const w = computeWaitingOn(s, NOW)
+    expect(w.byPerson.map((p) => p.userId)).toEqual(['tim'])
+    expect(w.totalTodos).toBe(1)
+    for (const id of ids.slice(1)) expect(computeTodos(s, id, NOW).some((t) => t.title === 'Freeze balances so people can settle')).toBe(false)
+  })
+
+  it('By item: one row, held by the organiser only, "10 people can\'t settle until then"', () => {
+    const items = computeWaitingOn(s, NOW).byItem.filter((i) => i.kind === 'org_setup')
+    expect(items).toHaveLength(1)
+    expect(items[0].userIds).toEqual(['tim'])
+    expect(items[0].detail).toBe("10 people can't settle until then")
+  })
+
+  it('an inactive organiser does not hold it; the trip creator does even without the organiser role', () => {
+    const inactive = snap({ ...s, participants: ids.map((id) => person(id, id === 'tim' ? { role: 'organizer', active: false } : {})) })
+    expect(computeWaitingOn(inactive, NOW).byPerson).toEqual([])
+    const creatorOnly = snap({ ...s, participants: ids.map((id) => person(id)) })
+    expect(computeWaitingOn(creatorOnly, NOW).byPerson.map((p) => p.userId)).toEqual(['tim'])
+  })
+})

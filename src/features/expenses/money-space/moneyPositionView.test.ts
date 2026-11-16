@@ -142,7 +142,7 @@ describe('review D1/D2/D3/E1 in the view', () => {
     expect(v.note).toBe('£200.00 sent, waiting for Sam to confirm but you only owe £100.00')
     expect(v.rows.some((r) => r.label === 'Nothing more to pay once confirmed')).toBe(false)
     expect(v.rows[v.rows.length - 1]).toMatchObject({ label: "You've sent £100.00 too much", amount: null })
-    expect(v.rows.find((r) => r.key === 'ledger')).toMatchObject({ label: 'Before payments you owed', amount: '£100.00' })
+    expect(v.rows.find((r) => r.key === 'ledger')).toMatchObject({ label: 'Before the payments still to confirm, you owed', amount: '£100.00' })
     expect(v.settleHint).toBe('Some payments look recorded twice — check Settle up')
     expect(v.settleHintLink).toBe('?open=settle')
     expect(v.tone).toBe('owe')

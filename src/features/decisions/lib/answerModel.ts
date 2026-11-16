@@ -328,7 +328,7 @@ export interface AnswerControlModel {
   /** Own choice only. */
   own: { rows: OwnRow[]; totalsByCurrency: Record<string, number>; totalLabel: string | null; hasChecked: boolean } | null
   myState: 'unanswered' | 'answered' | 'passed'
-  /** "Your answer: Osaka Airbnb", "You said: No preference", "Your picks: Skis + boots × 2 · £86". */
+  /** "Your answer: Osaka Airbnb", "You said: No preference", "Your answer: Skis + boots × 2 · £86". */
   mySummary: string | null
   /** Group choices only: there is something to clear. */
   canClear: boolean
@@ -663,12 +663,12 @@ export function ownRowsToItems(rows: ReadonlyArray<OwnRow>): OwnItemInput[] {
   }))
 }
 
-/** "Your picks: Skis + boots × 2, Helmet · £86" */
+/** "Your answer: Skis + boots × 2, Helmet · £86" */
 export function ownSummary(rows: ReadonlyArray<Pick<OwnRow, 'checked' | 'title' | 'quantity' | 'variant'>>, totalLabel: string | null): string {
   const picks = rows
     .filter((r) => r.checked)
     .map((r) => `${r.title}${r.variant ? ` (${r.variant})` : ''}${r.quantity > 1 ? ` × ${r.quantity}` : ''}`)
-  return `Your picks: ${picks.join(', ')}${totalLabel ? ` · ${totalLabel}` : ''}`
+  return `Your answer: ${picks.join(', ')}${totalLabel ? ` · ${totalLabel}` : ''}`
 }
 
 // ---------------------------------------------------------------------------

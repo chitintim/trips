@@ -163,7 +163,7 @@ describe('read model: legacy own-choice order with quantities', () => {
     expect(skis.variants).toEqual(['Adult', 'Kids'])
     expect(m.own!.totalLabel).toBe('€336')
     expect(m.myState).toBe('answered')
-    expect(m.mySummary).toBe('Your picks: Skis + boots (Adult) × 2 · €336')
+    expect(m.mySummary).toBe('Your answer: Skis + boots (Adult) × 2 · €336')
   })
   it('unpicked rows default to the person\'s travel dates; flat items need no dates', () => {
     const m = control(legacySkiRental())

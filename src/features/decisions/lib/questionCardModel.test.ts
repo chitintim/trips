@@ -106,11 +106,11 @@ describe('QuestionCard model: own choice', () => {
     expect(m.chip).toBeNull()
     expect(m.defaultExpanded).toBe(false)
   })
-  it('a closed own choice says "Orders closed" and has no winner', () => {
+  it('a closed own choice says "Answers closed" and has no winner', () => {
     const m = card({ section: { ...legacySkiRental('tim'), status: 'completed' } })
     expect(m.stage).toBe('decided')
     expect(m.decided).toBeNull()
-    expect(m.ownClosedLabel).toBe('Orders closed')
+    expect(m.ownClosedLabel).toBe('Answers closed')
   })
   it('"None for me" counts as done', () => {
     const m = card({ section: legacySkiRental('tim'), passes: [{ section_id: 's-ski', user_id: 'sam', kind: 'none_for_me' }] })

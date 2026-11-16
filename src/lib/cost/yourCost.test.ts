@@ -499,3 +499,67 @@ describe('headcount noun follows the in-scope rule', () => {
     expect(m.lines[0].basisLine).toBe('£1,800 total · 9 invited · est.')
   })
 })
+
+describe('Meribel: own-choice questions price what THIS person picked, on the option\'s own basis', () => {
+  const EUR = { EUR: 0.85 }
+  const pickers = (...ids: string[]) => ids.map((user_id) => ({ user_id, metadata: {} }))
+  const lessons = (status: string) =>
+    sec({
+      id: 'lessons',
+      title: 'Ski lessons',
+      section_type: 'lessons',
+      status,
+      metadata: { decision_shape: 'personal' },
+      options: [
+        // Group lesson: one £600 (EUR) total shared by the 8 people who picked it. Legacy rows: no pricing metadata, empty selection metadata.
+        opt({ id: 'group', title: 'Group lesson', price: 600, currency: 'EUR', price_type: 'total_split', selections: pickers(ME, 'a', 'b', 'c', 'd', 'e', 'f', 'g') }),
+        opt({ id: 'private', title: 'Private lesson', price: 400, currency: 'EUR', price_type: 'per_person_fixed', selections: pickers('a') }),
+        opt({ id: 'pass', title: 'Lift pass', price: 250, currency: 'EUR', price_type: 'per_person_fixed', selections: pickers('b', 'c') }),
+      ],
+    })
+
+  it('a group total is split between the people who picked it, never charged in full to each', () => {
+    // 8 pickers: €600 / 8 = €75 -> £63.75 (was €600 -> £510 before the fix)
+    const m = run({ sections: [lessons('in_progress')], fxRates: EUR })
+    expect(m.lines).toHaveLength(1)
+    expect(m.lines[0]).toMatchObject({ kind: 'own_picks', low: 63.75, high: 63.75, optionCount: 1 })
+    expect(m.lines[0].native).toEqual({ low: 75, high: 75, currency: 'EUR' })
+    expect(m.totals.low).toBe(63.75)
+  })
+
+  it('options the viewer did not pick add nothing (private lesson, lift pass)', () => {
+    const m = run({ sections: [lessons('completed')], fxRates: EUR, now: '2027-04-01' })
+    expect(m.totals.high).toBe(63.75)
+  })
+
+  it('UPCOMING trip, viewer picked ONE of several options: the headline is that one option, not the sum', () => {
+    const s = sec({
+      id: 'rent',
+      title: 'Equipment rental',
+      section_type: 'equipment',
+      metadata: { decision_shape: 'personal' },
+      options: [
+        opt({ id: 'skis', title: 'Skis', price: 90, currency: 'EUR', selections: pickers(ME) }),
+        opt({ id: 'boots', title: 'Boots', price: 70, currency: 'EUR', selections: pickers('a', 'b') }),
+        opt({ id: 'board', title: 'Snowboard', price: 120, currency: 'EUR', selections: pickers('c') }),
+        opt({ id: 'helmet', title: 'Helmet', price: 25, currency: 'EUR', selections: [] }),
+      ],
+    })
+    const m = run({ sections: [s, lessons('in_progress')], fxRates: EUR })
+    expect(m.mode).toBe('estimate')
+    // skis €90 -> £76.50, plus the group lesson £63.75
+    expect(m.totals.low).toBe(140.25)
+    expect(m.totals.high).toBe(140.25)
+  })
+
+  it('a plan entry made from an own-choice option that only has catalog pricing is not counted twice', () => {
+    const s = sec({
+      id: 'rent',
+      title: 'Equipment rental',
+      metadata: { decision_shape: 'personal' },
+      options: [opt({ id: 'skis', title: 'Skis', price: null, metadata: { pricing: { flat: 90 } }, currency: 'GBP', selections: pickers(ME) })],
+    })
+    const events = [{ id: 'ev', title: 'Pick up skis', source_option_id: 'skis', metadata: { cost: { amount: 90, currency: 'GBP', basis: 'each' } } }]
+    expect(run({ sections: [s], events }).totals.low).toBe(90)
+  })
+})

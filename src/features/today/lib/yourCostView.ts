@@ -64,11 +64,13 @@ function linkFor(line: YourCostLine): string | null {
   return null
 }
 
-/** The pre-trip estimate is worth showing next to the real share only when it covered a meaningful part of it. */
+/** The pre-trip estimate is worth showing next to the real share only when it is within a believable band of it. */
 export const ESTIMATE_COMPARISON_MIN_COVERAGE = 0.5
+export const ESTIMATE_COMPARISON_MAX_RATIO = 2
 
-export function showEstimateComparison(estimateHigh: number, share: number): boolean {
-  return share > 0 && estimateHigh >= share * ESTIMATE_COMPARISON_MIN_COVERAGE
+/** `estimateLow` defaults to the high end (a single figure). A wildly-off comparison helps nobody, so it is omitted. */
+export function showEstimateComparison(estimateHigh: number, share: number, estimateLow: number = estimateHigh): boolean {
+  return share > 0 && estimateHigh >= share * ESTIMATE_COMPARISON_MIN_COVERAGE && estimateLow <= share * ESTIMATE_COMPARISON_MAX_RATIO
 }
 
 function amountFor(line: YourCostLine, currency: string): string {
@@ -172,7 +174,7 @@ export function buildYourCostView(model: YourCostModel): YourCostView {
       subline: 'Your part of every expense on this trip.',
       spent: null,
       comparison:
-        countable.length > 0 && showEstimateComparison((model.estimateForComparison ?? model.totals).high, model.share)
+        countable.length > 0 && showEstimateComparison((model.estimateForComparison ?? model.totals).high, model.share, (model.estimateForComparison ?? model.totals).low)
           ? `Estimated before the trip: ${model.estimateForComparison?.text ?? model.totals.text}`
           : null,
       empty: null,

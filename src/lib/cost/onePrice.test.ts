@@ -103,6 +103,26 @@ describe('item 3: pre-trip estimate comparison', () => {
     expect(showEstimateComparison(3000, 5719.28)).toBe(true)
     expect(showEstimateComparison(2859.64, 5719.28)).toBe(true)
   })
+  it('and only when it is not wildly above it either (Meribel: £1,456.60 share vs ≈£7,960)', () => {
+    expect(showEstimateComparison(7960, 1456.6)).toBe(false)
+    expect(showEstimateComparison(1456.6 * 2, 1456.6)).toBe(true)
+    expect(showEstimateComparison(1800, 1456.6)).toBe(true)
+    // a range counts when it overlaps the believable band
+    expect(showEstimateComparison(7960, 1456.6, 1200)).toBe(true)
+    expect(showEstimateComparison(7960, 1456.6, 3200)).toBe(false)
+  })
+  it('the view leaves the line out silently when the estimate is far off', () => {
+    const model = {
+      mode: 'share', title: 'Your share', currency: 'GBP', headcount: 11, headcountIsEstimate: false,
+      lines: [{ id: 'q', kind: 'question', label: 'Chalet', low: 7960, high: 7960, native: { low: 7960, high: 7960, currency: 'GBP' }, nativeByCurrency: [], notShared: false, deepLink: { type: 'trip_settings' }, certainty: 'decided', qualifier: 'decided', note: 'decided', basisLine: null, approx: false, dividedByHeadcount: false }],
+      totals: { low: 7960, high: 7960, isRange: false, approx: true, certainty: 'decided', text: '≈£7,960' },
+      alreadySpent: 1456.6, share: 1456.6, estimateForComparison: { low: 7960, high: 7960, isRange: false, approx: true, certainty: 'decided', text: '≈£7,960' },
+      notIncluded: [], optionalNotChosen: 0, missingRates: [], expensesMissingRate: [], expenseShares: [], failedLines: [], headcountNoun: 'going', note: null, emptyReason: null, isEmpty: false,
+    } as unknown as Parameters<typeof buildYourCostView>[0]
+    expect(buildYourCostView(model).comparison).toBeNull()
+    const sane = { ...model, estimateForComparison: { ...model.estimateForComparison!, low: 1500, high: 1500, text: '≈£1,500' } }
+    expect(buildYourCostView(sane).comparison).toBe('Estimated before the trip: ≈£1,500')
+  })
 })
 
 describe('item 5: rough estimate wording', () => {

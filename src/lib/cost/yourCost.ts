@@ -641,8 +641,16 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
             assumed = withDays.assumedDays
             total = buildOrderLine({ id: option.id, title: option.title, currency: option.currency }, pricing, withDays.item, base).total
           } else if (isPriced(option)) {
+            // No catalog pricing: the option's own price basis decides what ONE person pays. A group total ("£600 for the
+            // lesson") is split between the people who picked it, never charged in full to each of them.
             const qty = rawItem.quantity && rawItem.quantity > 0 ? rawItem.quantity : 1
-            total = fromMinorUnits(toMinorUnits(Number(option.price), currency) * qty, currency)
+            const p = computeOptionPrice(
+              { price: option.price, currency, price_type: option.price_type, metadata: option.metadata },
+              trip,
+              { count: optedInCount(option), isEstimate: true },
+              { headcountNoun: 'in', confirmationEnabled }
+            )
+            if (p) total = fromMinorUnits(toMinorUnits(p.perPerson, p.currency) * qty, p.currency)
           }
           if (total == null || total <= 0) continue
           picks += 1
@@ -772,7 +780,7 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
   const okSections = sections.filter((s) => !failedSectionIds.has(s.id))
 
   // --- 2. Plan entries with a cost -------------------------------------------
-  const pricedOptionIds = new Set(okSections.flatMap((s) => s.options.filter(isPriced).map((o) => o.id)))
+  const pricedOptionIds = new Set(okSections.flatMap((s) => s.options.filter((o) => isPriced(o) || !!readOptionPricing(o.metadata)).map((o) => o.id)))
   for (const event of events) {
     guarded(event.title, () => {
       if (event.source_option_id && pricedOptionIds.has(event.source_option_id)) return

@@ -369,20 +369,27 @@ function OwnChoice({
                   </div>
                 )}
                 <div className="flex items-center gap-3">
-                  <span id={`qty-${row.optionId}`} className="text-sm text-[var(--text-secondary)]">
-                    Quantity
-                  </span>
-                  <div className="flex items-center gap-2" role="group" aria-labelledby={`qty-${row.optionId}`}>
-                    <Button variant="outline" size="sm" aria-label={`Fewer ${row.title}`} disabled={disabled || row.quantity <= 1} onClick={() => update(row.optionId, { quantity: row.quantity - 1 })}>
-                      −
-                    </Button>
-                    <span className="w-6 text-center text-sm font-medium text-[var(--text-primary)]" aria-live="polite">
-                      {row.quantity}
-                    </span>
-                    <Button variant="outline" size="sm" aria-label={`More ${row.title}`} disabled={disabled} onClick={() => update(row.optionId, { quantity: row.quantity + 1 })}>
-                      +
-                    </Button>
-                  </div>
+                  {disabled ? (
+                    // Closed question: the quantity is a fact, not a control.
+                    <span className="text-sm font-medium text-[var(--text-primary)]">× {row.quantity}</span>
+                  ) : (
+                    <>
+                      <span id={`qty-${row.optionId}`} className="text-sm text-[var(--text-secondary)]">
+                        Quantity
+                      </span>
+                      <div className="flex items-center gap-2" role="group" aria-labelledby={`qty-${row.optionId}`}>
+                        <Button variant="outline" size="sm" aria-label={`Fewer ${row.title}`} disabled={row.quantity <= 1} onClick={() => update(row.optionId, { quantity: row.quantity - 1 })}>
+                          −
+                        </Button>
+                        <span className="w-6 text-center text-sm font-medium text-[var(--text-primary)]" aria-live="polite">
+                          {row.quantity}
+                        </span>
+                        <Button variant="outline" size="sm" aria-label={`More ${row.title}`} onClick={() => update(row.optionId, { quantity: row.quantity + 1 })}>
+                          +
+                        </Button>
+                      </div>
+                    </>
+                  )}
                   {row.pricing && row.total > 0 && <span className="ml-auto text-sm font-semibold text-[var(--text-primary)]">{formatMoney(row.total, row.currency)}</span>}
                 </div>
               </div>

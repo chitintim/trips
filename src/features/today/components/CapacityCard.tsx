@@ -1,4 +1,5 @@
 import { Button, Card, CapacityProgressBar, Deadline } from '../../../components/ui'
+import { rsvpButtonLabel } from '../../people/lib/rsvpButtonLabel'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Trip } from '../../../types'
 
@@ -34,7 +35,7 @@ export function CapacityCard({ trip, participants, myParticipant, confirmedCount
         )}
         {trip.confirmation_enabled && replied && (
           <Button variant="secondary" fullWidth onClick={onOpenStatusModal}>
-            {myParticipant?.confirmation_status === 'confirmed' ? 'View my reply' : 'Change my reply'}
+            {rsvpButtonLabel(myParticipant?.confirmation_status)}
           </Button>
         )}
       </Card.Content>

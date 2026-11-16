@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { computeWaitingOn } from '../todos/computeTodos'
 import { todoCountLabel } from '../todos/copy'
 import type { SnapshotParticipant, SnapshotSection, SnapshotTrip, TripSnapshot } from '../todos/types'
+import { buildOrganiserSummary } from '../../features/today/lib/organiserSummaryModel'
 import { todayListModel, todoSurfaceCore, tripCardBadgeCount } from './todoSurfaces'
 import { buildAnsweredSectionVoters } from '../answers/answers'
 import { buildTodoViews, groupTodos } from '../../features/actions/lib/todoModel'
@@ -38,6 +39,20 @@ const question = (id: string, title: string, over: Partial<SnapshotSection> = {}
   ],
   ...over,
 })
+
+const PAST = new Date(2026, 10, 10, 12).toISOString()
+
+/** A decided accommodation question; `status` is the winning option's legacy status. */
+const decidedStay = (metadata: Record<string, unknown>, status = 'available'): SnapshotSection =>
+  question('b', 'Where to stay', {
+    status: 'completed',
+    section_type: 'accommodation',
+    metadata: metadata as never,
+    options: [
+      { id: 'b-win', title: 'Osaka Airbnb', status, selections: [] },
+      { id: 'b-lose', title: 'Hotel', status: 'available', selections: [] },
+    ],
+  })
 
 const baseTrip: SnapshotTrip = {
   id: 'trip',
@@ -93,6 +108,20 @@ const FIXTURES: Record<string, TripSnapshot> = {
     trip: { ...baseTrip, id: 'unfrozen', status: 'trip_completed', start_date: '2025-06-01', end_date: '2025-06-08', settlement_snapshot: null },
     balances: { tim: 5000, sam: -4698.61, chai: -301.39, ana: 0, out: -50 },
   }),
+  // Slice 4E: organiser lifecycle fixtures (decide / tie / book / own-choice close).
+  deadlineLeader: snap({ sections: [question('d', 'Where to stay', { vote_deadline: PAST })], votes: [{ option_id: 'd-a', user_id: 'sam' }, { option_id: 'd-a', user_id: 'chai' }, { option_id: 'd-b', user_id: 'ana' }] }),
+  deadlineTie: snap({ sections: [question('d', 'Where to stay', { vote_deadline: PAST })], votes: [{ option_id: 'd-a', user_id: 'sam' }, { option_id: 'd-b', user_id: 'chai' }] }),
+  decidedRealBook: snap({
+    sections: [decidedStay({ decided_option_id: 'b-win', followup_action_id: 'act-book' })],
+    votes: [{ option_id: 'b-win', user_id: 'sam' }],
+    actions: [{ id: 'act-book', title: 'Book: Osaka Airbnb', assigned_to: 'sam', deadline_kind: 'fixed', due_date: '2026-12-01', completed_at: null, section_id: null }],
+  }),
+  decidedBooked: snap({
+    sections: [decidedStay({ decided_option_id: 'b-win' }, 'booked')],
+    votes: [{ option_id: 'b-win', user_id: 'sam' }],
+    bookings: [{ option_id: 'b-win', status: 'reserved' }],
+  }),
+  ownPastDeadline: snap({ sections: [question('own', 'Ski rental', { metadata: { decision_shape: 'personal' }, vote_deadline: PAST })] }),
   // Finished, money owed, one payment awaiting confirmation.
   sicily: snap({
     trip: { ...baseTrip, id: 'sicily', status: 'trip_completed', start_date: '2025-06-01', end_date: '2025-06-08' },
@@ -242,6 +271,48 @@ describe('Today count = the To-dos sheet "Yours" group, for task-type items', ()
     expect(everyone?.total).toBeGreaterThan(0)
     expect(claimed?.total).toBeUndefined()
     expect(w.byItem.some((i) => i.entityId === 'anyone-unclaimed')).toBe(false)
+  })
+})
+
+describe('organiser lifecycle fixtures (decide / tie / book / close answers)', () => {
+  const org = (key: string, uid = 'tim') => todoSurfaceCore(FIXTURES[key], uid, NOW).todos.filter((t) => t.group === 'organiser').map((t) => `${t.kind}:${t.link}`)
+
+  it('deadline passed with a clear leader -> Decide; with a tie -> Tie (never both)', () => {
+    expect(org('deadlineLeader')).toEqual(['org_decide:?open=decide:d'])
+    expect(org('deadlineTie')).toEqual(['org_tie:?open=decide:d'])
+  })
+
+  it('decided with a real Book to-do: no synthetic duplicate; the assignee sees ONE task; Waiting on has no org_book', () => {
+    expect(org('decidedRealBook')).toEqual([])
+    expect(todoSurfaceCore(FIXTURES.decidedRealBook, 'sam', NOW).todos.map((t) => t.id)).toEqual(['task:act-book'])
+    expect(computeWaitingOn(FIXTURES.decidedRealBook, NOW).byItem.some((i) => i.kind === 'org_book')).toBe(false)
+  })
+
+  it('decided + booked: no Book to-do for anyone', () => {
+    expect(org('decidedBooked')).toEqual([])
+    for (const p of crew) expect(todoSurfaceCore(FIXTURES.decidedBooked, p.user_id, NOW).todos.filter((t) => t.title.startsWith('Book:'))).toEqual([])
+  })
+
+  it('own-choice past its deadline: the organiser gets "Close answers", participants only their own pick', () => {
+    const t = todoSurfaceCore(FIXTURES.ownPastDeadline, 'tim', NOW).todos
+    expect(t.filter((x) => x.group === 'organiser').map((x) => x.title)).toEqual(['Close answers for Ski rental'])
+    expect(todoSurfaceCore(FIXTURES.ownPastDeadline, 'sam', NOW).todos.map((x) => x.kind)).toEqual(['answer'])
+  })
+
+  it('the Today organiser card says what to do about it, and calls the tie out', () => {
+    const s = FIXTURES.deadlineTie
+    const summary = buildOrganiserSummary(computeWaitingOn(s, NOW), 'tim', todoSurfaceCore(s, 'tim', NOW).todos)
+    expect(summary.headline).toContain('1 tied')
+    expect(summary.lines[0]).toBe('Tie: choose a winner for Where to stay — any organizer can do this (1)')
+    const leader = buildOrganiserSummary(computeWaitingOn(FIXTURES.deadlineLeader, NOW), 'tim', todoSurfaceCore(FIXTURES.deadlineLeader, 'tim', NOW).todos)
+    expect(leader.headline).toContain('1 to decide')
+    expect(leader.lines[0]).toBe('Decide: Where to stay — any organizer can do this (1)')
+  })
+
+  it('decided by anyone (or the auto-decide job) clears the Decide / Tie to-do on every surface', () => {
+    const decided = { ...FIXTURES.deadlineTie, sections: [{ ...FIXTURES.deadlineTie.sections[0], status: 'completed', metadata: { decided_option_id: 'd-a' } }] }
+    expect(todoSurfaceCore(decided, 'tim', NOW).todos.some((t) => t.kind === 'org_tie' || t.kind === 'org_decide')).toBe(false)
+    expect(computeWaitingOn(decided, NOW).byItem.some((i) => i.kind === 'org_tie' || i.kind === 'org_decide')).toBe(false)
   })
 })
 

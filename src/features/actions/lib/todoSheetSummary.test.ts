@@ -9,9 +9,12 @@ describe('allTodosRowLabel', () => {
     expect(allTodosRowLabel({ openCount: 3, mine: 0, canCreate: true })).toBe("See everyone's to-dos →")
     expect(allTodosRowLabel({ openCount: 3, mine: 0, canCreate: false })).toBe("See everyone's to-dos →")
   })
-  it('lets anyone who may create reach New to-do on an empty list, and hides the row otherwise', () => {
+  it('lets anyone who may create reach New to-do on an empty list, and is never hidden', () => {
     expect(allTodosRowLabel({ openCount: 0, mine: 0, canCreate: true })).toBe('Add a to-do →')
-    expect(allTodosRowLabel({ openCount: 0, mine: 0, canCreate: false })).toBeNull()
+    expect(allTodosRowLabel({ openCount: 0, mine: 0, canCreate: false })).toBe("See everyone's to-dos →")
+  })
+  it('on a finished trip the row is the history, even with a personal to-do and nothing in the sheet', () => {
+    expect(allTodosRowLabel({ openCount: 0, mine: 1, canCreate: false, finished: true })).toBe('To-do history →')
   })
   it('counts every open group, not Done', () => {
     const g = { yours: [1], everyone: [1, 2], others: [], upForGrabs: [1] } as never

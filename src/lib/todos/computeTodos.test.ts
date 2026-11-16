@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { computeTodos, computeInfo, computeWaitingOn, compareTodos, canAnswerAll, isActionDoneFor } from './computeTodos'
-import { answerAllLabel, closesLabel, formatMoney, todoCountLabel, DEEP_LINKS } from './copy'
+import { answerAllLabel, closesLabel, formatMoney, todoCountLabel, DEEP_LINKS, TODO_ACTION_LABEL } from './copy'
 import type { SnapshotParticipant, SnapshotSection, TripSnapshot } from './types'
 
 const NOW = new Date(2026, 10, 16, 12, 0, 0) // Mon 16 Nov 2026, local noon
@@ -247,7 +247,7 @@ describe('Sicily: finished trip with money owed and long-overdue group actions',
     const wo = computeWaitingOn(unfrozen, NOW)
     expect(wo.byPerson.map((p) => p.userId)).toEqual(['tim'])
     expect(wo.byItem).toHaveLength(1)
-    expect(wo.byItem[0]).toMatchObject({ id: 'org_setup:' + unfrozen.trip.id + ':freeze', detail: 'Unblocks 3 people', userIds: ['tim'] })
+    expect(wo.byItem[0]).toMatchObject({ id: 'org_setup:' + unfrozen.trip.id + ':freeze', detail: "3 people can't settle until then", userIds: ['tim'] })
     // nobody owes anything: no freeze to-do
     expect(computeTodos(snap({ ...unfrozen, balances: { tim: 0, sam: 0 } }), 'tim', NOW)).toEqual([])
     // a non-organiser never gets it
@@ -438,6 +438,8 @@ describe('claim, travel, waitlist, scope', () => {
   })
 })
 
+const crew4 = ['tim', 'sam', 'chai', 'ana']
+
 describe('organiser kinds', () => {
   const decided = (status: string, over: Partial<SnapshotSection> = {}) =>
     question('d', 'Where to stay', {
@@ -455,7 +457,7 @@ describe('organiser kinds', () => {
     expect(t.map((x) => x.kind)).toEqual(['org_book'])
     expect(t[0].title).toBe('Book: Osaka Airbnb')
     expect(t[0].actionLabel).toBe('Mark booked')
-    expect(t[0].link).toBe('?open=item:win')
+    expect(t[0].link).toBe('?open=book:win')
     expect(computeTodos(s('booked'), 'tim', NOW)).toEqual([])
     expect(computeTodos(s('available', [{ option_id: 'win', status: 'reserved' }]), 'tim', NOW)).toEqual([])
     expect(computeTodos(s('available', [{ option_id: 'win', status: 'cancelled' }]), 'tim', NOW)).toHaveLength(1)
@@ -499,11 +501,146 @@ describe('organiser kinds', () => {
     expect(t[0].overdue).toBe(true)
   })
 
-  it('own-choice questions are never decided', () => {
-    const s = snap({
-      sections: [question('own', 'Ski rental', { metadata: { decision_shape: 'personal' }, vote_deadline: new Date(2026, 10, 10, 12).toISOString() })],
+  it('own-choice: nothing to decide before the deadline; after it the organiser closes answers (org_decide, different copy)', () => {
+    const own = (deadline: string | null) =>
+      snap({ sections: [question('own', 'Ski rental', { metadata: { decision_shape: 'personal' }, vote_deadline: deadline })] })
+    expect(kinds(own(new Date(2026, 10, 20, 12).toISOString()), 'tim')).toEqual(['answer'])
+    const t = computeTodos(own(new Date(2026, 10, 10, 12).toISOString()), 'tim', NOW)
+    expect(t.map((x) => x.kind)).toEqual(['answer', 'org_decide'])
+    const close = t[1]
+    expect(close.title).toBe('Close answers for Ski rental')
+    expect(close.link).toBe('?open=decide:own')
+    expect(close.group).toBe('organiser')
+    // Everyone has answered but there is no deadline: picks stay editable, no to-do.
+    const allIn = snap({
+      sections: [question('own', 'Ski rental', { metadata: { decision_shape: 'personal' }, options: [{ id: 'o1', title: 'Skis', status: 'available', selections: crew4.map((u) => ({ user_id: u })) }] })],
     })
-    expect(kinds(s, 'tim')).toEqual(['answer'])
+    expect(kinds(allIn, 'tim')).not.toContain('org_decide')
+    // Participants never see it; a closed own-choice question has nothing left.
+    expect(kinds(own(new Date(2026, 10, 10, 12).toISOString()), 'sam')).not.toContain('org_decide')
+    const closed = snap({ sections: [question('own', 'Ski rental', { status: 'completed', metadata: { decision_shape: 'personal' }, vote_deadline: new Date(2026, 10, 10, 12).toISOString() })] })
+    expect(kinds(closed, 'tim')).not.toContain('org_decide')
+  })
+
+  describe('decide / tie (slice 4E)', () => {
+    const PAST = new Date(2026, 10, 10, 12).toISOString()
+    const FUTURE = new Date(2026, 10, 25, 12).toISOString()
+    const q = (over: Partial<SnapshotSection> = {}) => question('q', 'Where are we staying?', { vote_deadline: PAST, ...over })
+    const withVotes = (section: SnapshotSection, votes: Array<[string, string]>) => snap({ sections: [section], votes: votes.map(([option_id, user_id]) => ({ option_id, user_id })) })
+    const orgKinds = (s: TripSnapshot, uid = 'tim') => computeTodos(s, uid, NOW).filter((t) => t.group === 'organiser').map((t) => t.kind)
+
+    it('deadline passed with a clear leader: org_decide linking to decide:<id>', () => {
+      const s = withVotes(q(), [['q-a', 'sam'], ['q-a', 'tim'], ['q-b', 'chai']])
+      const t = computeTodos(s, 'tim', NOW).find((x) => x.kind === 'org_decide')!
+      expect(t.link).toBe('?open=decide:q')
+      expect(t.actionLabel).toBe('Decide')
+      expect(orgKinds(s)).toEqual(['org_decide'])
+    })
+
+    it('deadline passed with a tie: org_tie replaces org_decide (never both), same link', () => {
+      const s = withVotes(q(), [['q-a', 'sam'], ['q-b', 'chai']])
+      const t = computeTodos(s, 'tim', NOW).filter((x) => x.group === 'organiser')
+      expect(t.map((x) => x.kind)).toEqual(['org_tie'])
+      expect(t[0].title).toBe('Tie: choose a winner for Where are we staying?')
+      expect(t[0].subtitle).toBe('Tied: Where are we staying? A · Where are we staying? B')
+      expect(t[0].link).toBe('?open=decide:q')
+      expect(t[0].overdue).toBe(true)
+    })
+
+    it('the tie uses the resolveDecision rule: ranked polls break a tie on first-choice votes', () => {
+      const ranked = q({ voting_method: 'ranked' })
+      const clear = snap({ sections: [ranked], votes: [{ option_id: 'q-a', user_id: 'sam', rank: 1 }, { option_id: 'q-b', user_id: 'sam', rank: 2 }, { option_id: 'q-b', user_id: 'chai', rank: 1 }, { option_id: 'q-a', user_id: 'chai', rank: 2 }] })
+      // equal Borda and equal first-choice counts: still a tie
+      expect(orgKinds(clear)).toEqual(['org_tie'])
+    })
+
+    it('a tie is only called once the deadline has passed; before it, everyone answered is org_decide', () => {
+      const everyone = ['tim', 'sam', 'chai']
+      const votes = everyone.map((u, i): [string, string] => [i % 2 ? 'q-a' : 'q-b', u])
+      const open = withVotes(q({ vote_deadline: FUTURE }), votes)
+      const t = computeTodos(open, 'tim', NOW).filter((x) => x.group === 'organiser')
+      expect(t.map((x) => x.kind)).toEqual(['org_decide'])
+      expect(t[0].title).toBe('Decide: Where are we staying? (all 3 answered)')
+      // not everyone has answered and the deadline is ahead: nothing yet
+      expect(orgKinds(withVotes(q({ vote_deadline: FUTURE }), [['q-a', 'sam']]))).toEqual([])
+    })
+
+    it('no answers at all after the deadline is org_decide (not a tie)', () => {
+      expect(orgKinds(snap({ sections: [q()] }))).toEqual(['org_decide'])
+    })
+
+    it('decided (by anyone, or by the auto-decide job) clears decide and tie at once', () => {
+      for (const votes of [[['q-a', 'sam'], ['q-b', 'chai']], [['q-a', 'sam'], ['q-a', 'chai']]] as Array<Array<[string, string]>>) {
+        const open = withVotes(q(), votes)
+        expect(orgKinds(open)).toHaveLength(1)
+        const decided = withVotes(q({ status: 'completed', metadata: { decided_option_id: 'q-a' } }), votes)
+        expect(orgKinds(decided).filter((k) => k !== 'org_book')).toEqual([])
+      }
+    })
+
+    it('the email bridge (nobody marked organiser, created_by null) can never receive decide / tie / book', () => {
+      const s = snap({
+        trip: { ...snap().trip, created_by: null },
+        participants: [person('tim', 'Tim', { role: null }), person('sam', 'Sam', { role: null })],
+        sections: [q()],
+        votes: [{ option_id: 'q-a', user_id: 'sam' }, { option_id: 'q-b', user_id: 'tim' }],
+      })
+      for (const uid of ['tim', 'sam']) expect(computeTodos(s, uid, NOW).filter((t) => t.kind.startsWith('org_'))).toEqual([])
+    })
+
+    it('every organiser holds it; Waiting on shows ONE item saying any organiser can do it (N)', () => {
+      const s = snap({
+        participants: [person('tim', 'Tim', { role: 'organizer' }), person('amy', 'Amy', { role: 'organizer' }), person('sam', 'Sam')],
+        sections: [q()],
+        votes: [{ option_id: 'q-a', user_id: 'sam' }, { option_id: 'q-b', user_id: 'tim' }],
+      })
+      const item = computeWaitingOn(s, NOW).byItem.find((i) => i.kind === 'org_tie')!
+      expect(item.userIds.sort()).toEqual(['amy', 'tim'])
+      expect(item.detail).toBe('Any organizer can do this (2)')
+      expect(item.shortTitle).toBe('Tie: choose a winner for Where are we staying?')
+      expect(computeWaitingOn(s, NOW).byItem.filter((i) => i.kind === 'org_decide')).toHaveLength(0)
+    })
+  })
+
+  describe('book (slice 4E)', () => {
+    const DECIDED_META = { decided_option_id: 'win', followup_action_id: 'act-book' }
+    const realBook = (over: Record<string, unknown> = {}) => ({ id: 'act-book', title: 'Book: Osaka Airbnb', assigned_to: 'sam', deadline_kind: 'fixed', due_date: '2026-12-01', completed_at: null as string | null, section_id: null, ...over })
+    const sec = (metadata: Record<string, unknown>) =>
+      question('d', 'Where to stay', { status: 'completed', section_type: 'accommodation', metadata: metadata as never, options: [{ id: 'win', title: 'Osaka Airbnb', status: 'available', selections: [] }, { id: 'lose', title: 'Hotel', status: 'available', selections: [] }] })
+    const mk = (section: SnapshotSection, actions: TripSnapshot['actions'] = [], bookings?: TripSnapshot['bookings']) =>
+      snap({ sections: [section], votes: [{ option_id: 'win', user_id: 'sam' }], actions, bookings, participants: [person('tim', 'Tim', { role: 'organizer' }), person('sam', 'Sam')] })
+
+    it('decided with a real Book to-do: no synthetic org_book; the real one is a normal task for its assignee', () => {
+      const s = mk(sec(DECIDED_META), [realBook()])
+      expect(kinds(s, 'tim')).toEqual([])
+      const sam = computeTodos(s, 'sam', NOW)
+      expect(sam.map((t) => [t.kind, t.title, t.group])).toEqual([['task', 'Book: Osaka Airbnb', 'personal']])
+      // done real to-do (mark_booked completes it): nothing reappears
+      expect(kinds(mk(sec(DECIDED_META), [realBook({ completed_at: '2026-11-15T00:00:00Z' })]), 'tim')).toEqual([])
+      expect(kinds(mk(sec(DECIDED_META), [realBook({ completed_at: '2026-11-15T00:00:00Z' })]), 'sam')).toEqual([])
+    })
+
+    it('the real to-do deleted (or never created): the synthetic org_book comes back, linking to book:<optionId>', () => {
+      for (const s of [mk(sec(DECIDED_META), []), mk(sec({ decided_option_id: 'win' }))]) {
+        const t = computeTodos(s, 'tim', NOW)
+        expect(t.map((x) => x.kind)).toEqual(['org_book'])
+        expect(t[0].link).toBe('?open=book:win')
+        expect(t[0].title).toBe('Book: Osaka Airbnb')
+      }
+    })
+
+    it('decided + booked (legacy status or a live booking): no org_book; cancelled booking brings it back', () => {
+      const booked = sec({ decided_option_id: 'win' })
+      booked.options = booked.options.map((o) => (o.id === 'win' ? { ...o, status: 'booked' } : o))
+      expect(kinds(mk(booked), 'tim')).toEqual([])
+      expect(kinds(mk(sec({ decided_option_id: 'win' }), [], [{ option_id: 'win', status: 'reserved' }]), 'tim')).toEqual([])
+      expect(kinds(mk(sec({ decided_option_id: 'win' }), [], [{ option_id: 'win', status: 'cancelled' }]), 'tim')).toEqual(['org_book'])
+    })
+
+    it('keeps the restraint rules: not on the dates question, not past the trip start, never for own choice', () => {
+      expect(kinds(mk({ ...sec({ decided_option_id: 'win' }), title: 'Trip dates' }), 'tim')).toEqual([])
+      expect(kinds(mk(sec({ decided_option_id: 'win', decision_shape: 'personal' })), 'tim')).toEqual([])
+    })
   })
 
   it('org_setup is true-in-the-data: invite and first question', () => {
@@ -632,5 +769,42 @@ describe('copy helpers', () => {
     const s = snap({ sections: [question('a', 'A'), question('b', 'B')] })
     expect(canAnswerAll(computeTodos(s, 'sam', NOW))).toBe(true)
     expect(canAnswerAll(computeTodos(snap({ sections: [question('a', 'A')] }), 'sam', NOW))).toBe(false)
+  })
+})
+
+describe('Ideas bucket and own-choice bookings', () => {
+  const ideas = question('ideas', 'Ideas', {
+    metadata: { ideas_bucket: true, decision_shape: 'group' },
+    vote_deadline: '2026-11-01T00:00:00Z',
+    voting_method: 'approval',
+  })
+  const s = () => snap({ sections: [ideas], votes: [{ option_id: 'ideas-a', user_id: 'sam' }] })
+
+  it('creates no answer, decide, tie or book to-do for anyone, and no setup-question nag count change', () => {
+    for (const uid of ['tim', 'sam', 'chai']) {
+      const k = kinds(s(), uid).filter((x) => x !== 'org_setup' && x !== 'rsvp')
+      expect(k).toEqual([])
+    }
+  })
+
+  it('a completed Ideas bucket does not produce a Book to-do', () => {
+    const done = { ...ideas, status: 'completed', section_type: 'activities', options: [{ id: 'x', title: 'Idea', status: 'booked', selections: [] }] }
+    expect(kinds(snap({ sections: [done] }), 'tim').filter((x) => x === 'org_book')).toEqual([])
+  })
+
+  it('one booked option of an Own-choice question does not close it for everyone else', () => {
+    const own = question('own', 'Flights', {
+      metadata: { decision_shape: 'personal' },
+      vote_deadline: '2027-01-01T00:00:00Z',
+      options: [
+        { id: 'own-a', title: 'Mine', status: 'booked', selections: [] },
+        { id: 'own-b', title: 'Yours', status: 'available', selections: [] },
+      ],
+    })
+    expect(kinds(snap({ sections: [own] }), 'sam')).toContain('answer')
+  })
+
+  it('org_tie action label is "Choose winner"', () => {
+    expect(TODO_ACTION_LABEL.org_tie).toBe('Choose winner')
   })
 })

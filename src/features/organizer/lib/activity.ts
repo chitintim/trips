@@ -31,6 +31,7 @@ export type ActivityVerb =
   | 'expense_added'
   | 'settlement_confirmed'
   | 'settlement_marked_paid'
+  | 'settlement_duplicate_removed'
   | 'booking_added'
   | 'booking_updated'
   | 'event_added'
@@ -106,6 +107,7 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   expense_added: { icon: '💰', phrase: (e) => `added the expense${e ? ` "${e}"` : ''}` },
   settlement_confirmed: { icon: '🤝', phrase: (e) => `confirmed a payment${e ? ` (${e})` : ''}` },
   settlement_marked_paid: { icon: '💸', phrase: (e) => `marked a payment as paid${e ? ` (${e})` : ''}` },
+  settlement_duplicate_removed: { icon: '🧹', phrase: (e) => `removed a duplicate payment${e ? ` (${e})` : ''}` },
   booking_added: { icon: '🧾', phrase: (e) => `marked${e ? ` "${e}"` : ' an item'} as booked` },
   booking_updated: { icon: '🧾', phrase: (e) => `updated the booking details${e ? ` for "${e}"` : ''}` },
   event_added: { icon: '📅', phrase: (e) => `added${e ? ` "${e}"` : ' something'} to the plan` },
@@ -135,6 +137,13 @@ export interface RenderedActivity {
 export function renderActivity(entry: ActivityFeedEntry, actorName: string): RenderedActivity {
   const entity = (entry.entity ?? null) as ActivityEntity | null
   const label = entity?.label ?? null
+  // Written by the scheduled job (auto_decide_question): no actor, flagged auto.
+  const meta = entry.metadata && typeof entry.metadata === 'object' && !Array.isArray(entry.metadata) ? (entry.metadata as Record<string, unknown>) : null
+  if (entry.verb === 'poll_closed' && meta?.auto === true) {
+    const winner = typeof meta.decided_option_title === 'string' && meta.decided_option_title ? meta.decided_option_title : null
+    const text = `${label ? `"${label}"` : 'A question'} was decided automatically when answers closed${winner ? `: ${winner}` : ''}`
+    return { icon: '🏁', text, actorName }
+  }
   const template = VERB_TEMPLATES[entry.verb as ActivityVerb]
   if (!template) {
     return { icon: '•', text: `${actorName} ${entry.verb.replace(/_/g, ' ')}`, actorName }

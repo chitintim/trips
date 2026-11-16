@@ -108,3 +108,13 @@ describe('selectDaysItems', () => {
     expect(r.scheduled).toHaveLength(0)
   })
 })
+
+import { groupQuestions as gq } from './questionsModel'
+describe('booked options are never grouped under Closed (item 9)', () => {
+  it('finished trip, legacy-booked option on an unstamped question', () => {
+    const section = { id: 's', title: 'Stay', status: 'open', options: [{ id: 'a', title: 'Hotel', status: 'booked' }, { id: 'b', title: 'Hut', status: 'available' }] } as never
+    const g = gq({ sections: [section], userId: 'u', votes: [], passes: [], participants: [], trip: { status: 'trip_completed', start_date: '2026-01-01', end_date: '2026-01-05' } as never })
+    expect(g.closed).toHaveLength(0)
+    expect(g.booked.length + g.decided.length).toBe(1)
+  })
+})

@@ -25,6 +25,14 @@ export interface ChaseSettings {
   delay_hours: number
   quiet_hours: { start: number; end: number } | null
   max_reminders: number
+  /**
+   * "Decide questions automatically at their deadline" (Phase 4D). OPT-OUT:
+   * absent = ON; only an explicit off value (false / "false" / "off" / "no" /
+   * "0" / 0) turns it off. Same rule as the SQL function auto_decide_question,
+   * which re-checks it itself. Not gated by `enabled`: it is a trip rule, not
+   * a reminder email.
+   */
+  auto_decide: boolean
 }
 
 export const DEFAULT_SETTINGS: ChaseSettings = {
@@ -33,6 +41,13 @@ export const DEFAULT_SETTINGS: ChaseSettings = {
   delay_hours: 48,
   quiet_hours: null,
   max_reminders: 3,
+  auto_decide: true,
+}
+
+/** Values that switch auto-decide off (mirrors the SQL: false/'false'/'off'/'no'/'0'). */
+export function isAutoDecideOff(v: unknown): boolean {
+  if (v === false || v === 0) return true
+  return typeof v === 'string' && ['false', 'off', 'no', '0'].includes(v.trim().toLowerCase())
 }
 
 export function parseChaseSettings(raw: unknown): ChaseSettings {
@@ -47,6 +62,7 @@ export function parseChaseSettings(raw: unknown): ChaseSettings {
         ? (r.quiet_hours as { start: number; end: number })
         : null,
     max_reminders: typeof r.max_reminders === 'number' ? r.max_reminders : DEFAULT_SETTINGS.max_reminders,
+    auto_decide: !isAutoDecideOff(r.auto_decide),
   }
 }
 

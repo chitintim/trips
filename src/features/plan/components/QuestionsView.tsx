@@ -21,8 +21,6 @@ export interface QuestionsViewProps {
   list: UseQuestionListResult
   /** useTripPermissions().canManageTrip: shows "⋯ Manage" on each card. */
   canManage: boolean
-  /** Opens the scheduler for a decided option ("Put it on the plan" in Manage). Omitted = not offered. */
-  onSchedule?: (sectionId: string, optionId: string) => void
   /** Question card to scroll to and briefly highlight (`?open=question:<id>`). */
   highlight?: { id: string; nonce: number } | null
   /** Organisers' "Ask the group" (opens the Add sheet as a question). */
@@ -42,7 +40,6 @@ export function QuestionsView({
   trip,
   list,
   canManage,
-  onSchedule,
   highlight = null,
   onAsk,
   onCreateStarters,
@@ -197,7 +194,7 @@ export function QuestionsView({
       )}
 
       {manageSectionId && (
-        <QuestionManageSheet isOpen onClose={() => setManageSectionId(null)} tripId={trip.id} sectionId={manageSectionId} onSchedule={onSchedule} />
+        <QuestionManageSheet isOpen onClose={() => setManageSectionId(null)} tripId={trip.id} sectionId={manageSectionId} />
       )}
     </div>
   )

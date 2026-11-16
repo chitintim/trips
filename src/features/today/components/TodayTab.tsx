@@ -95,7 +95,11 @@ export function TodayTab({
             confirmedCount={brief.confirmedCount}
             onOpenStatusModal={() => setRsvpOpen(true)}
           />
-          <WhosInRow participants={brief.participants} />
+          <WhosInRow
+            participants={brief.participants}
+            trackingOn={trip.confirmation_enabled === true}
+            onOpenPeople={() => onNavigate('people')}
+          />
           {announcements}
           {organiserCards}
           {activity}

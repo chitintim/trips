@@ -11,13 +11,18 @@ import { BookingEditorSheet } from '../../organizer/components/BookingEditorShee
 import { NudgeDraftSheet } from '../../organizer/components/NudgeDraftSheet'
 import type { Blocker } from '../../organizer/lib/blockers'
 import { readFollowupActionId, resolveDecidedOptionId } from '../lib/closeDecision'
+import { isIdeasBucket } from '../../../lib/ideasBucket'
+import { planInitialChild, type ManageInitialChild } from '../lib/manageInitialChild'
 import { getManageActions, type ManageAction } from '../lib/manageActions'
+import { eventCategoryForSection, readOptionPlanDate } from '../lib/decideSheetModel'
 import { useQuestionAnswers } from '../lib/useQuestionAnswers'
 import { useDeleteQuestion } from '../lib/useDeleteQuestion'
 import { CARD_CHIP } from '../lib/questionCardModel'
 import { CLOSED_NO_DECISION } from '../lib/answerCopy'
 import { participantName } from '../lib/everyonesAnswers'
-import { CloseDecisionSheet } from './CloseDecisionSheet'
+import { DecideSheet } from './DecideSheet'
+import { MarkBookedSheet } from './MarkBookedSheet'
+import { PutOnPlanSheet } from './PutOnPlanSheet'
 import { SectionEditorSheet } from './SectionEditorSheet'
 import { OptionEditorSheet } from './OptionEditorSheet'
 import { ReopenDecisionDialog } from './ReopenDecisionDialog'
@@ -31,15 +36,16 @@ export interface QuestionManageSheetProps {
   tripId: string
   sectionId: string
   /**
-   * Optional (not part of the agreed four). "Put it on the plan" opens the
-   * plan feature's ScheduleItSheet, which lives in src/features/plan, so the
-   * host passes how to open it. When omitted the "Put it on the plan" action
-   * is simply not offered. Called with the decided option.
+   * Open straight into a step (the "Decide: X" / "Book: X" to-dos and their links):
+   * `decide` = Decide (or Close answers); `booking` = Mark booked for `initialOptionId`
+   * (default: the decided option). When the step no longer makes sense the sheet
+   * simply opens on its home view.
    */
-  onSchedule?: (sectionId: string, optionId: string) => void
+  initialChild?: ManageInitialChild
+  initialOptionId?: string | null
 }
 
-type Child = null | 'decide' | 'settings' | 'add_option' | 'reopen' | 'delete' | 'add_todo' | 'booking' | 'nudge_pick' | 'nudge_draft'
+type Child = null | 'decide' | 'schedule' | 'mark_booked' | 'unmark_booked' | 'settings' | 'add_option' | 'reopen' | 'delete' | 'add_todo' | 'booking' | 'nudge_pick' | 'nudge_draft'
 type View = 'home' | 'answers' | 'nudge'
 
 /**
@@ -48,17 +54,17 @@ type View = 'home' | 'answers' | 'nudge'
  * then the actions that make sense for its state (see manageActions.ts):
  *
  *   Open     Decide · See everyone's answers · Nudge · Question settings · Add option · Delete
- *   Decided  outcome · Put it on the plan · Add a to-do · Mark booked / Track booking · Settings · Reopen · Delete
- *   Booked   read-only summary · See everyone's answers · Track booking · Reopen
+ *   Decided  outcome · Put it on the plan · Add a to-do · Mark booked · Settings · Reopen · Delete
+ *   Booked   read-only summary · See everyone's answers · Track booking · Not booked after all · Reopen
  *
  * Renders nothing for people who cannot manage the trip.
  */
-export function QuestionManageSheet({ isOpen, onClose, tripId, sectionId, onSchedule }: QuestionManageSheetProps) {
+export function QuestionManageSheet({ isOpen, onClose, tripId, sectionId, initialChild, initialOptionId }: QuestionManageSheetProps) {
   const { data: trip } = useTrip(tripId)
   const { data: sections } = useSections(tripId)
   const section = useMemo(() => (sections ?? []).find((s) => s.id === sectionId) ?? null, [sections, sectionId])
   if (!trip || !section) return null
-  return <ManageBody isOpen={isOpen} onClose={onClose} tripId={tripId} section={section} onSchedule={onSchedule} trip={trip} />
+  return <ManageBody isOpen={isOpen} onClose={onClose} tripId={tripId} section={section} trip={trip} initialChild={initialChild} initialOptionId={initialOptionId} />
 }
 
 function ManageBody({
@@ -66,14 +72,16 @@ function ManageBody({
   onClose,
   tripId,
   section,
-  onSchedule,
   trip,
+  initialChild,
+  initialOptionId,
 }: {
+  initialChild?: ManageInitialChild
+  initialOptionId?: string | null
   isOpen: boolean
   onClose: () => void
   tripId: string
   section: NonNullable<ReturnType<typeof useSections>['data']>[number]
-  onSchedule?: (sectionId: string, optionId: string) => void
   trip: NonNullable<ReturnType<typeof useTrip>['data']>
 }) {
   const { showToast } = useToast()
@@ -90,6 +98,8 @@ function ManageBody({
 
   const [view, setView] = useState<View>('home')
   const [child, setChild] = useState<Child>(null)
+  const [bookOptionId, setBookOptionId] = useState<string | null>(null)
+  const [initialApplied, setInitialApplied] = useState(false)
   const [nudgeTarget, setNudgeTarget] = useState<{ userId: string; name: string } | null>(null)
 
   const liveBookings = useMemo(() => (bookings ?? []).filter((b) => b.status !== 'cancelled'), [bookings])
@@ -116,10 +126,38 @@ function ManageBody({
     onThePlan: !!scheduledEvent,
     hasFollowupTodo: !!followup,
     hasBooking: !!booking,
-    canSchedule: !!onSchedule,
+    ideas: isIdeasBucket(section),
   })
 
+  // Apply the requested first step once, as soon as we know the viewer can manage the trip.
+  if (!initialApplied && canManageTrip) {
+    setInitialApplied(true)
+    const planned = planInitialChild({
+      initialChild,
+      initialOptionId,
+      canManage: canManageTrip,
+      finished: isTripFinished(trip),
+      section: {
+        status: section.status,
+        options: section.options.map((o) => ({ id: o.id, status: o.status })),
+        own: shape === 'own',
+        decidedOptionId: decidedOption?.id ?? null,
+      },
+    })
+    if (planned.child === 'decide') setChild('decide')
+    else if (planned.child === 'mark_booked') {
+      setBookOptionId(planned.optionId)
+      setChild('mark_booked')
+    }
+  }
+
   if (!canManageTrip) return null
+
+  const markBookedOption = (() => {
+    const o = bookOptionId ? section.options.find((x) => x.id === bookOptionId) : null
+    const target = o ?? decidedOption
+    return target ? { id: target.id, title: target.title } : null
+  })()
 
   const stageLabel = card.stage === 'booked' ? CARD_CHIP.booked : card.stage === 'decided' ? CARD_CHIP.decided : card.stage === 'closed' ? CLOSED_NO_DECISION : 'Open'
   const stageTone = card.stage === 'booked' || card.stage === 'decided' ? 'success' : card.stage === 'closed' ? 'neutral' : 'info'
@@ -173,11 +211,12 @@ function ManageBody({
       case 'delete':
         return setChild('delete')
       case 'schedule':
-        if (decidedOption && onSchedule) {
-          onSchedule(section.id, decidedOption.id)
-          onClose()
-        }
-        return
+        return setChild('schedule')
+      case 'mark_booked':
+        setBookOptionId(null)
+        return setChild('mark_booked')
+      case 'unmark_booked':
+        return setChild('unmark_booked')
       case 'add_todo':
         return setChild('add_todo')
       case 'booking':
@@ -317,7 +356,28 @@ function ManageBody({
         </div>
       </Modal>
 
-      <CloseDecisionSheet isOpen={isOpen && child === 'decide'} onClose={closeChild} tripId={tripId} section={section} votes={votes} onClosed={() => setChild(null)} />
+      <DecideSheet isOpen={isOpen && child === 'decide'} onClose={closeChild} trip={trip} section={section} />
+
+      <PutOnPlanSheet
+        isOpen={isOpen && child === 'schedule'}
+        onClose={closeChild}
+        trip={trip}
+        target={
+          decidedOption
+            ? {
+                optionId: decidedOption.id,
+                title: decidedOption.title,
+                description: decidedOption.description,
+                placeId: decidedOption.place_id,
+                category: eventCategoryForSection(section.section_type),
+                date: readOptionPlanDate(decidedOption.metadata, section.metadata)?.date ?? null,
+                startTime: readOptionPlanDate(decidedOption.metadata, section.metadata)?.startTime ?? null,
+              }
+            : null
+        }
+      />
+
+      <MarkBookedSheet isOpen={isOpen && (child === 'mark_booked' || child === 'unmark_booked')} onClose={closeChild} trip={trip} option={markBookedOption} mode={child === 'unmark_booked' ? 'unmark' : 'mark'} />
 
       <SectionEditorSheet isOpen={isOpen && child === 'settings'} onClose={closeChild} tripId={tripId} section={section} />
 

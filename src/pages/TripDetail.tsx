@@ -16,7 +16,7 @@ import { useTodos } from '../lib/queries/useTodos'
 import { useSections } from '../lib/queries/usePlanning'
 import { useTimeline } from '../lib/queries/useTimeline'
 import { answerTodoList } from '../lib/todos/computeTodos'
-import { isTripFinished } from '../lib/answers/answers'
+import { isTripFinished, isOwnChoice } from '../lib/answers/answers'
 import { useExpenses } from '../lib/queries/useExpenses'
 import { useSettlements } from '../lib/queries/useSettlements'
 import { useQueryClient } from '@tanstack/react-query'
@@ -38,6 +38,7 @@ import {
 import { todayTabConfig } from '../features/today'
 import { planTabConfig, AddToPlanSheet, AnswerFlow } from '../features/plan'
 import type { PlanFocus } from '../features/plan'
+import { QuestionManageSheet } from '../features/decisions'
 import { peopleTabConfig, StatusModal, TravelDetailsSheet } from '../features/people'
 import { OPEN_QUICK_CAPTURE_EVENT } from '../features/timeline'
 import { OrganizerConsole } from '../features/organizer'
@@ -134,6 +135,8 @@ export function TripDetail() {
   const [answerSectionIds, setAnswerSectionIds] = useState<string[] | null>(null)
   const [markPaidSettlementId, setMarkPaidSettlementId] = useState<string | null>(null)
   const [todosScrollNonce, setTodosScrollNonce] = useState(0)
+  // ?open=decide:<sectionId> / book:<optionId> -> that question's Manage sheet, opened into Decide / Mark booked.
+  const [manageRequest, setManageRequest] = useState<{ sectionId: string; mode: 'decide' | 'book'; optionId?: string } | null>(null)
   // Hand-offs for deep links that target something a space owns: the Plan
   // opens an item / highlights a question, Money scrolls to a payment, the
   // To-dos sheet flashes a row. `nonce` re-fires the same link twice in a row.
@@ -214,6 +217,9 @@ export function TripDetail() {
       status: s.status,
       hasLiveOptions: s.options.some((o) => o.status !== 'cancelled'),
     }))
+    const liveBookingOptionIds = new Set((snapshot.bookings ?? []).filter((b) => b.option_id && b.status !== 'cancelled').map((b) => b.option_id as string))
+    const options = snapshot.sections.flatMap((s) => s.options.map((o) => ({ id: o.id, sectionId: s.id, booked: o.status === 'booked' || liveBookingOptionIds.has(o.id) })))
+    const ownChoiceSectionIds = new Set(snapshot.sections.filter((s) => isOwnChoice(s)).map((s) => s.id))
     const itemIds = new Set<string>()
     for (const e of timelineData ?? []) itemIds.add(e.id)
     for (const s of snapshot.sections) for (const o of s.options) itemIds.add(o.id)
@@ -230,6 +236,8 @@ export function TripDetail() {
       settlements: snapshot.settlements,
       expenses: (expensesData?.expenses ?? []).map((e) => ({ id: e.id, claimCode: e.allocation_link?.code ?? null })),
       itemIds,
+      options,
+      ownChoiceSectionIds,
     }
   }, [trip, snapshot, timelineData, user?.id, isOrganizer, myParticipant, participants.length, todos, expensesData])
 
@@ -265,6 +273,10 @@ export function TripDetail() {
         break
       case 'plan-question':
         setPlanFocus((prev) => ({ kind: 'question', id: sheet.id, nonce: (prev?.nonce ?? 0) + 1 }))
+        break
+      case 'manage-question':
+        // Organiser to-dos (Decide / Tie / Book): the question's Manage sheet, straight into the step.
+        setManageRequest({ sectionId: sheet.id, mode: sheet.mode, optionId: sheet.optionId })
         break
       case 'mark-paid':
         setMarkPaidSettlementId(sheet.settlementId)
@@ -710,6 +722,19 @@ export function TripDetail() {
           onClose={() => setAnswerSectionIds(null)}
           trip={trip}
           sections={(sectionsData ?? []).filter((sec) => answerSectionIds.includes(sec.id))}
+        />
+      )}
+
+      {/* ?open=decide:<id> / book:<optionId>: the Manage sheet for that question, opened
+          straight into the Decide / Mark booked step (home view if the step no longer applies). */}
+      {manageRequest && isOrganizer && (
+        <QuestionManageSheet
+          isOpen
+          onClose={() => setManageRequest(null)}
+          tripId={trip.id}
+          sectionId={manageRequest.sectionId}
+          initialChild={manageRequest.mode === 'decide' ? 'decide' : 'booking'}
+          initialOptionId={manageRequest.optionId}
         />
       )}
 

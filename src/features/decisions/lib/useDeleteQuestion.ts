@@ -50,6 +50,39 @@ export function toDeleteSummary(raw: unknown): DeleteQuestionSummary {
   }
 }
 
+/**
+ * The "Book: <option>" to-do that decide_question made for a question, if it is
+ * still open. delete_question only removes to-dos with a section_id; the Book:
+ * to-do has section_id NULL on purpose and is linked only through the
+ * question's `metadata.followup_action_id`, so it would be left behind with
+ * nothing to book. Returns its id when it is safe to remove: linked from the
+ * question, section_id NULL, title starting "Book:", and not done yet.
+ */
+export function bookTodoToRemove(
+  metadata: unknown,
+  action: { id: string; title: string; section_id: string | null; completed_at: string | null } | null
+): string | null {
+  if (!action || !metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
+  const followup = (metadata as Record<string, unknown>).followup_action_id
+  if (typeof followup !== 'string' || followup !== action.id) return null
+  if (action.section_id !== null || action.completed_at !== null) return null
+  return action.title.startsWith('Book:') ? action.id : null
+}
+
+/** Best-effort: look up the question's open Book: to-do before it is deleted. */
+async function findBookTodo(sectionId: string): Promise<string | null> {
+  try {
+    const { data: section } = await supabase.from('planning_sections').select('metadata').eq('id', sectionId).maybeSingle()
+    const meta = section?.metadata
+    const followup = meta && typeof meta === 'object' && !Array.isArray(meta) ? (meta as Record<string, unknown>).followup_action_id : null
+    if (typeof followup !== 'string') return null
+    const { data: action } = await supabase.from('trip_actions').select('id, title, section_id, completed_at').eq('id', followup).maybeSingle()
+    return bookTodoToRemove(meta, action ?? null)
+  } catch {
+    return null
+  }
+}
+
 // Remembered for the session: once the function is known to be missing, the
 // UI can disable the button instead of letting people hit the error again.
 let deleteMissing = false
@@ -64,6 +97,7 @@ export function useDeleteQuestion(tripId: string) {
   const queryClient = useQueryClient()
   const mutation = useMutation({
     mutationFn: async (sectionId: string): Promise<DeleteQuestionSummary> => {
+      const bookTodoId = await findBookTodo(sectionId)
       const { data, error } = await supabase.rpc('delete_question', { p_section_id: sectionId })
       if (error) {
         if (isFunctionMissingError(error)) {
@@ -72,6 +106,8 @@ export function useDeleteQuestion(tripId: string) {
         }
         throw new Error(error.message)
       }
+      // Only after the question is really gone, so a failed delete never costs the to-do.
+      if (bookTodoId) await supabase.from('trip_actions').delete().eq('id', bookTodoId)
       return toDeleteSummary(data)
     },
     onSuccess: () => {

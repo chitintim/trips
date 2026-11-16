@@ -9,7 +9,7 @@ describe('buildRsvpCostLine', () => {
   it('falls back to the organizer estimate, via the one formatter, labelled as an estimate', () => {
     const l = buildRsvpCostLine(trip, null)!
     expect(l.source).toBe('organizer')
-    expect(l.figure).toBe('≈£500 per person')
+    expect(l.figure).toBe('≈£500 each')
     expect(l.note).toMatch(/estimate/)
     expect(l.figure).not.toMatch(/GBP/)
   })

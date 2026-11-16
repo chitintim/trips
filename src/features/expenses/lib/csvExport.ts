@@ -67,10 +67,15 @@ export function buildExpenseLedgerCsv(expenses: ExpenseWithDetails[], userName: 
 }
 
 /** Builds the settlement summary CSV: one row per settlement payment. */
-export function buildSettlementSummaryCsv(settlements: Settlement[], userName: CsvUserLookup): string {
+export function buildSettlementSummaryCsv(
+  settlements: Settlement[],
+  userName: CsvUserLookup,
+  /** Memos are private to payer, payee and trip managers; omit to include all. */
+  canSeeMemo: (s: Settlement) => boolean = () => true
+): string {
   const header = toRow(['From', 'To', 'Amount', 'Currency', 'Status', 'Settled at', 'Notes'])
   const rows = settlements.map((s) =>
-    toRow([userName(s.from_user_id), userName(s.to_user_id), s.amount, s.currency ?? '', s.status, s.settled_at, s.notes ?? ''])
+    toRow([userName(s.from_user_id), userName(s.to_user_id), s.amount, s.currency ?? '', s.status, s.settled_at, canSeeMemo(s) ? s.notes ?? '' : ''])
   )
   return [header, ...rows].join('\n')
 }

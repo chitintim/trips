@@ -239,7 +239,8 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
             </div>
 
             <Input
-              label="Full cost breakdown link (optional)"
+              label="Link to more details (optional) — e.g. the booking page"
+              helperText="Opens outside the app, labelled with its website address."
               type="url"
               value={values.fullCostLink}
               onChange={(e) => updateField('fullCostLink', e.target.value)}

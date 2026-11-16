@@ -8,23 +8,28 @@ import { useParticipants, useAllParticipants, useCurrentUserRow } from '../../..
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import {
   useSettlements,
+  fetchSettlements,
   useSettlementCarryovers,
-  useRecordSettlement,
   useUpdateSettlementStatus,
-  useFinalizeSettlementSnapshot,
+  useFreezeSettlements,
+  useUnfreezeSettlements,
   useCreateSettlementCarryover,
-  useDeleteSettlement,
 } from '../../../lib/queries/useSettlements'
-import { useLogActivity } from '../../../lib/queries/useActivityFeed'
+import { queryKeys } from '../../../lib/queries/queryKeys'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { formatMoney } from '../lib/formatMoney'
 import {
   computeSuggestedPayments,
+  computeRemainingSuggestions,
   readLegacySnapshot,
   buildSnapshot,
   computePendingMismatches,
-  excludePendingPairs,
+  dedupeTransactions,
+  findDuplicatePayments,
+  unresolvedDuplicateGroups,
 } from './settleUpLogic'
+import { DuplicatePaymentsNotice } from './DuplicatePaymentsNotice'
+import { buildFreezeSuggestions, knownPaidIds, FREEZE_BLOCKED_BY_DUPLICATES } from './settlementFreeze'
 import { computeBalances, partitionCarryovers } from '../lib/balances'
 import { buildSettleUpPeople, LEFT_TRIP_SUFFIX } from './settleUpPeople'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
@@ -38,6 +43,8 @@ import type { Trip } from '../../../types'
 export interface SettleUpTabProps {
   /** `?open=payment:<id>` for the receiver: scroll to that payment and highlight its "Confirm received" row (nothing is confirmed automatically). */
   initialConfirmId?: string
+  /** Scroll to the "recorded twice" notice (the Money header's hint). */
+  focusDuplicates?: boolean
   trip: Trip
 }
 
@@ -53,7 +60,7 @@ const SETTLEMENT_STATUS_LABELS: Record<string, string> = {
  * suggested -> marked_paid -> confirmed status flow, recipient payment
  * details card, CSV export, cross-trip carryover.
  */
-export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
+export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleUpTabProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const queryClient = useQueryClient()
@@ -91,17 +98,21 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
     }
   }, [initialConfirmId, isLoading])
 
-  const recordSettlement = useRecordSettlement(trip.id)
+  useEffect(() => {
+    if (!focusDuplicates || isLoading) return
+    const on = setTimeout(() => document.getElementById('duplicate-payments')?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 150)
+    return () => clearTimeout(on)
+  }, [focusDuplicates, isLoading])
+
   const updateStatus = useUpdateSettlementStatus(trip.id)
-  const finalizeSnapshot = useFinalizeSettlementSnapshot(trip.id)
+  const freezeSettlements = useFreezeSettlements(trip.id)
+  const unfreezeSettlements = useUnfreezeSettlements(trip.id)
   const createCarryover = useCreateSettlementCarryover(trip.id)
-  const deleteSettlement = useDeleteSettlement(trip.id)
-  const logActivity = useLogActivity(trip.id)
   const logTypedActivity = useTripActivityLog(trip.id)
 
   const [simplify, setSimplify] = useState(true)
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false)
-  const [markPaidTarget, setMarkPaidTarget] = useState<Settlement | null>(null)
+  const [markPaidTargetId, setMarkPaidTargetId] = useState<string | null>(null)
   const [isFreezing, setIsFreezing] = useState(false)
   const [isUnfreezing, setIsUnfreezing] = useState(false)
   const { data: carryoverCandidates = [] } = useCarryoverCandidates(trip.id, user?.id)
@@ -115,6 +126,11 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
     [expenses, settlements, carryovers, trip.base_currency, participants, allParticipants]
   )
   const leftPeople = people.filter((p) => p.left)
+  // The live row (not a copy taken at tap time) so the sheet sees it move on.
+  const markPaidTarget: Settlement | null = settlements.find((s) => s.id === markPaidTargetId) ?? null
+  const duplicatePayments = useMemo(() => findDuplicatePayments(settlements, trip.base_currency), [settlements, trip.base_currency])
+  // Freeze is blocked (here and in the server function) while a payment recorded twice is unresolved.
+  const freezeBlockedByDuplicates = useMemo(() => unresolvedDuplicateGroups(settlements, trip.base_currency).length > 0, [settlements, trip.base_currency])
 
   // Freeze/unfreeze: trip organiser, creator or site admin (one shared rule,
   // see useTripPermissions). The trips-row snapshot write is RLS-protected, so
@@ -129,7 +145,7 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
   const legacySnapshot = useMemo(() => readLegacySnapshot(trip.settlement_snapshot), [trip.settlement_snapshot])
 
   const suggested = useMemo(
-    () => (isFrozen ? [] : computeSuggestedPayments(expenses, settlements, people, trip.base_currency, simplify, carryovers)),
+    () => (isFrozen ? [] : computeRemainingSuggestions(expenses, settlements, people, trip.base_currency, simplify, carryovers)),
     [expenses, settlements, people, trip.base_currency, simplify, isFrozen, carryovers]
   )
 
@@ -168,54 +184,32 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
     if (!user) return
     setIsFreezing(true)
     try {
-      const { balances } = computeBalances(expenses, settlements, people.map((p) => p.userId), trip.base_currency, carryovers)
+      // Re-read the settlements right now rather than trusting the cached
+      // list: a second organizer or tab may have just marked a payment paid
+      // or frozen already, and the suggestions below must account for it.
+      const freshSettlements = await fetchSettlements(trip.id)
+      queryClient.setQueryData(queryKeys.settlements(trip.id), freshSettlements)
+      if (unresolvedDuplicateGroups(freshSettlements, trip.base_currency).length > 0) throw new Error(FREEZE_BLOCKED_BY_DUPLICATES)
+
+      // Payments already marked paid (or confirmed) are taken into account:
+      // only what is STILL owed is suggested, so a freeze never re-creates a
+      // payment the payer has already sent.
+      const toInsert = dedupeTransactions(
+        computeRemainingSuggestions(expenses, freshSettlements, people, trip.base_currency, simplify, carryovers)
+      )
+      const { balances } = computeBalances(expenses, freshSettlements, people.map((p) => p.userId), trip.base_currency, carryovers)
       const balancesMinor = new Map(balances.map((b) => [b.userId, b.netBalanceMinor]))
-      const snapshot = buildSnapshot(suggested, people, balancesMinor, trip.base_currency)
+      const snapshot = buildSnapshot(toInsert, people, balancesMinor, trip.base_currency)
 
-      await finalizeSnapshot.mutateAsync({ snapshotData: snapshot, snapshotBy: user.id })
-      await logActivity.mutateAsync({ actor: user.id, verb: 'froze_settlement', entity: { trip_id: trip.id }, metadata: { transaction_count: snapshot.transactions.length } })
-
-      // Clear any previously suggested (never acted on) settlements first --
-      // an unfreeze -> edit expenses -> freeze-again cycle used to insert a
-      // second batch of 'suggested' rows alongside the stale first batch,
-      // both rendered in the list below with no way to tell them apart.
-      // marked_paid/confirmed rows are real payment history and are never
-      // touched here. A delete can now fail loudly under RLS (see
-      // useDeleteSettlement) instead of silently no-op'ing -- collect
-      // failures and warn rather than proceeding as if cleanup succeeded.
-      const staleSuggested = settlements.filter((s) => s.status === 'suggested')
-      const deleteFailures: string[] = []
-      for (const s of staleSuggested) {
-        try {
-          await deleteSettlement.mutateAsync(s.id)
-        } catch {
-          deleteFailures.push(s.id)
-        }
-      }
-      if (deleteFailures.length > 0) {
-        showToast({
-          type: 'error',
-          message: 'Could not clear some old suggested payments',
-          description: 'They may still show below — try freezing again.',
-        })
-      }
-
-      // Never re-suggest a pair that already has a pending 'marked_paid'
-      // row -- that payment is real history awaiting confirmation, not
-      // something to duplicate. pendingMismatchByPair (rendered per-card
-      // below) surfaces it instead if the live amount has since drifted.
-      const toInsert = excludePendingPairs(suggested, settlements)
-      for (const t of toInsert) {
-        await recordSettlement.mutateAsync({
-          from_user_id: t.from,
-          to_user_id: t.to,
-          amount: t.amount,
-          currency: trip.base_currency,
-          status: 'suggested',
-          created_by: user.id,
-          settled_at: new Date().toISOString(),
-        })
-      }
+      // One atomic write (snapshot + replace the 'suggested' rows). Before the
+      // migration is applied the hook falls back to the old client sequence.
+      await freezeSettlements.mutateAsync({
+        userId: user.id,
+        snapshot,
+        suggestions: buildFreezeSuggestions(toInsert, trip.base_currency),
+        knownPaidIds: knownPaidIds(freshSettlements),
+        baseCurrency: trip.base_currency,
+      })
       showToast({ type: 'success', message: 'Balances frozen — suggested payments created' })
     } catch (err) {
       showToast({ type: 'error', message: 'Failed to freeze balances', description: err instanceof Error ? err.message : undefined })
@@ -228,8 +222,7 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
     if (!user) return
     setIsUnfreezing(true)
     try {
-      await finalizeSnapshot.mutateAsync({ snapshotData: null, snapshotBy: user.id })
-      await logActivity.mutateAsync({ actor: user.id, verb: 'unfroze_settlement', entity: { trip_id: trip.id } })
+      await unfreezeSettlements.mutateAsync({ userId: user.id })
       showToast({ type: 'info', message: 'Settlement unfrozen — expenses can be edited again' })
     } catch (err) {
       showToast({ type: 'error', message: 'Failed to unfreeze balances', description: err instanceof Error ? err.message : undefined })
@@ -240,7 +233,7 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
 
   const handleExportCsv = () => {
     const ledgerCsv = buildExpenseLedgerCsv(expenses, (id) => nameById[id] ?? id)
-    const settlementCsv = buildSettlementSummaryCsv(settlements, (id) => nameById[id] ?? id)
+    const settlementCsv = buildSettlementSummaryCsv(settlements, (id) => nameById[id] ?? id, (s) => isOrganizer || s.from_user_id === user?.id || s.to_user_id === user?.id)
     downloadCsv(`${trip.name.replace(/\s+/g, '_')}_expense_ledger.csv`, ledgerCsv)
     downloadCsv(`${trip.name.replace(/\s+/g, '_')}_settlement_summary.csv`, settlementCsv)
   }
@@ -359,11 +352,16 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
             />
           </div>
           {isOrganizer ? (
-            <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing} isLoading={isFreezing}>
+            <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing || freezeBlockedByDuplicates} isLoading={isFreezing}>
               Freeze balances & suggest payments
             </Button>
           ) : (
             <p className="text-sm text-center text-[var(--text-muted)] py-2">Ask an organizer to freeze balances</p>
+          )}
+          {isOrganizer && freezeBlockedByDuplicates && (
+            <p className="text-xs text-center text-[var(--text-muted)]" role="status">
+              {FREEZE_BLOCKED_BY_DUPLICATES}
+            </p>
           )}
         </Card>
       )}
@@ -372,7 +370,11 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
         <EmptyState
           icon={<AllSettled className="w-32 h-24 text-success-500" />}
           title="All settled up"
-          description="Nobody owes anybody anything right now."
+          description={
+            settlements.some((s) => s.status === 'marked_paid')
+              ? 'Everything owed has been paid. Some payments are waiting to be confirmed.'
+              : 'Nobody owes anybody anything right now.'
+          }
         />
       )}
 
@@ -392,6 +394,14 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
           <p className="text-xs text-[var(--text-muted)] pt-1">Freeze balances to turn these into trackable payments.</p>
         </Card>
       )}
+
+      <DuplicatePaymentsNotice
+        groups={duplicatePayments}
+        canRemove={isOrganizer}
+        tripId={trip.id}
+        baseCurrency={trip.base_currency}
+        nameOf={(id) => nameById[id] ?? 'Someone'}
+      />
 
       <div className="space-y-2">
         {settlements.map((s) => {
@@ -436,7 +446,7 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
                 </Badge>
 
                 {isMePaying && s.status === 'suggested' && (
-                  <Button variant="secondary" size="sm" onClick={() => setMarkPaidTarget(s)}>
+                  <Button variant="secondary" size="sm" onClick={() => setMarkPaidTargetId(s.id)}>
                     Mark paid
                   </Button>
                 )}
@@ -603,7 +613,7 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
 
       <MarkPaidSheet
         isOpen={!!markPaidTarget}
-        onClose={() => setMarkPaidTarget(null)}
+        onClose={() => setMarkPaidTargetId(null)}
         settlement={markPaidTarget}
         tripId={trip.id}
         toName={markPaidTarget ? nameById[markPaidTarget.to_user_id] ?? 'them' : ''}

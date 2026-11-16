@@ -29,6 +29,10 @@ export interface MoneyPositionView {
   footnote: string | null
   /** Payments in another currency that are not part of the sums above (no exchange rate): "¥5,000 marked paid to Sam isn't counted above (different currency)". */
   foreignNote: string | null
+  /** "Some payments look recorded twice — check Settle up" when duplicate-looking payments involve you, else null. */
+  settleHint: string | null
+  /** Where the hint points (the Settle up deep link). */
+  settleHintLink: string
   /** True only when truly settled (nothing owed either way, nothing waiting). */
   square: boolean
 }
@@ -38,12 +42,15 @@ function who(names: string[]): string {
   return unique.length === 1 ? unique[0] : `${unique.length} people`
 }
 
+export const DUPLICATE_PAYMENTS_HINT = 'Some payments look recorded twice — check Settle up'
+export const SETTLE_UP_LINK = '?open=settle'
+
 export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
   const cur = eq.currency
   const money = (v: number) => formatMoney(v, cur, { mode: 'exact' })
   const h = eq.headline
   const square = h.kind === 'settled' && !eq.stale
-  const tone: PositionTone = square ? 'settled' : h.kind === 'owe' ? 'owe' : h.kind === 'owed' ? 'owed' : 'waiting'
+  const tone: PositionTone = square ? 'settled' : h.kind === 'owe' || h.kind === 'overpaid' ? 'owe' : h.kind === 'owed' ? 'owed' : 'waiting'
 
   const rows: EquationRowView[] = []
   if (eq.paid > 0 || eq.share > 0 || eq.sentConfirmed > 0 || eq.receivedConfirmed > 0 || eq.carriedOver.length > 0) {
@@ -76,7 +83,8 @@ export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
   }
 
   if (eq.sentWaiting > 0 || eq.receivedWaiting > 0) {
-    if (eq.kind === 'owe') rows.push({ key: 'left', label: eq.remainingToPay > 0 ? 'Still to pay' : 'Nothing more to pay once confirmed', amount: eq.remainingToPay > 0 ? money(eq.remainingToPay) : null, sign: '=', strong: true })
+    if (eq.overpaid > 0) rows.push({ key: 'left', label: "More than you owe, if all of it is confirmed", amount: money(eq.overpaid), sign: '=', strong: true })
+    else if (eq.kind === 'owe') rows.push({ key: 'left', label: eq.remainingToPay > 0 ? 'Still to pay' : 'Nothing more to pay once confirmed', amount: eq.remainingToPay > 0 ? money(eq.remainingToPay) : null, sign: '=', strong: true })
     else if (eq.kind === 'owed') rows.push({ key: 'left', label: eq.remainingToReceive > 0 ? 'Still to come' : 'Nothing more due once you confirm', amount: eq.remainingToReceive > 0 ? money(eq.remainingToReceive) : null, sign: '=', strong: true })
   }
 
@@ -95,6 +103,8 @@ export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
     rows,
     footnote: suggested,
     foreignNote,
+    settleHint: eq.hasDuplicatePayments ? DUPLICATE_PAYMENTS_HINT : null,
+    settleHintLink: SETTLE_UP_LINK,
     square,
   }
 }

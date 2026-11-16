@@ -32,6 +32,7 @@
  * a question that was never decided is "Closed — no decision" and is never
  * "Needs your answer". `questionAnswerState` applies it.
  */
+import { isIdeasBucket } from '../ideasBucket.ts'
 import type { Json } from '../todos/deps/json.ts'
 import type { TripStatus } from '../todos/deps/tripStatus.ts'
 import { effectiveTripStage } from '../todos/deps/tripStage.ts'
@@ -252,9 +253,17 @@ export function liveOptionCount(section: AnswerSection): number {
   return section.options.filter((o) => o.status !== 'cancelled').length
 }
 
+/** A live option the legacy flow marked booked: the question has an outcome even if it was never stamped completed. */
+export function hasBookedOption(section: AnswerSection): boolean {
+  // An Own choice question has one booking per person, so one booked option never closes it for everyone.
+  if (isOwnChoice(section)) return false
+  return section.options.some((o) => o.status === 'booked')
+}
+
 /** A question is Open when it is not completed and has at least one live option. */
 export function isQuestionOpen(section: AnswerSection): boolean {
-  return section.status !== 'completed' && liveOptionCount(section) > 0
+  if (isIdeasBucket(section)) return false
+  return section.status !== 'completed' && !hasBookedOption(section) && liveOptionCount(section) > 0
 }
 
 /** True when the trip's effective stage is Finished (stored status upgraded by dates, never downgraded). */
@@ -289,7 +298,8 @@ export interface QuestionStateContext {
 
 /** The chip state of a question from one person's side. The to-dos engine uses exactly this. */
 export function questionAnswerState(section: AnswerSection, userId: string, ctx: QuestionStateContext): QuestionAnswerState {
-  if (section.status === 'completed') return 'decided'
+  if (isIdeasBucket(section)) return 'not_applicable'
+  if (section.status === 'completed' || hasBookedOption(section)) return 'decided'
   if (ctx.tripFinished) return 'closed_no_decision'
   if (liveOptionCount(section) === 0) return 'no_options'
   if (ctx.viewerOut) return 'not_applicable'

@@ -51,7 +51,7 @@ describe('buildYourCostView', () => {
 
   it('organiser rough estimate alone is labelled as that', () => {
     const view = buildYourCostView(run({ sections: [], trip: { ...TRIP, estimated_accommodation_cost: 800 } }))
-    expect(view.headline).toBe("Organizer's rough estimate: ~£800 each")
+    expect(view.headline).toBe("Organizer's rough estimate: ≈£800 each")
     expect(view.rows).toEqual([])
     expect(view.basis).toBeNull()
   })
@@ -76,7 +76,7 @@ describe('buildYourCostView', () => {
         trip: { ...TRIP, status: 'trip_completed' },
         now: '2027-04-01',
         expenses,
-        sections: [sec({ id: 'acc', title: 'Cabin', section_type: 'accommodation', options: [opt({ id: 'o1', title: 'Cabin', price: 1000, price_type: 'total_split' })] })],
+        sections: [sec({ id: 'acc', title: 'Cabin', section_type: 'accommodation', options: [opt({ id: 'o1', title: 'Cabin', price: 1000, price_type: 'total_split', status: 'booked' })] })],
       })
     )
     expect(view.mode).toBe('share')
@@ -113,10 +113,10 @@ describe('review regressions in the view', () => {
     expect(view.rows[0].amount).toBe('≈£208 – £255')
   })
   it('C6: a finished trip with no expenses keeps the estimate and says why', () => {
-    const stay = sec({ id: 'stay', title: 'Stay', section_type: 'accommodation', options: [opt({ id: 'a', title: 'A', price: 9000, price_type: 'total_split' })] })
+    const stay = sec({ id: 'stay', title: 'Stay', section_type: 'accommodation', options: [opt({ id: 'a', title: 'A', price: 9000, price_type: 'total_split', status: 'booked' })] })
     const view = buildYourCostView(run({ sections: [stay], expenses: [], now: '2027-04-01' }))
     expect(view.mode).toBe('estimate')
-    expect(view.headline).toBe('Your cost so far: ≈£1,000')
+    expect(view.headline).toBe('Your cost so far: £1,000')
     expect(view.subline).toMatch(/No expenses were logged/)
   })
   it('C8: the assumed day count is in the picks row', () => {

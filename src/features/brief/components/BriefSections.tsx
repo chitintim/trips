@@ -3,6 +3,7 @@ import remarkBreaks from 'remark-breaks'
 import { Badge, Card, UserAvatar } from '../../../components/ui'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
+import { buildWhosIn } from '../lib/whosIn'
 import type { Trip, TripStatus } from '../../../types'
 
 /**
@@ -39,28 +40,81 @@ export function OrganizerMessageCard({ message }: { message: string | null }) {
   )
 }
 
-/** Who's-in avatar row: confirmed people (then conditional), capped with a +N overflow. */
-export function WhosInRow({ participants, max = 8 }: { participants: ParticipantWithUser[]; max?: number }) {
-  const confirmed = participants.filter((p) => p.confirmation_status === 'confirmed')
-  const conditional = participants.filter((p) => p.confirmation_status === 'conditional')
-  const people = [...confirmed, ...conditional]
-  if (people.length === 0) return null
-  const shown = people.slice(0, max)
-  const overflow = people.length - shown.length
+const RING: Record<string, string> = {
+  going: 'ring-success-500',
+  'not-sure': 'ring-warn-500',
+  'no-reply': 'ring-neutral-300 dark:ring-neutral-600',
+  waitlist: 'ring-accent-500',
+  'not-going': 'ring-danger-500',
+  everyone: 'ring-transparent',
+}
+
+/**
+ * Who's-coming card: everyone grouped by their reply (Going first), each with
+ * a status ring, first name beneath, and an accessible "Name — Reply" label.
+ * The label and count carry the meaning, never colour alone. Tapping opens the
+ * People space.
+ */
+export function WhosInRow({
+  participants,
+  trackingOn = true,
+  onOpenPeople,
+}: {
+  participants: ParticipantWithUser[]
+  trackingOn?: boolean
+  onOpenPeople?: () => void
+}) {
+  const model = buildWhosIn(
+    participants.map((p) => ({ id: p.user_id, name: p.user?.full_name, status: p.confirmation_status, active: p.active })),
+    trackingOn,
+  )
+  if (model.total === 0) return null
+  const byId = new Map(participants.map((p) => [p.user_id, p]))
+  const body = (
+    <>
+      <h3 className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide mb-2">{model.heading}</h3>
+      <div className="space-y-3">
+        {model.groups.map((g) => (
+          <div key={g.chip}>
+            {g.chip !== 'everyone' && (
+              <p className="text-xs font-semibold text-[var(--text-secondary)] mb-1.5">
+                {g.label} · {g.count}
+              </p>
+            )}
+            <ul className="flex flex-wrap gap-x-2 gap-y-2">
+              {g.people.map((person) => {
+                const reply = g.chip === 'everyone' ? null : g.label
+                const full = reply ? `${person.fullName} — ${reply}` : person.fullName
+                return (
+                  <li key={person.id} className="flex w-14 flex-col items-center" title={full}>
+                    <UserAvatar
+                      avatarData={byId.get(person.id)?.user}
+                      size="md"
+                      alt={full}
+                      className={`ring-2 ring-offset-1 ring-offset-[var(--surface-raised,transparent)] ${RING[g.chip]}`}
+                    />
+                    <span aria-hidden="true" className="mt-1 w-full truncate text-center text-[11px] text-[var(--text-secondary)]">
+                      {person.firstName}
+                    </span>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </>
+  )
   return (
     <Card>
       <Card.Content>
-        <p className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide mb-2">
-          Who's in ({confirmed.length} going{conditional.length > 0 ? `, ${conditional.length} not sure` : ''})
-        </p>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          {shown.map((p) => (
-            <div key={p.user_id} title={p.user?.full_name ?? undefined}>
-              <UserAvatar avatarData={p.user} size="sm" />
-            </div>
-          ))}
-          {overflow > 0 && <span className="text-sm text-[var(--text-muted)] ml-1">+{overflow}</span>}
-        </div>
+        {onOpenPeople ? (
+          <button type="button" onClick={onOpenPeople} className="block w-full text-left press-scale">
+            {body}
+          </button>
+        ) : (
+          body
+        )}
       </Card.Content>
     </Card>
   )

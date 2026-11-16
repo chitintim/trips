@@ -206,3 +206,30 @@ describe('isTripFinished', () => {
     expect(isTripFinished({ status: 'trip_completed', start_date: '2027-01-01', end_date: '2027-01-10' }, now)).toBe(true)
   })
 })
+
+describe('booked option means decided (item 9)', () => {
+  const sec = { id: 's', status: 'open', options: [{ id: 'a', status: 'booked' }, { id: 'b', status: 'available' }] } as never
+  const ctx = { index: indexAnswers([sec], { votes: [] }), tripFinished: true }
+  it('is never closed-no-decision on a finished trip, and is not open', () => {
+    expect(questionAnswerState(sec, 'u', ctx)).toBe('decided')
+    expect(isQuestionOpen(sec)).toBe(false)
+  })
+})
+
+describe('Ideas bucket and booked options', () => {
+  it('Ideas bucket is never open and never needs an answer', () => {
+    const s = section({ metadata: { ideas_bucket: true } })
+    expect(isQuestionOpen(s)).toBe(false)
+    expect(questionAnswerState(s, 'u', { index: indexAnswers([s], { votes: [] }), tripFinished: false })).toBe('not_applicable')
+  })
+  it('a booked option closes a Group choice but not an Own choice', () => {
+    const booked = [{ id: 'o1', status: 'booked', selections: [] }, { id: 'o2', status: 'available', selections: [] }]
+    const g = section({ options: booked })
+    const o = section({ options: booked, metadata: { decision_shape: 'personal' } })
+    expect(isQuestionOpen(g)).toBe(false)
+    expect(isQuestionOpen(o)).toBe(true)
+    const ctx = (x: AnswerSection) => ({ index: indexAnswers([x], { votes: [] }), tripFinished: false })
+    expect(questionAnswerState(g, 'u', ctx(g))).toBe('decided')
+    expect(questionAnswerState(o, 'u', ctx(o))).toBe('needs_answer')
+  })
+})

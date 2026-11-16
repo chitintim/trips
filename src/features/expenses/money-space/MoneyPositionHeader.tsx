@@ -24,6 +24,8 @@ export interface MoneyPositionHeaderProps {
   frozen?: boolean
   /** Settle-up STATE card affordance (plan §4 #4) — only meaningful when there's actually something to settle. */
   onSettleUp: () => void
+  /** The "recorded twice" hint: open Settle up scrolled to the duplicate-payments notice. */
+  onSeeDuplicates?: () => void
   /** "See my breakdown" — pushes My Spending as a screen (plan §4 #5). */
   onSeeMyBreakdown: () => void
 }
@@ -68,6 +70,7 @@ export function MoneyPositionHeader({
   baseCurrency,
   frozen = false,
   onSettleUp,
+  onSeeDuplicates,
   onSeeMyBreakdown,
 }: MoneyPositionHeaderProps) {
   const [expanded, setExpanded] = useState(false)
@@ -127,6 +130,18 @@ export function MoneyPositionHeader({
             {view ? view.headline : '—'}
           </p>
           {view?.note && <p className="mt-0.5 text-sm text-[var(--text-secondary)]">{view.note}</p>}
+          {view?.settleHint && (
+            <a
+              href={view.settleHintLink}
+              onClick={(e) => {
+                e.preventDefault()
+                ;(onSeeDuplicates ?? onSettleUp)()
+              }}
+              className="mt-0.5 block text-sm font-medium text-warning-700 underline"
+            >
+              {view.settleHint}
+            </a>
+          )}
         </div>
 
         <div className="flex flex-col items-end gap-2 shrink-0">

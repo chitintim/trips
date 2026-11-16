@@ -5,11 +5,11 @@
  *   Open (and the muted "Closed -- no decision" on a finished trip)
  *     Decide, See everyone's answers, Nudge, Question settings, Add option, Delete question
  *   Decided
- *     See everyone's answers, Put it on the plan, Add a to-do, Mark booked / Track booking,
- *     Question settings, Reopen, Delete question
+ *     See everyone's answers, Put it on the plan (only when not on the plan yet), Add a to-do,
+ *     Mark booked (+ Track booking when a booking row exists), Question settings, Reopen, Delete question
  *   Finished trip (any state): See everyone's answers, Reopen (decided/booked only), Delete question
  *   Booked / Done
- *     See everyone's answers, Track booking, Reopen  (read-only summary)
+ *     See everyone's answers, Track booking, Not booked after all, Reopen  (read-only summary)
  *
  * Participants (not `canManage`) get nothing at all.
  */
@@ -25,6 +25,8 @@ export type ManageActionId =
   | 'schedule'
   | 'add_todo'
   | 'booking'
+  | 'mark_booked'
+  | 'unmark_booked'
   | 'reopen'
 
 export type ManageActionTone = 'primary' | 'default' | 'danger'
@@ -56,8 +58,8 @@ export interface ManageContext {
   hasFollowupTodo: boolean
   /** A live booking row exists for the winner. */
   hasBooking: boolean
-  /** The host passed `onSchedule`. */
-  canSchedule: boolean
+  /** The trip's Ideas bucket: collects suggestions, so it is never decided or nudged. */
+  ideas?: boolean
 }
 
 export const MANAGE_COPY = {
@@ -75,6 +77,10 @@ export const MANAGE_COPY = {
   settingsHint: 'Title, kind, how people answer, answer-by date and when results show.',
   addOption: 'Add option',
   addOptionHint: 'Add another thing people can choose.',
+  addIdea: 'Add an idea',
+  addIdeaHint: 'Drop another suggestion on the list.',
+  deleteIdeas: 'Delete the Ideas list',
+  deleteIdeasHint: 'Removes the list and every idea on it.',
   delete: 'Delete question',
   deleteHint: 'Removes the question, its options and everyone’s answers.',
   schedule: 'Put it on the plan',
@@ -83,6 +89,8 @@ export const MANAGE_COPY = {
   addTodoHint: 'Something someone has to do now it is decided, like booking it.',
   markBooked: 'Mark booked',
   markBookedHint: 'Record the booking, the reference and what was paid.',
+  unmarkBooked: 'Not booked after all',
+  unmarkBookedHint: 'Undo Booked. The booking is cancelled and the to-do to book it comes back.',
   trackBooking: 'Track booking',
   trackBookingHint: 'See or update the booking details.',
   reopen: 'Reopen',
@@ -96,9 +104,17 @@ export function getManageActions(ctx: ManageContext): ManageAction[] {
   const settings: ManageAction = { id: 'settings', label: MANAGE_COPY.settings, hint: MANAGE_COPY.settingsHint, tone: 'default' }
   const del: ManageAction = { id: 'delete', label: MANAGE_COPY.delete, hint: MANAGE_COPY.deleteHint, tone: 'danger' }
   const reopen: ManageAction = { id: 'reopen', label: MANAGE_COPY.reopen, hint: MANAGE_COPY.reopenHint, tone: 'default' }
-  const booking: ManageAction = ctx.hasBooking
-    ? { id: 'booking', label: MANAGE_COPY.trackBooking, hint: MANAGE_COPY.trackBookingHint, tone: 'default' }
-    : { id: 'booking', label: MANAGE_COPY.markBooked, hint: MANAGE_COPY.markBookedHint, tone: 'default' }
+  const track: ManageAction = { id: 'booking', label: MANAGE_COPY.trackBooking, hint: MANAGE_COPY.trackBookingHint, tone: 'default' }
+  const markBooked: ManageAction = { id: 'mark_booked', label: MANAGE_COPY.markBooked, hint: MANAGE_COPY.markBookedHint, tone: 'default' }
+  const unmarkBooked: ManageAction = { id: 'unmark_booked', label: MANAGE_COPY.unmarkBooked, hint: MANAGE_COPY.unmarkBookedHint, tone: 'default' }
+
+  // The Ideas list is never decided, nudged, booked or answered: only add an idea or delete the list.
+  // (Each idea is edited or deleted from its own row.)
+  if (ctx.ideas) {
+    if (!ctx.finished) out.push({ id: 'add_option', label: MANAGE_COPY.addIdea, hint: MANAGE_COPY.addIdeaHint, tone: 'default' })
+    out.push({ ...del, label: MANAGE_COPY.deleteIdeas, hint: MANAGE_COPY.deleteIdeasHint })
+    return out
+  }
 
   // Finished trip: read-only plus tidy-up. Nothing that starts new work.
   if (ctx.finished) {
@@ -111,7 +127,7 @@ export function getManageActions(ctx: ManageContext): ManageAction[] {
   if (ctx.stage === 'open' || ctx.stage === 'closed') {
     // "Close answers" only on a question that is still taking answers; a closed
     // one (decided after the fact) says "Decide now".
-    if (ctx.hasOptions) {
+    if (ctx.hasOptions && !ctx.ideas) {
       out.push(
         ctx.stage === 'closed'
           ? { id: 'decide', label: MANAGE_COPY.decideNow, hint: MANAGE_COPY.decideNowHint, tone: 'primary' }
@@ -119,7 +135,7 @@ export function getManageActions(ctx: ManageContext): ManageAction[] {
       )
     }
     out.push(answers)
-    if (ctx.stage === 'open' && ctx.waitingCount > 0) {
+    if (ctx.stage === 'open' && ctx.waitingCount > 0 && !ctx.ideas) {
       out.push({
         id: 'nudge',
         label: MANAGE_COPY.nudge,
@@ -135,20 +151,22 @@ export function getManageActions(ctx: ManageContext): ManageAction[] {
 
   if (ctx.stage === 'decided') {
     out.push(answers)
-    if (ctx.hasWinner && !ctx.onThePlan && ctx.canSchedule) {
+    if (ctx.hasWinner && !ctx.onThePlan) {
       out.push({ id: 'schedule', label: MANAGE_COPY.schedule, hint: MANAGE_COPY.scheduleHint, tone: 'primary' })
     }
     if (ctx.hasWinner && !ctx.hasFollowupTodo) {
       out.push({ id: 'add_todo', label: MANAGE_COPY.addTodo, hint: MANAGE_COPY.addTodoHint, tone: 'default' })
     }
-    if (ctx.hasWinner) out.push(booking)
+    if (ctx.hasWinner) out.push(markBooked)
+    if (ctx.hasWinner && ctx.hasBooking) out.push(track)
     out.push(settings, reopen, del)
     return out
   }
 
   // booked / done: read-only summary + the escape hatches that make sense
   out.push(answers)
-  if (ctx.hasWinner) out.push(booking)
+  if (ctx.hasWinner && ctx.hasBooking) out.push(track)
+  if (ctx.hasWinner) out.push(unmarkBooked)
   out.push(reopen)
   return out
 }

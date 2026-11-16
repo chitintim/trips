@@ -11,6 +11,7 @@ import type { Json } from '../../../types/database.types'
 interface ChaseFormValues {
   enabled: boolean
   actionReminders: boolean
+  autoDecide: boolean
   delayHours: string
   quietEnabled: boolean
   quietStart: string
@@ -23,6 +24,7 @@ function fromSettings(s: ChaseSettings, aiAutonomy: AiAutonomy): ChaseFormValues
   return {
     enabled: s.enabled,
     actionReminders: s.action_reminders,
+    autoDecide: s.auto_decide,
     delayHours: String(s.delay_hours),
     quietEnabled: s.quiet_hours != null,
     quietStart: String(s.quiet_hours?.start ?? 22),
@@ -88,6 +90,7 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
     const settings: ChaseSettings = {
       enabled: values.enabled,
       action_reminders: values.actionReminders,
+      auto_decide: values.autoDecide,
       delay_hours: delay,
       quiet_hours: values.quietEnabled
         ? { start: parseInt(values.quietStart, 10), end: parseInt(values.quietEnd, 10) }
@@ -155,6 +158,24 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
               Any to-do with a deadline already emails whoever it's assigned to (or the whole group) — 7 days
               before, 1 day before, and once overdue. This runs for every trip regardless of the toggle above,
               because giving a to-do a deadline is itself the opt-in. Turn this off to silence those emails too.
+            </span>
+          </span>
+        </label>
+
+        <label className="flex items-start gap-3 cursor-pointer rounded-[var(--radius-md)] border border-[var(--border-default)] p-3">
+          <input
+            type="checkbox"
+            checked={values.autoDecide}
+            onChange={(e) => updateField('autoDecide', e.target.checked)}
+            className="mt-1 w-5 h-5 accent-accent-600"
+          />
+          <span>
+            <span className="block text-sm font-medium text-[var(--text-primary)]">Decide questions automatically at their deadline</span>
+            <span className="block text-xs text-[var(--text-muted)] mt-0.5">
+              When a question's answer-by time passes and enough people have answered and one option is clearly
+              ahead, it is decided for you and the group is emailed the result. This only happens while reminders
+              above are on, so every automatic decision is announced. A tie, or too few answers, is left for you to
+              decide. You can reopen any automatic decision. Turn this off to decide every question yourself.
             </span>
           </span>
         </label>

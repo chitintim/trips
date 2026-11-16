@@ -11,6 +11,11 @@ export interface ReopenDecisionDialogProps {
   section: SectionWithOptions | null
   /** Title of the currently decided option, for the activity entry / copy. */
   decidedTitle?: string | null
+  /** Wording overrides, for offering the reopen after a cancelled booking. */
+  heading?: string
+  intro?: string
+  confirmLabel?: string
+  cancelLabel?: string
 }
 
 /**
@@ -19,7 +24,7 @@ export interface ReopenDecisionDialogProps {
  * already created from the outcome (a scheduled event, a booking, a follow-up
  * action) is deliberately NOT touched -- the confirm copy says so.
  */
-export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decidedTitle }: ReopenDecisionDialogProps) {
+export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decidedTitle, heading, intro, confirmLabel, cancelLabel }: ReopenDecisionDialogProps) {
   const updateSection = useUpdateSection(tripId)
   const logActivity = useTripActivityLog(tripId)
   const { showToast } = useToast()
@@ -42,8 +47,9 @@ export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decided
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} size="sm" title={`Reopen "${section.title}"?`}>
+    <Modal isOpen={isOpen} onClose={onClose} size="sm" title={heading ?? `Reopen "${section.title}"?`}>
       <div className="space-y-3">
+        {intro && <p className="text-sm text-[var(--text-secondary)]">{intro}</p>}
         <p className="text-sm text-[var(--text-secondary)]">
           {decidedTitle ? `"${decidedTitle}" will no longer be the answer. ` : ''}
           The question opens again and everyone's existing answers are kept.
@@ -54,10 +60,10 @@ export function ReopenDecisionDialog({ isOpen, onClose, tripId, section, decided
         </p>
         <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
           <Button variant="ghost" onClick={onClose} disabled={updateSection.isPending}>
-            Cancel
+            {cancelLabel ?? 'Cancel'}
           </Button>
           <Button onClick={handleReopen} isLoading={updateSection.isPending}>
-            Reopen question
+            {confirmLabel ?? 'Reopen question'}
           </Button>
         </div>
       </div>

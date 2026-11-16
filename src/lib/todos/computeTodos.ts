@@ -17,6 +17,7 @@
  * Pure: no React, no Supabase. See src/lib/todos/copy.ts for every string and
  * deep link, and src/lib/answers/answers.ts for "has this person answered".
  */
+import { isIdeasBucket } from '../ideasBucket'
 import { effectiveTripStage, tripStageRank } from '../tripStage'
 import {
   buildAnsweredSectionVoters,
@@ -47,11 +48,16 @@ import {
   claimTitle,
   distinguishedTitle,
   closesLabel,
+  anyOrganizerLabel,
   confirmPaymentTitle,
   formatMoney,
   formatDayMonth,
   orgBookTitle,
   orgDecideTitle,
+  orgDecideShortTitle,
+  orgCloseAnswersTitle,
+  orgTieSubtitle,
+  orgTieTitle,
   payTitle,
   rsvpTitle,
   settleUpTitle,
@@ -151,7 +157,9 @@ interface Ctx {
   organiserIds: Set<string>
 }
 
-function buildCtx(s: TripSnapshot, now: Date): Ctx {
+function buildCtx(snapshot: TripSnapshot, now: Date): Ctx {
+  // The Ideas bucket is a place to collect suggestions, never a question: the engine does not see it.
+  const s: TripSnapshot = snapshot.sections.some(isIdeasBucket) ? { ...snapshot, sections: snapshot.sections.filter((x) => !isIdeasBucket(x)) } : snapshot
   const stage = effectiveTripStage(s.trip, now)
   const answerInputs: AnswerInputs = { votes: s.votes, passes: s.passes }
   const sections = s.sections
@@ -533,6 +541,13 @@ function isBookableSection(section: SnapshotSection): boolean {
   return !!section.section_type && BOOKABLE_SECTION_TYPES.has(section.section_type)
 }
 
+/** `metadata.followup_action_id` when the Decide sheet (or the old follow-up flow) linked a real "Book:" to-do. */
+function followupActionId(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null
+  const id = (metadata as Record<string, unknown>).followup_action_id
+  return typeof id === 'string' && id.length > 0 ? id : null
+}
+
 function organiserTodos(ctx: Ctx, userId: string): Todo[] {
   const out: Todo[] = []
   const g = { group: 'organiser' as const }
@@ -542,31 +557,82 @@ function organiserTodos(ctx: Ctx, userId: string): Todo[] {
   // of to-dos on trips that are past booking. Capped so a big plan stays quiet.
   const bookingsOpen = ctx.stageRank < tripStageRank('trip_ongoing')
   let bookTodos = 0
+  const actionIds = new Set(ctx.s.actions.map((a) => a.id))
 
   for (const section of ctx.s.sections) {
-    if (isOwnChoice(section)) continue // each person picks for themselves: nothing to decide
+    const deadlinePassed = !!section.vote_deadline && isPast(section.vote_deadline, ctx.now)
 
-    if (isQuestionOpen(section)) {
-      const counts = answerCounts(section.id, ctx.index, ctx.s.participants, ctx.confirmationEnabled)
-      const deadlinePassed = !!section.vote_deadline && isPast(section.vote_deadline, ctx.now)
-      const allAnswered = counts.total > 0 && counts.answered >= counts.total
-      if (deadlinePassed || allAnswered) {
+    if (isOwnChoice(section)) {
+      // Each person picks for themselves: nothing to decide and nothing to book.
+      // Past its deadline the organiser only has to close answers (same sheet,
+      // different words). Never "everyone answered": picks stay editable.
+      if (isQuestionOpen(section) && deadlinePassed) {
+        const counts = answerCounts(section.id, ctx.index, ctx.s.participants, ctx.confirmationEnabled)
         out.push(
           finish(ctx, userId, {
             ...g,
             kind: 'org_decide',
             entityId: section.id,
-            title: orgDecideTitle(
-              section.title,
-              deadlinePassed ? { kind: 'deadline_passed', answered: counts.answered, total: counts.total } : { kind: 'all_answered', total: counts.total }
-            ),
+            title: orgCloseAnswersTitle(section.title),
+            shortTitle: orgCloseAnswersTitle(section.title),
             due: section.vote_deadline,
-            link: DEEP_LINKS.question(section.id),
+            link: DEEP_LINKS.decide(section.id),
+            shape: 'own',
             progress: { done: counts.answered, total: counts.total },
           })
         )
       }
+      continue
+    }
+
+    if (isQuestionOpen(section)) {
+      const counts = answerCounts(section.id, ctx.index, ctx.s.participants, ctx.confirmationEnabled)
+      const allAnswered = counts.total > 0 && counts.answered >= counts.total
+      if (!deadlinePassed && !allAnswered) continue
+      // A tie is only called once answers are closed (deadline passed): same
+      // tally and tie rule as the Decide sheet and the auto-decide job. It
+      // replaces org_decide for the question, never both.
+      const winner = deadlinePassed
+        ? resolveWinner({ status: section.status, metadata: section.metadata, voting_method: section.voting_method, options: section.options.map((o) => ({ ...o, metadata: o.metadata ?? null })) }, [...ctx.s.votes])
+        : null
+      if (winner?.tied) {
+        const titles = winner.tiedOptionIds.map((id) => section.options.find((o) => o.id === id)?.title).filter((t): t is string => !!t)
+        out.push(
+          finish(ctx, userId, {
+            ...g,
+            kind: 'org_tie',
+            entityId: section.id,
+            title: orgTieTitle(section.title),
+            shortTitle: orgTieTitle(section.title),
+            subtitle: titles.length > 0 ? orgTieSubtitle(titles) : null,
+            due: section.vote_deadline,
+            link: DEEP_LINKS.decide(section.id),
+            progress: { done: counts.answered, total: counts.total },
+          })
+        )
+        continue
+      }
+      out.push(
+        finish(ctx, userId, {
+          ...g,
+          kind: 'org_decide',
+          entityId: section.id,
+          title: orgDecideTitle(
+            section.title,
+            deadlinePassed ? { kind: 'deadline_passed', answered: counts.answered, total: counts.total } : { kind: 'all_answered', total: counts.total }
+          ),
+          shortTitle: orgDecideShortTitle(section.title),
+          due: section.vote_deadline,
+          link: DEEP_LINKS.decide(section.id),
+          progress: { done: counts.answered, total: counts.total },
+        })
+      )
     } else if (section.status === 'completed' && bookingsOpen && bookTodos < MAX_BOOK_TODOS && isBookableSection(section)) {
+      // The Decide sheet makes a real "Book: X" to-do (assigned to someone, not
+      // necessarily an organiser) and links it from the question. While that
+      // row exists (open or done) the synthetic one would be a duplicate.
+      const linked = followupActionId(section.metadata)
+      if (linked && actionIds.has(linked)) continue
       const winner = resolveWinner(
         { status: section.status, metadata: section.metadata, voting_method: section.voting_method, options: section.options.map((o) => ({ ...o, metadata: o.metadata ?? null })) },
         [...ctx.s.votes]
@@ -581,7 +647,7 @@ function organiserTodos(ctx: Ctx, userId: string): Todo[] {
             entityId: option.id,
             title: orgBookTitle(option.title ?? section.title),
             due: null,
-            link: DEEP_LINKS.item(option.id),
+            link: DEEP_LINKS.book(option.id),
           })
         )
       }
@@ -723,6 +789,7 @@ export function computeWaitingOn(snapshot: TripSnapshot, now: Date = new Date(),
           userIds: [person.userId],
           todoIds: { [person.userId]: t.id },
           ...(t.unblocks != null ? { detail: unblocksLabel(t.unblocks), unblocks: t.unblocks } : {}),
+          ...(t.shortTitle ? { shortTitle: t.shortTitle } : {}),
         })
       }
     }
@@ -732,6 +799,8 @@ export function computeWaitingOn(snapshot: TripSnapshot, now: Date = new Date(),
   const roster = snapshot.participants.filter((p) => !isOut(p))
   for (const item of items.values()) {
     if (item.kind === 'confirm_payment' && item.entityId.startsWith('from:')) item.detail = confirmPaymentGroupDetail(item.userIds.length)
+    // Decide / tie / book can be done by ANY organiser; none of them individually owes it.
+    if (item.kind === 'org_decide' || item.kind === 'org_tie' || item.kind === 'org_book') item.detail = anyOrganizerLabel(item.userIds.length)
     if (item.kind === 'answer' && sectionById.has(item.entityId)) {
       const c = answerCounts(item.entityId, ctx.index, snapshot.participants, ctx.confirmationEnabled)
       item.title = sectionById.get(item.entityId)!.title

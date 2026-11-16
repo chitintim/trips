@@ -38,6 +38,8 @@ import {
   YOURS_EMPTY,
   TODOS_EMPTY_BODY,
   TODOS_EMPTY_TITLE,
+  TODOS_FINISHED_EMPTY_BODY,
+  TODOS_FINISHED_EMPTY_TITLE,
   TODOS_FINISHED_NOTE,
   TODOS_TITLE,
 } from '../lib/todoLabels'
@@ -337,8 +339,8 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
         ) : isEmpty ? (
           <EmptyState
             icon="✅"
-            title={TODOS_EMPTY_TITLE}
-            description={TODOS_EMPTY_BODY}
+            title={finished ? TODOS_FINISHED_EMPTY_TITLE : TODOS_EMPTY_TITLE}
+            description={finished ? TODOS_FINISHED_EMPTY_BODY : TODOS_EMPTY_BODY}
             action={
               mayCreate ? (
                 <Button variant="primary" onClick={openForCreate}>

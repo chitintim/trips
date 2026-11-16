@@ -58,6 +58,7 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
   const [editingExpense, setEditingExpense] = useState<ExpenseWithDetails | null>(null)
   const [editorKey, setEditorKey] = useState(0)
   const [settleUpOpen, setSettleUpOpen] = useState(initialScreen === 'settle-up')
+  const [focusDuplicates, setFocusDuplicates] = useState(false)
   const [mySpendingOpen, setMySpendingOpen] = useState(initialScreen === 'my-spending')
 
   const expenses = useMemo(() => data?.expenses ?? [], [data])
@@ -117,7 +118,14 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
         currentUserId={user?.id}
         baseCurrency={trip.base_currency}
         frozen={trip.settlement_snapshot != null}
-        onSettleUp={() => setSettleUpOpen(true)}
+        onSettleUp={() => {
+          setFocusDuplicates(false)
+          setSettleUpOpen(true)
+        }}
+        onSeeDuplicates={() => {
+          setFocusDuplicates(true)
+          setSettleUpOpen(true)
+        }}
         onSeeMyBreakdown={() => setMySpendingOpen(true)}
       />
 
@@ -175,7 +183,7 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
 
       {/* Settle up — pushed screen (plan §4 #4), not a tab. */}
       <Modal isOpen={settleUpOpen} onClose={() => setSettleUpOpen(false)} size="xl" title="Settle up">
-        <SettleUpTab trip={trip} initialConfirmId={initialConfirmId ?? undefined} />
+        <SettleUpTab trip={trip} initialConfirmId={initialConfirmId ?? undefined} focusDuplicates={focusDuplicates} />
       </Modal>
 
       {/* My spending — pushed from the position header's "see my breakdown" (plan §4 #5), not a tab. */}

@@ -52,12 +52,12 @@ describe('finished trip, balances not frozen (Japan 2026)', () => {
     for (const id of ids.filter((x) => x !== 'tim')) expect(computeTodos(s, id, NOW)).toEqual([])
   })
 
-  it('shows it once By item, with the number behind "Unblocks 8 people"', () => {
+  it('shows it once By item, with the number of people it blocks', () => {
     const w = computeWaitingOn(s, NOW)
     const item = w.byItem.filter((i) => i.kind === 'org_setup')
     expect(item).toHaveLength(1)
     expect(item[0].userIds).toEqual(['tim'])
-    expect(item[0].detail).toBe('Unblocks 8 people')
+    expect(item[0].detail).toBe("8 people can't settle until then")
     expect(item[0].unblocks).toBe(8)
   })
 

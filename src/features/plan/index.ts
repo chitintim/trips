@@ -50,9 +50,6 @@ export type { PlanItemSheetProps } from './components/PlanItemSheet'
 export { AddToPlanSheet } from './components/AddToPlanSheet'
 export type { AddToPlanSheetProps } from './components/AddToPlanSheet'
 
-export { ScheduleItSheet } from './components/ScheduleItSheet'
-export type { ScheduleItSheetProps } from './components/ScheduleItSheet'
-
 export {
   composePlanItems,
   groupPlanItemsByDate,

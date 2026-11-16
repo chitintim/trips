@@ -1,93 +1,52 @@
+import { isTripFinished } from '../../../lib/answers/answers'
 import { useEffect, useState } from 'react'
-import {
-  Modal,
-  Button,
-  Input,
-  TextArea,
-  Select,
-  SegmentedControl,
-  Chip,
-  useToast,
-  ConfirmDiscardSheet,
-} from '../../../components/ui'
+import { useNavigate } from 'react-router-dom'
+import { Modal, Button, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { useAuth } from '../../../hooks/useAuth'
-import { useCreateTimelineEvent } from '../../../lib/queries/useTimeline'
-import { useSections, useCreateSection, useBulkCreateOptions } from '../../../lib/queries/usePlanning'
-import { useTripActivityLog } from '../../organizer/lib/activity'
-import { PlacePicker, PlaceChip } from '../../places'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
+import { useParticipants } from '../../../lib/queries/useTrip'
+import { PlacePicker } from '../../places'
 import { PasteALinkSheet } from '../../decisions/components/PasteALinkSheet'
-import { CATEGORY_OPTIONS } from '../../timeline/lib/categoryConfig'
-import type { DecisionShape } from '../../decisions/lib/decisionShapes'
-import type { Trip, TimelineEventCategory } from '../../../types'
-import type { Json, Tables } from '../../../types/database.types'
+import { pricingFromDraft } from '../../decisions/lib/optionPricingForm'
+import {
+  INTENT_TILES,
+  applyTemplate,
+  availableIntents,
+  emptyHappening,
+  emptyIdea,
+  emptyQuestion,
+  validateHappening,
+  validateIdea,
+  validateQuestion,
+  viewLink,
+  type AddIntent,
+  type HappeningValues,
+  type IdeaValues,
+  type QuestionValues,
+} from '../lib/addFlow'
+import { useAddToPlanSave } from '../lib/useAddToPlanSave'
+import { IntentChooser } from './add/IntentChooser'
+import { HappeningForm } from './add/HappeningForm'
+import { QuestionForm } from './add/QuestionForm'
+import { IdeaForm } from './add/IdeaForm'
+import type { Trip } from '../../../types'
+import type { Tables } from '../../../types/database.types'
 import type { OptionDraft } from '../../../shared/contracts'
 
-interface DraftOptionRow {
-  title: string
-  price: string
-  /** Personal-picks (decision_shape 'personal') catalog pricing — see decisionShapes.ts's OptionPricing. Ignored in vote shape. */
-  pricingPerDay: string
-  pricingFlat: string
+interface AddFormState {
+  intent: AddIntent | null
+  happening: HappeningValues
+  question: QuestionValues
+  idea: IdeaValues
 }
 
-/** Builds an option row's `metadata.pricing` (shape 2, personal picks) from its per-day/flat inputs, or null when neither is set — mirrors OptionEditorSheet's buildMetadata pricing branch. */
-function buildRowPricingMetadata(row: DraftOptionRow): Json | null {
-  const perDay = row.pricingPerDay ? parseFloat(row.pricingPerDay) : undefined
-  const flat = row.pricingFlat ? parseFloat(row.pricingFlat) : undefined
-  if (perDay == null && flat == null) return null
-  return { pricing: { ...(perDay != null ? { per_day: perDay } : {}), ...(flat != null ? { flat } : {}) } } as unknown as Json
-}
-
-interface AddToPlanFormValues {
-  title: string
-  description: string
-  category: TimelineEventCategory
-  hasDate: boolean
-  date: string
-  hasTime: boolean
-  startTime: string
-  endTime: string
-  price: string
-  currency: string
-  placeId: string | null
-  isVote: boolean
-  voteTarget: 'new' | 'existing'
-  existingSectionId: string
-  /** Group vote / Personal picks (UX_REDESIGN.md Part 5) — only meaningful (and shown) for the "new section" path; an existing section's shape is already fixed. */
-  decisionShape: DecisionShape
-  votingMethod: 'single' | 'approval' | 'ranked'
-  voteDeadline: string
-  optionRows: DraftOptionRow[]
-}
-
-function emptyValues(baseCurrency: string, defaultDate: string, defaultIsVote: boolean): AddToPlanFormValues {
+function seedState(baseCurrency: string, defaultDate: string, defaultIsVote: boolean): AddFormState {
   return {
-    title: '',
-    description: '',
-    category: 'other',
-    // "New question" (UX_REDESIGN.md Part 4 "Decisions: questions, not
-    // sections") opens straight into vote mode with no date pinned yet --
-    // most open questions ("Where are we staying?") don't have a day until
-    // they're decided, so they land in the Undecided tray by default.
-    hasDate: !defaultIsVote,
-    date: defaultDate,
-    hasTime: false,
-    startTime: '',
-    endTime: '',
-    price: '',
-    currency: baseCurrency,
-    placeId: null,
-    isVote: defaultIsVote,
-    voteTarget: 'new',
-    existingSectionId: '',
-    decisionShape: 'vote',
-    votingMethod: 'single',
-    voteDeadline: '',
-    optionRows: [
-      { title: '', price: '', pricingPerDay: '', pricingFlat: '' },
-      { title: '', price: '', pricingPerDay: '', pricingFlat: '' },
-    ],
+    intent: defaultIsVote ? 'question' : null,
+    happening: emptyHappening(defaultDate, baseCurrency),
+    question: emptyQuestion(baseCurrency),
+    idea: emptyIdea(),
   }
 }
 
@@ -95,403 +54,184 @@ export interface AddToPlanSheetProps {
   isOpen: boolean
   onClose: () => void
   trip: Trip
-  /** Pre-fill the date (e.g. tapping "+" on a specific day header). */
+  /** Pre-fill the day (e.g. tapping "+" on a specific day header). */
   defaultDate?: string
   /**
-   * Open straight into "make it a vote" mode with no date pinned — the
-   * Undecided tray's "New question" affordance (UX_REDESIGN.md Part 4) uses
-   * this so organizers land directly on the question-authoring UI instead
-   * of needing to find and tick the vote toggle themselves.
+   * Skip the first screen and open on "A question for the group" (the organiser "Set up" to-do and the
+   * `add-to-plan` deep link with `asQuestion`).
    */
   defaultIsVote?: boolean
 }
 
 /**
- * The single "Add to plan" creation form (plan §2, Form & Flow Standard):
- * one form for title/day/time/place/price plus a "make it a vote?" toggle
- * that reveals either a 2+ option builder (creates a new section) or an
- * attach-to-existing-section picker. Routing on save:
- *  - votable -> planning_sections (+ bulk options)
- *  - direct  -> trip_timeline_events
- * Also offers a "paste a link" entry point that reuses decisions'
- * PasteALinkSheet, landing the extracted draft back into the option
- * builder for review.
+ * Add: three intents (proposal 5.5). A first screen of three plain choices; each form needs at most two
+ * fields to save and keeps everything else behind "More options". Only people who can run the trip see it
+ * (RLS rejects everyone else), so nobody is shown a form the server will refuse.
  */
 export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVote = false }: AddToPlanSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
+  const navigate = useNavigate()
   const tripId = trip.id
   const baseCurrency = trip.base_currency || 'GBP'
+  const { canManageTrip, isLoading: permsLoading } = useTripPermissions(trip)
+  const intents = availableIntents(canManageTrip, isTripFinished(trip))
+  const { data: participants } = useParticipants(tripId)
+  const save = useAddToPlanSave(tripId, user?.id)
 
-  const { data: sections } = useSections(tripId)
-  const createEvent = useCreateTimelineEvent(tripId)
-  const createSection = useCreateSection(tripId)
-  const bulkCreateOptions = useBulkCreateOptions(tripId)
-  const logActivity = useTripActivityLog(tripId)
-
-  // Namespaced by defaultIsVote (UPGRADE_MASTER_PLAN.md audit item 8): a
-  // regular "+ Add" draft and a tray "+ New question" draft must never
-  // collide — sharing one key meant a stale plain-item draft (isVote:
-  // false, hasDate: true) could silently override the "New question"
-  // intent (isVote: true, hasDate: false) on the next open, since
-  // useFormDraft only restores/seeds once per mount.
-  const draftKey = `add-to-plan:new:${tripId}:${defaultIsVote ? 'vote' : 'item'}`
-  const seed = emptyValues(baseCurrency, defaultDate || trip.start_date, defaultIsVote)
-  const { values, setValues, updateField, clearDraft } = useFormDraft<AddToPlanFormValues>(draftKey, seed)
+  const seed = seedState(baseCurrency, defaultDate || trip.start_date, defaultIsVote)
+  const { values, setValues, clearDraft } = useFormDraft<AddFormState>(`add-to-plan:v2:${tripId}`, seed)
 
   const [placePickerOpen, setPlacePickerOpen] = useState(false)
   const [pickedPlace, setPickedPlace] = useState<Tables<'places'> | null>(null)
-  const [pasteLinkOpen, setPasteLinkOpen] = useState(false)
+  const [pasteUrl, setPasteUrl] = useState<string | null>(null)
 
-  // Fresh-state guarantee: every open starts clean (unless a draft was
-  // restored by useFormDraft itself, which is the intended autosave path).
+  // Each open starts clean (a restored draft is the intended exception); a "set up the first question"
+  // open always lands on the question form.
   useEffect(() => {
-    if (isOpen) {
-      setPickedPlace(null)
-    }
+    if (!isOpen) return
+    setPickedPlace(null)
+    if (defaultIsVote) setValues((prev) => ({ ...prev, intent: 'question' }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen])
+  }, [isOpen, defaultIsVote])
 
-  const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
+  const isDirty = JSON.stringify({ ...values, intent: null }) !== JSON.stringify({ ...seed, intent: null })
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
-  const isSaving = createEvent.isPending || createSection.isPending || bulkCreateOptions.isPending
+  const intent = values.intent && intents.includes(values.intent) ? values.intent : null
+  const tile = INTENT_TILES.find((t) => t.intent === intent) ?? null
 
-  const updateOptionRow = (index: number, field: keyof DraftOptionRow, value: string) => {
-    setValues((prev) => ({
-      ...prev,
-      optionRows: prev.optionRows.map((row, i) => (i === index ? { ...row, [field]: value } : row)),
-    }))
+  const patch = <K extends 'happening' | 'question' | 'idea'>(key: K, p: Partial<AddFormState[K]>) =>
+    setValues((prev) => ({ ...prev, [key]: { ...prev[key], ...p } }))
+
+  const attendees = (participants || [])
+    .filter((p) => p.active)
+    .map((p) => ({ id: p.user_id, name: p.user?.full_name || p.user?.email || 'Someone' }))
+
+  // ---- Paste a link: pull title / price, review, then drop into the current form -----------------
+  const handleApprovedFromLink = (draft: OptionDraft) => {
+    const link = pasteUrl
+    setPasteUrl(null)
+    setValues((prev) => {
+      const title = draft.title || ''
+      if (prev.intent === 'happening') {
+        const cost = draft.price != null && draft.price > 0
+        return {
+          ...prev,
+          happening: {
+            ...prev.happening,
+            title,
+            notes: prev.happening.notes || link || '',
+            ...(cost
+              ? { costAmount: String(draft.price), costCurrency: draft.currency || prev.happening.costCurrency, costBasis: draft.price_type === 'total_split' ? ('total_split' as const) : ('each' as const) }
+              : {}),
+          },
+        }
+      }
+      if (prev.intent === 'question') {
+        // The link is one of the answers, so it joins the options. The title field held the address, so it empties.
+        const q = prev.question
+        const lines = q.optionsText.trim() ? q.optionsText.replace(/\s+$/, '') + '\n' : ''
+        const priced = pricingFromDraft(draft, q.basis)
+        return {
+          ...prev,
+          question: {
+            ...q,
+            title: '',
+            optionsText: title ? `${lines}${title}` : q.optionsText,
+            prices: title && priced.price ? { ...q.prices, [title.toLowerCase()]: priced.price } : q.prices,
+            basis: priced.price ? priced.basis : q.basis,
+            currency: priced.price && draft.currency ? draft.currency : q.currency,
+          },
+        }
+      }
+      return { ...prev, idea: { title, link: link || prev.idea.link } }
+    })
   }
 
-  const addOptionRow = () =>
-    setValues((prev) => ({ ...prev, optionRows: [...prev.optionRows, { title: '', price: '', pricingPerDay: '', pricingFlat: '' }] }))
-  const removeOptionRow = (index: number) =>
-    setValues((prev) => ({ ...prev, optionRows: prev.optionRows.filter((_, i) => i !== index) }))
-
-  const handleApprovedFromLink = (draft: OptionDraft) => {
-    setPasteLinkOpen(false)
-    setValues((prev) => ({
-      ...prev,
-      isVote: true,
-      title: prev.title || draft.title,
-      optionRows: [
-        { title: draft.title, price: draft.price != null ? String(draft.price) : '', pricingPerDay: '', pricingFlat: '' },
-        ...prev.optionRows.slice(1),
-      ],
-      currency: draft.currency || prev.currency,
-    }))
+  const finish = (message: string, target: { type: 'question' | 'item'; id: string }) => {
+    showToast({ type: 'success', message, action: { label: 'View', onClick: () => navigate(viewLink(tripId, target)) } })
+    clearDraft()
+    setValues(seed)
+    setPickedPlace(null)
+    onClose()
   }
 
   const handleSave = async () => {
-    if (!user) return
-    if (!values.title.trim()) {
-      showToast({ type: 'error', message: 'Please enter a title' })
-      return
-    }
-
+    if (!intent) return
+    const fail = (message: string) => showToast({ type: 'error', message })
     try {
-      if (values.isVote) {
-        const filledRows = values.optionRows.filter((r) => r.title.trim())
-        if (values.voteTarget === 'new' && filledRows.length < 2) {
-          showToast({ type: 'error', message: 'Add at least 2 options to ask the group' })
-          return
-        }
-        if (values.voteTarget === 'existing' && !values.existingSectionId) {
-          showToast({ type: 'error', message: 'Choose a question to add this option to' })
-          return
-        }
-
-        let sectionId = values.existingSectionId
-        if (values.voteTarget === 'new') {
-          const isPersonal = values.decisionShape === 'personal'
-          const created = await createSection.mutateAsync({
-            title: values.title.trim(),
-            description: values.description.trim() || null,
-            metadata: { decision_shape: values.decisionShape },
-            section_type: 'activities',
-            status: 'in_progress',
-            allow_multiple_selections: false,
-            order_index: 0,
-            voting_method: values.votingMethod,
-            hide_votes_until_close: true,
-            vote_deadline: values.voteDeadline ? new Date(values.voteDeadline).toISOString() : null,
-            quorum: null,
-          })
-          sectionId = created.id
-
-          await bulkCreateOptions.mutateAsync(
-            filledRows.map((row) => ({
-              section_id: sectionId,
-              title: row.title.trim(),
-              // Personal picks (shape 2) price entirely through
-              // metadata.pricing (per-day/flat) -- no row-level price, but
-              // still stamp a currency for that pricing to be denominated
-              // in (mirrors OptionEditorSheet's buildMetadata/currency rule).
-              price: isPersonal ? null : row.price ? parseFloat(row.price) : null,
-              currency: isPersonal ? values.currency : row.price ? values.currency : null,
-              price_type: 'per_person_fixed' as const,
-              place_id: pickedPlace?.id ?? values.placeId,
-              metadata: isPersonal ? buildRowPricingMetadata(row) : null,
-            }))
-          )
-          logActivity({ verb: 'option_added', entity: { type: 'section', id: sectionId, label: values.title.trim() } })
-        } else {
-          await bulkCreateOptions.mutateAsync([
-            {
-              section_id: sectionId,
-              title: values.title.trim(),
-              description: values.description.trim() || null,
-              price: values.price ? parseFloat(values.price) : null,
-              currency: values.price ? values.currency : null,
-              price_type: 'per_person_fixed' as const,
-              place_id: pickedPlace?.id ?? values.placeId,
-            },
-          ])
-          logActivity({ verb: 'option_added', entity: { type: 'option', label: values.title.trim() } })
-        }
-
-        showToast({ type: 'success', message: 'Question added' })
+      if (intent === 'happening') {
+        const err = validateHappening(values.happening)
+        if (err) return fail(err)
+        const row = await save.happening.mutateAsync(values.happening)
+        finish('Added to the plan', { type: 'item', id: row.id })
+      } else if (intent === 'question') {
+        const err = validateQuestion(values.question)
+        if (err) return fail(err)
+        const row = await save.question.mutateAsync(values.question)
+        finish('Question added', { type: 'question', id: row.id })
       } else {
-        if (values.hasDate && !values.date) {
-          showToast({ type: 'error', message: 'Please pick a date, or turn off "has a date"' })
-          return
-        }
-
-        const created = await createEvent.mutateAsync({
-          trip_id: tripId,
-          created_by: user.id,
-          title: values.title.trim(),
-          description: values.description.trim() || null,
-          category: values.category,
-          event_date: values.hasDate ? values.date : trip.start_date,
-          all_day: values.hasDate ? !values.hasTime : true,
-          start_time: values.hasDate && values.hasTime ? values.startTime || null : null,
-          end_time: values.hasDate && values.hasTime ? values.endTime || null : null,
-          place_id: pickedPlace?.id ?? values.placeId,
-          location: pickedPlace?.name ?? null,
-        })
-        logActivity({ verb: 'event_added', entity: { type: 'timeline_event', label: values.title.trim() } })
-        void created
-        showToast({ type: 'success', message: 'Added to the plan' })
+        const err = validateIdea(values.idea)
+        if (err) return fail(err)
+        const row = await save.idea.mutateAsync(values.idea)
+        finish('Idea added', { type: 'question', id: row.questionId })
       }
-
-      clearDraft()
-      onClose()
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not add this to the plan', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not save this', description: (err as Error).message })
     }
   }
 
+  // Never render a form the server would reject.
+  if (permsLoading || intents.length === 0) return null
+
   return (
     <>
-      <Modal isOpen={isOpen} onClose={handleClose} size="lg" title="Add to plan">
+      <Modal isOpen={isOpen} onClose={handleClose} size="lg" title={tile ? tile.title : 'Add'}>
         <div className="space-y-4">
-          <div className="flex justify-end">
-            <Button variant="ghost" size="sm" onClick={() => setPasteLinkOpen(true)}>
-              🔗 Paste a link instead
-            </Button>
-          </div>
+          {!intent && <IntentChooser intents={intents} onChoose={(i) => setValues((prev) => ({ ...prev, intent: i }))} />}
 
-          <Input label="Title" value={values.title} onChange={(e) => updateField('title', e.target.value)} placeholder="e.g. Dinner at Kumo" required autoFocus />
-          <TextArea label="Description (optional)" value={values.description} onChange={(e) => updateField('description', e.target.value)} rows={2} />
-
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={values.hasDate} onChange={(e) => updateField('hasDate', e.target.checked)} className="w-5 h-5 accent-accent-600" />
-            <span className="text-sm text-[var(--text-primary)]">This has a day</span>
-          </label>
-
-          {values.hasDate && (
-            <div className="space-y-3 pl-1">
-              <div className="grid grid-cols-2 gap-3">
-                <Input label="Day" type="date" value={values.date} onChange={(e) => updateField('date', e.target.value)} />
-                <Select
-                  label="Type"
-                  value={values.category}
-                  onChange={(e) => updateField('category', e.target.value as TimelineEventCategory)}
-                  options={CATEGORY_OPTIONS}
-                />
-              </div>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={values.hasTime} onChange={(e) => updateField('hasTime', e.target.checked)} className="w-5 h-5 accent-accent-600" />
-                <span className="text-sm text-[var(--text-primary)]">Specific time (otherwise all day)</span>
-              </label>
-              {values.hasTime && (
-                <div className="grid grid-cols-2 gap-3">
-                  <Input label="Start time" type="time" value={values.startTime} onChange={(e) => updateField('startTime', e.target.value)} />
-                  <Input label="End time" type="time" value={values.endTime} onChange={(e) => updateField('endTime', e.target.value)} />
-                </div>
-              )}
-            </div>
+          {intent === 'happening' && (
+            <HappeningForm
+              values={values.happening}
+              onChange={(p) => patch('happening', p)}
+              pickedPlace={pickedPlace}
+              onPickPlace={() => setPlacePickerOpen(true)}
+              onClearPlace={() => {
+                setPickedPlace(null)
+                patch('happening', { placeId: null, placeName: null })
+              }}
+              attendees={attendees}
+              onPullLink={setPasteUrl}
+            />
           )}
+          {intent === 'question' && (
+            <QuestionForm
+              values={values.question}
+              onChange={(p) => patch('question', p)}
+              onTemplate={(title) => setValues((prev) => ({ ...prev, question: applyTemplate(prev.question, title) }))}
+              onPullLink={setPasteUrl}
+            />
+          )}
+          {intent === 'idea' && <IdeaForm values={values.idea} onChange={(p) => patch('idea', p)} onPullLink={setPasteUrl} />}
 
-          <div>
-            <span className="mb-1.5 block text-sm font-medium text-[var(--text-primary)]">Place (optional)</span>
-            {pickedPlace || values.placeId ? (
-              <div className="flex items-center gap-2">
-                {pickedPlace ? <PlaceChip place={pickedPlace} compact /> : <Chip icon={<span>📍</span>}>Linked place</Chip>}
-                <Button variant="ghost" size="sm" onClick={() => { setPickedPlace(null); updateField('placeId', null) }}>
-                  Remove
+          {intent && (
+            <div className="flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
+              {intents.length > 1 ? (
+                <Button variant="ghost" onClick={() => setValues((prev) => ({ ...prev, intent: null }))} disabled={save.isSaving}>
+                  Back
                 </Button>
-              </div>
-            ) : (
-              <Button variant="secondary" size="sm" onClick={() => setPlacePickerOpen(true)}>
-                📍 Attach a place
-              </Button>
-            )}
-          </div>
-
-          {!values.isVote && (
-            <div className="grid grid-cols-2 gap-3">
-              <Input label="Price (optional)" type="number" value={values.price} onChange={(e) => updateField('price', e.target.value)} placeholder="0.00" />
-              <Select
-                label="Currency"
-                value={values.currency}
-                onChange={(e) => updateField('currency', e.target.value)}
-                options={['GBP', 'EUR', 'USD', 'JPY', 'CHF', 'AUD', 'CAD'].map((c) => ({ value: c, label: c }))}
-              />
-            </div>
-          )}
-
-          <label className="flex items-start gap-3 cursor-pointer rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3">
-            <input type="checkbox" checked={values.isVote} onChange={(e) => updateField('isVote', e.target.checked)} className="mt-0.5 w-5 h-5 accent-accent-600" />
-            <span className="text-sm text-[var(--text-primary)]">
-              Ask the group
-              <span className="block text-xs text-[var(--text-muted)]">Not sure yet? Let the group decide between options.</span>
-            </span>
-          </label>
-
-          {values.isVote && (
-            <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--border-default)] p-3">
-              <SegmentedControl
-                fullWidth
-                size="sm"
-                value={values.voteTarget}
-                onChange={(v) => updateField('voteTarget', v)}
-                options={[
-                  { value: 'new', label: 'New question' },
-                  { value: 'existing', label: 'Add to existing question' },
-                ]}
-              />
-
-              {values.voteTarget === 'existing' ? (
-                <Select
-                  label="Question"
-                  value={values.existingSectionId}
-                  onChange={(e) => updateField('existingSectionId', e.target.value)}
-                  options={(sections || []).map((s) => ({ value: s.id, label: s.title }))}
-                />
               ) : (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">Question type</label>
-                    <SegmentedControl
-                      fullWidth
-                      size="sm"
-                      value={values.decisionShape}
-                      onChange={(v) => updateField('decisionShape', v)}
-                      options={[
-                        { value: 'vote', label: 'Group choice' },
-                        { value: 'personal', label: 'Own choice' },
-                      ]}
-                    />
-                    <p className="mt-1.5 text-xs text-[var(--text-muted)]">
-                      {values.decisionShape === 'vote'
-                        ? 'One answer for everyone — the group chooses between options.'
-                        : 'Each person chooses for themselves (rental gear, lessons).'}
-                    </p>
-                  </div>
-
-                  <div>
-                    <span className="mb-1.5 block text-sm font-medium text-[var(--text-primary)]">Options (2+)</span>
-                    <div className="space-y-2">
-                      {values.optionRows.map((row, i) => (
-                        <div key={i} className="space-y-1.5">
-                          <div className="flex gap-2">
-                            <Input value={row.title} onChange={(e) => updateOptionRow(i, 'title', e.target.value)} placeholder={`Option ${i + 1}`} fullWidth />
-                            {values.decisionShape === 'vote' && (
-                              <Input
-                                type="number"
-                                value={row.price}
-                                onChange={(e) => updateOptionRow(i, 'price', e.target.value)}
-                                placeholder="Price"
-                                className="w-28"
-                              />
-                            )}
-                            {values.optionRows.length > 2 && (
-                              <Button variant="ghost" size="sm" onClick={() => removeOptionRow(i)}>
-                                ✕
-                              </Button>
-                            )}
-                          </div>
-                          {values.decisionShape === 'personal' && (
-                            <div className="flex gap-2 pl-1">
-                              <Input
-                                type="number"
-                                value={row.pricingPerDay}
-                                onChange={(e) => updateOptionRow(i, 'pricingPerDay', e.target.value)}
-                                placeholder="Price per day"
-                                className="w-32"
-                              />
-                              <Input
-                                type="number"
-                                value={row.pricingFlat}
-                                onChange={(e) => updateOptionRow(i, 'pricingFlat', e.target.value)}
-                                placeholder="Flat price"
-                                className="w-32"
-                              />
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                    <Button variant="ghost" size="sm" onClick={addOptionRow} className="mt-2">
-                      + Add another option
-                    </Button>
-                  </div>
-
-                  {values.decisionShape === 'vote' && (
-                    <div>
-                      <label className="block text-sm font-medium text-[var(--text-primary)] mb-2">How people answer</label>
-                      <SegmentedControl
-                        fullWidth
-                        size="sm"
-                        value={values.votingMethod}
-                        onChange={(v) => updateField('votingMethod', v)}
-                        options={[
-                          { value: 'single', label: 'Choose one' },
-                          { value: 'approval', label: 'Choose any' },
-                          { value: 'ranked', label: 'Rank them' },
-                        ]}
-                      />
-                    </div>
-                  )}
-
-                  <Input
-                    label={values.decisionShape === 'personal' ? 'Answer by (optional)' : 'Answer by (optional)'}
-                    type="datetime-local"
-                    value={values.voteDeadline}
-                    onChange={(e) => updateField('voteDeadline', e.target.value)}
-                    helperText={
-                      values.decisionShape === 'personal'
-                        ? 'Shown to the group as when answers close.'
-                        : undefined
-                    }
-                  />
-                </>
+                <Button variant="ghost" onClick={handleClose} disabled={save.isSaving}>
+                  Cancel
+                </Button>
               )}
+              <Button onClick={handleSave} isLoading={save.isSaving}>
+                {tile?.saveLabel}
+              </Button>
             </div>
           )}
-
-          <div className="flex justify-end gap-3 pt-2 border-t border-[var(--border-subtle)]">
-            <Button variant="ghost" onClick={handleClose} disabled={isSaving}>
-              Cancel
-            </Button>
-            <Button onClick={handleSave} isLoading={isSaving}>
-              {values.isVote ? 'Ask the group' : 'Add to plan'}
-            </Button>
-          </div>
         </div>
 
         <PlacePicker
@@ -501,7 +241,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
           title="Where is this?"
           onPicked={(place) => {
             setPickedPlace(place)
-            updateField('placeId', place.id)
+            patch('happening', { placeId: place.id, placeName: place.name })
             setPlacePickerOpen(false)
           }}
         />
@@ -511,12 +251,19 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
           onKeep={guardProps.onKeep}
           onDiscard={() => {
             clearDraft()
+            setValues(seed)
             guardProps.onDiscard()
           }}
         />
       </Modal>
 
-      <PasteALinkSheet isOpen={pasteLinkOpen} onClose={() => setPasteLinkOpen(false)} tripId={tripId} onApproved={handleApprovedFromLink} />
+      <PasteALinkSheet
+        isOpen={pasteUrl != null}
+        onClose={() => setPasteUrl(null)}
+        tripId={tripId}
+        initialUrl={pasteUrl ?? undefined}
+        onApproved={handleApprovedFromLink}
+      />
     </>
   )
 }

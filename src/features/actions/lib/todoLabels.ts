@@ -56,6 +56,9 @@ export const GRABS_HINT = 'Nobody is on these yet. Take one and it moves to your
 export const TODOS_EMPTY_TITLE = 'No to-dos.'
 export const TODOS_EMPTY_BODY = "Add one for the group — like 'Book the transfer' or 'Bring a speaker'."
 export const TODOS_FINISHED_NOTE = 'This trip has finished, so to-dos are shown as history.'
+/** Finished trip, nothing in the sheet: the sheet only lists shared task to-dos; answering, paying and freezing live on Today. */
+export const TODOS_FINISHED_EMPTY_TITLE = 'No shared to-dos were left open on this trip.'
+export const TODOS_FINISHED_EMPTY_BODY = 'This list holds shared tasks. Answering, paying and freezing balances show on Today.'
 export const NO_LONGER_NEEDED = '🗳️ No longer needed — the question is closed'
 export const TICKS_WHEN_ANSWERED = '🗳️ Ticks off when you answer'
 

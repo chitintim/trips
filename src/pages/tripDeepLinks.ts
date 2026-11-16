@@ -27,10 +27,12 @@ export type OpenTarget =
   | { kind: 'item'; id: string }
   | { kind: 'claim'; id: string }
   | { kind: 'setup' }
+  | { kind: 'decide'; id: string }
+  | { kind: 'book'; id: string }
   | { kind: 'actions'; segment: 'actions' | 'bring' }
 
 /** Values that carry an id after a colon: `question:<id>` etc. */
-const ID_KINDS = ['question', 'todo', 'bring', 'payment', 'item', 'claim'] as const
+const ID_KINDS = ['question', 'todo', 'bring', 'payment', 'item', 'claim', 'decide', 'book'] as const
 type IdKind = (typeof ID_KINDS)[number]
 
 const BARE_KINDS: Record<string, OpenTarget> = {
@@ -72,6 +74,8 @@ export function formatOpenParam(target: OpenTarget): string {
     case 'payment':
     case 'item':
     case 'claim':
+    case 'decide':
+    case 'book':
       return `${target.kind}:${target.id}`
     default:
       return target.kind
@@ -111,6 +115,10 @@ export interface DeepLinkContext {
   expenses: ReadonlyArray<{ id: string; claimCode: string | null }>
   /** Timeline event ids and option ids (what `item:` can point at). */
   itemIds: ReadonlySet<string>
+  /** Every option with its question and whether it is already booked (legacy status or a live booking). `book:` needs it. */
+  options: ReadonlyArray<{ id: string; sectionId: string; booked: boolean }>
+  /** Section ids that are Own choice (nothing to book). */
+  ownChoiceSectionIds: ReadonlySet<string>
 }
 
 export type DeepLinkSheet =
@@ -122,6 +130,8 @@ export type DeepLinkSheet =
   | { sheet: 'confirm-payment'; settlementId: string }
   | { sheet: 'plan-item'; id: string }
   | { sheet: 'plan-question'; id: string }
+  /** Organiser: open the question's Manage sheet straight into Decide (`decide`) or Mark booked (`book`). */
+  | { sheet: 'manage-question'; id: string; mode: 'decide' | 'book'; optionId?: string }
   | { sheet: 'settle-up' }
   | { sheet: 'claim'; code: string }
   | { sheet: 'add-participant' }
@@ -148,6 +158,8 @@ export const DEEP_LINK_TOASTS = {
   claimClosed: "Claiming isn't open for that receipt.",
   item: "That item isn't on the plan any more.",
   rsvp: "You're not on this trip's guest list.",
+  /** decide: / book: for a viewer who can't manage the trip, or a question already decided / option already booked. */
+  organiserGone: DEEP_LINK_GONE_TOAST,
 } as const
 
 const soft = (toast: string): DeepLinkPlan => ({ space: 'today', toast })
@@ -230,6 +242,20 @@ export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLink
     case 'item':
       // The Plan owns PlanItemSheet; the shell hands it the id to open.
       return ctx.itemIds.has(target.id) ? { space: 'plan', open: { sheet: 'plan-item', id: target.id } } : soft(DEEP_LINK_TOASTS.item)
+
+    case 'decide': {
+      const section = ctx.sections.find((s) => s.id === target.id)
+      // Only an organiser can decide, and only an Open question can be decided.
+      if (!ctx.isOrganizer || !section || section.status === 'completed' || ctx.tripFinished || !section.hasLiveOptions) return soft(DEEP_LINK_TOASTS.organiserGone)
+      return { space: 'plan', open: { sheet: 'manage-question', id: section.id, mode: 'decide' } }
+    }
+
+    case 'book': {
+      const option = ctx.options.find((o) => o.id === target.id)
+      const section = option ? ctx.sections.find((s) => s.id === option.sectionId) : undefined
+      if (!ctx.isOrganizer || ctx.tripFinished || !option || !section || option.booked || section.status !== 'completed' || ctx.ownChoiceSectionIds.has(section.id)) return soft(DEEP_LINK_TOASTS.organiserGone)
+      return { space: 'plan', open: { sheet: 'manage-question', id: section.id, mode: 'book', optionId: option.id } }
+    }
 
     case 'setup': {
       if (!ctx.isOrganizer) return { space: 'today' }

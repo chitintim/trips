@@ -4,9 +4,13 @@ import {
   isFullySettled,
   balanceEpsilonMajor,
   computePendingMismatches,
-  excludePendingPairs,
+  computeRemainingSuggestions,
+  dedupeTransactions,
+  findDuplicatePayments,
+  unresolvedDuplicateGroups,
   type SettleUpPerson,
 } from './settleUpLogic'
+import { explainMoneyPosition } from '../../../lib/cost/moneyEquation'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 import type { Transaction } from '../../../lib/debtMinimization'
@@ -275,23 +279,209 @@ describe('computePendingMismatches', () => {
   })
 })
 
-describe('excludePendingPairs (refreeze dedup)', () => {
-  it('excludes a suggested pair that already has a pending marked_paid row for the same from/to', () => {
-    const suggested = [makeTransaction('bob', 'alice', 50), makeTransaction('charlie', 'alice', 20)]
-    const settlements = [makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'marked_paid' })]
-    const result = excludePendingPairs(suggested, settlements)
-    expect(result).toEqual([makeTransaction('charlie', 'alice', 20)])
+// ---------------------------------------------------------------------------
+// Sicily regression: the payer had marked four payments paid BEFORE a (re)freeze;
+// balances count only confirmed rows, so the freeze suggested the same four
+// payments again and they were marked paid a second time.
+// ---------------------------------------------------------------------------
+const sicilyPeople: SettleUpPerson[] = ['tim', 'tharindu', 'lv', 'raine', 'leo', 'emma'].map((id) => ({ userId: id, name: id }))
+
+function sicilyExpenses(): ExpenseWithDetails[] {
+  // tharindu/lv/raine/leo each paid £200 shared with tim (tim owes each £100); leo also paid £80 shared with emma (emma owes leo £40).
+  const shared = (id: string, payer: string, other: string, amount: number) =>
+    makeExpense({ id, amount, paid_by: payer, splits: [makeSplit(payer, amount / 2), makeSplit(other, amount / 2)] })
+  return [
+    shared('e1', 'tharindu', 'tim', 200),
+    shared('e2', 'lv', 'tim', 200),
+    shared('e3', 'raine', 'tim', 200),
+    shared('e4', 'leo', 'tim', 200),
+    shared('e5', 'leo', 'emma', 80),
+  ]
+}
+const markedPaidByTim = (to: string, amount = 100, id = `mp-${to}`) =>
+  makeSettlement({ id, from_user_id: 'tim', to_user_id: to, amount, status: 'marked_paid', created_at: '2026-09-13T14:29:47Z' })
+const timPaidFour = () => ['tharindu', 'lv', 'raine', 'leo'].map((to) => markedPaidByTim(to))
+const pairOf = (t: Transaction) => `${t.from}>${t.to}`
+
+describe('Sicily sequence: four payments marked paid, then freeze', () => {
+  for (const simplify of [false, true]) {
+    it(`does not suggest the four payments again (simplify=${simplify}) but still suggests the other debt`, () => {
+      const existing = timPaidFour()
+      const before = computeSuggestedPayments(sicilyExpenses(), existing, sicilyPeople, 'GBP', simplify)
+      // The old behaviour: marked_paid is not in the balances, so Tim still appears to owe everyone.
+      expect(before.filter((t) => t.from === 'tim').length).toBeGreaterThan(0)
+
+      const remaining = computeRemainingSuggestions(sicilyExpenses(), existing, sicilyPeople, 'GBP', simplify)
+      expect(remaining.filter((t) => t.from === 'tim' || t.to === 'tim')).toEqual([])
+      expect(remaining.map((t) => [t.from, t.to, t.amount])).toEqual([['emma', 'leo', 40]])
+    })
+  }
+
+  it('a freeze inserts only suggested rows, so the row set has no duplicate payment and each receiver has one confirm', () => {
+    const existing = timPaidFour()
+    const toInsert = computeRemainingSuggestions(sicilyExpenses(), existing, sicilyPeople, 'GBP', false)
+    const afterFreeze: Settlement[] = [
+      ...existing,
+      ...toInsert.map((t) =>
+        makeSettlement({ from_user_id: t.from, to_user_id: t.to, amount: t.amount, status: 'suggested', created_at: '2026-09-14T00:29:20Z' })
+      ),
+    ]
+    expect(findDuplicatePayments(afterFreeze, 'GBP')).toEqual([])
+    for (const to of ['tharindu', 'lv', 'raine', 'leo']) {
+      expect(afterFreeze.filter((s) => s.from_user_id === 'tim' && s.to_user_id === to && s.status !== 'confirmed')).toHaveLength(1)
+    }
+    // Refreezing again (unfreeze, freeze) over the same rows still adds nothing for Tim.
+    const again = computeRemainingSuggestions(sicilyExpenses(), afterFreeze.filter((s) => s.status !== 'suggested'), sicilyPeople, 'GBP', false)
+    expect(again.map(pairOf)).toEqual(['emma>leo'])
   })
 
-  it('does not exclude a pair whose only settlement rows are suggested or confirmed', () => {
-    const suggested = [makeTransaction('bob', 'alice', 50)]
-    const settlements = [makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'confirmed' })]
-    expect(excludePendingPairs(suggested, settlements)).toEqual(suggested)
+  it("the payer's position counts the four sent payments once (sent 400, nothing left to pay)", () => {
+    const eq = explainMoneyPosition({
+      expenses: sicilyExpenses(),
+      settlements: timPaidFour(),
+      participantUserIds: sicilyPeople.map((p) => p.userId),
+      currentUserId: 'tim',
+      baseCurrency: 'GBP',
+    })
+    expect(eq.sentWaiting).toBe(400)
+    expect(eq.remainingToPay).toBe(0)
   })
 
-  it('is a no-op when there are no pending settlements at all', () => {
-    const suggested = [makeTransaction('bob', 'alice', 50)]
-    expect(excludePendingPairs(suggested, [])).toEqual(suggested)
+  it('the duplicated state seen live (eight marked_paid rows) is detected as four pairs, oldest first', () => {
+    const batchA = timPaidFour()
+    const batchB = ['tharindu', 'lv', 'raine', 'leo'].map((to) =>
+      makeSettlement({ id: `b-${to}`, from_user_id: 'tim', to_user_id: to, amount: 100, status: 'marked_paid', created_at: '2026-09-14T00:29:18Z' })
+    )
+    const groups = findDuplicatePayments([...batchB, ...batchA], 'GBP')
+    expect(groups).toHaveLength(4)
+    for (const g of groups) {
+      expect(g.rows).toHaveLength(2)
+      expect(`${g.rows[0].created_at}` < `${g.rows[1].created_at}`).toBe(true)
+    }
+  })
+})
+
+describe('Sailing Sicily live shape: every payment recorded twice (batch A 09-13, batch B 09-14), then unfreeze and freeze', () => {
+  const batchB = () =>
+    ['tharindu', 'lv', 'raine', 'leo'].map((to) =>
+      makeSettlement({ id: `b-${to}`, from_user_id: 'tim', to_user_id: to, amount: 100, status: 'marked_paid', created_at: '2026-09-14T00:29:18Z' })
+    )
+  const eight = () => [...timPaidFour(), ...batchB()]
+
+  for (const simplify of [false, true]) {
+    it(`counts each duplicated payment once, so there are no reverse suggestions (simplify=${simplify})`, () => {
+      const remaining = computeRemainingSuggestions(sicilyExpenses(), eight(), sicilyPeople, 'GBP', simplify)
+      expect(remaining.filter((t) => t.to === 'tim')).toEqual([])
+      expect(remaining.filter((t) => t.from === 'tim')).toEqual([])
+      expect(remaining.map((t) => [t.from, t.to, t.amount])).toEqual([['emma', 'leo', 40]])
+    })
+  }
+
+  it('Freeze is blocked while the four duplicate groups are unresolved, and unblocked once one row of each is gone', () => {
+    expect(unresolvedDuplicateGroups(eight(), 'GBP')).toHaveLength(4)
+    expect(unresolvedDuplicateGroups(timPaidFour(), 'GBP')).toHaveLength(0)
+  })
+
+  it('a marked_paid row duplicating a confirmed one is not counted twice', () => {
+    const confirmed = makeSettlement({ id: 'c', from_user_id: 'tim', to_user_id: 'leo', amount: 100, status: 'confirmed', created_at: '2026-09-13T14:00:00Z' })
+    const dup = markedPaidByTim('leo', 100, 'dup')
+    const r = computeRemainingSuggestions(sicilyExpenses(), [confirmed, dup], sicilyPeople, 'GBP', false)
+    const only = computeRemainingSuggestions(sicilyExpenses(), [confirmed], sicilyPeople, 'GBP', false)
+    expect(r).toEqual(only)
+  })
+
+  it('two equal payments more than 24h apart are separate instalments and both count', () => {
+    const first = markedPaidByTim('leo', 50, 'i1')
+    const second = makeSettlement({ id: 'i2', from_user_id: 'tim', to_user_id: 'leo', amount: 50, status: 'marked_paid', created_at: '2026-09-20T00:00:00Z' })
+    expect(findDuplicatePayments([first, second], 'GBP')).toEqual([])
+    expect(unresolvedDuplicateGroups([first, second], 'GBP')).toEqual([])
+  })
+
+  it('confirmed-only duplicates do not block a freeze (already in the balances, nothing removable)', () => {
+    const a = makeSettlement({ id: 'ca', from_user_id: 'tim', to_user_id: 'leo', amount: 10, status: 'confirmed', created_at: '2026-09-13T14:00:00Z' })
+    const b = makeSettlement({ id: 'cb', from_user_id: 'tim', to_user_id: 'leo', amount: 10, status: 'confirmed', created_at: '2026-09-13T15:00:00Z' })
+    expect(findDuplicatePayments([a, b], 'GBP')).toHaveLength(1)
+    expect(unresolvedDuplicateGroups([a, b], 'GBP')).toHaveLength(0)
+  })
+})
+
+describe('computeRemainingSuggestions: partial, over- and cross-currency payments', () => {
+  const two: SettleUpPerson[] = [
+    { userId: 'alice', name: 'Alice' },
+    { userId: 'bob', name: 'Bob' },
+  ]
+  const exp = [makeExpense({ id: 'e1', amount: 200, paid_by: 'alice', splits: [makeSplit('alice', 100), makeSplit('bob', 100)] })]
+  const sent = (amount: number, status: Settlement['status'], currency = 'GBP') =>
+    makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount, status, currency })
+
+  it('a partial marked_paid payment reduces the suggestion', () => {
+    for (const simplify of [false, true]) {
+      const r = computeRemainingSuggestions(exp, [sent(30, 'marked_paid')], two, 'GBP', simplify)
+      expect(r.map((t) => [t.from, t.to, t.amount])).toEqual([['bob', 'alice', 70]])
+    }
+  })
+
+  it('a confirmed payment is counted once (already in balances), not twice', () => {
+    const r = computeRemainingSuggestions(exp, [sent(30, 'confirmed')], two, 'GBP', true)
+    expect(r.map((t) => t.amount)).toEqual([70])
+  })
+
+  it('paying more than owed flips into the reverse suggestion, never a negative amount', () => {
+    for (const simplify of [false, true]) {
+      const r = computeRemainingSuggestions(exp, [sent(130, 'marked_paid')], two, 'GBP', simplify)
+      expect(r.map((t) => [t.from, t.to, t.amount])).toEqual([['alice', 'bob', 30]])
+      expect(r.every((t) => t.amount > 0)).toBe(true)
+    }
+  })
+
+  it('a payment in another currency does not reduce a GBP suggestion', () => {
+    const r = computeRemainingSuggestions(exp, [sent(100, 'marked_paid', 'EUR')], two, 'GBP', true)
+    expect(r.map((t) => t.amount)).toEqual([100])
+  })
+
+  it('suggested rows are ignored, and the input rows are not mutated', () => {
+    const rows = [sent(100, 'suggested'), sent(30, 'marked_paid')]
+    const r = computeRemainingSuggestions(exp, rows, two, 'GBP', true)
+    expect(r.map((t) => t.amount)).toEqual([70])
+    expect(rows[1].status).toBe('marked_paid')
+  })
+
+  it('does not change what computePendingMismatches compares against (plain suggestions ignore marked_paid)', () => {
+    const rows = [sent(100, 'marked_paid')]
+    expect(computeSuggestedPayments(exp, rows, two, 'GBP', true).map((t) => t.amount)).toEqual([100])
+    expect(computeRemainingSuggestions(exp, rows, two, 'GBP', true)).toEqual([])
+  })
+})
+
+describe('dedupeTransactions', () => {
+  it('drops repeated identical from/to/amount entries only', () => {
+    const t = [makeTransaction('a', 'b', 5), makeTransaction('a', 'b', 5), makeTransaction('a', 'b', 6), makeTransaction('b', 'a', 5)]
+    expect(dedupeTransactions(t)).toHaveLength(3)
+  })
+})
+
+describe('findDuplicatePayments', () => {
+  const row = (over: Partial<Settlement> = {}) => makeSettlement({ from_user_id: 'bob', to_user_id: 'alice', amount: 50, status: 'marked_paid', ...over })
+
+  it('ignores suggested rows and different amounts, pairs or currencies', () => {
+    expect(
+      findDuplicatePayments(
+        [row({ status: 'suggested' }), row({ status: 'suggested' }), row(), row({ amount: 51 }), row({ from_user_id: 'carol' }), row({ currency: 'EUR' })],
+        'GBP'
+      )
+    ).toEqual([])
+  })
+
+  it('groups a marked_paid and a confirmed row with the same amount, earliest first', () => {
+    const late = row({ id: 'late', created_at: '2026-09-13T10:00:00Z' })
+    const early = row({ id: 'early', status: 'confirmed', created_at: '2026-09-13T00:00:00Z' })
+    const [g] = findDuplicatePayments([late, early], 'GBP')
+    expect(g.rows.map((r) => r.id)).toEqual(['early', 'late'])
+    expect(g.amount).toBe(50)
+  })
+
+  it('treats a null currency as the base currency', () => {
+    expect(findDuplicatePayments([row({ currency: null as unknown as string }), row()], 'GBP')).toHaveLength(1)
   })
 })
 

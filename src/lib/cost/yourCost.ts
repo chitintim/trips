@@ -200,6 +200,8 @@ export interface YourCostInput {
   organizerName?: string | null
   /** trips.confirmation_enabled. Decides "going" vs "invited" in every headcount label. */
   confirmationEnabled?: boolean
+  /** Whether the viewer is in scope (going / not declined). `false` + no expense of theirs: the card says so instead of estimating. Default true. */
+  viewerInScope?: boolean
   now?: Date | string
 }
 
@@ -249,6 +251,8 @@ export interface YourCostLine {
   basisLine: string | null
   /** At least one figure is a total divided by the headcount (so "N going/invited" matters). */
   dividedByHeadcount: boolean
+  /** A real expense is linked to this item but the viewer is not on it: shown as "Not shared with you", never in the totals. */
+  notShared: boolean
 }
 
 export interface YourCostTotals {
@@ -294,6 +298,8 @@ export interface YourCostModel {
   headcountNoun: 'going' | 'invited'
   /** An honest sentence about the figure (finished trip without your expenses, ...), else null. */
   note: string | null
+  /** 'no_costs': finished trip and the viewer is on no expense. 'not_going': the viewer is not in scope. */
+  emptyReason: 'no_costs' | 'not_going' | null
   isEmpty: boolean
 }
 
@@ -407,14 +413,31 @@ export function paidTotalMinor(list: ReadonlyArray<ExpenseWithDetails>, ledgerId
   return balances.reduce((acc, b) => acc + b.totalPaidMinor, 0)
 }
 
-/** The "actual" figure for an option's price: what its matched expenses add up to, in the trip's base currency. Null when nothing was spent. */
+/**
+ * The "actual" figure for an option's price: what its matched expenses add up to, in the trip's base currency.
+ * Null when nothing was spent. With `userId` it also says who the money was really split between (`splitCount`,
+ * never the trip headcount) and the viewer's own share (`viewerShare`; null = not on the expense).
+ */
 export function actualFromExpenses(
   matched: ReadonlyArray<ExpenseWithDetails>,
   ledgerIds: string[],
-  base: string
-): { total: number; currency: string } | null {
+  base: string,
+  userId?: string | null
+): { total: number; currency: string; viewerShare?: number | null; splitCount?: number } | null {
   const minor = paidTotalMinor(matched, ledgerIds, base)
-  return minor > 0 ? { total: fromMinorUnits(minor, base), currency: base } : null
+  if (minor <= 0) return null
+  const out: { total: number; currency: string; viewerShare?: number | null; splitCount?: number } = { total: fromMinorUnits(minor, base), currency: base }
+  if (userId) {
+    const ids = [...new Set([...ledgerIds, userId])]
+    const { balances } = computeBalances([...matched], [], ids, base)
+    const mine = balances.find((b) => b.userId === userId)?.totalOwedMinor ?? 0
+    const splitCount = balances.filter((b) => b.totalOwedMinor > 0).length
+    if (splitCount > 0) {
+      out.splitCount = splitCount
+      out.viewerShare = mine > 0 ? fromMinorUnits(mine, base) : null
+    }
+  }
+  return out
 }
 
 export function buildYourCost(input: YourCostInput): YourCostModel {
@@ -460,11 +483,12 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
   const expensesOf = (o: CostOptionInput): ExpenseWithDetails[] => matchOptionExpenses(o.id, bookings, expenses)
 
   const pushLine = (
-    line: Omit<YourCostLine, 'low' | 'high' | 'isRange' | 'native' | 'nativeByCurrency' | 'partial' | 'converted' | 'approx' | 'dividedByHeadcount'> & {
+    line: Omit<YourCostLine, 'low' | 'high' | 'isRange' | 'native' | 'nativeByCurrency' | 'partial' | 'converted' | 'approx' | 'dividedByHeadcount' | 'notShared'> & {
       figures: Figure[]
+      notShared?: boolean
     }
   ): void => {
-    const { figures, ...rest } = line
+    const { figures, notShared = false, ...rest } = line
     // One native range PER currency: a range never mixes currencies.
     const byCurrency = new Map<string, { low: number; high: number }>()
     for (const f of figures) {
@@ -490,6 +514,7 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
       converted,
       approx: converted || partial || figures.some((f) => f.approximate || f.certainty === 'est'),
       dividedByHeadcount: figures.some((f) => f.divided),
+      notShared,
     })
   }
 
@@ -540,6 +565,25 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
     }
 
     const minePaid = fromMinorUnits(myShareMinorOf(matched), base)
+    if (minePaid <= 0) {
+      // A real expense exists but the viewer is not on it: say so, never "£0 paid", and keep it out of their total.
+      if (scope !== 'everyone') return false
+      pushLine({
+        id: where.id,
+        kind: 'question',
+        label: where.label,
+        sectionType: section.section_type ?? null,
+        deepLink: { type: 'question', sectionId: section.id, optionId: option.id },
+        figures: [{ amount: 0, currency: base, certainty: 'paid', approximate: false, divided: false, basisLine: null }],
+        certainty: 'paid',
+        qualifier: 'paid',
+        note: 'Not shared with you',
+        optionCount: 1,
+        basisLine: null,
+        notShared: true,
+      })
+      return true
+    }
     const paidFigure = (certainty: Certainty): Figure => ({ amount: minePaid, currency: base, certainty, approximate: false, divided: false, basisLine: null })
     if (!p) {
       // Nothing priced, only real money: the paid split is the line.
@@ -675,7 +719,8 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
       if (emitted > 0) return
     }
 
-    // Open question.
+    // Open question. On a finished trip it was never decided and will not happen: it costs nothing.
+    if (finished) return
     if (priced.length === 0) return
     const candidates = scope === 'everyone' ? priced : priced.filter(iAnswered)
     if (candidates.length === 0) {
@@ -758,7 +803,7 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
       liveOptions(s).some((o) => isPriced(o) || isBookedOption(o) || expensesOf(o).length > 0)
   )
   const rough = trip.estimated_accommodation_cost
-  if (rough != null && Number(rough) > 0 && !accommodationPriced) {
+  if (rough != null && Number(rough) > 0 && !accommodationPriced && !finished) {
     const name = input.organizerName?.trim()
     const label = name ? `Rough estimate from ${name}` : 'Rough estimate from the organiser'
     guarded(label, () =>
@@ -779,18 +824,18 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
   }
 
   // --- 4. Totals, reconciliation ---------------------------------------------
-  const counted = lines.filter((l) => l.low != null && l.high != null)
+  const counted = lines.filter((l) => !l.notShared && l.low != null && l.high != null)
   const lowMinor = counted.reduce((acc, l) => acc + toMinorUnits(l.low as number, base), 0)
   const highMinor = counted.reduce((acc, l) => acc + toMinorUnits(l.high as number, base), 0)
   const low = fromMinorUnits(lowMinor, base)
   const high = fromMinorUnits(highMinor, base)
-  const approx = lines.some((l) => l.approx)
+  const approx = lines.some((l) => !l.notShared && l.approx)
   const totals: YourCostTotals = {
     low,
     high,
     isRange: low !== high,
     approx,
-    certainty: weakestCertainty(lines.map((l) => l.certainty)),
+    certainty: weakestCertainty(lines.filter((l) => !l.notShared).map((l) => l.certainty)),
     text: formatMoneyRange(low, high, base, approx ? { estimate: true } : {}),
   }
 
@@ -811,12 +856,23 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
   // that include you, is still the estimate (with a plain note), never "Your share: £0.00".
   const share = finished && alreadySpent != null && involved ? alreadySpent : null
   const mode: YourCostModel['mode'] = share != null ? 'share' : 'estimate'
+  const hasCosts = lines.some((l) => !l.notShared)
+  const emptyReason: YourCostModel['emptyReason'] =
+    share != null || !userId || hasCosts
+      ? null
+      : input.viewerInScope === false
+        ? 'not_going'
+        : finished
+          ? 'no_costs'
+          : null
   const note =
-    finished && share == null && userId
-      ? expenses.length === 0
-        ? 'No expenses were logged for this trip, so this is still the estimate.'
-        : "You're not on any logged expense, so this is still the estimate."
-      : null
+    emptyReason === 'not_going'
+      ? "You're not going on this trip, so there is no cost to estimate for you."
+      : emptyReason === 'no_costs'
+        ? 'You have no costs recorded on this trip.'
+        : finished && share == null && userId && expenses.length === 0
+          ? 'No expenses were logged for this trip, so this is still the estimate.'
+          : null
 
   return {
     mode,
@@ -836,7 +892,8 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
     failedLines,
     headcountNoun: countNoun(hc.isEstimate, confirmationEnabled),
     note,
-    isEmpty: lines.length === 0 && share == null,
+    emptyReason,
+    isEmpty: !hasCosts && share == null,
   }
 }
 

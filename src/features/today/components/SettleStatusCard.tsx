@@ -61,6 +61,7 @@ export function SettleStatusCard({ trip, onNavigate }: SettleStatusCardProps) {
     >
       <span className="text-sm text-[var(--text-primary)]">
         💸 <span className="font-medium">{statusLine}</span>
+        {view.settleHint && <span className="block text-xs text-[var(--text-muted)]">{view.settleHint}</span>}
       </span>
       <span className="text-sm text-[var(--text-muted)]">Money →</span>
     </button>

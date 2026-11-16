@@ -2163,8 +2163,32 @@ export type Database = {
         Args: { p_section_id: string }
         Returns: Json
       }
+      decide_question: {
+        Args: { p_book_todo?: Json; p_option_id?: string; p_put_on_plan?: Json; p_section_id: string }
+        Returns: Json
+      }
+      mark_booked: {
+        Args: { p_booking?: Json; p_option_id: string }
+        Returns: Json
+      }
+      unmark_booked: {
+        Args: { p_cancel_booking?: boolean; p_option_id: string; p_reopen_question?: boolean }
+        Returns: Json
+      }
       reset_trip_confirmations: {
         Args: { p_include_declined?: boolean; p_trip_id: string }
+        Returns: Json
+      }
+      freeze_settlements: {
+        Args: { p_known_paid_ids: string[]; p_snapshot: Json; p_suggestions: Json; p_trip_id: string }
+        Returns: Json
+      }
+      unfreeze_settlements: {
+        Args: { p_trip_id: string }
+        Returns: Json
+      }
+      remove_duplicate_settlement: {
+        Args: { p_settlement_id: string }
         Returns: Json
       }
       get_confirmation_summary: {

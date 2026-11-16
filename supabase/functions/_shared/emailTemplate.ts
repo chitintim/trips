@@ -52,9 +52,27 @@ export interface DigestTripSection {
   actionRows: DigestActionRow[]
   /** Any other open loops (votes, RSVPs, settlements, ...), rendered as a list. */
   otherLines: Array<{ description: string; link: string }>
+  /**
+   * "We have an answer" lines (Phase 4D): decided questions, announced once.
+   * They are news, not to-dos: rendered in their own block and never counted
+   * in the "to-dos waiting on you" subject.
+   */
+  decisions?: DigestDecision[]
   /** `${tripLink}?open=todos` -- rendered as the "See all your to-dos" footer link when set. */
   todosLink?: string
 }
+
+export interface DigestDecision {
+  /** `"Where to stay" -- it's Hotel Kumo` */
+  headline: string
+  /** Price line, who is booking it, ... (plain text). */
+  details: string[]
+  /** `?open=question:<id>` deep link. */
+  link: string
+}
+
+/** Heading of the decisions block (the approved "We have an answer" wording). */
+export const DECISIONS_HEADING = 'We have an answer'
 
 /** Link text for the per-trip "all my to-dos" footer (same words as the app's EMAIL_TODOS_FOOTER). */
 export const TODOS_FOOTER_LABEL = 'See all your to-dos'
@@ -149,6 +167,14 @@ function digestSubject(input: DigestEmailInput): string {
   const sections = input.sections
   const totalActions = sections.reduce((n, s) => n + s.actionRows.length, 0)
   const totalOther = sections.reduce((n, s) => n + s.otherLines.length, 0)
+  const totalDecisions = sections.reduce((n, s) => n + (s.decisions?.length ?? 0), 0)
+  if (totalActions + totalOther === 0 && totalDecisions > 0) {
+    // Only news, no to-dos: "We have an answer" is the whole email.
+    if (sections.length === 1 && totalDecisions === 1) return `${sections[0].tripName}: we have an answer. ${sections[0].decisions![0].headline}`
+    return sections.length === 1
+      ? `${sections[0].tripName}: we have ${totalDecisions} answers`
+      : `We have ${totalDecisions} answers across your trips`
+  }
   if (sections.length === 1) {
     const s = sections[0]
     if (totalOther === 0 && totalActions === 1) {
@@ -171,9 +197,10 @@ export function renderDigestEmail(rawInput: DigestEmailInput): RenderedEmail {
   // and test_digest paths in auto-chase).
   const input: DigestEmailInput = {
     ...rawInput,
-    sections: rawInput.sections.filter((s) => s.actionRows.length + s.otherLines.length > 0),
+    sections: rawInput.sections.filter((s) => s.actionRows.length + s.otherLines.length + (s.decisions?.length ?? 0) > 0),
   }
-  const itemCount = input.sections.reduce((n, s) => n + s.actionRows.length + s.otherLines.length, 0)
+  const itemCount = input.sections.reduce((n, s) => n + s.actionRows.length + s.otherLines.length + (s.decisions?.length ?? 0), 0)
+  const todoCount = input.sections.reduce((n, s) => n + s.actionRows.length + s.otherLines.length, 0)
 
   const sectionsHtml = input.sections
     .map((s) => {
@@ -186,20 +213,34 @@ export function renderDigestEmail(rawInput: DigestEmailInput): RenderedEmail {
               )
               .join('')}</ul>`
           : ''
-      const todosFooter = s.todosLink
+      const decisions =
+        (s.decisions?.length ?? 0) > 0
+          ? `<p style="margin:12px 0 4px;font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:${COLORS.muted};font-weight:600;">${DECISIONS_HEADING}</p>
+             <ul style="margin:4px 0 8px;padding-left:20px;">${s
+               .decisions!.map(
+                 (d) =>
+                   `<li style="margin:6px 0;font-size:14px;line-height:1.5;color:${COLORS.ink};">${escapeHtml(d.headline)}${d.details
+                     .map((x) => `<br><span style="color:${COLORS.muted};font-size:13px;">${escapeHtml(x)}</span>`)
+                     .join('')} <a href="${escapeHtml(d.link)}" style="color:${COLORS.brand};">Open</a></li>`
+               )
+               .join('')}</ul>`
+          : ''
+      // The to-dos footer only makes sense when this trip has to-dos in the email.
+      const todosFooter = s.todosLink && s.actionRows.length + s.otherLines.length > 0
         ? `<p style="margin:4px 0 8px;font-size:13px;"><a href="${escapeHtml(s.todosLink)}" style="color:${COLORS.brand};">${TODOS_FOOTER_LABEL}</a></p>`
         : ''
       return `
       <h2 style="margin:20px 0 8px;font-size:17px;color:${COLORS.ink};">${escapeHtml(s.tripName)}</h2>
       ${s.actionRows.length > 0 ? renderActionsTable(s.actionRows) : ''}
       ${others}
+      ${decisions}
       ${todosFooter}`
     })
     .join('')
 
   const bodyHtml = `
     <p style="margin:0 0 4px;font-size:15px;color:${COLORS.ink};">Hi ${escapeHtml(input.greetingName)},</p>
-    <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:${COLORS.muted};">A few to-dos are waiting on you:</p>
+    <p style="margin:0 0 8px;font-size:14px;line-height:1.6;color:${COLORS.muted};">${todoCount > 0 ? 'A few to-dos are waiting on you:' : 'Good news from your trips:'}</p>
     ${sectionsHtml}`
 
   const tripNames = input.sections.map((s) => s.tripName)
@@ -222,11 +263,15 @@ export function renderDigestEmail(rawInput: DigestEmailInput): RenderedEmail {
         (r) => `  • ${r.title} — ${r.deadlineLabel} (${r.chipLabel})${r.link ? `\n    ${r.link}` : ''}`
       )
       const otherLines = s.otherLines.map((l) => `  • ${l.description}\n    ${l.link}`)
-      const footer = s.todosLink ? [`  ${TODOS_FOOTER_LABEL}: ${s.todosLink}`] : []
-      return `${s.tripName}\n${[...actionLines, ...otherLines, ...footer].join('\n')}`
+      const decisionLines = (s.decisions ?? []).flatMap((d, i) => [
+        ...(i === 0 ? [`  ${DECISIONS_HEADING}:`] : []),
+        `  • ${d.headline}${d.details.map((x) => `\n    ${x}`).join('')}\n    ${d.link}`,
+      ])
+      const footer = s.todosLink && s.actionRows.length + s.otherLines.length > 0 ? [`  ${TODOS_FOOTER_LABEL}: ${s.todosLink}`] : []
+      return `${s.tripName}\n${[...actionLines, ...otherLines, ...decisionLines, ...footer].join('\n')}`
     })
     .join('\n\n')
-  const text = `Hi ${input.greetingName},\n\nA few to-dos are waiting on you:\n\n${textSections}\n\nOpen ${BRAND_NAME}: ${input.appUrl}\n\n${footerLine}\nYou can turn these emails off in your profile settings.`
+  const text = `Hi ${input.greetingName},\n\n${todoCount > 0 ? 'A few to-dos are waiting on you:' : 'Good news from your trips:'}\n\n${textSections}\n\nOpen ${BRAND_NAME}: ${input.appUrl}\n\n${footerLine}\nYou can turn these emails off in your profile settings.`
 
   return { subject: digestSubject(input), html, text, itemCount }
 }

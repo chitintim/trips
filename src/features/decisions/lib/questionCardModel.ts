@@ -13,6 +13,7 @@
  * Own choices read the same way, with their own wording ("Orders closed" once
  * decided, "N of M done").
  */
+import { isIdeasBucket } from '../../../lib/ideasBucket'
 import {
   answerCounts,
   indexAnswers,
@@ -116,7 +117,7 @@ export function buildQuestionCardModel(input: CardInput): QuestionCardModel {
 
   // ---- winner / booked (group choices) ----------------------------------
   const live = liveOptions(section)
-  const legacyBooked = !own ? live.find((o) => o.status === 'booked') : undefined
+  const legacyBooked = live.find((o) => o.status === 'booked')
   const decidedByStatus = section.status === 'completed' || !!legacyBooked
   let decided: QuestionCardModel['decided'] = null
   if (!own && decidedByStatus) {
@@ -131,6 +132,7 @@ export function buildQuestionCardModel(input: CardInput): QuestionCardModel {
     const option = live.find((o) => o.id === winnerId)
     if (option) decided = { optionId: option.id, title: option.title }
   }
+  if (own && legacyBooked) decided = { optionId: legacyBooked.id, title: legacyBooked.title }
   const booked = !!decided && (input.bookedOptionIds?.has(decided.optionId) === true || live.find((o) => o.id === decided!.optionId)?.status === 'booked')
 
   // ---- stage -------------------------------------------------------------
@@ -139,7 +141,8 @@ export function buildQuestionCardModel(input: CardInput): QuestionCardModel {
   else if (finished) stage = 'closed'
   else stage = 'open'
 
-  const owed = isAnswerTodoCandidate(section as AnswerSection, passes !== undefined)
+  // The Ideas bucket is never owed: no "Needs your answer" chip, not expanded by default.
+  const owed = !isIdeasBucket(section) && isAnswerTodoCandidate(section as AnswerSection, passes !== undefined)
 
   // ---- chip --------------------------------------------------------------
   let chip: CardChip | null = null

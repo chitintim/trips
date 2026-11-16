@@ -230,7 +230,7 @@ describe('organiser rough estimate', () => {
 describe('finished trip becomes "Your share"', () => {
   it('headline is the real share, the estimate stays underneath', () => {
     const e = expense({ id: 'e1', amount: 900, paid_by: 'a', splits: PEOPLE.map((u) => ({ user_id: u, amount: 100 })) })
-    const stay = sec({ id: 'stay', title: 'Stay', section_type: 'accommodation', options: [opt({ id: 'a', title: 'A', price: 1800, price_type: 'total_split' })] })
+    const stay = sec({ id: 'stay', title: 'Stay', section_type: 'accommodation', options: [opt({ id: 'a', title: 'A', price: 1800, price_type: 'total_split', status: 'booked' })] })
     const m = run({ sections: [stay], expenses: [e], now: '2027-04-01' })
     expect(m.mode).toBe('share')
     expect(m.title).toBe('Your share')
@@ -414,7 +414,7 @@ describe('C5: an open opt-in total divides by the people who opted in', () => {
 
 describe('C6: "Your share" needs you to be in an expense', () => {
   it('finished trip, nobody logged anything: estimate with an honest note', () => {
-    const s = sec({ id: 'stay', title: 'Stay', section_type: 'accommodation', options: [opt({ id: 'a', title: 'A', price: 9000, price_type: 'total_split' })] })
+    const s = sec({ id: 'stay', title: 'Stay', section_type: 'accommodation', options: [opt({ id: 'a', title: 'A', price: 9000, price_type: 'total_split', status: 'booked' })] })
     const m = run({ sections: [s], expenses: [], now: '2027-04-01' })
     expect(m.mode).toBe('estimate')
     expect(m.share).toBeNull()
@@ -424,7 +424,8 @@ describe('C6: "Your share" needs you to be in an expense', () => {
     const e = expense({ id: 'e', amount: 100, paid_by: 'a', splits: [{ user_id: 'a', amount: 50 }, { user_id: 'b', amount: 50 }], participant_ids: ['a', 'b'] })
     const m = run({ sections: [], expenses: [e], now: '2027-04-01' })
     expect(m.mode).toBe('estimate')
-    expect(m.note).toMatch(/not on any logged expense/)
+    expect(m.note).toBe('You have no costs recorded on this trip.')
+    expect(m.emptyReason).toBe('no_costs')
   })
 })
 

@@ -81,6 +81,18 @@
 //     It can only remove recipients, never add them: no new email kinds, no
 //     email for questions without a deadline. Dedupe keys are unchanged.
 //
+// Phase 4D -- what moves by itself (all fail-soft, all before the sweeps):
+//   - stage sync: stored trips.status moves FORWARD to trip_ongoing /
+//     trip_completed when the trip's dates say so (./autoDecide.ts stageSyncTarget);
+//   - auto-decide: open Group-choice questions whose deadline passed within
+//     the last 48h are decided through the service-role-only SQL function
+//     auto_decide_question (clear leader only; ties become an organizer to-do,
+//     which the to-dos engine derives -- no email); trips.chase_settings.
+//     auto_decide=false opts a trip out;
+//   - "We have an answer": the ONE new email kind ('decision'), once per
+//     decided question per asked person, folded into the daily digest.
+//     See section j in the trip loop.
+//
 // Test entrypoint: POST {"test_digest": {"trip_id", "user_id", "to_email"}}
 // (same cron/service-role auth) composes that user's action digest for one
 // trip and sends it to to_email ONLY -- no notification/reminder state is
@@ -108,6 +120,22 @@ import {
 import { outstandingTargets } from './outstandingTargets.ts'
 import { chaseScopes, isChaseableParticipant, isSectionClosed, isTripOpenForReminders, joinedAfterDueDate } from './chaseScope.ts'
 import { actionRemindersGateOpen, DEFAULT_SETTINGS, inQuietHours, parseChaseSettings } from './chaseSettings.ts'
+import {
+  autoDecideDeadlineBounds,
+  type AutoDecideSectionRow,
+  type AutoDecideSummary,
+  buildDecisionAnnouncement,
+  type DecidedSectionRow,
+  decisionAnnounceSince,
+  decisionDedupeKey,
+  DECISION_KIND,
+  decisionRecipients,
+  isAutoDecideCandidate,
+  lastHumanStatusChange,
+  recentDecisionsFromActivity,
+  runAutoDecide,
+  stageSyncTarget,
+} from './autoDecide.ts'
 import { decideEmailSuppression } from './emailSuppression.ts'
 import { type AnswerPass } from '../_shared/answers/answers.ts'
 import type { Json } from '../_shared/todos/deps/json.ts'
@@ -155,13 +183,18 @@ interface ChaseItem {
     | 't30_no_transport'
     | 't14_missing_arrival'
     | 't1_checkin'
+    | 'decision'
     | 'action_due_7d'
     | 'action_due_1d'
     | 'overdue_action'
   entityType: string
   entityId: string
+  /** Overrides the default `chase:<kind>:<entityId>:<userId>:<seq>` dedupe key (the decision email carries the winner in it). */
+  dedupeKey?: string
   description: string
   deepLink: string
+  /** Present on 'decision' items ("We have an answer", Phase 4D): rendered in the digest's own block. */
+  decision?: { headline: string; details: string[] }
   /** Present on staged action-deadline reminders (section 1b): drives the
    * digest's actions table + the once-per-stage sent-state marking. */
   actionReminder?: {
@@ -307,6 +340,126 @@ async function fetchClosedSectionIds(admin: SupabaseClient, sectionIds: string[]
   return new Set((data ?? []).filter((s) => isSectionClosed(s)).map((s) => s.id as string))
 }
 
+/**
+ * Stage sync (Phase 4D): when a trip's DATES say it has started or finished but
+ * the stored trips.status lags, move the stored status FORWARD to match. Rule
+ * (stageSyncTarget): dates must be present and sane, never backwards, never a
+ * finished trip. Compare-and-set on the old status so a concurrent organizer
+ * edit always wins. Logs a status_changed activity row (auto, no actor).
+ * Fail-soft: never throws.
+ */
+async function syncTripStages(admin: SupabaseClient, now: Date): Promise<Array<{ trip_id: string; from: string; to: string }>> {
+  const moved: Array<{ trip_id: string; from: string; to: string }> = []
+  try {
+    const { data, error } = await admin
+      .from('trips')
+      .select('id, status, start_date, end_date')
+      .neq('status', 'trip_completed')
+      .not('start_date', 'is', null)
+      .not('end_date', 'is', null)
+    if (error) {
+      console.warn('[auto-chase] stage sync: trips query failed, skipping:', error.message)
+      return moved
+    }
+    const today = now.toISOString().slice(0, 10)
+    for (const t of (data ?? []) as Array<{ id: string; status: string; start_date: string; end_date: string }>) {
+      try {
+        if (!stageSyncTarget(t, today)) continue // cheap pre-check before the activity lookup
+        const { data: changes } = await admin
+          .from('activity_feed')
+          .select('actor, created_at, metadata')
+          .eq('trip_id', t.id)
+          .eq('verb', 'status_changed')
+        const target = stageSyncTarget(t, today, lastHumanStatusChange((changes ?? []) as Parameters<typeof lastHumanStatusChange>[0]))
+        if (!target) continue
+        const { data: updated, error: updError } = await admin
+          .from('trips')
+          .update({ status: target })
+          .eq('id', t.id)
+          .eq('status', t.status)
+          .select('id')
+        if (updError) {
+          console.warn('[auto-chase] stage sync: update failed for trip', t.id, updError.message)
+          continue
+        }
+        if (!updated || updated.length === 0) continue // changed under us: leave it
+        moved.push({ trip_id: t.id, from: t.status, to: target })
+        const { error: actError } = await admin.from('activity_feed').insert({
+          trip_id: t.id,
+          actor: null,
+          verb: 'status_changed',
+          entity: { type: 'trip', id: t.id, label: target },
+          metadata: { from: t.status, to: target, source: 'dates', auto: true },
+        })
+        if (actError) console.warn('[auto-chase] stage sync: activity log failed for trip', t.id, actError.message)
+      } catch (e) {
+        console.warn('[auto-chase] stage sync failed for trip, continuing:', t.id, e instanceof Error ? e.message : e)
+      }
+    }
+  } catch (e) {
+    console.warn('[auto-chase] stage sync failed, continuing:', e instanceof Error ? e.message : e)
+  }
+  return moved
+}
+
+/**
+ * Auto-decide pass (Phase 4D): for every open question whose answer-by
+ * deadline passed within the last 48 hours (AUTO_DECIDE_WINDOW_HOURS), on
+ * trips that are not finished and have not switched auto_decide off, ask the
+ * database to decide it (auto_decide_question: clear leader only; ties, no
+ * answers, Own choice, date polls are refused there). Per-trip isolation;
+ * FAIL-SOFT when the function is not installed yet. The "We have an answer"
+ * email is NOT sent from here: the announcement step in the main loop finds
+ * the poll_closed activity row this call writes, same as for organizer decisions.
+ */
+async function autoDecidePass(admin: SupabaseClient, now: Date): Promise<AutoDecideSummary & { candidates: number }> {
+  const total: AutoDecideSummary & { candidates: number } = {
+    candidates: 0, attempted: 0, decided: 0, tied: 0, skipped: 0, errors: 0, rpcMissing: false,
+  }
+  try {
+    const { from, to } = autoDecideDeadlineBounds(now)
+    const { data, error } = await admin
+      .from('planning_sections')
+      .select('id, title, status, vote_deadline, metadata, trip_id, trips!inner(status, end_date, chase_settings)')
+      .neq('status', 'completed')
+      .gte('vote_deadline', from)
+      .lte('vote_deadline', to)
+    if (error) {
+      console.warn('[auto-chase] auto-decide: candidate query failed, skipping:', error.message)
+      return total
+    }
+    const byTrip = new Map<string, string[]>()
+    for (const row of (data ?? []) as unknown as Array<AutoDecideSectionRow & { trip_id: string; trips: unknown }>) {
+      const tripRow = (Array.isArray(row.trips) ? row.trips[0] : row.trips) as { status?: string | null; end_date?: string | null; chase_settings?: unknown } | undefined
+      if (!tripRow || !isAutoDecideCandidate(row, tripRow, now)) continue
+      const list = byTrip.get(row.trip_id) ?? []
+      list.push(row.id)
+      byTrip.set(row.trip_id, list)
+      total.candidates++
+    }
+    for (const [tripId, ids] of byTrip) {
+      try {
+        const r = await runAutoDecide({ rpc: (fn, args) => admin.rpc(fn, args) }, ids)
+        total.attempted += r.attempted
+        total.decided += r.decided
+        total.tied += r.tied
+        total.skipped += r.skipped
+        total.errors += r.errors
+        if (r.rpcMissing) {
+          total.rpcMissing = true
+          break // not installed yet: no point asking again for other trips
+        }
+      } catch (e) {
+        total.errors++
+        console.warn('[auto-chase] auto-decide failed for trip, continuing:', tripId, e instanceof Error ? e.message : e)
+      }
+    }
+  } catch (e) {
+    console.warn('[auto-chase] auto-decide pass failed, continuing:', e instanceof Error ? e.message : e)
+  }
+  return total
+}
+
 Deno.serve(async (req) => {
   const preflight = handleCorsPreflight(req)
   if (preflight) return preflight
@@ -365,6 +518,12 @@ Deno.serve(async (req) => {
     const todayStartIso = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString()
 
     const hasWaitlistColumn = await waitlistColumnExists(admin)
+
+    // ---- 0. What moves by itself (Phase 4D). Both passes are fail-soft and
+    // run BEFORE the reminder sweeps so the sweeps see fresh trip statuses
+    // and the "We have an answer" announcements see this run's decisions. ----
+    const stagesMoved = await syncTripStages(admin, now)
+    const autoDecide = await autoDecidePass(admin, now)
 
     // ---- 1. Load chase-enabled trips (opt-in via trips.chase_settings.enabled) ----
     const { data: trips, error: tripsError } = await admin
@@ -754,6 +913,103 @@ Deno.serve(async (req) => {
           })
         }
       }
+
+      // ---- j. "We have an answer" (Phase 4D): ONE email kind, once per
+      // decided question per person. Recipients = the people who were asked
+      // (active, not declined/cancelled), minus whoever made the decision.
+      // Found via the poll_closed activity row (organizer decisions and
+      // auto-decisions both log it) inside DECISION_ANNOUNCE_WINDOW_HOURS, so
+      // old decisions are never announced retroactively. Deduped forever by
+      // chase:decision:<sectionId>:<optionId>:<userId>:1, folded into the user's digest
+      // below (never a second email on the same day). ----
+      if (tripOpen && participantIds.length > 0) {
+        try {
+          const { data: activityRows } = await admin
+            .from('activity_feed')
+            .select('actor, created_at, entity, metadata')
+            .eq('trip_id', trip.id)
+            .eq('verb', 'poll_closed')
+            .gte('created_at', decisionAnnounceSince(now))
+          const recent = recentDecisionsFromActivity((activityRows ?? []) as Parameters<typeof recentDecisionsFromActivity>[0], now)
+          if (recent.length > 0) {
+            const { data: decidedRows } = await admin
+              .from('planning_sections')
+              .select('id, title, status, metadata, options(id, title, status, price, currency, price_type)')
+              .eq('trip_id', trip.id)
+              .in('id', recent.map((r) => r.sectionId))
+            const decided = (decidedRows ?? []) as unknown as DecidedSectionRow[]
+
+            // "<Name> is booking it": only when a real, still-open Book to-do exists.
+            const followupBySection = new Map<string, string>()
+            for (const d of decided) {
+              const f = d.metadata && typeof d.metadata === 'object' && !Array.isArray(d.metadata) ? (d.metadata as Record<string, unknown>).followup_action_id : null
+              if (typeof f === 'string') followupBySection.set(d.id, f)
+            }
+            const bookerBySection = new Map<string, string>()
+            if (followupBySection.size > 0) {
+              const { data: bookActions } = await admin
+                .from('trip_actions')
+                .select('id, assigned_to, completed_at')
+                .in('id', [...followupBySection.values()])
+              const openAssignee = new Map<string, string>()
+              for (const a of (bookActions ?? []) as Array<{ id: string; assigned_to: string | null; completed_at: string | null }>) {
+                if (!a.completed_at && a.assigned_to) openAssignee.set(a.id, a.assigned_to)
+              }
+              const assigneeIds = [...new Set(openAssignee.values())]
+              if (assigneeIds.length > 0) {
+                const { data: assigneeRows } = await admin.from('users').select('id, first_name, full_name').in('id', assigneeIds)
+                const nameOf = new Map<string, string>()
+                for (const u of (assigneeRows ?? []) as Array<{ id: string; first_name: string | null; full_name: string | null }>) {
+                  const first = u.first_name?.trim() || u.full_name?.trim().split(/\s+/)[0]
+                  if (first) nameOf.set(u.id, first)
+                }
+                for (const [sectionId, actionId] of followupBySection) {
+                  const who = openAssignee.get(actionId)
+                  const name = who ? nameOf.get(who) : undefined
+                  if (name) bookerBySection.set(sectionId, name)
+                }
+              }
+            }
+
+            // The activity row is only a hint (any participant can write one):
+            // the announcement is built from the section's own stored state.
+            const announcements: Array<{ r: (typeof recent)[number]; ann: NonNullable<ReturnType<typeof buildDecisionAnnouncement>> }> = []
+            for (const r of recent) {
+              const section = decided.find((d) => d.id === r.sectionId)
+              if (!section) continue
+              const ann = buildDecisionAnnouncement(section, APP_BASE_URL, trip.id, bookerBySection.get(section.id) ?? null, r.optionId)
+              if (ann) announcements.push({ r, ann })
+            }
+            const candidateKeys = announcements.flatMap(({ ann }) => participantIds.map((u) => decisionDedupeKey(ann.sectionId, ann.optionId, u)))
+            const alreadyAnnounced = new Set<string>()
+            if (candidateKeys.length > 0) {
+              const { data: sentRows } = await admin.from('notifications').select('dedupe_key').in('dedupe_key', candidateKeys)
+              for (const row of (sentRows ?? []) as Array<{ dedupe_key: string }>) alreadyAnnounced.add(row.dedupe_key)
+            }
+
+            for (const { r, ann } of announcements) {
+              for (const uid of decisionRecipients(participantIds, r.actor)) {
+                const key = decisionDedupeKey(r.sectionId, ann.optionId, uid)
+                if (alreadyAnnounced.has(key)) continue
+                items.push({
+                  tripId: trip.id,
+                  tripName: trip.name,
+                  userId: uid,
+                  kind: DECISION_KIND,
+                  entityType: 'planning_section',
+                  entityId: r.sectionId,
+                  dedupeKey: key,
+                  description: `We have an answer: ${ann.headline}`,
+                  deepLink: ann.link,
+                  decision: { headline: ann.headline, details: ann.details },
+                })
+              }
+            }
+          }
+        } catch (decisionError) {
+          console.warn('[auto-chase] decision announcements failed for trip, continuing:', trip.id, decisionError instanceof Error ? decisionError.message : decisionError)
+        }
+      }
       } catch (tripError) {
         console.error('[auto-chase] trip failed, continuing with the next one:', trip.id, tripError)
       }
@@ -889,6 +1145,13 @@ Deno.serve(async (req) => {
       const maxRemindersByTrip = new Map(chaseTrips.map((t) => [t.id, t.settings.max_reminders]))
 
       for (const item of items) {
+        // "We have an answer" is announced once, ever: its dedupe key (seq 1)
+        // is checked when the item is built, so it is outside the reminder cap
+        // and can never be escalated to the blockers board.
+        if (item.kind === DECISION_KIND) {
+          sendable.push({ ...item, seq: 1 })
+          continue
+        }
         const priorForItem = prior.filter(
           (n) => n.user_id === item.userId && n.kind === item.kind && n.entity_id === item.entityId
         )
@@ -968,7 +1231,9 @@ Deno.serve(async (req) => {
           }
           sectionsByTrip.set(i.tripId, section)
         }
-        if (i.actionReminder) {
+        if (i.decision) {
+          ;(section.decisions ??= []).push({ headline: i.decision.headline, details: i.decision.details, link: i.deepLink })
+        } else if (i.actionReminder) {
           section.actionRows.push({
             title: i.actionReminder.title,
             deadlineLabel: i.actionReminder.deadlineLabel,
@@ -984,8 +1249,14 @@ Deno.serve(async (req) => {
       const rendered = renderDigestEmail({
         greetingName,
         sections: digestSections,
-        // One trip: the button opens its to-dos. Several: the app home.
-        appUrl: digestSections.length === 1 ? digestSections[0].todosLink! : APP_BASE_URL,
+        // One trip: the button opens its to-dos (or, for a lone "We have an
+        // answer", that question). Several trips: the app home.
+        appUrl:
+          digestSections.length === 1
+            ? digestSections[0].actionRows.length + digestSections[0].otherLines.length === 0 && digestSections[0].decisions?.length === 1
+              ? digestSections[0].decisions[0].link
+              : digestSections[0].todosLink!
+            : APP_BASE_URL,
       })
 
       // Never send an empty digest. Structurally every user in byUser has
@@ -1048,7 +1319,7 @@ Deno.serve(async (req) => {
 
       // ---- 4. Log every item to notifications (dedupe_key enforces caps) ----
       for (const item of userItems) {
-        const dedupeKey = `chase:${item.kind}:${item.entityId}:${userId}:${item.seq}`
+        const dedupeKey = item.dedupeKey ?? `chase:${item.kind}:${item.entityId}:${userId}:${item.seq}`
         const { error: insertError } = await admin.from('notifications').insert({
           trip_id: item.tripId,
           user_id: userId,
@@ -1078,6 +1349,9 @@ Deno.serve(async (req) => {
       waitlist_offers_sent: waitlistOffersSent,
       waitlist_feature_available: hasWaitlistColumn,
       escalations,
+      stages_moved: stagesMoved,
+      auto_decide: autoDecide,
+      decision_announcements_found: items.filter((i) => i.kind === DECISION_KIND).length,
       chase_drafts: chaseDrafts,
       email_channel_available: emailSender.available,
     }

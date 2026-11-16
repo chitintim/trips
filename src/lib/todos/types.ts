@@ -223,6 +223,8 @@ export interface Todo {
   progress?: { done: number; total: number }
   /** For the organiser's freeze to-do: how many people it unblocks. */
   unblocks?: number
+  /** Organiser decide / tie / close-answers: the title without the "(deadline passed, 7 of 9 answered)" reason, for one-line summaries. */
+  shortTitle?: string
   /** For `confirm_payment`: the person who paid (the other party). */
   counterpartyId?: string
 }
@@ -262,10 +264,12 @@ export interface WaitingOnItem {
   userIds: string[]
   /** userId -> that person's `Todo.id` for this item (an item can group different to-do ids). */
   todoIds: Record<string, string>
-  /** Optional secondary line ("Unblocks 9 people", "4 payments to confirm"). */
+  /** Optional secondary line ("6 people can't settle until then", "4 payments to confirm"). */
   detail?: string
   /** For the organiser's freeze item: how many people it unblocks (the number behind `detail`). */
   unblocks?: number
+  /** Organiser decide / tie / close-answers items: the title without the reason suffix. */
+  shortTitle?: string
   /** Present for answers and "Everyone" to-dos: "7 of 9 answered" / "8 of 10 done". */
   done?: number
   total?: number

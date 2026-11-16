@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Badge, Card } from '../../../components/ui'
 import { useYourCostModel } from '../../../lib/queries/useYourCostModel'
 import { buildYourCostView, type YourCostRowView } from '../lib/yourCostView'
+import { safeExternalUrl, organizerLinkLabel } from '../lib/organizerLink'
 import type { Trip } from '../../../types'
 
 const CHIP_VARIANT: Record<string, 'neutral' | 'info' | 'success' | 'warning'> = {
@@ -21,9 +22,11 @@ function Row({ row, onOpen }: { row: YourCostRowView; onOpen: (search: string) =
       </div>
       <div className="shrink-0 text-right">
         <p className="text-sm font-medium tabular-nums text-[var(--text-primary)]">{row.amount}</p>
-        <Badge variant={CHIP_VARIANT[row.chip] ?? 'neutral'} size="sm" className="mt-0.5">
-          {row.chip}
-        </Badge>
+        {row.chip && (
+          <Badge variant={CHIP_VARIANT[row.chip] ?? 'neutral'} size="sm" className="mt-0.5">
+            {row.chip}
+          </Badge>
+        )}
       </div>
     </>
   )
@@ -58,6 +61,8 @@ export function YourCostCard({ trip }: { trip: Trip }) {
   const view = buildYourCostView(model)
   const showRows = openOverride ?? view.defaultOpen
   const hasDetail = view.rows.length > 0
+  const organizerHref = safeExternalUrl(trip.full_cost_link)
+  const organizerLabel = organizerLinkLabel(trip.full_cost_link)
 
   return (
     <Card>
@@ -107,9 +112,14 @@ export function YourCostCard({ trip }: { trip: Trip }) {
             {w}
           </p>
         ))}
-        {trip.full_cost_link && (
-          <a href={trip.full_cost_link} target="_blank" rel="noreferrer" className="inline-block text-sm text-accent-700 hover:underline">
-            See full cost breakdown →
+        {organizerHref && organizerLabel && (
+          <a
+            href={organizerHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block text-xs text-[var(--text-secondary)] underline decoration-dotted"
+          >
+            {organizerLabel}
           </a>
         )}
       </Card.Content>

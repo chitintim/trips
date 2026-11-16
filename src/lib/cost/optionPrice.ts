@@ -83,6 +83,13 @@ export interface PriceActual {
   currency: string
   /** The person's own share, when known (their expense split). Otherwise total / headcount. */
   perPerson?: number
+  /**
+   * The viewer's own share of the matched expense(s). A number when they are on the expense; `null` when they are
+   * not (the expense is not shared with them). Omit when unknown (no viewer): the old "total / headcount" rule applies.
+   */
+  viewerShare?: number | null
+  /** How many people the expense(s) were actually split between (never the trip headcount). */
+  splitCount?: number
 }
 
 export interface PriceContext {
@@ -138,6 +145,10 @@ export interface OptionPrice {
   basisLine: string
   /** by_group_size only. */
   sensitivity: TierSensitivityInfo | null
+  /** Set when the figure comes from a real expense that knows who it was split between. `viewerShare` null = viewer not on it. */
+  actualSplit: { viewerShare: number | null; splitCount: number } | null
+  /** The quiet "listed at £248.70" line, only when a real expense replaced a different listed price. */
+  listedLine: string | null
 }
 
 function normaliseHeadcount(headcount: InScopeHeadcount | number): { count: number; isEstimate: boolean } {
@@ -210,6 +221,8 @@ export function computeOptionPrice(
   let totalMinor = 0
   let perPersonMinor = 0
   let sensitivity: TierSensitivityInfo | null = null
+  let actualSplit: OptionPrice['actualSplit'] = null
+  let listedTotalMinor: number | null = null
 
   const listedCurrency = optionCurrency ?? currency
   if (hasListedPrice || tiers.length > 0) {
@@ -251,9 +264,16 @@ export function computeOptionPrice(
     sensitivity = null
   }
   if (context.actual) {
+    listedTotalMinor = totalMinor
     totalMinor = toMinorUnits(context.actual.total, currency)
-    perPersonMinor =
-      context.actual.perPerson != null ? toMinorUnits(context.actual.perPerson, currency) : splitMinor(totalMinor, divisor)
+    const a = context.actual
+    if (a.viewerShare !== undefined && a.splitCount != null && a.splitCount > 0) {
+      // A real expense knows who it was split between: never divide it by the trip headcount.
+      actualSplit = { viewerShare: a.viewerShare, splitCount: a.splitCount }
+      perPersonMinor = a.viewerShare != null ? toMinorUnits(a.viewerShare, currency) : splitMinor(totalMinor, a.splitCount)
+    } else {
+      perPersonMinor = a.perPerson != null ? toMinorUnits(a.perPerson, currency) : splitMinor(totalMinor, divisor)
+    }
     certainty = 'paid'
     sensitivity = null
   }
@@ -277,7 +297,9 @@ export function computeOptionPrice(
   const money = (v: number) => formatMoney(v, currency, { mode: certainty === 'paid' ? 'exact' : 'headline' })
   const hc = context.headcountNoun ? `${count} ${context.headcountNoun}` : headcountLabel(count, headcountIsEstimate, context.confirmationEnabled)
   let basisLine: string
-  if (certainty === 'paid') {
+  if (certainty === 'paid' && actualSplit) {
+    basisLine = `${money(total)} total · split between ${actualSplit.splitCount} · ${word}`
+  } else if (certainty === 'paid') {
     basisLine = `${money(total)} total · ${hc} · ${word}`
   } else if (effectiveBasis === 'each' && !bookingLive) {
     basisLine = `per person · ${word}`
@@ -289,7 +311,22 @@ export function computeOptionPrice(
     basisLine = `${money(total)} total · ${hc} · ${word}`
   }
 
-  const headline = `${formatMoney(perPerson, currency, approximate ? { estimate: true } : { mode: certainty === 'paid' ? 'exact' : 'headline' })} each`
+  // The listed estimate stays as a quiet secondary line when a real expense replaced a different figure.
+  let listedLine: string | null = null
+  if (context.actual && hasListedPrice && listedTotalMinor != null && listedTotalMinor !== totalMinor && optionCurrency === currency) {
+    const unit = formatMoney(entered as number, currency, { mode: 'headline' })
+    listedLine = `listed at ${effectiveBasis === 'each' ? `${unit} each` : effectiveBasis === 'per_night' ? `${unit}/night` : unit}`
+    basisLine = `${basisLine} · ${listedLine}`
+  }
+  // Not on the expense: the headline already says total, split and paid; keep only the quiet listed line.
+  if (actualSplit && actualSplit.viewerShare == null) basisLine = listedLine ?? ''
+
+  const exactMoney = (v: number) => formatMoney(v, currency, { mode: 'exact' })
+  const headline = actualSplit
+    ? actualSplit.viewerShare != null
+      ? `${exactMoney(perPerson)} — your share`
+      : `${exactMoney(total)} total · split between ${actualSplit.splitCount} · paid`
+    : `${formatMoney(perPerson, currency, approximate ? { estimate: true } : { mode: certainty === 'paid' ? 'exact' : 'headline' })} each`
 
   return {
     perPerson,
@@ -309,5 +346,7 @@ export function computeOptionPrice(
     headline,
     basisLine,
     sensitivity,
+    actualSplit,
+    listedLine,
   }
 }

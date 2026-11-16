@@ -15,7 +15,6 @@ import { useQuestionList } from '../lib/useQuestionList'
 import { daysBannerText, defaultLens, type PlanLens } from '../lib/questionsModel'
 import { PlanItemSheet } from './PlanItemSheet'
 import { AddToPlanSheet } from './AddToPlanSheet'
-import { ScheduleItSheet } from './ScheduleItSheet'
 import { OrganizeSheet } from './OrganizeSheet'
 import type { Trip } from '../../../types'
 
@@ -78,7 +77,6 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
   const [selectedItem, setSelectedItem] = useState<PlanItem | null>(null)
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [addSheetDefaultIsVote, setAddSheetDefaultIsVote] = useState(false)
-  const [scheduleItem, setScheduleItem] = useState<PlanItem | null>(null)
   const [organizeOpen, setOrganizeOpen] = useState(false)
 
   // Deep link -> item: open its sheet once the plan has loaded. A question
@@ -117,14 +115,6 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
     } finally {
       setCreatingStarters(false)
     }
-  }
-
-  // "Put it on the plan" from a question's Manage sheet: find the decided option's plan item and open the scheduler.
-  const handleScheduleOption = (_sectionId: string, optionId: string) => {
-    const match = items.find((i) => i.optionId === optionId)
-    if (!match) return
-    setSelectedItem(null)
-    setScheduleItem(match)
   }
 
   const handleNavigateToExpense = (expenseId: string) => {
@@ -186,7 +176,6 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
           trip={trip}
           list={questionList}
           canManage={isOrganizer}
-          onSchedule={handleScheduleOption}
           highlight={focus?.kind === 'question' ? { id: focus.id, nonce: focus.nonce } : null}
           onAsk={() => openAddSheet(true)}
           onCreateStarters={handleCreateStarterQuestions}
@@ -222,16 +211,9 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
         isOrganizer={isOrganizer}
         headcount={headcount}
         onNavigateToExpense={onNavigate ? handleNavigateToExpense : undefined}
-        onScheduleOption={handleScheduleOption}
-        onScheduleIt={(item) => {
-          setSelectedItem(null)
-          setScheduleItem(item)
-        }}
       />
 
       {isOrganizer && <AddToPlanSheet isOpen={addSheetOpen} onClose={() => setAddSheetOpen(false)} trip={trip} defaultIsVote={addSheetDefaultIsVote} />}
-
-      <ScheduleItSheet isOpen={!!scheduleItem} onClose={() => setScheduleItem(null)} trip={trip} item={scheduleItem} />
 
       {isOrganizer && <OrganizeSheet isOpen={organizeOpen} onClose={() => setOrganizeOpen(false)} trip={trip} />}
     </div>

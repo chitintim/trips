@@ -13,7 +13,7 @@ import {
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import { useTrip } from '../../../lib/queries/useTrip'
-import { useYourCostHeadline } from '../../../lib/queries/useYourCostModel'
+import { useRoughConversion, useYourCostHeadline } from '../../../lib/queries/useYourCostModel'
 import type { Trip } from '../../../types'
 import { useUpdateConfirmationStatus, ConfirmationStatus, ConditionalType } from '../../../lib/queries/useConfirmations'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
@@ -104,6 +104,7 @@ interface StatusModalProps {
    * estimate; when absent the organizer's rough figure (trips.estimated_accommodation_cost) is shown instead.
    */
   yourCostText?: string | null
+  roughConversion?: { baseCurrency: string; convertedBase: number | null } | null
 }
 
 /**
@@ -167,15 +168,16 @@ type Step = 'answer' | 'waiting-on' | 'condition-detail' | 'review'
  * "Your cost" model Today uses, so "What 'I'm in' means" quotes the real
  * figure whenever the plan has prices.
  */
-export function StatusModal(props: Omit<StatusModalProps, 'yourCostText'>) {
+export function StatusModal(props: Omit<StatusModalProps, 'yourCostText' | 'roughConversion'>) {
   const { data: trip } = useTrip(props.tripId)
   if (!trip) return <StatusModalBody {...props} />
   return <StatusModalWithCost {...props} trip={trip} />
 }
 
-function StatusModalWithCost({ trip, ...props }: Omit<StatusModalProps, 'yourCostText'> & { trip: Trip }) {
+function StatusModalWithCost({ trip, ...props }: Omit<StatusModalProps, 'yourCostText' | 'roughConversion'> & { trip: Trip }) {
   const yourCostText = useYourCostHeadline(trip)
-  return <StatusModalBody {...props} yourCostText={yourCostText} />
+  const roughConversion = useRoughConversion(trip)
+  return <StatusModalBody {...props} yourCostText={yourCostText} roughConversion={roughConversion} />
 }
 
 function StatusModalBody({
@@ -187,9 +189,10 @@ function StatusModalBody({
   capacityLimit,
   confirmedCount,
   yourCostText,
+  roughConversion,
 }: StatusModalProps) {
   const { data: trip } = useTrip(tripId)
-  const costLine = buildRsvpCostLine(trip, yourCostText)
+  const costLine = buildRsvpCostLine(trip, yourCostText, roughConversion)
   const updateStatus = useUpdateConfirmationStatus(tripId)
   const { showToast } = useToast()
 

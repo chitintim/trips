@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Modal, Button, Input, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { supabase } from '../../../lib/supabase'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
@@ -11,6 +11,11 @@ interface PasteALinkSheetProps {
   tripId: string
   /** Called with the extracted option draft once the user approves it — the caller opens OptionEditorSheet pre-filled for final review/section choice. */
   onApproved: (draft: OptionDraft) => void
+  /**
+   * A link already typed or pasted in the Add form's title field. When given, the sheet opens with it filled in
+   * and pulls the details straight away; the review-before-use step is unchanged.
+   */
+  initialUrl?: string
 }
 
 /**
@@ -27,7 +32,7 @@ interface PasteALinkSheetProps {
  * configured, function not served, network error) — this degrades
  * gracefully to a toast + manual entry instead of blocking the flow.
  */
-export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteALinkSheetProps) {
+export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved, initialUrl }: PasteALinkSheetProps) {
   const { showToast } = useToast()
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
@@ -52,8 +57,9 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(closeAndReset)
 
-  const handleFetch = async () => {
-    if (!url.trim()) return
+  const handleFetch = async (override?: string) => {
+    const target = (override ?? url).trim()
+    if (!target) return
     setLoading(true)
     setError(null)
     setPreview(null)
@@ -61,7 +67,7 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
 
     try {
       const { data, error: invokeError } = await supabase.functions.invoke('ingest', {
-        body: { trip_id: tripId, url: url.trim() },
+        body: { trip_id: tripId, url: target },
       })
 
       if (invokeError) throw invokeError
@@ -72,20 +78,35 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
         setPreview(result.option)
       } else {
         setNonOptionWarning(
-          `This looks like a ${result.classification}, not an option to compare. Try the dedicated "${result.classification}" quick-add instead, or enter it manually.`
+          `This looks like a ${result.classification}, not something to choose between. You can still type it in yourself.`
         )
       }
     } catch {
-      setError('Could not reach the extraction service. You can still add this option manually.')
+      setError('Couldn’t read that link. You can still type the details in yourself.')
       showToast({
         type: 'warning',
-        message: 'Link extraction unavailable',
-        description: 'Falling back to manual entry.',
+        message: 'Couldn’t read that link',
+        description: 'Type the details in yourself instead.',
       })
     } finally {
       setLoading(false)
     }
   }
+
+  // Opened from a pasted link: fill it in and pull the details once per opening.
+  const autoFetchedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!isOpen) {
+      autoFetchedFor.current = null
+      return
+    }
+    const link = initialUrl?.trim()
+    if (!link || autoFetchedFor.current === link) return
+    autoFetchedFor.current = link
+    setUrl(link)
+    void handleFetch(link)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, initialUrl])
 
   const handleApprove = () => {
     if (!preview) return
@@ -99,16 +120,16 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={handleClose} size="md" title="Add from a link">
+    <Modal isOpen={isOpen} onClose={handleClose} size="md" title="Pull details from a link">
       <div className="space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">
-          Paste an Airbnb, Booking.com, restaurant, or Google Maps link — we'll try to pull out the title, price, and
-          location for you to review.
+          Paste an Airbnb, Booking.com, restaurant, or Google Maps link. We’ll try to pull out the title, price and
+          place for you to check before anything is used.
         </p>
 
         <div className="flex gap-2">
           <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://..." fullWidth autoFocus />
-          <Button onClick={handleFetch} isLoading={loading} disabled={!url.trim()}>
+          <Button onClick={() => handleFetch()} isLoading={loading} disabled={!url.trim()}>
             Fetch
           </Button>
         </div>
@@ -117,7 +138,7 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
           <div className="bg-warn-50 border border-warn-200 text-warn-800 rounded-[var(--radius-md)] p-3 text-sm flex items-center justify-between gap-3">
             <span>{error}</span>
             <Button size="sm" variant="outline" onClick={handleManualFallback}>
-              Enter manually
+              Type it in
             </Button>
           </div>
         )}
@@ -130,7 +151,7 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
 
         {preview && (
           <div className="border border-[var(--border-default)] rounded-[var(--radius-md)] p-4 space-y-2">
-            <p className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">Review before adding</p>
+            <p className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide">Check before using</p>
             <p className="font-semibold text-[var(--text-primary)]">{preview.title}</p>
             {preview.description && <p className="text-sm text-[var(--text-secondary)]">{preview.description}</p>}
             {preview.price != null && (
@@ -140,7 +161,7 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
             )}
             {preview.place_name && <p className="text-xs text-[var(--text-muted)]">📍 {preview.place_name}</p>}
             <div className="flex justify-end pt-2">
-              <Button onClick={handleApprove}>Approve & continue</Button>
+              <Button onClick={handleApprove}>Use these details</Button>
             </div>
           </div>
         )}

@@ -134,4 +134,28 @@ describe('review D1/D2/D3/E1 in the view', () => {
     const v = run([expense('e1', 300, 'a')], [settlement('s1', 'me', 'a', 100, 'marked_paid')])
     expect(v.headline).not.toMatch(/You owe/)
   })
+
+  it('Sicily: sent twice what is owed -> says so, never "Nothing more to pay", points at Settle up', () => {
+    const dup = (id: string) => settlement(id, 'me', 'a', 100, 'marked_paid')
+    const v = run([expense('e1', 300, 'a')], [dup('s1'), dup('s2')])
+    expect(v.headline).toBe("You've sent £100.00 more than you owe")
+    expect(v.note).toBe('£200.00 sent, waiting for Sam to confirm but you only owe £100.00')
+    expect(v.rows.some((r) => r.label === 'Nothing more to pay once confirmed')).toBe(false)
+    expect(v.rows[v.rows.length - 1]).toMatchObject({ label: 'More than you owe, if all of it is confirmed', amount: '£100.00' })
+    expect(v.settleHint).toBe('Some payments look recorded twice — check Settle up')
+    expect(v.settleHintLink).toBe('?open=settle')
+    expect(v.tone).toBe('owe')
+  })
+
+  it('sent exactly what is owed: unchanged, no duplicate hint', () => {
+    const v = run([expense('e1', 300, 'a')], [settlement('s1', 'me', 'a', 100, 'marked_paid')])
+    expect(v.headline).toBe('£100.00 sent — waiting for Sam to confirm')
+    expect(v.settleHint).toBeNull()
+  })
+
+  it('overpaid with different (not duplicate) payments gets no duplicate hint', () => {
+    const v = run([expense('e1', 300, 'a')], [settlement('s1', 'me', 'a', 100, 'marked_paid'), settlement('s2', 'me', 'a', 30, 'marked_paid')])
+    expect(v.headline).toBe("You've sent £30.00 more than you owe")
+    expect(v.settleHint).toBeNull()
+  })
 })

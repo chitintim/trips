@@ -70,6 +70,7 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
   const tripData = trip.data
   const participantData = participants.data
   const allParticipantData = allParticipants.data
+  // The Ideas bucket is ignored by the to-dos engine itself (computeTodos).
   const sectionData = sections.data
   const voteData = votes.data
   const actionData = actions.data

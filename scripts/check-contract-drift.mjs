@@ -56,6 +56,7 @@ const FILE_PAIRS = [
     '../../features/decisions/lib/decisionShapes': '../todos/deps/decisionShapes',
     '../../features/people/lib/inScopePeople': '../todos/deps/inScopePeople',
   }],
+  ['src/lib/ideasBucket.ts', 'supabase/functions/_shared/ideasBucket.ts', 'ideas', {}],
   ['src/lib/todos/types.ts', 'supabase/functions/_shared/todos/types.ts', 'todos', {
     '../../types/database.types': './deps/json',
     '../tripStatus': './deps/tripStatus',

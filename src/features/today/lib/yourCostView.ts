@@ -6,6 +6,7 @@
 import { formatMoney, formatMoneyRange } from '../../../lib/money/format'
 import { CERTAINTY_WORD, type Certainty } from '../../../lib/cost/optionPrice'
 import { DEEP_LINKS } from '../../../lib/todos/copy'
+import { formatRoughEstimate } from '../../people/lib/roughCost'
 import type { YourCostLine, YourCostModel } from '../../../lib/cost/yourCost'
 
 export interface YourCostRowView {
@@ -54,7 +55,15 @@ function linkFor(line: YourCostLine): string | null {
   return null
 }
 
+/** The pre-trip estimate is worth showing next to the real share only when it covered a meaningful part of it. */
+export const ESTIMATE_COMPARISON_MIN_COVERAGE = 0.5
+
+export function showEstimateComparison(estimateHigh: number, share: number): boolean {
+  return share > 0 && estimateHigh >= share * ESTIMATE_COMPARISON_MIN_COVERAGE
+}
+
 function amountFor(line: YourCostLine, currency: string): string {
+  if (line.notShared) return 'Not shared with you'
   if (line.low == null || line.high == null) {
     // No rate: show it in its own currency (each currency separately, never one range across them); it is left out of the total.
     return line.nativeByCurrency.map((c) => formatMoneyRange(c.low, c.high, c.currency, { estimate: true })).join(' · ')
@@ -63,6 +72,7 @@ function amountFor(line: YourCostLine, currency: string): string {
 }
 
 function detailFor(line: YourCostLine, currency: string): string | null {
+  if (line.notShared) return null
   const parts: string[] = []
   if (line.qualifier === 'open' || line.qualifier === 'your_pick' || line.qualifier === 'your_picks' || line.qualifier === 'on_plan') {
     parts.push(line.note)
@@ -85,7 +95,7 @@ function rowFor(line: YourCostLine, currency: string): YourCostRowView {
     id: line.id,
     label: line.kind === 'estimate' ? ROUGH_ESTIMATE_LABEL : line.label,
     amount: amountFor(line, currency),
-    chip: CERTAINTY_WORD[line.certainty],
+    chip: line.notShared ? '' : CERTAINTY_WORD[line.certainty],
     certainty: line.certainty,
     detail: detailFor(line, currency),
     link: linkFor(line),
@@ -95,9 +105,9 @@ function rowFor(line: YourCostLine, currency: string): YourCostRowView {
 export function buildYourCostView(model: YourCostModel): YourCostView {
   const cur = model.currency
   const rows = model.lines.map((l) => rowFor(l, cur))
-  const countable = model.lines.filter((l) => l.low != null)
+  const countable = model.lines.filter((l) => !l.notShared && l.low != null)
   const onlyRough = model.lines.length > 0 && model.lines.every((l) => l.kind === 'estimate')
-  const divided = model.lines.some((l) => l.dividedByHeadcount)
+  const divided = model.lines.some((l) => !l.notShared && l.dividedByHeadcount)
 
   const warnings: string[] = []
   if (model.missingRates.length > 0) {
@@ -136,10 +146,29 @@ export function buildYourCostView(model: YourCostModel): YourCostView {
       headline: `Your share: ${formatMoney(model.share, cur, { mode: 'exact' })}`,
       subline: 'Your part of every expense on this trip.',
       spent: null,
-      comparison: countable.length > 0 ? `Estimated before the trip: ${model.estimateForComparison?.text ?? model.totals.text}` : null,
+      comparison:
+        countable.length > 0 && showEstimateComparison((model.estimateForComparison ?? model.totals).high, model.share)
+          ? `Estimated before the trip: ${model.estimateForComparison?.text ?? model.totals.text}`
+          : null,
       empty: null,
       // The planning lines are history now; keep them folded.
       defaultOpen: false,
+    }
+  }
+
+  // Nothing of theirs: say exactly why, never estimate.
+  if (model.emptyReason) {
+    return {
+      ...base,
+      mode: 'estimate',
+      headline: null,
+      subline: null,
+      spent: null,
+      comparison: null,
+      empty: {
+        title: model.emptyReason === 'not_going' ? "You're not going on this trip" : 'You have no costs recorded on this trip.',
+        body: model.emptyReason === 'not_going' ? 'There is no cost to estimate for you.' : 'Expenses shared with you would show up here.',
+      },
     }
   }
 
@@ -162,13 +191,13 @@ export function buildYourCostView(model: YourCostModel): YourCostView {
   // Only the organiser's rough figure so far: say exactly that, never as "your cost".
   if (onlyRough) {
     const line = countable[0]
-    const amount = line.low != null ? formatMoney(line.low, cur) : formatMoney(line.native.low, line.native.currency)
+    const rough = formatRoughEstimate(line.native.low, line.native.currency, cur, line.low)
     return {
       ...base,
       mode: 'estimate',
       rows: [],
       basis: null,
-      headline: `${ROUGH_ESTIMATE_LABEL}: ~${amount} each`,
+      headline: `${ROUGH_ESTIMATE_LABEL}: ${rough}`,
       subline: 'Nothing is priced yet. This is replaced by real prices as the group decides.',
       spent,
       comparison: null,

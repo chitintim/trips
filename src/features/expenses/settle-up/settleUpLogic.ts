@@ -7,7 +7,7 @@
  * MUST keep reading legacy snapshots for a trip that already has one).
  */
 import { minimizeTransactions, getUserTransactions, type Person, type Transaction } from '../../../lib/debtMinimization'
-import { fromMinorUnits } from '../../../lib/money'
+import { fromMinorUnits, toMinorUnits } from '../../../lib/money'
 
 /** Matches computeBalances' BALANCE_EPSILON_MINOR=1 threshold, currency-aware (0.01 for GBP/USD/EUR, 1 for JPY, 0.001 for BHD/KWD/JOD/OMR) -- see the doc comment on minimizeTransactions' `epsilon` param for why a hardcoded 0.01 was wrong. */
 export function balanceEpsilonMajor(currency: string): number {
@@ -179,18 +179,129 @@ export function computePendingMismatches(
 }
 
 /**
- * Filters freshly-recomputed suggested payments (about to be inserted by a
- * (re)freeze) to exclude any from/to pair that already has a pending
- * ('marked_paid') settlement row for it -- that payment is real history
- * awaiting confirmation, not something to duplicate. computePendingMismatches
- * above is what surfaces an amount that has since drifted, instead of
- * silently inserting a second, conflicting suggestion for the same pair.
+ * Treats payments the payer has already marked as paid (status 'marked_paid',
+ * awaiting the receiver's confirmation) as sent, for the purpose of working out
+ * what is STILL left to suggest. balances.ts deliberately counts only
+ * 'confirmed' rows (money not yet confirmed is not yet a balance), so without
+ * this a freeze or refreeze recomputes the same debts again and suggests them a
+ * second time. Only rows in the trip's base currency are promoted: balances
+ * have no per-row fx for settlements, so a payment in another currency cannot
+ * honestly reduce a base-currency debt. The returned rows are for the maths
+ * only, never written back.
  */
-export function excludePendingPairs(suggested: Transaction[], settlements: Settlement[]): Transaction[] {
-  const pendingPairs = new Set(
-    settlements.filter((s) => s.status === 'marked_paid').map((s) => `${s.from_user_id}:${s.to_user_id}`)
+export function withSentPaymentsCounted(settlements: Settlement[], baseCurrency: string): Settlement[] {
+  // A payment recorded twice is ONE payment: count one row per duplicate group
+  // (and none when a confirmed row in the group is already in the balances).
+  const notCounted = new Set<string>()
+  for (const g of findDuplicatePayments(settlements, baseCurrency)) {
+    const hasConfirmed = g.rows.some((r) => r.status === 'confirmed')
+    g.rows.forEach((r, i) => {
+      if (r.status === 'marked_paid' && (hasConfirmed || i > 0)) notCounted.add(r.id)
+    })
+  }
+  return settlements.map((s) =>
+    s.status === 'marked_paid' && !notCounted.has(s.id) && (s.currency ?? baseCurrency) === baseCurrency ? { ...s, status: 'confirmed' } : s
   )
-  return suggested.filter((t) => !pendingPairs.has(`${t.from}:${t.to}`))
+}
+
+/**
+ * What is still left to pay: computeSuggestedPayments over the balances with
+ * already-sent (marked_paid) base-currency payments counted. A pair that has
+ * sent in full gets no suggestion, a partial payment shrinks it, and an
+ * overpayment flips it into the reverse suggestion (never a negative amount).
+ * Used for the pre-freeze list and for the rows a (re)freeze inserts. Do NOT
+ * use it for computePendingMismatches, which must compare a pending row with
+ * the debt as if that row did not exist.
+ */
+export function computeRemainingSuggestions(
+  expenses: ExpenseWithDetails[],
+  settlements: Settlement[],
+  people: SettleUpPerson[],
+  baseCurrency: string,
+  simplify: boolean,
+  carryovers: SettlementCarryover[] = []
+): Transaction[] {
+  return dedupeTransactions(
+    computeSuggestedPayments(expenses, withSentPaymentsCounted(settlements, baseCurrency), people, baseCurrency, simplify, carryovers)
+  )
+}
+
+/** Drops repeated identical (from, to, amount) suggestions so a freeze can never insert the same payment twice. */
+export function dedupeTransactions(transactions: Transaction[]): Transaction[] {
+  const seen = new Set<string>()
+  return transactions.filter((t) => {
+    const key = `${t.from}:${t.to}:${t.amount}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+export interface DuplicatePaymentGroup {
+  key: string
+  from: string
+  to: string
+  amount: number
+  currency: string
+  /** Oldest first (by created_at, then id). Always at least two rows. */
+  rows: Settlement[]
+}
+
+/** Two rows count as the same payment only if created within this window (mirrors remove_duplicate_settlement). */
+export const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Detection for payments recorded twice: two or more NON-suggested settlement
+ * rows (marked_paid or confirmed) between the same pair with the same amount
+ * and currency, each created within 24 hours of the previous one. It is only a
+ * hint, since two genuine identical payments are possible, so nothing acts on
+ * it automatically. Suggested rows are ignored (they are proposals, and a
+ * refreeze replaces them). Rows further apart than 24h are separate payments.
+ */
+export function findDuplicatePayments(settlements: Settlement[], baseCurrency: string): DuplicatePaymentGroup[] {
+  const groups = new Map<string, DuplicatePaymentGroup>()
+  for (const s of settlements) {
+    if (s.status === 'suggested') continue
+    const currency = s.currency ?? baseCurrency
+    const key = `${s.from_user_id}:${s.to_user_id}:${toMinorUnits(s.amount, currency)}:${currency}`
+    const g = groups.get(key)
+    if (g) g.rows.push(s)
+    else groups.set(key, { key, from: s.from_user_id, to: s.to_user_id, amount: s.amount, currency, rows: [s] })
+  }
+  const out: DuplicatePaymentGroup[] = []
+  for (const g of groups.values()) {
+    if (g.rows.length < 2) continue
+    const sorted = [...g.rows].sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? '') || a.id.localeCompare(b.id))
+    let cluster: Settlement[] = []
+    const flush = () => {
+      if (cluster.length > 1) out.push({ ...g, key: `${g.key}:${cluster[0].id}`, rows: cluster })
+      cluster = []
+    }
+    for (const r of sorted) {
+      const prev = cluster[cluster.length - 1]
+      if (prev && !withinDuplicateWindow(prev, r)) flush()
+      cluster.push(r)
+    }
+    flush()
+  }
+  return out
+}
+
+/** True when two rows were created within 24h of each other (rows with no timestamp are assumed close). */
+export function withinDuplicateWindow(a: Pick<Settlement, 'created_at'>, b: Pick<Settlement, 'created_at'>): boolean {
+  if (!a.created_at || !b.created_at) return true
+  return Math.abs(new Date(a.created_at).getTime() - new Date(b.created_at).getTime()) < DUPLICATE_WINDOW_MS
+}
+
+/**
+ * Duplicate groups that still need a human: at least one row is not yet
+ * confirmed (so it can be removed). Freeze is blocked while any exist, because
+ * the amounts to suggest would otherwise rest on a payment that may not be real.
+ * A group of only confirmed rows is already in the balances and cannot be
+ * removed here, so it does not block.
+ */
+export function unresolvedDuplicateGroups(settlements: Settlement[], baseCurrency: string): DuplicatePaymentGroup[] {
+  return findDuplicatePayments(settlements, baseCurrency).filter((g) => g.rows.some((r) => r.status === 'marked_paid'))
 }
 
 /** Builds a fresh SettlementSnapshot to write on freeze, from the current suggested payments. */

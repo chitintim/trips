@@ -79,6 +79,7 @@ export function YourTodosCard({ tripId, onOpenAll }: { tripId: string; onOpenAll
         openCount: sheet.isLoading || sheet.isError ? 0 : openSheetCount(sheet.groups),
         mine: todos.length,
         canCreate: canCreate({ userId: user?.id, isOrganizer: false, isParticipant: sheet.isParticipant, finished: sheet.finished, whoSupported: false }),
+        finished: sheet.finished,
       })
     : null
 

@@ -104,3 +104,45 @@ Deno.test('renderDigestEmail: rows without links and sections without todosLink 
   assert(!rendered.html.includes('See all your to-dos'))
   assert(rendered.html.includes('Book the ferry'))
 })
+
+Deno.test('renderDigestEmail: decisions-only email is "we have an answer", not a to-do email', () => {
+  const rendered = renderDigestEmail({
+    greetingName: 'Tim',
+    sections: [
+      section({
+        tripName: 'Japow 2027',
+        decisions: [{ headline: '"Where to stay" \u2014 it\'s Hotel Kumo', details: ['\u00a3120 per person', 'Sam is booking it'], link: `${APP_URL}/t?open=question:s1` }],
+        todosLink: `${APP_URL}/t?open=todos`,
+      }),
+    ],
+    appUrl: APP_URL,
+  })
+  assertEquals(rendered.itemCount, 1)
+  assertEquals(rendered.subject, 'Japow 2027: we have an answer. "Where to stay" \u2014 it\'s Hotel Kumo')
+  assert(rendered.html.includes('We have an answer'))
+  assert(rendered.html.includes('Sam is booking it'))
+  assert(rendered.html.includes(`${APP_URL}/t?open=question:s1`))
+  assert(rendered.text.includes(`${APP_URL}/t?open=question:s1`))
+  assert(!rendered.html.includes('to-dos are waiting')) // no to-do wording or footer
+  assert(!rendered.html.includes('See all your to-dos'))
+})
+
+Deno.test('renderDigestEmail: decisions fold into a to-do digest without changing its subject or count', () => {
+  const base = section({ tripName: 'Japow 2027', actionRows: [sampleRow] })
+  const without = renderDigestEmail({ greetingName: 'Tim', sections: [base], appUrl: APP_URL })
+  const withDecision = renderDigestEmail({
+    greetingName: 'Tim',
+    sections: [{ ...base, decisions: [{ headline: '"Dinner" \u2014 it\'s Ramen', details: [], link: `${APP_URL}/t?open=question:s2` }] }],
+    appUrl: APP_URL,
+  })
+  assertEquals(withDecision.subject, without.subject)
+  assertEquals(withDecision.itemCount, 2)
+  assert(withDecision.html.includes('A few to-dos are waiting on you'))
+  assert(withDecision.html.includes("it&#39;s Ramen") || withDecision.html.includes("it's Ramen"))
+})
+
+Deno.test('renderDigestEmail: no decisions -> output identical to before (to-do digests unchanged)', () => {
+  const r = renderDigestEmail({ greetingName: 'Tim', sections: [section({ tripName: 'T', actionRows: [sampleRow] })], appUrl: APP_URL })
+  assert(!r.html.includes('We have an answer'))
+  assert(r.html.includes('A few to-dos are waiting on you'))
+})

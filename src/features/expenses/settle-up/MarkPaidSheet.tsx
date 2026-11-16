@@ -48,9 +48,13 @@ export function MarkPaidSheet({ isOpen, onClose, settlement, tripId, toName }: M
   // isOpen false->true" fix PaymentDetailsSheet already needed -- see its
   // audit-finding-#5 comment) so a previous discard or a different
   // settlement row never leaks into the next open.
+  // Set synchronously on the first submit so a double tap (or Enter + click)
+  // cannot fire a second write before React re-renders the disabled button.
+  const submitting = useRef(false)
   const wasOpen = useRef(isOpen)
   useEffect(() => {
     if (isOpen && !wasOpen.current) {
+      submitting.current = false
       const seeded = { method: 'Bank transfer', customMethod: '', date: todayIso(), note: '' }
       initial.current = seeded
       setMethod(seeded.method)
@@ -73,7 +77,14 @@ export function MarkPaidSheet({ isOpen, onClose, settlement, tripId, toName }: M
 
   const resolvedMethod = method === 'Other' ? customMethod.trim() : method
 
+  // The row this sheet targets is the thing that transitions (never a new
+  // insert); if it is no longer 'suggested' (already marked paid, e.g. from
+  // another tab) there is nothing left to submit.
+  const alreadyMarked = settlement.status !== 'suggested'
+
   const handleSave = () => {
+    if (submitting.current || alreadyMarked) return
+    submitting.current = true
     updateStatus.mutate(
       {
         settlementId: settlement.id,
@@ -91,8 +102,10 @@ export function MarkPaidSheet({ isOpen, onClose, settlement, tripId, toName }: M
           showToast({ type: 'success', message: `Marked as paid — waiting for ${toName} to confirm.` })
           onClose()
         },
-        onError: (err) =>
-          showToast({ type: 'error', message: 'Failed to mark as paid', description: err instanceof Error ? err.message : undefined }),
+        onError: (err) => {
+          submitting.current = false
+          showToast({ type: 'error', message: 'Failed to mark as paid', description: err instanceof Error ? err.message : undefined })
+        },
       }
     )
   }
@@ -139,9 +152,10 @@ export function MarkPaidSheet({ isOpen, onClose, settlement, tripId, toName }: M
           placeholder="e.g. Sent via Revolut, ref 'Sicily trip'"
         />
 
-        <Button variant="primary" fullWidth onClick={handleSave} isLoading={updateStatus.isPending} disabled={method === 'Other' && !customMethod.trim()}>
+        <Button variant="primary" fullWidth onClick={handleSave} isLoading={updateStatus.isPending} disabled={updateStatus.isPending || alreadyMarked || (method === 'Other' && !customMethod.trim())}>
           Mark as paid
         </Button>
+        {alreadyMarked && <p className="text-xs text-[var(--text-muted)]">This payment is already marked as paid.</p>}
       </div>
 
       <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />

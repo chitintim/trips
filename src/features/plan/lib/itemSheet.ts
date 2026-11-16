@@ -71,7 +71,7 @@ export function liveBookedOptionIds(bookings: ReadonlyArray<{ option_id: string 
   return ids
 }
 
-export type ItemMenuAction = 'edit_event' | 'edit_option' | 'edit_booking' | 'schedule' | 'delete'
+export type ItemMenuAction = 'edit_event' | 'edit_option' | 'edit_booking' | 'schedule' | 'mark_booked' | 'delete'
 
 export interface ItemMenuInput {
   isOrganizer: boolean
@@ -79,6 +79,8 @@ export interface ItemMenuInput {
   hasBooking: boolean
   /** Undated decided/booked item that can be put on a day. */
   canSchedule: boolean
+  /** Decided, not yet booked, on a live trip. */
+  canMarkBooked?: boolean
 }
 
 /** Item-level organiser actions for the one "⋯" menu. Participants get none. */
@@ -89,6 +91,7 @@ export function itemMenuActions(input: ItemMenuInput): ItemMenuAction[] {
   if (input.editTarget === 'option') out.push('edit_option')
   if (input.hasBooking) out.push('edit_booking')
   if (input.canSchedule) out.push('schedule')
+  if (input.canMarkBooked) out.push('mark_booked')
   out.push('delete')
   return out
 }

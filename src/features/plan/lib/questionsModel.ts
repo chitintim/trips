@@ -16,6 +16,7 @@ import {
   type CardSection,
   type CardStage,
 } from '../../decisions/lib/questionCardModel'
+import { isIdeasBucket } from '../../../lib/ideasBucket'
 import type { PlanItem } from './planItems'
 
 export type PlanLens = 'questions' | 'days' | 'map'
@@ -86,7 +87,7 @@ export function groupQuestions<S extends GroupableSection>(input: GroupQuestions
       bookedOptionIds: input.bookedOptionIds,
       now: input.now,
     })
-    const entry: QuestionEntry<S> = { section, stage: model.stage, needsAnswer: model.viewerState === 'needs_answer' && model.stage === 'open' }
+    const entry: QuestionEntry<S> = { section, stage: model.stage, needsAnswer: model.viewerState === 'needs_answer' && model.stage === 'open' && !isIdeasBucket(section) }
     if (model.stage === 'open') (entry.needsAnswer ? open : answered).push(entry)
     else if (model.stage === 'decided') decided.push(entry)
     else if (model.stage === 'booked') booked.push(entry)

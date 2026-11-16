@@ -42,6 +42,10 @@ export const DEEP_LINKS = {
   claim: (expenseId: string) => open(`claim:${expenseId}`),
   /** NEW in 1A: organizer setup steps (invite / first question). */
   setup: () => open('setup'),
+  /** Slice 4E: Manage > Decide for one open question (org_decide / org_tie). */
+  decide: (sectionId: string) => open(`decide:${sectionId}`),
+  /** Slice 4E: Mark booked for one decided option (org_book). */
+  book: (optionId: string) => open(`book:${optionId}`),
 } as const
 
 /** `/{tripId}?open=...` for `navigate()` or an email. */
@@ -113,7 +117,7 @@ export const TODO_ACTION_LABEL: Record<TodoKind, string> = {
   travel: 'Add',
   waitlist_offer: 'Respond',
   org_decide: 'Decide',
-  org_tie: 'Decide',
+  org_tie: 'Choose winner',
   org_book: 'Mark booked',
   org_setup: 'Set up',
 }
@@ -154,7 +158,10 @@ export const settleUpTitle = (amount: string) => `Settle up: you owe ${amount}`
 export const settleUpInfoText = (amount: string) => `You'll be able to settle up (you owe ${amount}) once the organizer finalizes balances`
 export const confirmPaymentGroupTitle = (fromName: string) => `Confirm payment from ${fromName}`
 export const confirmPaymentGroupDetail = (n: number) => `${n} payments to confirm`
-export const unblocksLabel = (n: number) => `Unblocks ${n} ${n === 1 ? 'person' : 'people'}`
+/** Detail line of the organiser's freeze item: who is BLOCKED (not who can act). */
+export const unblocksLabel = (n: number) => `${n} ${n === 1 ? 'person' : 'people'} can't settle until then`
+/** Heading above the names on a shared organiser item: they CAN do it, none of them individually owes it. */
+export const anyOrganizerLabel = (n: number) => `Any organizer can do this (${n})`
 export const freezeBalancesTitle = 'Freeze balances so people can settle'
 export const FREEZE_BALANCES_SUBTITLE = 'The trip is over and people owe money, but they cannot pay until you freeze balances'
 export const confirmPaymentTitle = (fromName: string, amount: string) => `Confirm ${fromName} paid you ${amount}`
@@ -172,8 +179,13 @@ export function orgDecideTitle(
     ? `Decide: ${question} (deadline passed, ${reason.answered} of ${reason.total} answered)`
     : `Decide: ${question} (all ${reason.total} answered)`
 }
+export const orgDecideShortTitle = (question: string) => `Decide: ${question}`
 export const orgBookTitle = (option: string) => `Book: ${option}`
 export const orgTieTitle = (question: string) => `Tie: choose a winner for ${question}`
+/** Own-choice question past its deadline: nothing to decide, the organizer only closes answers. */
+export const orgCloseAnswersTitle = (question: string) => `Close answers for ${question}`
+/** Subline of a tie to-do: the options that share the top score. */
+export const orgTieSubtitle = (optionTitles: ReadonlyArray<string>) => `Tied: ${optionTitles.join(' · ')}`
 export const ORG_SETUP_INVITE_TITLE = 'Invite people to the trip'
 export const ORG_SETUP_QUESTION_TITLE = 'Ask the group your first question'
 
@@ -201,9 +213,10 @@ export const WAITING_ON_EMPTY = 'Nobody owes anything right now.'
 export const EMAIL_TODOS_FOOTER = 'See all your to-dos'
 
 /** Organizer card on Today: "As organizer: waiting on 6 people · 2 to decide · 1 to book". */
-export function organiserSummary(waitingPeople: number, toDecide: number, toBook: number): string {
+export function organiserSummary(waitingPeople: number, toDecide: number, toBook: number, tied = 0): string {
   const parts = [`waiting on ${waitingPeople} ${waitingPeople === 1 ? 'person' : 'people'}`]
   if (toDecide > 0) parts.push(`${toDecide} to decide`)
+  if (tied > 0) parts.push(`${tied} tied`)
   if (toBook > 0) parts.push(`${toBook} to book`)
   return `As organizer: ${parts.join(' · ')}`
 }

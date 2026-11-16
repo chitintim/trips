@@ -3,7 +3,7 @@ import { supabase } from '../../../lib/supabase'
 import { Modal, Button, Input, TextArea, Select, useToast, ConfirmDiscardSheet, Chip } from '../../../components/ui'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { useQueryClient } from '@tanstack/react-query'
-import { useCreateBooking, useUpdateBooking, useCancelBookingFollowUps, type Booking } from '../../../lib/queries/useBookings'
+import { useCreateBooking, useUpdateBooking, useCancelBookingFollowUps, useUnmarkBooked, useBookings, type Booking } from '../../../lib/queries/useBookings'
 import { queryKeys } from '../../../lib/queries/queryKeys'
 import { useCreateExpense, type SplitRow } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
@@ -12,6 +12,8 @@ import { inScopePeople } from '../../people/lib/inScopePeople'
 import { useAuth } from '../../../hooks/useAuth'
 import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
 import { PlacePicker, PlaceChip } from '../../places'
+import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
+import { readDecidedOptionId } from '../../decisions/lib/closeDecision'
 import { useTripActivityLog } from '../lib/activity'
 import type { Trip } from '../../../types'
 import type { Tables } from '../../../types/database.types'
@@ -81,6 +83,8 @@ export interface BookingEditorSheetProps {
   booking: Booking | null
   /** New bookings only: pre-select this option in "Linked option" (e.g. "Mark booked" on a decided question). */
   initialOptionId?: string | null
+  /** Editing a booking that has an amount but no expense: start with "Log as an expense" ticked (Mark booked's follow-up). */
+  initialLogExpense?: boolean
 }
 
 /**
@@ -90,7 +94,7 @@ export interface BookingEditorSheetProps {
  * populates three systems consistently, via the shared src/lib/queries
  * hooks (never reaching into the expenses feature's internals).
  */
-export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOptionId = null }: BookingEditorSheetProps) {
+export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOptionId = null, initialLogExpense = false }: BookingEditorSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
   const tripId = trip.id
@@ -103,6 +107,8 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
   const { data: participants } = useParticipants(tripId)
   const logActivity = useTripActivityLog(tripId)
   const cancelFollowUps = useCancelBookingFollowUps(tripId)
+  const unmarkBooked = useUnmarkBooked(tripId)
+  const { data: allBookings } = useBookings(tripId)
   const { data: sections } = useSections(tripId)
   // Options the booking can be linked to (so the plan card turns "Booked"
   // for the decided option). Closed decisions first.
@@ -119,6 +125,10 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
   const [cancelStep, setCancelStep] = useState(false)
   const [removeExpense, setRemoveExpense] = useState(false)
   const [removeEvent, setRemoveEvent] = useState(false)
+  const [logExpense, setLogExpense] = useState(false)
+  // After cancelling the booking of a decided option: offer to reopen the question.
+  const [reopenOffer, setReopenOffer] = useState<{ sectionId: string; optionTitle: string } | null>(null)
+  const [reopenOpen, setReopenOpen] = useState(false)
 
   const isEditing = !!booking
   const draftKey = isEditing ? `booking-editor:${booking!.id}` : `booking-editor:new:${tripId}`
@@ -138,6 +148,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
       const seeded = fromBooking(booking, baseCurrency)
       setValues(!booking && initialOptionId ? { ...seeded, optionId: initialOptionId } : seeded)
       setPickedPlace(null)
+      setLogExpense(initialLogExpense)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, booking?.id, initialOptionId])
@@ -147,10 +158,42 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
-  const isSaving = createBooking.isPending || updateBooking.isPending || createExpense.isPending || cancelFollowUps.isPending
+  const isSaving = createBooking.isPending || updateBooking.isPending || createExpense.isPending || cancelFollowUps.isPending || unmarkBooked.isPending
   const amountNumber = values.amount ? parseFloat(values.amount) : null
   const canCreateExpense = amountNumber != null && !Number.isNaN(amountNumber) && amountNumber > 0
   const canCreateEvent = !!values.bookingDate
+  const canLogExpenseOnEdit = isEditing && !booking!.expense_id && canCreateExpense && values.status !== 'cancelled'
+  const cancelling = isEditing && values.status === 'cancelled' && booking!.status !== 'cancelled'
+
+  /** Creates the expense for a booking: paid by you, split equally among everyone who is in. Returns its id. */
+  const createLinkedExpense = async (e: { description: string; amount: number; currency: string; date: string; placeId: string | null; vendor: string | null }): Promise<string> => {
+    // Same in-scope rule as new-expense defaults, cost per person and vote counts.
+    const activeIds = inScopePeople(participants ?? [], trip.confirmation_enabled === true).map((p) => p.user_id)
+    const splitUserIds = activeIds.length > 0 ? activeIds : [user!.id]
+    const totalMinor = toMinorUnits(e.amount, e.currency)
+    const shares = largestRemainderDistribute(totalMinor, splitUserIds.map(() => 1))
+    const splits: SplitRow[] = splitUserIds.map((userId, i) => ({
+      user_id: userId,
+      amount: fromMinorUnits(shares[i], e.currency),
+      split_type: 'equal',
+    }))
+    const expense = await createExpense.mutateAsync({
+      expense: {
+        description: e.description,
+        amount: e.amount,
+        currency: e.currency,
+        paid_by: user!.id,
+        payment_date: e.date || new Date().toISOString().slice(0, 10),
+        category: 'other' as const,
+        participant_ids: splitUserIds,
+        place_id: e.placeId,
+        vendor_name: e.vendor,
+      },
+      splits,
+    })
+    logActivity({ verb: 'expense_added', entity: { type: 'expense', id: expense.id, label: e.description } })
+    return expense.id
+  }
 
   const handleSave = async (followUps?: { removeExpense: boolean; removeEvent: boolean }) => {
     if (!user) return
@@ -202,8 +245,38 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
             removeEventId: followUps.removeEvent ? booking!.timeline_event_id : null,
           })
         }
+        if (logExpense && canLogExpenseOnEdit && amountNumber != null) {
+          const expenseId = await createLinkedExpense({
+            description: bookingFields.title,
+            amount: amountNumber,
+            currency: values.currency || baseCurrency,
+            date: values.bookingDate,
+            placeId: values.placeId,
+            vendor: bookingFields.vendor,
+          })
+          await updateBooking.mutateAsync({ id: booking!.id, update: { expense_id: expenseId } })
+        }
         logActivity({ verb: 'booking_updated', entity: { type: 'booking', id: booking!.id, label: bookingFields.title } })
-        showToast({ type: 'success', message: 'Booking updated' })
+        showToast({ type: 'success', message: logExpense && canLogExpenseOnEdit ? 'Booking updated and expense logged' : 'Booking updated' })
+
+        // Cancelled the booking of a booked option: clear Booked and bring the "Book: ..." to-do
+        // back ("Booking cancelled - needs rebooking"), then offer to reopen the question.
+        if (cancelling && booking!.option_id) {
+          const optionId = booking!.option_id
+          const otherLive = (allBookings ?? []).some((b) => b.option_id === optionId && b.id !== booking!.id && b.status !== 'cancelled')
+          if (!otherLive) {
+            try {
+              await unmarkBooked.mutateAsync({ optionId, cancelBooking: false, reopenQuestion: false })
+            } catch (err) {
+              showToast({ type: 'error', message: 'The booking is cancelled, but Booked could not be cleared', description: (err as Error).message })
+            }
+            const owner = (sections ?? []).find((sec) => sec.options.some((o) => o.id === optionId))
+            if (owner && owner.status === 'completed' && readDecidedOptionId(owner.metadata) === optionId) {
+              setReopenOffer({ sectionId: owner.id, optionTitle: owner.options.find((o) => o.id === optionId)?.title ?? bookingFields.title })
+              setReopenOpen(true)
+            }
+          }
+        }
       } else {
         const created = await createBooking.mutateAsync({ ...bookingFields, booked_by: user.id })
 
@@ -232,33 +305,14 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
         // ---- Linked creation: expense draft ----------------------------
         let expenseId: string | null = null
         if (values.createExpense && canCreateExpense && amountNumber != null) {
-          // Same in-scope rule as new-expense defaults, cost per person and vote counts.
-          const activeIds = inScopePeople(participants ?? [], trip.confirmation_enabled === true).map((p) => p.user_id)
-          const splitUserIds = activeIds.length > 0 ? activeIds : [user.id]
-          const currency = values.currency || baseCurrency
-          const totalMinor = toMinorUnits(amountNumber, currency)
-          const shares = largestRemainderDistribute(totalMinor, splitUserIds.map(() => 1))
-          const splits: SplitRow[] = splitUserIds.map((userId, i) => ({
-            user_id: userId,
-            amount: fromMinorUnits(shares[i], currency),
-            split_type: 'equal',
-          }))
-          const expense = await createExpense.mutateAsync({
-            expense: {
-              description: bookingFields.title,
-              amount: amountNumber,
-              currency,
-              paid_by: user.id,
-              payment_date: values.bookingDate || new Date().toISOString().slice(0, 10),
-              category: 'other' as const,
-              participant_ids: splitUserIds,
-              place_id: values.placeId,
-              vendor_name: bookingFields.vendor,
-            },
-            splits,
+          expenseId = await createLinkedExpense({
+            description: bookingFields.title,
+            amount: amountNumber,
+            currency: values.currency || baseCurrency,
+            date: values.bookingDate,
+            placeId: values.placeId,
+            vendor: bookingFields.vendor,
           })
-          expenseId = expense.id
-          logActivity({ verb: 'expense_added', entity: { type: 'expense', id: expense.id, label: bookingFields.title } })
         }
 
         // Back-link the booking to whatever got created alongside it.
@@ -294,6 +348,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
   }
 
   return (
+    <>
     <Modal isOpen={isOpen} onClose={handleClose} size="lg" title={isEditing ? 'Edit booking' : 'Track a booking'}>
       <div className="space-y-4">
         <Input
@@ -405,6 +460,16 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
 
         <TextArea label="Notes" value={values.notes} onChange={(e) => updateField('notes', e.target.value)} rows={2} />
 
+        {canLogExpenseOnEdit && (
+          <label className="flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3">
+            <input type="checkbox" checked={logExpense} onChange={(e) => setLogExpense(e.target.checked)} className="mt-0.5 h-5 w-5 accent-accent-600" />
+            <span className="text-sm text-[var(--text-primary)]">
+              Log this as an expense
+              <span className="block text-xs text-[var(--text-muted)]">Paid by you, split equally among everyone who's in (editable later).</span>
+            </span>
+          </label>
+        )}
+
         {!isEditing && (
           <div className="rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3 space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-[var(--text-muted)]">Also create</p>
@@ -508,5 +573,18 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
         }}
       />
     </Modal>
+
+    <ReopenDecisionDialog
+      isOpen={reopenOpen}
+      onClose={() => setReopenOpen(false)}
+      tripId={tripId}
+      section={reopenOffer ? (sections ?? []).find((sec) => sec.id === reopenOffer.sectionId) ?? null : null}
+      decidedTitle={reopenOffer?.optionTitle ?? null}
+      heading="Reopen the question?"
+      intro="The booking was cancelled. If the group should choose again, reopen the question."
+      confirmLabel="Reopen the question"
+      cancelLabel="Keep it decided"
+    />
+    </>
   )
 }

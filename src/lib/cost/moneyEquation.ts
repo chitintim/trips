@@ -39,6 +39,7 @@
 import { computeBalances, partitionCarryovers, splitOwedAmounts } from '../../features/expenses/lib/balances'
 import { computeMoneyPosition, type MoneyPositionKind } from '../../features/expenses/money-space/moneyPosition'
 import { withMoneyParticipants } from '../../features/expenses/lib/balances'
+import { findDuplicatePayments } from '../../features/expenses/settle-up/settleUpLogic'
 import { formatMoney } from '../money/format'
 import { fromMinorUnits, toMinorUnits } from '../money/minorUnits'
 import type { ExpenseWithDetails } from '../queries/useExpenses'
@@ -69,6 +70,7 @@ export interface EquationTerm {
 export type PositionHeadlineKind =
   | 'owe' // you still owe
   | 'sent_waiting' // everything you owe has been sent; waiting for confirmation
+  | 'overpaid' // what you have sent (waiting for confirmation) is MORE than you owe
   | 'owed' // you're still owed
   | 'confirm_receipt' // others say they've paid you; confirm
   | 'settled'
@@ -130,6 +132,10 @@ export interface MoneyEquation {
   /** Suggested (not yet paid) totals. */
   sentSuggested: number
   receivedSuggested: number
+  /** Sent (marked paid, base currency) beyond what the ledger says you owe; 0 when not overpaying. */
+  overpaid: number
+  /** Payments involving you that look recorded twice (same pair, amount, currency; see findDuplicatePayments). */
+  hasDuplicatePayments: boolean
   /** After taking marked-paid money into account. */
   remainingToPay: number
   remainingToReceive: number
@@ -244,8 +250,22 @@ export function explainMoneyPosition(input: ExplainMoneyInput): MoneyEquation {
   const sentNote = sentWaiting > 0 ? `${approx}${money(sentWaiting)} sent — waiting for ${nameList(waitingOn)} to confirm` : null
   const receivedNote = receivedWaiting > 0 ? `${nameList(waitingFrom)} ${new Set(waitingFrom).size > 1 ? 'say' : 'says'} they've paid you ${approx}${money(receivedWaiting)} — confirm receipt` : null
 
+  // Money sent beyond the debt (typically payments recorded twice): never "nothing more to pay".
+  const overpaidMinor =
+    kind === 'owe' || kind === 'settled' ? Math.max(toMinorUnits(sentWaiting, baseCurrency) - toMinorUnits(kind === 'owe' ? ledgerAmount : 0, baseCurrency), 0) : 0
+  const overpaid = fromMinorUnits(overpaidMinor, baseCurrency)
+  const hasDuplicatePayments = findDuplicatePayments(settlements, baseCurrency).some((g) => g.from === currentUserId || g.to === currentUserId)
+
   let headline: PositionHeadline
-  if (kind === 'owe') {
+  if (overpaid > 0) {
+    const but = kind === 'owe' ? ` but you only owe ${money(ledgerAmount)}` : ''
+    headline = {
+      kind: 'overpaid',
+      amount: overpaid,
+      text: `You've sent ${approx}${money(overpaid)} more than you owe`,
+      note: `${approx}${money(sentWaiting)} sent, waiting for ${nameList(waitingOn)} to confirm${but}`,
+    }
+  } else if (kind === 'owe') {
     if (remainingToPay > 0) {
       headline = { kind: 'owe', amount: remainingToPay, text: `You owe ${money(remainingToPay)}`, note: sentNote }
     } else if (sentWaiting > 0) {
@@ -326,6 +346,8 @@ export function explainMoneyPosition(input: ExplainMoneyInput): MoneyEquation {
     receivedWaiting,
     sentSuggested,
     receivedSuggested,
+    overpaid,
+    hasDuplicatePayments,
     remainingToPay,
     remainingToReceive,
     headline,

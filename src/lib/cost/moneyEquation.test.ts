@@ -238,4 +238,17 @@ describe('D3/E3: money in another currency is never read 1:1', () => {
     expect(eq.headline.note).toBe('≈£26.00 sent — waiting for Alex to confirm')
     expect(eq.excludedForeign).toEqual([])
   })
+
+  it('Sicily: sent waiting twice the debt (duplicate rows) is an overpayment, flagged as possible duplicates', () => {
+    const rows = [pay('d1', ME, ALEX, 2349.3, 'marked_paid'), pay('d2', ME, ALEX, 2349.3, 'marked_paid')]
+    const eq = explainMoneyPosition({ expenses: [villa], settlements: [...confirmedBack, ...rows], participantUserIds: PEOPLE, currentUserId: ME, baseCurrency: 'GBP', names: NAMES })
+    expect(eq.ledgerAmount).toBeCloseTo(4698.61, 2)
+    expect(eq.sentWaiting).toBeCloseTo(4698.6, 2)
+    expect(eq.hasDuplicatePayments).toBe(true)
+    const more = explainMoneyPosition({ expenses: [villa], settlements: [...confirmedBack, ...rows, pay('d3', ME, BEN, 100, 'marked_paid')], participantUserIds: PEOPLE, currentUserId: ME, baseCurrency: 'GBP', names: NAMES })
+    expect(more.headline.kind).toBe('overpaid')
+    expect(more.headline.text).toMatch(/^You've sent £\d/)
+    expect(more.headline.text).toMatch(/more than you owe$/)
+    expect(more.overpaid).toBeCloseTo(99.99, 1)
+  })
 })

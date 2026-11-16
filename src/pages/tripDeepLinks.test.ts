@@ -40,6 +40,12 @@ function ctx(over: Partial<DeepLinkContext> = {}): DeepLinkContext {
       { id: 'exp-nocode', claimCode: null },
     ],
     itemIds: new Set(['evt-1', 'opt-1']),
+    options: [
+      { id: 'opt-open', sectionId: 'sec-open', booked: false },
+      { id: 'opt-win', sectionId: 'sec-done', booked: false },
+      { id: 'opt-booked', sectionId: 'sec-done', booked: true },
+    ],
+    ownChoiceSectionIds: new Set<string>(),
     ...over,
   }
 }
@@ -62,6 +68,8 @@ describe('resolveOpenParam', () => {
       [DEEP_LINKS.item('e1'), { kind: 'item', id: 'e1' }],
       [DEEP_LINKS.claim('x1'), { kind: 'claim', id: 'x1' }],
       [DEEP_LINKS.setup(), { kind: 'setup' }],
+      [DEEP_LINKS.decide('s1'), { kind: 'decide', id: 's1' }],
+      [DEEP_LINKS.book('o1'), { kind: 'book', id: 'o1' }],
     ]
     for (const [link, expected] of cases) {
       expect(resolveOpenParam(valueOf(link)), link).toEqual(expected)
@@ -103,7 +111,7 @@ describe('formatOpenParam', () => {
   it('round-trips every target', () => {
     const values = [
       'todos', 'rsvp', 'question:s1', 'answer-all', 'todo:a1', 'bring:c1', 'settle',
-      'payment:p1', 'travel-details', 'item:e1', 'claim:x1', 'setup', 'actions', 'actions-bring',
+      'payment:p1', 'travel-details', 'item:e1', 'claim:x1', 'setup', 'decide:s1', 'book:o1', 'actions', 'actions-bring',
     ]
     for (const v of values) {
       const target = resolveOpenParam(v)
@@ -118,6 +126,36 @@ describe('stripDeepLinkParams', () => {
     expect(stripDeepLinkParams('open=todos')).toBe('')
     expect(stripDeepLinkParams('?tab=money&open=settle&ref=email')).toBe('ref=email')
     expect(stripDeepLinkParams('')).toBe('')
+  })
+})
+
+describe('planDeepLink: decide / book', () => {
+  const org = (over: Partial<DeepLinkContext> = {}) => ctx({ isOrganizer: true, ...over })
+
+  it('decide:<id> on an open question -> Manage sheet in decide mode', () => {
+    expect(planDeepLink({ kind: 'decide', id: 'sec-open' }, org())).toEqual({ space: 'plan', open: { sheet: 'manage-question', id: 'sec-open', mode: 'decide' } })
+  })
+
+  it('decide fails soft (no longer available) when decided, unknown, finished or the viewer cannot manage', () => {
+    const gone = { space: 'today', toast: DEEP_LINK_GONE_TOAST }
+    expect(planDeepLink({ kind: 'decide', id: 'sec-done' }, org())).toEqual(gone)
+    expect(planDeepLink({ kind: 'decide', id: 'nope' }, org())).toEqual(gone)
+    expect(planDeepLink({ kind: 'decide', id: 'sec-open' }, org({ tripFinished: true }))).toEqual(gone)
+    expect(planDeepLink({ kind: 'decide', id: 'sec-open' }, ctx())).toEqual(gone)
+  })
+
+  it('book:<optionId> on a decided, unbooked option -> Manage sheet in book mode', () => {
+    expect(planDeepLink({ kind: 'book', id: 'opt-win' }, org())).toEqual({ space: 'plan', open: { sheet: 'manage-question', id: 'sec-done', mode: 'book', optionId: 'opt-win' } })
+  })
+
+  it('book fails soft when already booked, the question is not decided, unknown, own choice, or not an organiser', () => {
+    const gone = { space: 'today', toast: DEEP_LINK_GONE_TOAST }
+    expect(planDeepLink({ kind: 'book', id: 'opt-booked' }, org())).toEqual(gone)
+    expect(planDeepLink({ kind: 'book', id: 'opt-open' }, org())).toEqual(gone)
+    expect(planDeepLink({ kind: 'book', id: 'nope' }, org())).toEqual(gone)
+    expect(planDeepLink({ kind: 'book', id: 'opt-win' }, org({ ownChoiceSectionIds: new Set(['sec-done']) }))).toEqual(gone)
+    expect(planDeepLink({ kind: 'book', id: 'opt-win' }, ctx())).toEqual(gone)
+    expect(planDeepLink({ kind: 'book', id: 'opt-win' }, org({ tripFinished: true }))).toEqual(gone)
   })
 })
 

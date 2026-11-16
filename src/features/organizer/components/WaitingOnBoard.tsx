@@ -9,7 +9,7 @@ import { useBookings } from '../../../lib/queries/useBookings'
 import { useNotifications } from '../../../lib/queries/useNotifications'
 import { useWaitingOn } from '../../../lib/queries/useTodos'
 import { isTripFinished } from '../../../lib/answers/answers'
-import { WAITING_ON_EMPTY, todoCountLabel, formatDayMonth } from '../../../lib/todos/copy'
+import { WAITING_ON_EMPTY, anyOrganizerLabel, todoCountLabel, formatDayMonth } from '../../../lib/todos/copy'
 import type { Todo, WaitingOnItem } from '../../../lib/todos/types'
 import { ActionsSheet } from '../../actions/components/ActionsSheet'
 import { NEW_TODO_LABEL, doneCountLabel } from '../../actions/lib/todoLabels'
@@ -142,7 +142,7 @@ export function WaitingOnBoard({ trip }: WaitingOnBoardProps) {
             { value: 'item', label: 'By item' },
           ]}
         />
-        {canManageTrip && (
+        {canManageTrip && !tripFinished && (
           <Button size="sm" variant="secondary" onClick={() => setTodosOpen(true)} className="shrink-0">
             + {NEW_TODO_LABEL}
           </Button>
@@ -317,7 +317,9 @@ function ItemRow({
             </div>
           </div>
           <ul className="flex flex-wrap items-center gap-1.5">
-            <li className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">Waiting on</li>
+            <li className="text-[10px] font-medium uppercase tracking-wide text-[var(--text-muted)]">
+              {item.unblocks != null && item.userIds.length > 1 ? anyOrganizerLabel(item.userIds.length) : 'Waiting on'}
+            </li>
             {item.userIds.map((userId) => {
               const todo = todoFor(userId)
               const name = nameOf(userId)

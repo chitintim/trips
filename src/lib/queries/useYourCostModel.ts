@@ -8,7 +8,7 @@ import { useBookings } from './useBookings'
 import { useExpenses } from './useExpenses'
 import { getFXRate, type Currency } from '../currency'
 import { buildYourCost, readEventCost, yourCostHeadline, type YourCostModel } from '../cost/yourCost'
-import { inScopeHeadcount } from '../../features/people/lib/inScopePeople'
+import { inScopeHeadcount, inScopeUserIds } from '../../features/people/lib/inScopePeople'
 import { isConfirmationEnabled } from '../tripStatus'
 import type { Trip } from '../../types'
 
@@ -92,6 +92,7 @@ export function useYourCostModel(trip: Trip): { model: YourCostModel | null; isL
       fxRates,
       organizerName,
       confirmationEnabled: isConfirmationEnabled(trip),
+      viewerInScope: user?.id ? inScopeUserIds(participants, isConfirmationEnabled(trip)).includes(user.id) : true,
     })
   }, [sections, votes, events, bookings, money, participants, headcount, fxRates, trip, base, user?.id, organizerName])
 
@@ -108,4 +109,12 @@ export function useYourCostHeadline(trip: Trip): string | null {
   if (!model || model.isEmpty) return null
   if (model.mode === 'estimate' && model.lines.every((l) => l.kind === 'estimate')) return null
   return yourCostHeadline(model)
+}
+
+/** The organizer's rough figure in the trip's base currency (same rate as the Your-cost model), for the RSVP step. */
+export function useRoughConversion(trip: Trip): { baseCurrency: string; convertedBase: number | null } | null {
+  const { model } = useYourCostModel(trip)
+  if (!model) return null
+  const line = model.lines.find((l) => l.kind === 'estimate')
+  return { baseCurrency: model.currency, convertedBase: line?.low ?? null }
 }

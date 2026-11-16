@@ -12,7 +12,6 @@ const base: ManageContext = {
   onThePlan: false,
   hasFollowupTodo: false,
   hasBooking: false,
-  canSchedule: true,
 }
 const ids = (c: Partial<ManageContext>) => getManageActions({ ...base, ...c }).map((a) => a.id)
 
@@ -50,18 +49,17 @@ describe('getManageActions', () => {
     expect(ids({ finished: true, stage: 'open' })).toEqual(['answers', 'delete'])
     expect(ids({ finished: true, stage: 'decided', hasWinner: true })).toEqual(['answers', 'reopen', 'delete'])
     expect(ids({ finished: true, stage: 'booked', hasWinner: true, hasBooking: true })).toEqual(['answers', 'reopen', 'delete'])
-    for (const id of ['decide', 'booking', 'schedule', 'add_todo', 'add_option', 'nudge'] as const) {
+    for (const id of ['decide', 'booking', 'mark_booked', 'unmark_booked', 'schedule', 'add_todo', 'add_option', 'nudge'] as const) {
       expect(ids({ finished: true, stage: 'decided', hasWinner: true })).not.toContain(id)
     }
   })
 
   it('decided: schedule, to-do and booking follow the winner', () => {
-    expect(ids({ stage: 'decided', hasWinner: true })).toEqual(['answers', 'schedule', 'add_todo', 'booking', 'settings', 'reopen', 'delete'])
+    expect(ids({ stage: 'decided', hasWinner: true })).toEqual(['answers', 'schedule', 'add_todo', 'mark_booked', 'settings', 'reopen', 'delete'])
   })
 
-  it('decided: hides schedule when already on the plan or when the host cannot schedule', () => {
+  it('decided: hides schedule once it is on the plan', () => {
     expect(ids({ stage: 'decided', hasWinner: true, onThePlan: true })).not.toContain('schedule')
-    expect(ids({ stage: 'decided', hasWinner: true, canSchedule: false })).not.toContain('schedule')
   })
 
   it('decided: hides add a to-do once one exists; no winner means no follow-ups', () => {
@@ -69,14 +67,26 @@ describe('getManageActions', () => {
     expect(ids({ stage: 'decided', hasWinner: false })).toEqual(['answers', 'settings', 'reopen', 'delete'])
   })
 
-  it('booking action reads Mark booked, then Track booking', () => {
-    const f = (hasBooking: boolean) => getManageActions({ ...base, stage: 'decided', hasWinner: true, hasBooking }).find((a) => a.id === 'booking')?.label
-    expect(f(false)).toBe('Mark booked')
-    expect(f(true)).toBe('Track booking')
+  it('decided offers Mark booked, plus Track booking only when a booking row exists', () => {
+    expect(ids({ stage: 'decided', hasWinner: true })).toContain('mark_booked')
+    expect(ids({ stage: 'decided', hasWinner: true })).not.toContain('booking')
+    expect(ids({ stage: 'decided', hasWinner: true, hasBooking: true })).toEqual(['answers', 'schedule', 'add_todo', 'mark_booked', 'booking', 'settings', 'reopen', 'delete'])
+    expect(getManageActions({ ...base, stage: 'decided', hasWinner: true }).find((a) => a.id === 'mark_booked')?.label).toBe('Mark booked')
   })
 
   it('booked is read-only plus reopen', () => {
-    expect(ids({ stage: 'booked', hasWinner: true, hasBooking: true })).toEqual(['answers', 'booking', 'reopen'])
+    expect(ids({ stage: 'booked', hasWinner: true, hasBooking: true })).toEqual(['answers', 'booking', 'unmark_booked', 'reopen'])
+    expect(ids({ stage: 'booked', hasWinner: true })).toEqual(['answers', 'unmark_booked', 'reopen'])
+    expect(getManageActions({ ...base, stage: 'booked', hasWinner: true }).find((a) => a.id === 'unmark_booked')?.label).toBe('Not booked after all')
+  })
+})
+
+describe('Ideas list manage actions', () => {
+  it('offers only add idea and delete, at any stage', () => {
+    expect(ids({ ideas: true })).toEqual(['add_option', 'delete'])
+    expect(ids({ ideas: true, stage: 'decided', hasWinner: true })).toEqual(['add_option', 'delete'])
+    expect(ids({ ideas: true, finished: true })).toEqual(['delete'])
+    expect(ids({ ideas: true, canManage: false })).toEqual([])
   })
 })
 

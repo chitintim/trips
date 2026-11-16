@@ -328,7 +328,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       const stage: PlanItemStage =
         isLive(booking) || (!booking && option.status === 'booked') ? 'booked' : isIdea ? 'idea' : 'proposal'
 
-      const actual = actualFromExpenses(matchOptionExpenses(option.id, bookings, expenses), ledgerIds, baseCurrency)
+      const actual = actualFromExpenses(matchOptionExpenses(option.id, bookings, expenses), ledgerIds, baseCurrency, currentUserId)
       const price = computeOptionPrice(option, trip, { count: confirmedCount, isEstimate: headcountIsEstimate }, {
         decided: isWinner && section.status === 'completed',
         booking: isLive(booking) ? { amount: booking.amount, currency: booking.currency, status: booking.status } : null,

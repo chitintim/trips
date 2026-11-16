@@ -1,3 +1,4 @@
+import { isIdeasBucket } from '../../../lib/ideasBucket'
 import { useState } from 'react'
 import { Modal, Badge, Button, PriceTag, SelectionAvatars, useToast } from '../../../components/ui'
 import { usePlaces } from '../../../lib/queries/usePlaces'
@@ -10,13 +11,15 @@ import { BookingEditorSheet } from '../../organizer/components/BookingEditorShee
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
+import { useAuth } from '../../../hooks/useAuth'
 import { actualFromExpenses, matchOptionExpenses } from '../../../lib/cost/yourCost'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
 import { computeOptionPrice } from '../../../lib/cost/optionPrice'
 import { formatMoney } from '../../../lib/money'
 import { OptionEditorSheet } from '../../decisions/components/OptionEditorSheet'
-import { QuestionCard, QuestionManageSheet } from '../../decisions'
+import { QuestionCard, QuestionManageSheet, DecideSheet, PutOnPlanSheet, MarkBookedSheet } from '../../decisions'
+import { isTripFinished } from '../../../lib/answers/answers'
 import { isDecidedOption } from '../../decisions/lib/resolveDecision'
 import { getDecisionShape } from '../../decisions/lib/decisionShapes'
 import { formatTimeRange, CATEGORY_CONFIG } from '../../timeline/lib/categoryConfig'
@@ -29,7 +32,8 @@ const MENU_LABEL: Record<ItemMenuAction, string> = {
   edit_event: 'Edit',
   edit_option: 'Edit option',
   edit_booking: 'Edit booking',
-  schedule: '📅 Schedule it',
+  schedule: '📅 Put it on the plan',
+  mark_booked: '🧾 Mark booked',
   delete: 'Delete',
 }
 
@@ -43,10 +47,6 @@ export interface PlanItemSheetProps {
   headcount: InScopeHeadcount
   /** Navigate to the Money space for this item's linked expense. */
   onNavigateToExpense?: (expenseId: string) => void
-  /** "Schedule it" — opens a day/time picker to place a decided-but-undated item onto the timeline. */
-  onScheduleIt?: (item: PlanItem) => void
-  /** "Put it on the plan" from the question's Manage sheet (decided option). Omitted = not offered. */
-  onScheduleOption?: (sectionId: string, optionId: string) => void
 }
 
 /**
@@ -66,8 +66,6 @@ export function PlanItemSheet({
   isOrganizer,
   headcount,
   onNavigateToExpense,
-  onScheduleIt,
-  onScheduleOption,
 }: PlanItemSheetProps) {
   const tripId = trip.id
   const { showToast } = useToast()
@@ -78,6 +76,7 @@ export function PlanItemSheet({
   const { data: bookings } = useBookings(tripId)
   const { data: money } = useExpenses(tripId)
   const { data: ledgerPeople = [] } = useParticipants(tripId)
+  const { user: viewer } = useAuth()
 
   const deleteOption = useDeleteOption(tripId)
   const deleteEvent = useDeleteTimelineEvent(tripId)
@@ -88,6 +87,8 @@ export function PlanItemSheet({
   const [editOptionOpen, setEditOptionOpen] = useState(false)
   const [editBookingOpen, setEditBookingOpen] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [scheduleOpen, setScheduleOpen] = useState(false)
+  const [markBookedOpen, setMarkBookedOpen] = useState(false)
 
   if (!item) return null
 
@@ -108,7 +109,8 @@ export function PlanItemSheet({
         actual: actualFromExpenses(
           matchOptionExpenses(option.id, bookings ?? [], money?.expenses ?? []),
           ledgerPeople.map((p) => p.user_id),
-          trip.base_currency || 'GBP'
+          trip.base_currency || 'GBP',
+          viewer?.id
         ),
       })
     : null
@@ -125,17 +127,22 @@ export function PlanItemSheet({
   const status = planItemStatus(item)
   const bookedIds = liveBookedOptionIds(bookings || [])
   const bookedSummary = bookingSummaryText(item.booking)
-  // "Schedule it" on a still-open vote closes it and records this option as the decision.
-  const scheduleClosesVote = !!section && section.status !== 'completed' && !decisionIsPersonal
-  const canSchedule = !item.date && (item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner) && !!onScheduleIt
+  // "Put it on the plan" on a still-open vote is the Decide sheet (one step: record the winner and give it a day).
+  // An idea on the Ideas list is never decided: "Put it on the plan" just schedules THAT idea.
+  const isIdea = !!decisionSection && isIdeasBucket(decisionSection)
+  const scheduleClosesVote = !!section && !isIdea && section.status !== 'completed' && !decisionIsPersonal
+  const tripFinished = isTripFinished(trip)
+  const canSchedule = !tripFinished && !item.date && (isIdea ? !item.eventId && !!item.optionId : item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner)
+  const canMarkBooked = !tripFinished && item.stage === 'decided' && !!item.optionId && !!decisionSection && decisionSection.status === 'completed' && !decisionIsPersonal && !isIdea
   // Organiser-only (RLS: timeline INSERT, booking edits and deletes are organiser-only server-side).
-  const menuActions = itemMenuActions({ isOrganizer, editTarget, hasBooking: !!booking, canSchedule })
+  const menuActions = itemMenuActions({ isOrganizer, editTarget, hasBooking: !!booking, canSchedule, canMarkBooked })
   const runMenuAction = (action: ItemMenuAction) => {
     setMenuOpen(false)
     if (action === 'edit_event') setEditEventOpen(true)
     else if (action === 'edit_option') setEditOptionOpen(true)
     else if (action === 'edit_booking') setEditBookingOpen(true)
-    else if (action === 'schedule') onScheduleIt?.(item)
+    else if (action === 'schedule') setScheduleOpen(true)
+    else if (action === 'mark_booked') setMarkBookedOpen(true)
     else if (action === 'delete') setConfirmingDelete(true)
   }
 
@@ -203,7 +210,7 @@ export function PlanItemSheet({
             <div role="group" aria-label="Item actions" className="flex flex-wrap gap-2 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-2">
               {menuActions.map((action) => (
                 <Button key={action} variant={action === 'delete' ? 'danger' : 'secondary'} size="sm" onClick={() => runMenuAction(action)}>
-                  {action === 'schedule' && scheduleClosesVote ? '📅 Close question & schedule' : MENU_LABEL[action]}
+                  {action === 'schedule' && scheduleClosesVote ? '📅 Decide & put it on the plan' : MENU_LABEL[action]}
                 </Button>
               ))}
             </div>
@@ -321,7 +328,22 @@ export function PlanItemSheet({
       {booking && <BookingEditorSheet isOpen={editBookingOpen} onClose={() => setEditBookingOpen(false)} trip={trip} booking={booking} />}
 
       {isOrganizer && decisionSection && (
-        <QuestionManageSheet isOpen={manageOpen} onClose={() => setManageOpen(false)} tripId={tripId} sectionId={decisionSection.id} onSchedule={onScheduleOption} />
+        <QuestionManageSheet isOpen={manageOpen} onClose={() => setManageOpen(false)} tripId={tripId} sectionId={decisionSection.id} />
+      )}
+
+      {isOrganizer && scheduleClosesVote && section && (
+        <DecideSheet isOpen={scheduleOpen} onClose={() => setScheduleOpen(false)} trip={trip} section={section} initialOptionId={item.optionId} />
+      )}
+      {isOrganizer && !scheduleClosesVote && item.optionId && (
+        <PutOnPlanSheet
+          isOpen={scheduleOpen}
+          onClose={() => setScheduleOpen(false)}
+          trip={trip}
+          target={{ optionId: item.optionId, title: item.title, description: item.description, placeId: item.placeId, category: item.category }}
+        />
+      )}
+      {isOrganizer && item.optionId && (
+        <MarkBookedSheet isOpen={markBookedOpen} onClose={() => setMarkBookedOpen(false)} trip={trip} option={{ id: item.optionId, title: item.title }} mode="mark" />
       )}
 
       {confirmingDelete && (

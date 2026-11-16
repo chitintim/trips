@@ -61,6 +61,8 @@ describe('itemMenuActions', () => {
   it('lists organiser item actions, delete last', () => {
     expect(itemMenuActions({ isOrganizer: true, editTarget: 'option', hasBooking: true, canSchedule: true })).toEqual(['edit_option', 'edit_booking', 'schedule', 'delete'])
     expect(itemMenuActions({ isOrganizer: true, editTarget: 'event', hasBooking: false, canSchedule: false })).toEqual(['edit_event', 'delete'])
+    expect(itemMenuActions({ isOrganizer: true, editTarget: 'option', hasBooking: false, canSchedule: true, canMarkBooked: true })).toEqual(['edit_option', 'schedule', 'mark_booked', 'delete'])
+    expect(itemMenuActions({ isOrganizer: false, editTarget: null, hasBooking: false, canSchedule: true, canMarkBooked: true })).toEqual([])
   })
 })
 

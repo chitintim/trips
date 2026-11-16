@@ -88,7 +88,7 @@ test.describe('unauthenticated smoke', () => {
     expect(res.ok(), `manifest fetch failed: ${res.status()} ${manifestUrl}`).toBeTruthy()
 
     const manifest = await res.json()
-    expect(manifest.name).toBe('Trips')
+    expect(manifest.name).toBe("Tim's Trip Planner")
     expect(manifest.start_url).toContain('/trips/')
     expect(Array.isArray(manifest.icons)).toBe(true)
     expect(manifest.icons.length).toBeGreaterThan(0)

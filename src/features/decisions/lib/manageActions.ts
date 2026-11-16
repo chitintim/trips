@@ -7,6 +7,7 @@
  *   Decided
  *     See everyone's answers, Put it on the plan, Add a to-do, Mark booked / Track booking,
  *     Question settings, Reopen, Delete question
+ *   Finished trip (any state): See everyone's answers, Reopen (decided/booked only), Delete question
  *   Booked / Done
  *     See everyone's answers, Track booking, Reopen  (read-only summary)
  *
@@ -40,6 +41,8 @@ export interface ManageContext {
   /** useTripPermissions().canManageTrip. */
   canManage: boolean
   stage: CardStage
+  /** The trip is Finished: only read actions plus tidy-up (Reopen, Delete) are offered. */
+  finished: boolean
   shape: 'group' | 'own'
   /** The question has at least one live option. */
   hasOptions: boolean
@@ -63,6 +66,8 @@ export const MANAGE_COPY = {
     group: 'Choose the winner. This closes the question and shows everyone the results.',
     own: 'Stop taking answers. Everyone can still see what was chosen.',
   },
+  decideNow: 'Decide now',
+  decideNowHint: 'Record the outcome after the fact.',
   answers: 'See everyone’s answers',
   answersHint: 'Who answered what, and who has not answered yet.',
   nudge: 'Nudge people who haven’t answered',
@@ -95,9 +100,23 @@ export function getManageActions(ctx: ManageContext): ManageAction[] {
     ? { id: 'booking', label: MANAGE_COPY.trackBooking, hint: MANAGE_COPY.trackBookingHint, tone: 'default' }
     : { id: 'booking', label: MANAGE_COPY.markBooked, hint: MANAGE_COPY.markBookedHint, tone: 'default' }
 
+  // Finished trip: read-only plus tidy-up. Nothing that starts new work.
+  if (ctx.finished) {
+    out.push(answers)
+    if (ctx.stage === 'decided' || ctx.stage === 'booked') out.push(reopen)
+    out.push(del)
+    return out
+  }
+
   if (ctx.stage === 'open' || ctx.stage === 'closed') {
+    // "Close answers" only on a question that is still taking answers; a closed
+    // one (decided after the fact) says "Decide now".
     if (ctx.hasOptions) {
-      out.push({ id: 'decide', label: MANAGE_COPY.decide[ctx.shape], hint: MANAGE_COPY.decideHint[ctx.shape], tone: 'primary' })
+      out.push(
+        ctx.stage === 'closed'
+          ? { id: 'decide', label: MANAGE_COPY.decideNow, hint: MANAGE_COPY.decideNowHint, tone: 'primary' }
+          : { id: 'decide', label: MANAGE_COPY.decide[ctx.shape], hint: MANAGE_COPY.decideHint[ctx.shape], tone: 'primary' }
+      )
     }
     out.push(answers)
     if (ctx.stage === 'open' && ctx.waitingCount > 0) {

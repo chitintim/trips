@@ -40,7 +40,7 @@ import {
   sumOrderLinesByCurrency,
   type OrderItemMetadata,
 } from './decisionShapes'
-import { formatCostImpact, formatMoney, getTierSensitivityLine, type CostImpactInput } from './costImpact'
+import { formatMoney } from '../../../lib/money'
 import {
   answersFor,
   isOwnChoice,
@@ -665,26 +665,6 @@ export function ownRowsToItems(rows: ReadonlyArray<OwnRow>): OwnItemInput[] {
     startDate: r.startDate || null,
     endDate: r.endDate || null,
   }))
-}
-
-/**
- * The existing per-option cost text (placeholder until Phase 3's one money
- * display): "+£54/person" / "≈£50/person at 9 people", plus the tier
- * sensitivity line. Both null when the option has no price.
- */
-export function optionCostLines(
-  option: { price: number | null; currency: string | null; price_type: CostImpactInput['priceType']; metadata?: Json | null },
-  headcount: { count: number; isEstimate: boolean }
-): { text: string | null; sensitivity: string | null } {
-  const input: CostImpactInput = {
-    price: option.price,
-    currency: option.currency,
-    priceType: option.price_type,
-    confirmedCount: headcount.count,
-    isEstimate: headcount.isEstimate,
-    metadata: option.metadata,
-  }
-  return { text: formatCostImpact(input), sensitivity: getTierSensitivityLine(input) }
 }
 
 /** "Your picks: Skis + boots × 2, Helmet · £86" */

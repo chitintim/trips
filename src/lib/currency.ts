@@ -324,29 +324,6 @@ export function isConfirmedRateAvailable(date: string): boolean {
 }
 
 /**
- * Format currency amount with symbol
- */
-export function formatCurrency(amount: number, currency: Currency): string {
-  const symbols: Record<Currency, string> = {
-    GBP: '£',
-    EUR: '€',
-    USD: '$',
-    CHF: 'CHF ',
-    JPY: '¥',
-    AUD: 'A$',
-    CAD: 'C$'
-  }
-
-  const symbol = symbols[currency] || currency
-
-  if (currency === 'JPY') {
-    return `${symbol}${Math.round(amount).toLocaleString()}`
-  }
-
-  return `${symbol}${amount.toFixed(2)}`
-}
-
-/**
  * Get all supported currencies
  */
 export function getSupportedCurrencies(): Currency[] {

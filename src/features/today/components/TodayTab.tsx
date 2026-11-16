@@ -1,12 +1,12 @@
 import { useMemo, useState } from 'react'
 import { Button, Card, Skeleton } from '../../../components/ui'
-import { useBriefData, BriefCover, OrganizerMessageCard, CostBandCard, WhosInRow } from '../../brief'
+import { useBriefData, BriefCover, OrganizerMessageCard, WhosInRow } from '../../brief'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { StatusModal } from '../../people'
 import { usePlanItems } from '../../plan'
 import { formatTime } from '../../timeline'
 import { AnnouncementsSection } from './AnnouncementsSection'
-import { DecidedSoFarCard } from './DecidedSoFarCard'
+import { YourCostCard } from './YourCostCard'
 import { CountdownHero } from './CountdownHero'
 import { TripProgressStrip } from './TripProgressStrip'
 import { NowNextCard } from './NowNextCard'
@@ -64,7 +64,8 @@ export function TodayTab({
     )
   }
 
-  const todos = <YourTodosCard tripId={trip.id} />
+  const todos = <YourTodosCard tripId={trip.id} onOpenAll={() => onOpenActions('actions')} />
+  const yourCost = <YourCostCard trip={trip} />
   const announcements = <AnnouncementsSection trip={trip} isOrganizer={organiser} />
   const activity = <RecentActivitySection tripId={trip.id} />
   // Organiser-only: the summary, plus the two prompts that have no to-do yet
@@ -85,7 +86,7 @@ export function TodayTab({
         <>
           <BriefCover trip={trip} statusOverride={effectiveStage} />
           {todos}
-          <CostBandCard costBand={brief.costBand} fullCostLink={trip.full_cost_link} />
+          {yourCost}
           <OrganizerMessageCard message={trip.confirmation_message} />
           <CapacityCard
             trip={trip}
@@ -106,7 +107,7 @@ export function TodayTab({
       layout = (
         <>
           {todos}
-          <DecidedSoFarCard trip={trip} onNavigate={onNavigate} />
+          {yourCost}
           <KeyBookingsCard tripId={trip.id} />
           {announcements}
           {organiserCards}
@@ -120,6 +121,7 @@ export function TodayTab({
         <>
           <CountdownHero trip={trip} />
           {todos}
+          {yourCost}
           <KeyBookingsCard tripId={trip.id} />
           <ChecklistNudgeCard onOpen={() => onOpenActions('bring')} />
           {announcements}
@@ -133,6 +135,8 @@ export function TodayTab({
       layout = (
         <>
           <TripProgressStrip trip={trip} />
+          {todos}
+          {yourCost}
           <NowNextCard trip={trip} />
           <TodayItemsList trip={trip} />
           <div className="flex gap-2">
@@ -141,7 +145,6 @@ export function TodayTab({
             </Button>
           </div>
           <SettleStatusCard trip={trip} onNavigate={onNavigate} />
-          {todos}
           {announcements}
           {organiserCards}
           {activity}
@@ -153,6 +156,7 @@ export function TodayTab({
       layout = (
         <>
           {todos}
+          {yourCost}
           <RecapTeaserCard onOpenRecap={onOpenRecap} />
           {announcements}
           {organiserCards}
@@ -165,6 +169,7 @@ export function TodayTab({
       layout = (
         <>
           {todos}
+          {yourCost}
           {announcements}
           {organiserCards}
           {activity}

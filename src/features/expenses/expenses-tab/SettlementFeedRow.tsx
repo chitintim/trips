@@ -9,6 +9,8 @@ export interface SettlementFeedRowProps {
   participantsByUserId: Record<string, ParticipantWithUser>
   baseCurrency: string
   currentUserId: string | undefined
+  /** Organisers / admins may read memos on payments between other people. */
+  canManage?: boolean
 }
 
 /**
@@ -23,7 +25,7 @@ export interface SettlementFeedRowProps {
  * flagged as pending — they do NOT count in balances yet (computeBalances
  * semantics), and hiding them would invite double payment.
  */
-export function SettlementFeedRow({ settlement, participantsByUserId, baseCurrency, currentUserId }: SettlementFeedRowProps) {
+export function SettlementFeedRow({ settlement, participantsByUserId, baseCurrency, currentUserId, canManage = false }: SettlementFeedRowProps) {
   const nameOf = (userId: string): string => {
     if (currentUserId && userId === currentUserId) return 'You'
     const p = participantsByUserId[userId]
@@ -32,6 +34,8 @@ export function SettlementFeedRow({ settlement, participantsByUserId, baseCurren
 
   const pending = isPendingSettlement(settlement)
   const involvesViewer = currentUserId === settlement.from_user_id || currentUserId === settlement.to_user_id
+  // A memo is a note between payer and payee (and whoever runs the trip), not a group announcement.
+  const memo = involvesViewer || canManage ? settlement.notes : null
 
   return (
     <div
@@ -48,14 +52,17 @@ export function SettlementFeedRow({ settlement, participantsByUserId, baseCurren
             <span className="font-medium text-[var(--text-primary)]">{nameOf(settlement.from_user_id)}</span>
             {' paid '}
             <span className="font-medium text-[var(--text-primary)]">{nameOf(settlement.to_user_id)}</span>
+            <Badge variant="neutral" size="sm" className="ml-2 align-middle">
+              Payment
+            </Badge>
           </p>
           <p className="shrink-0 text-sm font-semibold tabular-nums text-[var(--text-primary)]">
             {formatMoney(settlement.amount, settlement.currency || baseCurrency)}
           </p>
         </div>
-        {(settlement.notes || pending) && (
+        {(memo || pending) && (
           <div className="mt-0.5 flex items-center gap-2 min-w-0">
-            {settlement.notes && <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">{settlement.notes}</p>}
+            {memo && <p className="min-w-0 flex-1 truncate text-xs text-[var(--text-muted)]">{memo}</p>}
             {pending && (
               <Badge variant="warning" size="sm" className="shrink-0">
                 Pending — not in balances yet

@@ -13,6 +13,8 @@ import {
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import { useTrip } from '../../../lib/queries/useTrip'
+import { useYourCostHeadline } from '../../../lib/queries/useYourCostModel'
+import type { Trip } from '../../../types'
 import { useUpdateConfirmationStatus, ConfirmationStatus, ConditionalType } from '../../../lib/queries/useConfirmations'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
@@ -26,6 +28,7 @@ import {
   type RsvpAnswer,
   type WaitingOnAnswer,
 } from '../lib/rsvpAnswers'
+import { buildRsvpCostLine } from '../lib/roughCost'
 import { RSVP_PROMPT, RSVP_BUTTON_LABELS } from '../lib/rsvpLabels'
 
 // ============================================================================
@@ -95,6 +98,12 @@ interface StatusModalProps {
   participants: ParticipantWithUser[]
   capacityLimit: number | null
   confirmedCount: number
+  /**
+   * Optional. The pre-formatted "Your cost" headline (e.g. `yourCostHeadline(buildYourCost(...))`,
+   * "≈£400 – £580") for this person. When given it is shown in the "What 'I'm in' means" step as an
+   * estimate; when absent the organizer's rough figure (trips.estimated_accommodation_cost) is shown instead.
+   */
+  yourCostText?: string | null
 }
 
 /**
@@ -153,7 +162,23 @@ function resolveStatus(values: StatusFormValues, wasConfirmed: boolean): { statu
 
 type Step = 'answer' | 'waiting-on' | 'condition-detail' | 'review'
 
-export function StatusModal({
+/**
+ * Host-facing modal. Looks up the trip and, once it is loaded, the same
+ * "Your cost" model Today uses, so "What 'I'm in' means" quotes the real
+ * figure whenever the plan has prices.
+ */
+export function StatusModal(props: Omit<StatusModalProps, 'yourCostText'>) {
+  const { data: trip } = useTrip(props.tripId)
+  if (!trip) return <StatusModalBody {...props} />
+  return <StatusModalWithCost {...props} trip={trip} />
+}
+
+function StatusModalWithCost({ trip, ...props }: Omit<StatusModalProps, 'yourCostText'> & { trip: Trip }) {
+  const yourCostText = useYourCostHeadline(trip)
+  return <StatusModalBody {...props} yourCostText={yourCostText} />
+}
+
+function StatusModalBody({
   isOpen,
   onClose,
   tripId,
@@ -161,8 +186,10 @@ export function StatusModal({
   participants,
   capacityLimit,
   confirmedCount,
+  yourCostText,
 }: StatusModalProps) {
   const { data: trip } = useTrip(tripId)
+  const costLine = buildRsvpCostLine(trip, yourCostText)
   const updateStatus = useUpdateConfirmationStatus(tripId)
   const { showToast } = useToast()
 
@@ -567,10 +594,9 @@ export function StatusModal({
                   </div>
                 )}
                 <ul className="space-y-1.5 text-sm text-warn-900">
-                  {trip?.estimated_accommodation_cost && (
+                  {costLine && (
                     <li>
-                      <strong>Estimated accommodation cost per person:</strong>{' '}
-                      {trip.accommodation_cost_currency} {trip.estimated_accommodation_cost.toFixed(2)} (an estimate, not a final price).
+                      <strong>{costLine.label}</strong> {costLine.figure} {costLine.note}
                     </li>
                   )}
                   {trip?.confirmation_deadline && (

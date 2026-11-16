@@ -55,7 +55,10 @@ import type { Json } from '../../../types/database.types'
 import { readOptionMetadata } from '../../decisions/lib/optionMetadata'
 import { type VotingMethod } from '../../decisions/lib/voting'
 import { resolveWinner } from '../../decisions/lib/resolveDecision'
-import { getPerPersonCostImpact, getTierSensitivityLine, isTieredCostImpact } from '../../decisions/lib/costImpact'
+import { computeOptionPrice, type OptionPrice, type PriceTrip } from '../../../lib/cost/optionPrice'
+import { actualFromExpenses, computeEventPrice, matchOptionExpenses } from '../../../lib/cost/yourCost'
+import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { isPersonalOrderSection } from '../../decisions/lib/decisionShapes'
 
 export type PlanItemStage = 'idea' | 'proposal' | 'decided' | 'booked'
@@ -69,19 +72,6 @@ export interface PlanItemVoteSummary {
   /** The question's status; a closed ('completed') question always reveals results (areVotesVisible). */
   sectionStatus: string
   quorum: number | null
-}
-
-export interface PlanItemCostImpact {
-  perPerson: number | null
-  currency: string | null
-  /** True when this figure comes from tiered group pricing (option.metadata.price_tiers, UX_REDESIGN.md Part 5 shape 3) rather than flat price_type math. */
-  isTiered: boolean
-  /** "£75/pp if 6 · £38/pp if 12" — null when not tiered. */
-  sensitivityLine: string | null
-  /** True when the divisor is an in-scope headcount estimate (RSVP tracking off / nobody confirmed) — render "≈ per person across N people". */
-  isEstimate: boolean
-  /** The headcount a total_split price was divided by. */
-  headcount: number
 }
 
 export interface PlanItemBookingInfo {
@@ -128,7 +118,8 @@ export interface PlanItem {
   isPersonalOrder: boolean
 
   vote: PlanItemVoteSummary | null
-  costImpact: PlanItemCostImpact | null
+  /** The one price (computeOptionPrice): headline, basis line, certainty. Render with <PriceTag price={item.price} />. Events show the cost saved in the event editor; null for unpriced items. */
+  price: OptionPrice | null
   booking: PlanItemBookingInfo | null
   /** Committed picks (the `selections` table) for this item's option — empty for timeline events and for options nobody has picked. Populated regardless of stage/decision shape so any card can show "chosen by ..." (rule 7). */
   selections: SelectionWithUser[]
@@ -181,6 +172,12 @@ export interface ComposePlanItemsInput {
   /** True when `confirmedCount` is an estimate rather than a real confirmed count (defaults to false). */
   headcountIsEstimate?: boolean
   currentUserId?: string | null
+  /** For per-night prices (nights default to the trip's). */
+  trip?: (PriceTrip & { confirmation_enabled?: boolean | null; base_currency?: string | null }) | null
+  /** Real expenses, so a paid item shows what was actually spent (same matching as Your cost). */
+  expenses?: ReadonlyArray<ExpenseWithDetails>
+  /** Everyone in the expense ledger (participants' user ids). */
+  participantUserIds?: string[]
 }
 
 export interface ComposePlanItemsResult {
@@ -195,7 +192,10 @@ export interface ComposePlanItemsResult {
  * testable and safe to call from a `useMemo` in the hook wrapper.
  */
 export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItemsResult {
-  const { events, sections, votes, bookings, confirmedCount, headcountIsEstimate = false, currentUserId } = input
+  const { events, sections, votes, bookings, confirmedCount, headcountIsEstimate = false, currentUserId, trip = null, expenses = [], participantUserIds = [] } = input
+  const confirmationEnabled = trip ? isConfirmationEnabled({ confirmation_enabled: trip.confirmation_enabled ?? null }) : undefined
+  const baseCurrency = trip?.base_currency || 'GBP'
+  const ledgerIds = [...new Set([...participantUserIds, ...(currentUserId ? [currentUserId] : [])])]
 
   // Cancelled bookings never make an item "Booked". For each option/event we
   // keep the NEWEST live booking; failing that, the newest cancelled one so
@@ -252,6 +252,11 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
   // ---- 1. Timeline events: decided, or booked when a booking references them ----
   for (const event of events) {
     const booking = bookingsByEventId.get(event.id)
+    // A cost typed into the event editor shows through the same price display as an option.
+    const eventPrice = computeEventPrice(event, trip, { count: confirmedCount, isEstimate: headcountIsEstimate }, {
+      booking: isLive(booking) ? { amount: booking.amount, currency: booking.currency, status: booking.status } : null,
+      confirmationEnabled,
+    })
     items.push({
       id: event.id,
       idKind: 'event',
@@ -274,7 +279,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       isMatrixSection: false,
       isPersonalOrder: false,
       vote: null,
-      costImpact: null,
+      price: eventPrice,
       booking: toBookingInfo(booking),
       selections: [],
       isUnscheduledWinner: false,
@@ -323,15 +328,14 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
       const stage: PlanItemStage =
         isLive(booking) || (!booking && option.status === 'booked') ? 'booked' : isIdea ? 'idea' : 'proposal'
 
-      const costImpactInput = {
-        price: option.price,
-        currency: option.currency,
-        priceType: option.price_type,
-        confirmedCount,
-        metadata: option.metadata,
-        isEstimate: headcountIsEstimate,
-      }
-      const perPerson = getPerPersonCostImpact(costImpactInput)
+      const actual = actualFromExpenses(matchOptionExpenses(option.id, bookings, expenses), ledgerIds, baseCurrency)
+      const price = computeOptionPrice(option, trip, { count: confirmedCount, isEstimate: headcountIsEstimate }, {
+        decided: isWinner && section.status === 'completed',
+        booking: isLive(booking) ? { amount: booking.amount, currency: booking.currency, status: booking.status } : null,
+        booked: option.status === 'booked',
+        confirmationEnabled,
+        actual,
+      })
 
       items.push({
         id: option.id,
@@ -365,17 +369,7 @@ export function composePlanItems(input: ComposePlanItemsInput): ComposePlanItems
               sectionStatus: section.status,
               quorum: section.quorum,
             },
-        costImpact:
-          perPerson != null
-            ? {
-                perPerson,
-                currency: option.currency,
-                isTiered: isTieredCostImpact(option.metadata),
-                sensitivityLine: getTierSensitivityLine(costImpactInput),
-                isEstimate: headcountIsEstimate && option.price_type === 'total_split' && !isTieredCostImpact(option.metadata),
-                headcount: confirmedCount,
-              }
-            : null,
+        price,
         booking: toBookingInfo(booking),
         selections: option.selections,
         // A winner that hasn't yet produced a timeline event (no event has

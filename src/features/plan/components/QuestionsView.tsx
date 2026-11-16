@@ -8,6 +8,7 @@ import type { UseQuestionListResult } from '../lib/useQuestionList'
 import {
   ANSWER_ALL_SEARCH,
   NOTHING_OPEN_NOTE,
+  GROUP_HEADINGS,
   groupHeading,
   questionsEmptyState,
   showAnswerAll,
@@ -34,7 +35,7 @@ export interface QuestionsViewProps {
 
 /**
  * Plan > Questions (proposal 5.1/5.3/5.8): one list of QuestionCard grouped
- * Open -> Decided -> Booked & done. No vote logic here; every answer goes
+ * Open -> Decided -> Booked -> Closed. No vote logic here; every answer goes
  * through QuestionCard / AnswerControl / useAnswer.
  */
 export function QuestionsView({
@@ -52,10 +53,10 @@ export function QuestionsView({
   const [manageSectionId, setManageSectionId] = useState<string | null>(null)
   const [doneOpen, setDoneOpen] = useState(false)
 
-  // A deep link into the collapsed Booked & done group opens it first.
+  // A deep link into the collapsed Closed group opens it first.
   const highlightId = highlight?.id
   const highlightNonce = highlight?.nonce
-  const inDone = !!highlightId && groups.done.some((e) => e.section.id === highlightId)
+  const inDone = !!highlightId && groups.closed.some((e) => e.section.id === highlightId)
   useEffect(() => {
     if (inDone) setDoneOpen(true)
   }, [inDone, highlightNonce])
@@ -171,20 +172,27 @@ export function QuestionsView({
         </section>
       )}
 
-      {groups.done.length > 0 && (
-        <section aria-label={groupHeading('Booked & done', groups.done.length)} className="space-y-2">
+      {groups.booked.length > 0 && (
+        <section aria-label={groupHeading(GROUP_HEADINGS.booked, groups.booked.length)} className="space-y-2">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">{groupHeading(GROUP_HEADINGS.booked, groups.booked.length)}</h3>
+          {groups.booked.map(card)}
+        </section>
+      )}
+
+      {groups.closed.length > 0 && (
+        <section aria-label={groupHeading(GROUP_HEADINGS.closed, groups.closed.length)} className="space-y-2">
           <button
             type="button"
             onClick={() => setDoneOpen((v) => !v)}
             aria-expanded={doneOpen}
             className="flex w-full items-center justify-between gap-2 text-left text-sm font-semibold text-[var(--text-primary)]"
           >
-            <span>{groupHeading('Booked & done', groups.done.length)}</span>
+            <span>{groupHeading(GROUP_HEADINGS.closed, groups.closed.length)}</span>
             <span aria-hidden="true" className="text-xs font-normal text-[var(--text-muted)]">
               {doneOpen ? '▲ Hide' : '▾ Show'}
             </span>
           </button>
-          {doneOpen && groups.done.map(card)}
+          {doneOpen && groups.closed.map(card)}
         </section>
       )}
 

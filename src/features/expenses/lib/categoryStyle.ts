@@ -10,7 +10,7 @@ export const CATEGORY_ICONS: Record<ExpenseCategory, string> = {
   accommodation: '🏠',
   transport: '🚗',
   food: '🍽️',
-  activities: '⛷️',
+  activities: '🎟️',
   equipment: '🎿',
   other: '📦',
 }

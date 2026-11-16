@@ -1,8 +1,7 @@
 /**
  * Pure logic behind Plan's Questions and Days lenses (proposal 5.1, 5.3, 5.8).
  *
- * - `groupQuestions`: one list of questions grouped Open -> Decided -> Booked &
- *   done, "needs your answer" first inside Open. Stage and viewer state come
+ * - `groupQuestions`: one list of questions grouped Open -> Decided -> Booked -> Closed, "needs your answer" first inside Open. Stage and viewer state come
  *   from `buildQuestionCardModel`, so the grouping always agrees with the chip
  *   on the card and with the to-dos engine.
  * - `defaultLens`: Questions while the viewer owes an answer, otherwise Days.
@@ -48,11 +47,12 @@ export interface QuestionGroups<S extends GroupableSection> {
   /** Open questions: needs-your-answer first, then answered (original order inside each). */
   open: QuestionEntry<S>[]
   decided: QuestionEntry<S>[]
-  /** Booked, plus "Closed - no decision recorded" questions on a finished trip. */
-  done: QuestionEntry<S>[]
+  booked: QuestionEntry<S>[]
+  /** "Closed, no decision": never decided and the trip is over (or the question was closed). Collapsed in the UI. */
+  closed: QuestionEntry<S>[]
   /** Open questions the viewer still owes an answer to. */
   needsAnswerCount: number
-  /** open + decided + done. */
+  /** open + decided + booked + closed. */
   total: number
 }
 
@@ -71,7 +71,8 @@ export function groupQuestions<S extends GroupableSection>(input: GroupQuestions
   const open: QuestionEntry<S>[] = []
   const answered: QuestionEntry<S>[] = []
   const decided: QuestionEntry<S>[] = []
-  const done: QuestionEntry<S>[] = []
+  const booked: QuestionEntry<S>[] = []
+  const closed: QuestionEntry<S>[] = []
 
   for (const section of input.sections) {
     if (!isListable(section, input.canManage)) continue
@@ -88,7 +89,8 @@ export function groupQuestions<S extends GroupableSection>(input: GroupQuestions
     const entry: QuestionEntry<S> = { section, stage: model.stage, needsAnswer: model.viewerState === 'needs_answer' && model.stage === 'open' }
     if (model.stage === 'open') (entry.needsAnswer ? open : answered).push(entry)
     else if (model.stage === 'decided') decided.push(entry)
-    else done.push(entry) // booked | closed
+    else if (model.stage === 'booked') booked.push(entry)
+    else closed.push(entry)
   }
 
   const needsAnswerCount = open.length
@@ -96,9 +98,10 @@ export function groupQuestions<S extends GroupableSection>(input: GroupQuestions
   return {
     open: openAll,
     decided,
-    done,
+    booked,
+    closed,
     needsAnswerCount,
-    total: openAll.length + decided.length + done.length,
+    total: openAll.length + decided.length + booked.length + closed.length,
   }
 }
 
@@ -114,6 +117,9 @@ export function showAnswerAll(needsAnswerCount: number): boolean {
 
 /** `?open=answer-all` (handled by the trip shell). */
 export const ANSWER_ALL_SEARCH = '?open=answer-all'
+
+/** Group headings, matched to what each group holds. */
+export const GROUP_HEADINGS = { open: 'Open', decided: 'Decided', booked: 'Booked', closed: 'Closed \u2014 no decision' } as const
 
 export function groupHeading(label: string, count: number): string {
   return `${label} (${count})`

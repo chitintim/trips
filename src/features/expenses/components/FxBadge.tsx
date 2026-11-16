@@ -27,7 +27,7 @@ export function FxBadge({ currency, baseCurrency, amount, baseCurrencyAmount, fx
   }
 
   return (
-    <span className={`text-[11px] text-[var(--text-muted)] tabular-nums ${className}`.trim()} title={`${amount} ${currency} @ ${fxRate}`}>
+    <span className={`text-[11px] text-[var(--text-muted)] tabular-nums ${className}`.trim()} title={`${formatMoney(amount, currency)} @ ${fxRate}`}>
       ≈ {formatMoney(baseCurrencyAmount, baseCurrency)}
       {rateSource === 'manual' ? ' · manual rate' : ''}
     </span>

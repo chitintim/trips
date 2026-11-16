@@ -473,7 +473,7 @@ export function SettleUpTab({ trip, initialConfirmId }: SettleUpTabProps) {
               {(s.payment_method || s.notes) && s.status !== 'suggested' && (
                 <p className="text-xs text-[var(--text-muted)] pl-9">
                   Paid via {s.payment_method ?? 'an unspecified method'} on {paidDate}
-                  {s.notes ? ` — "${s.notes}"` : ''}
+                  {s.notes && (isOrganizer || s.from_user_id === user?.id || s.to_user_id === user?.id) ? ` — "${s.notes}"` : ''}
                 </p>
               )}
 

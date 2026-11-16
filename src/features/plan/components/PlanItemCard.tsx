@@ -1,10 +1,10 @@
-import { Badge, Deadline, SelectionAvatars } from '../../../components/ui'
+import { Badge, Deadline, PriceTag, SelectionAvatars } from '../../../components/ui'
 import { useSections } from '../../../lib/queries/usePlanning'
 import { useQuestionAnswers } from '../../decisions'
 import { planItemStatus } from '../lib/itemSheet'
+import { isTripFinished } from '../../../lib/answers/answers'
 import { PlaceChip } from '../../places/components/PlaceChip'
 import { CATEGORY_CONFIG, formatTimeRange } from '../../timeline/lib/categoryConfig'
-import { formatMoney, splitAcrossNote } from '../../decisions/lib/costImpact'
 import type { PlanItem } from '../lib/planItems'
 import type { Tables } from '../../../types/database.types'
 import type { Trip } from '../../../types'
@@ -29,27 +29,6 @@ function toAvatarSelections(selections: PlanItem['selections']) {
         }
       : undefined,
   }))
-}
-
-/**
- * The ONE place the card states money (Phase 3 swaps this for the shared
- * PriceTag): the per-person cost badge. Returns null when the item has none.
- */
-function ItemCost({ item }: { item: PlanItem }) {
-  if (item.costImpact?.perPerson == null || !item.costImpact.currency) return null
-  return (
-    <Badge variant="info" size="sm">
-      {item.costImpact.isEstimate ? '≈ ' : item.costImpact.isTiered ? '≈' : '+'}
-      {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}
-      {item.costImpact.isEstimate && item.costImpact.headcount > 0 ? ` per person (${splitAcrossNote(item.costImpact.headcount)})` : '/person'}
-    </Badge>
-  )
-}
-
-/** Compact cost text for the one-line dense row (same slot, shorter form). */
-function denseCostText(item: PlanItem): string | null {
-  if (item.costImpact?.perPerson == null || !item.costImpact.currency) return null
-  return `${formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/pp`
 }
 
 /**
@@ -125,7 +104,8 @@ export function PlanItemCard({
   const timeRange = !item.allDay && item.startTime ? formatTimeRange(item.allDay, item.startTime, item.endTime) : item.allDay ? 'All day' : null
 
   const isSolid = item.stage === 'decided' || item.stage === 'booked'
-  const status = planItemStatus(item)
+  const tripFinished = !!trip && isTripFinished(trip)
+  const status = planItemStatus(item, undefined, { tripFinished })
   const showAnswerChip = !!trip && !!item.sectionId && !isSolid
 
   if (dense && isSolid) {
@@ -154,7 +134,7 @@ export function PlanItemCard({
             ⚠️
           </span>
         )}
-        {denseCostText(item) && <span className="shrink-0 text-xs text-[var(--text-muted)]">{denseCostText(item)}</span>}
+        {item.price && <PriceTag price={item.price} size="inline" compact className="shrink-0" />}
         {outsideTripDates && (
           <span className="shrink-0 text-xs" aria-hidden="true" title="Outside trip dates">
             ⚠️
@@ -232,17 +212,14 @@ export function PlanItemCard({
           )}
 
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
-            <ItemCost item={item} />
             {item.expenseId && (
               <Badge variant="neutral" size="sm">
                 💵 Linked expense
               </Badge>
             )}
-            {status?.label === 'Open' && item.vote?.voteDeadline && <Deadline date={item.vote.voteDeadline} kind="vote" compact size="sm" />}
+            {status?.label === 'Open' && !tripFinished && item.vote?.voteDeadline && <Deadline date={item.vote.voteDeadline} kind="vote" compact size="sm" />}
           </div>
-          {item.costImpact?.sensitivityLine && (
-            <p className="mt-1 text-xs text-[var(--text-muted)]">{item.costImpact.sensitivityLine}</p>
-          )}
+          {item.price && <PriceTag price={item.price} size={compact ? 'inline' : 'card'} compact={compact} className="mt-1.5" />}
 
           {/* Who's committed to this option (planItems.ts rule 7): pre-v3
               legacy picks and any personal-order/decided option that

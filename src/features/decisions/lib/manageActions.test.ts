@@ -4,6 +4,7 @@ import { answerKindChangeWarning, getManageActions, type ManageContext } from '.
 const base: ManageContext = {
   canManage: true,
   stage: 'open',
+  finished: false,
   shape: 'group',
   hasOptions: true,
   waitingCount: 3,
@@ -36,10 +37,22 @@ describe('getManageActions', () => {
     expect(getManageActions(base).find((x) => x.id === 'decide')?.label).toBe('Decide')
   })
 
-  it('a finished-trip question with no decision can still be decided but not nudged', () => {
-    const list = ids({ stage: 'closed' })
-    expect(list).toContain('decide')
-    expect(list).not.toContain('nudge')
+  it('a closed question on a live trip says Decide now, never Close answers', () => {
+    for (const shape of ['group', 'own'] as const) {
+      const a = getManageActions({ ...base, stage: 'closed', shape }).find((x) => x.id === 'decide')
+      expect(a?.label).toBe('Decide now')
+    }
+    expect(ids({ stage: 'closed' })).not.toContain('nudge')
+  })
+
+  it('finished trip: only read actions plus Reopen and Delete', () => {
+    expect(ids({ finished: true, stage: 'closed' })).toEqual(['answers', 'delete'])
+    expect(ids({ finished: true, stage: 'open' })).toEqual(['answers', 'delete'])
+    expect(ids({ finished: true, stage: 'decided', hasWinner: true })).toEqual(['answers', 'reopen', 'delete'])
+    expect(ids({ finished: true, stage: 'booked', hasWinner: true, hasBooking: true })).toEqual(['answers', 'reopen', 'delete'])
+    for (const id of ['decide', 'booking', 'schedule', 'add_todo', 'add_option', 'nudge'] as const) {
+      expect(ids({ finished: true, stage: 'decided', hasWinner: true })).not.toContain(id)
+    }
   })
 
   it('decided: schedule, to-do and booking follow the winner', () => {

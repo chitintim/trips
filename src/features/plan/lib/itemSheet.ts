@@ -8,10 +8,10 @@
  * is only ever stamped on a question's option; a plain timeline event shows no
  * chip until its date has passed (then Done).
  */
-import { formatMoney } from '../../decisions/lib/costImpact'
+import { formatMoney } from '../../../lib/money'
 import type { PlanItem, PlanItemBookingInfo, PlanItemEditTarget } from './planItems'
 
-export type ItemStatusLabel = 'Open' | 'Decided' | 'Booked' | 'Done'
+export type ItemStatusLabel = 'Open' | 'Decided' | 'Booked' | 'Done' | 'Closed'
 export type ItemStatusVariant = 'neutral' | 'success' | 'info'
 
 export interface ItemStatus {
@@ -19,7 +19,10 @@ export interface ItemStatus {
   variant: ItemStatusVariant
 }
 
-type StatusInput = Pick<PlanItem, 'stage' | 'date' | 'optionId' | 'sectionId'>
+type StatusInput = Pick<PlanItem, 'stage' | 'date' | 'optionId' | 'sectionId'> & {
+  isUnscheduledWinner?: boolean
+  vote?: { sectionStatus?: string | null } | null
+}
 
 /** Local YYYY-MM-DD (the plan's dates are calendar days, not instants). */
 export function localDateIso(now: Date = new Date()): string {
@@ -28,19 +31,34 @@ export function localDateIso(now: Date = new Date()): string {
   return `${now.getFullYear()}-${m}-${d}`
 }
 
-export function planItemStatus(item: StatusInput, today: string = localDateIso()): ItemStatus | null {
-  if (item.stage === 'idea' || item.stage === 'proposal') return { label: 'Open', variant: 'info' }
+/**
+ * The status comes from the question's real state, not from the option's
+ * display stage: the winner of a completed question is Decided (its stage stays
+ * 'proposal' until it is booked or scheduled); a question nobody decided on a
+ * finished trip is Closed, never Open.
+ */
+export function planItemStatus(item: StatusInput, today: string = localDateIso(), opts: { tripFinished?: boolean } = {}): ItemStatus | null {
+  if (item.stage === 'idea' || item.stage === 'proposal') {
+    if (item.isUnscheduledWinner && item.vote?.sectionStatus === 'completed') return { label: 'Decided', variant: 'success' }
+    if (opts.tripFinished) return { label: 'Closed', variant: 'neutral' }
+    return { label: 'Open', variant: 'info' }
+  }
   if (item.date && item.date < today) return { label: 'Done', variant: 'neutral' }
   if (item.stage === 'booked') return { label: 'Booked', variant: 'success' }
   if (item.optionId || item.sectionId) return { label: 'Decided', variant: 'success' }
   return null
 }
 
-/** "Booked · GBP 1,989.60 · ref HMX42" (parts that are missing are left out). */
+/** Days lens heading for decided items with no event yet. Quiet wording once the trip is over (nothing is pending). */
+export function notScheduledHeading(tripFinished: boolean, count: number): string {
+  return `${tripFinished ? 'Decided, not scheduled' : 'Not scheduled yet'} (${count})`
+}
+
+/** "Booked · £1,989.60 · ref HMX42" (parts that are missing are left out). */
 export function bookingSummaryText(booking: Pick<PlanItemBookingInfo, 'amount' | 'currency' | 'confirmationRef' | 'vendor'> | null): string | null {
   if (!booking) return null
   const parts = ['Booked']
-  if (booking.amount != null && booking.currency) parts.push(formatMoney(booking.amount, booking.currency))
+  if (booking.amount != null && booking.currency) parts.push(formatMoney(booking.amount, booking.currency, { mode: 'exact' }))
   if (booking.vendor) parts.push(booking.vendor)
   if (booking.confirmationRef) parts.push(`ref ${booking.confirmationRef}`)
   return parts.join(' · ')

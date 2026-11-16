@@ -7,7 +7,7 @@
  * Decision shapes (UX_REDESIGN.md Part 5, "the Meribel lessons"): real trips
  * have THREE decision shapes, not one. This module is the pure (no-React)
  * logic layer for shapes 2 (personal order form) and 3 (tiered group
- * pricing) — shape 1 (group vote) is the existing voting.ts/costImpact.ts
+ * pricing) — shape 1 (group vote) is the existing voting.ts
  * machinery, unchanged.
  *
  *   - decision_shape lives in planning_sections.metadata (additive jsonb
@@ -123,12 +123,31 @@ export function computeOrderItemTotal(pricing: OptionPricing, item: OrderItemMet
   if (flat != null) {
     perUnitMajor = flat
   } else if (per_day != null) {
-    const days = item.start_date && item.end_date ? countDaysInclusive(item.start_date, item.end_date) : 1
+    const days = item.start_date && item.end_date ? countDaysInclusive(item.start_date, item.end_date) : 1 // callers that know the trip use withTripDays first
     perUnitMajor = per_day * days
   }
 
   const perUnitMinor = toMinorUnits(perUnitMajor, currency)
   return fromMinorUnits(perUnitMinor * quantity, currency)
+}
+
+/**
+ * Own-choice picks priced per day with no dates stored (every live selection
+ * has empty metadata) would price ONE day. Fill the missing dates from the
+ * trip so the line covers the trip's days, and say how many were assumed
+ * (null when nothing was assumed: flat pricing, or the pick has its own dates).
+ */
+export function withTripDays(
+  pricing: OptionPricing,
+  item: OrderItemMetadata,
+  trip: { start_date?: string | null; end_date?: string | null }
+): { item: OrderItemMetadata; assumedDays: number | null } {
+  const { per_day, flat } = resolveVariantPricing(pricing, item.variant)
+  if (flat != null || per_day == null) return { item, assumedDays: null }
+  if (item.start_date && item.end_date) return { item, assumedDays: null }
+  if (!trip.start_date || !trip.end_date) return { item, assumedDays: null }
+  const days = countDaysInclusive(trip.start_date, trip.end_date)
+  return { item: { ...item, start_date: trip.start_date, end_date: trip.end_date }, assumedDays: days }
 }
 
 /** One resolved line in a participant's order (or the organizer's consolidated matrix), ready for display. */
@@ -178,8 +197,32 @@ export function sumOrderLinesByCurrency(lines: OrderLine[]): Record<string, numb
 // Shape 3: tiered group pricing
 // ============================================================================
 
+/** A finite number from a number or a numeric string ("600"); anything else (null, '', booleans, objects) is NaN. */
+function coerceNumber(value: unknown): number {
+  if (typeof value === 'number') return value
+  if (typeof value === 'string' && value.trim() !== '') return Number(value)
+  return Number.NaN
+}
+
+/**
+ * The usable tier rows of an option, validated and coerced. Stored rows are
+ * untyped jsonb, so a row with a missing/non-numeric `total`, a fractional or
+ * non-positive `max_people`, or the wrong shape is SKIPPED (never thrown on):
+ * `{max_people: 12, total: '600'}` becomes `{12, 600}`, `{max_people: 12}` is dropped.
+ */
 export function readPriceTiers(metadata: Json | null | undefined): PriceTier[] {
-  return readOptionMetadata(metadata).price_tiers ?? []
+  const raw = readOptionMetadata(metadata).price_tiers as unknown
+  if (!Array.isArray(raw)) return []
+  const tiers: PriceTier[] = []
+  for (const row of raw) {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) continue
+    const max = coerceNumber((row as Record<string, unknown>).max_people)
+    const total = coerceNumber((row as Record<string, unknown>).total)
+    if (!Number.isInteger(max) || max < 1) continue
+    if (!Number.isFinite(total) || total < 0) continue
+    tiers.push({ max_people: max, total })
+  }
+  return tiers
 }
 
 export function hasPriceTiers(metadata: Json | null | undefined): boolean {

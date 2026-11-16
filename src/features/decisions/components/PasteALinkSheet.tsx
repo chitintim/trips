@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Modal, Button, Input, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { supabase } from '../../../lib/supabase'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
+import { formatMoney } from '../../../lib/money'
 import type { IngestResult, OptionDraft } from '../../../shared/contracts'
 
 interface PasteALinkSheetProps {
@@ -134,7 +135,7 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
             {preview.description && <p className="text-sm text-[var(--text-secondary)]">{preview.description}</p>}
             {preview.price != null && (
               <p className="text-sm text-[var(--text-primary)]">
-                {preview.currency || ''} {preview.price}
+                {preview.currency ? formatMoney(preview.price, preview.currency) : preview.price}
               </p>
             )}
             {preview.place_name && <p className="text-xs text-[var(--text-muted)]">📍 {preview.place_name}</p>}

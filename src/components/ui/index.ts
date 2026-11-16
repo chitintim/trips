@@ -7,6 +7,8 @@ export { Select } from './Select'
 // Layout Components
 export { Card } from './Card'
 export { Badge } from './Badge'
+export { PriceTag } from './PriceTag'
+export type { PriceTagProps, PriceTagSize } from './PriceTag'
 export { Avatar, UserAvatar } from './Avatar'
 
 // Feedback Components

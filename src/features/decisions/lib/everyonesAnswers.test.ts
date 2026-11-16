@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAnswersText, buildEveryonesAnswers, type EAParticipant } from './everyonesAnswers'
+import { buildAnswersText, buildEveryonesAnswers, groupTotalText, linePriceText, type EAParticipant } from './everyonesAnswers'
 import { legacySkiRental, rankedStay, vote } from './answerFixtures'
 
 const people: EAParticipant[] = [
@@ -60,9 +60,23 @@ describe('buildEveryonesAnswers', () => {
 
   it('buildAnswersText includes totals and the not-answered list', () => {
     const data = buildEveryonesAnswers({ section: legacySkiRental('sam'), votes: [], passes: [], participants: people, fallbackCurrency: 'EUR' })
-    const text = buildAnswersText('Ski rental', data, 'EUR')
+    const text = buildAnswersText('Ski rental', data)
     expect(text).toMatch(/^Ski rental - answers/)
     expect(text).toMatch(/Group total:/)
     expect(text).toMatch(/Not answered yet: Amy/)
+  })
+
+  it('own choice with nothing priced: no £0 anywhere, no Group total', () => {
+    const base = legacySkiRental('sam')
+    const section = { ...base, options: base.options.map((o) => ({ ...o, price: null, metadata: null })) }
+    const data = buildEveryonesAnswers({ section, votes: [], passes: [], participants: people, fallbackCurrency: 'GBP' })
+    expect(data.groupTotals).toEqual({})
+    expect(groupTotalText(data.groupTotals)).toBeNull()
+    expect(data.itemTotals.every((t) => !t.priced)).toBe(true)
+    for (const l of data.people.flatMap((p) => p.lines)) expect(linePriceText(l)).toBeNull()
+    const text = buildAnswersText('Ski rental', data)
+    expect(text).not.toMatch(/Group total/)
+    expect(text).not.toMatch(/£0|0\.00/)
+    expect(text).toMatch(/No price set/)
   })
 })

@@ -7,6 +7,7 @@ import { supabase } from '../../../lib/supabase'
 import { useQueryClient } from '@tanstack/react-query'
 import { queryKeys } from '../../../lib/queries/queryKeys'
 import { mergeChaseSettingsJson, TRIP_DATES_SECTION_TITLE } from '../../today'
+import { ROUGH_COST_LABEL } from '../../people/lib/roughCost'
 import { CURRENCY_LIST } from '../../expenses/lib/currencyList'
 import type { Json } from '../../../types/database.types'
 import type { Trip, TripStatus } from '../../../types'
@@ -373,7 +374,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
             ) : (
               <div className="grid grid-cols-2 gap-3">
                 <Input
-                  label="Rough cost per person (optional)"
+                  label={ROUGH_COST_LABEL}
                   type="number"
                   min="0"
                   value={estimatedCost}

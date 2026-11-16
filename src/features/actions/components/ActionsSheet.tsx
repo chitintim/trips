@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Button, EmptyState, Modal, Skeleton, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
-import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
+import { useParticipants } from '../../../lib/queries/useTrip'
 import {
   useActions,
   useClaimAction,
   useCreateAction,
   useDeleteAction,
-  useSectionVoters,
   useTodoWhoSupport,
   useToggleActionDone,
   useUpdateAction,
@@ -22,9 +21,9 @@ import {
   useToggleChecklistItem,
   useUpdateChecklistItem,
 } from '../../../lib/queries/useChecklists'
-import { isTripFinished } from '../../../lib/answers/answers'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useTripActivityLog } from '../../organizer/lib/activity'
+import { useTodoGroups } from '../lib/useTodoGroups'
 import { TodoRow } from './TodoRow'
 import { TodoFormModal } from './TodoFormModal'
 import {
@@ -42,15 +41,12 @@ import {
   TODOS_FINISHED_NOTE,
   TODOS_TITLE,
 } from '../lib/todoLabels'
-import { countsTowardActions } from '../lib/actionStatus'
 import {
   EMPTY_TODO_FORM,
   buildActionColumns,
   buildChecklistColumns,
-  buildTodoViews,
   canCreate,
   formValuesFor,
-  groupTodos,
   validateTodoForm,
 } from '../lib/todoModel'
 import type { TodoFormValues, TodoView, Viewer } from '../lib/todoModel'
@@ -88,12 +84,10 @@ const GRABS_SECTION_ID = 'todo-section-grabs'
 export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegment, highlightId }: ActionsSheetProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
-  const { data: trip } = useTrip(tripId)
   const { data: participants } = useParticipants(tripId)
   const actionsQuery = useActions(tripId)
   const checklistsQuery = useChecklists(tripId)
   const { data: sections } = useSections(tripId)
-  const sectionVoters = useSectionVoters(tripId)
   const whoSupported = useTodoWhoSupport()
   const logActivity = useTripActivityLog(tripId)
 
@@ -109,7 +103,6 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
   const claimItem = useClaimChecklistItem(tripId)
 
   const actions = actionsQuery.data
-  const checklists = checklistsQuery.data
   const isLoading = actionsQuery.isLoading || checklistsQuery.isLoading
   const isError = actionsQuery.isError || checklistsQuery.isError
 
@@ -122,28 +115,8 @@ export function ActionsSheet({ isOpen, onClose, tripId, isOrganizer, initialSegm
 
   const { values, updateField, setValues, clearDraft } = useFormDraft<TodoFormValues>(`todos-add:${tripId}`, EMPTY_TODO_FORM)
 
-  const finished = trip ? isTripFinished(trip) : false
-  const myParticipant = (participants ?? []).find((p) => p.user_id === user?.id)
-  const isParticipant = !!myParticipant && countsTowardActions(myParticipant)
+  const { views, groups, finished, isParticipant } = useTodoGroups(tripId)
   const viewer: Viewer = { userId: user?.id, isOrganizer, isParticipant, finished, whoSupported }
-
-  const closedSectionIds = useMemo(() => new Set((sections ?? []).filter((s) => s.status === 'completed').map((s) => s.id)), [sections])
-
-  const views = useMemo(
-    () =>
-      buildTodoViews({
-        actions: actions ?? [],
-        checklists: checklists ?? [],
-        participants: participants ?? [],
-        userId: user?.id,
-        trip,
-        sectionVoters,
-        closedSectionIds,
-        finished,
-      }),
-    [actions, checklists, participants, user?.id, trip, sectionVoters, closedSectionIds, finished]
-  )
-  const groups = useMemo(() => groupTodos(views, { userId: user?.id, finished, viewerInScope: isParticipant }), [views, user?.id, finished, isParticipant])
 
   // Questions a to-do can be linked to: any open one, plus the one this to-do is already linked to.
   const sectionChoices = useMemo(() => {

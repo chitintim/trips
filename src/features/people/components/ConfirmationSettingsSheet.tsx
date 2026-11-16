@@ -5,6 +5,7 @@ import { Modal, Button, Input, TextArea, Select, useToast } from '../../../compo
 import { useTrip, useUpdateTrip, useParticipants } from '../../../lib/queries/useTrip'
 import { useResetConfirmations } from '../../../lib/queries/useConfirmations'
 import { ResetConfirmationsSheet } from './ResetConfirmationsSheet'
+import { ROUGH_COST_LABEL, ROUGH_COST_HELP } from '../lib/roughCost'
 import { countResettableConfirmations, describeResetCount } from '../lib/resetConfirmations'
 import { useFormDraft } from '../../../lib/forms/useFormDraft'
 import { useUnsavedChangesGuard } from '../../../lib/forms/useUnsavedChangesGuard'
@@ -115,12 +116,13 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
         showToast({ type: 'error', message: 'Capacity limit must be a positive number' })
         return
       }
-      if (values.estimatedCost && (parseFloat(values.estimatedCost) <= 0 || isNaN(parseFloat(values.estimatedCost)))) {
-        showToast({ type: 'error', message: 'Estimated cost must be a positive number' })
-        return
-      }
+    }
+    if (values.estimatedCost.trim() !== '' && (isNaN(parseFloat(values.estimatedCost)) || parseFloat(values.estimatedCost) < 0)) {
+      showToast({ type: 'error', message: 'The rough cost can’t be negative' })
+      return
     }
 
+    const roughCost = values.estimatedCost.trim() === '' ? 0 : parseFloat(values.estimatedCost)
     try {
       // Re-opening with "start fresh": wipe the old round first, so a failed
       // reset aborts before the trip is switched back on.
@@ -130,8 +132,8 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
       await updateTrip.mutateAsync({
         confirmation_enabled: values.confirmationEnabled,
         confirmation_message: values.confirmationEnabled ? values.confirmationMessage.trim() : null,
-        estimated_accommodation_cost: values.confirmationEnabled && values.estimatedCost ? parseFloat(values.estimatedCost) : null,
-        accommodation_cost_currency: values.confirmationEnabled && values.estimatedCost ? values.currency : null,
+        estimated_accommodation_cost: roughCost > 0 ? roughCost : null,
+        accommodation_cost_currency: roughCost > 0 ? values.currency : null,
         full_cost_link: values.confirmationEnabled && values.fullCostLink.trim() ? values.fullCostLink.trim() : null,
         capacity_limit: values.confirmationEnabled && values.capacityLimit ? parseInt(values.capacityLimit, 10) : null,
         confirmation_deadline: values.confirmationEnabled && values.confirmationDeadline ? new Date(values.confirmationDeadline).toISOString() : null,
@@ -170,6 +172,28 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
               }`}
             />
           </button>
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
+            <Input
+              label={ROUGH_COST_LABEL}
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
+              value={values.estimatedCost}
+              onChange={(e) => updateField('estimatedCost', e.target.value)}
+              placeholder="500"
+            />
+            <Select
+              label="Currency"
+              value={values.currency}
+              onChange={(e) => updateField('currency', e.target.value)}
+              options={CURRENCY_OPTIONS}
+            />
+          </div>
+          <p className="text-xs text-[var(--text-muted)]">{ROUGH_COST_HELP}</p>
         </div>
 
         {isReopening && values.confirmationEnabled && (
@@ -212,22 +236,6 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
                   <ReactMarkdown remarkPlugins={[remarkBreaks]}>{values.confirmationMessage || '*Nothing to preview yet*'}</ReactMarkdown>
                 </div>
               )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Input
-                label="Estimated accommodation cost per person"
-                type="number"
-                value={values.estimatedCost}
-                onChange={(e) => updateField('estimatedCost', e.target.value)}
-                placeholder="500"
-              />
-              <Select
-                label="Currency"
-                value={values.currency}
-                onChange={(e) => updateField('currency', e.target.value)}
-                options={CURRENCY_OPTIONS}
-              />
             </div>
 
             <Input

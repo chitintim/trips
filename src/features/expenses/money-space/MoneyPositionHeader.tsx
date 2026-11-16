@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Badge, Button, UserAvatar } from '../../../components/ui'
-import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
+import { formatMoneyMinor } from '../lib/formatMoney'
 import { withMoneyParticipants } from '../lib/balances'
+import { explainMoneyPosition } from '../../../lib/cost/moneyEquation'
+import { buildMoneyPositionView } from './moneyPositionView'
 import { computeMoneyPosition, computePairwiseLedger, mergeSettlementsWithUsableCarryovers } from './moneyPosition'
 import type { PairwiseLedgerEntry } from './moneyPosition'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -18,17 +20,21 @@ export interface MoneyPositionHeaderProps {
   allParticipants?: ParticipantWithUser[]
   currentUserId: string | undefined
   baseCurrency: string
+  /** trips.settlement_snapshot is set: balances are frozen and the pay to-dos come from the suggested rows. The headline then never contradicts them. */
+  frozen?: boolean
   /** Settle-up STATE card affordance (plan §4 #4) — only meaningful when there's actually something to settle. */
   onSettleUp: () => void
   /** "See my breakdown" — pushes My Spending as a screen (plan §4 #5). */
   onSeeMyBreakdown: () => void
 }
 
-const KIND_COPY: Record<'owed' | 'owe' | 'settled', { verb: string; emoji: string }> = {
-  owed: { verb: "You're owed", emoji: '💰' },
-  owe: { verb: 'You owe', emoji: '⚠️' },
-  settled: { verb: 'All square', emoji: '✅' },
-}
+const TONE_EMOJI = { owed: '💰', owe: '⚠️', waiting: '⏳', settled: '✅' } as const
+const TONE_COLOR = {
+  owe: 'text-danger-600',
+  owed: 'text-success-600',
+  waiting: 'text-[var(--text-primary)]',
+  settled: 'text-[var(--text-primary)]',
+} as const
 
 /** Short human date for a ledger entry line ("1 Jul"). */
 function ledgerDateLabel(date: string): string {
@@ -60,11 +66,13 @@ export function MoneyPositionHeader({
   allParticipants = [],
   currentUserId,
   baseCurrency,
+  frozen = false,
   onSettleUp,
   onSeeMyBreakdown,
 }: MoneyPositionHeaderProps) {
   const [expanded, setExpanded] = useState(false)
   const [expandedPersonId, setExpandedPersonId] = useState<string | null>(null)
+  const [showEquation, setShowEquation] = useState(true)
   const position = computeMoneyPosition(
     expenses,
     settlements,
@@ -73,8 +81,26 @@ export function MoneyPositionHeader({
     baseCurrency,
     carryovers
   )
-  const copy = KIND_COPY[position.kind]
   const byUserId = new Map([...allParticipants, ...participants].map((p) => [p.user_id, p]))
+  // The headline and the "how it adds up" rows: same ledger maths as Settle up
+  // (explainMoneyPosition wraps computeBalances), plus payments by status.
+  const view = useMemo(() => {
+    if (!currentUserId) return null
+    const names: Record<string, string> = {}
+    for (const p of [...allParticipants, ...participants]) names[p.user_id] = p.user?.full_name || p.user?.email || 'someone'
+    return buildMoneyPositionView(
+      explainMoneyPosition({
+        expenses,
+        settlements,
+        participantUserIds: participants.map((p) => p.user_id),
+        currentUserId,
+        baseCurrency,
+        carryovers,
+        frozen,
+        names,
+      })
+    )
+  }, [expenses, settlements, carryovers, participants, allParticipants, currentUserId, baseCurrency, frozen])
 
   // Same merged real-settlements + usable-carryovers list computeMoneyPosition
   // fed computePairwiseBreakdown -- the per-pair ledger must read the same
@@ -94,24 +120,17 @@ export function MoneyPositionHeader({
     <div className="rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] p-4 sm:p-5 space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">{copy.emoji} Your position</p>
-          <p
-            className={`mt-1 text-2xl font-semibold tabular-nums ${
-              position.kind === 'owe' ? 'text-danger-600' : position.kind === 'owed' ? 'text-success-600' : 'text-[var(--text-primary)]'
-            }`}
-          >
-            {position.kind === 'settled' ? (
-              <>All square ✓</>
-            ) : (
-              <>
-                {copy.verb} {formatMoney(position.amount, position.currency)}
-              </>
-            )}
+          <p className="text-xs font-medium uppercase tracking-wide text-[var(--text-muted)]">
+            {TONE_EMOJI[view?.tone ?? 'settled']} Your position
           </p>
+          <p className={`mt-1 text-xl sm:text-2xl font-semibold tabular-nums ${TONE_COLOR[view?.tone ?? 'settled']}`}>
+            {view ? view.headline : '—'}
+          </p>
+          {view?.note && <p className="mt-0.5 text-sm text-[var(--text-secondary)]">{view.note}</p>}
         </div>
 
         <div className="flex flex-col items-end gap-2 shrink-0">
-          {position.kind !== 'settled' && (
+          {!(view?.square ?? position.kind === 'settled') && (
             <Button variant="primary" size="sm" onClick={onSettleUp}>
               Settle
             </Button>
@@ -126,6 +145,37 @@ export function MoneyPositionHeader({
         <Badge variant="warning">
           ⚠️ {position.expensesMissingRate.length} expense{position.expensesMissingRate.length === 1 ? '' : 's'} missing FX rates — excluded above
         </Badge>
+      )}
+
+      {view && view.rows.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowEquation((v) => !v)}
+            className="text-xs font-medium text-accent-700 dark:text-accent-400 press-scale"
+            aria-expanded={showEquation}
+          >
+            How this adds up {showEquation ? '▲' : '▼'}
+          </button>
+          {showEquation && (
+            <dl className="mt-2 space-y-1 text-sm">
+              {view.rows.map((row) => (
+                <div
+                  key={row.key}
+                  className={`flex items-baseline justify-between gap-3 ${row.strong ? 'border-t border-[var(--border-subtle)] pt-1 font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}`}
+                >
+                  <dt className="min-w-0">
+                    {row.sign && <span className="inline-block w-4 text-[var(--text-muted)]" aria-hidden="true">{row.sign}</span>}
+                    {row.label}
+                  </dt>
+                  {row.amount && <dd className="shrink-0 tabular-nums">{row.amount}</dd>}
+                </div>
+              ))}
+              {view.footnote && <p className="pt-0.5 text-xs text-[var(--text-muted)]">{view.footnote}</p>}
+              {view.foreignNote && <p className="pt-0.5 text-xs text-[var(--text-muted)]">{view.foreignNote}</p>}
+            </dl>
+          )}
+        </div>
       )}
 
       <div className="flex items-center gap-3">

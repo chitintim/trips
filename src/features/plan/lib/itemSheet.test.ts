@@ -1,7 +1,24 @@
 import { describe, it, expect } from 'vitest'
-import { planItemStatus, bookingSummaryText, liveBookedOptionIds, itemMenuActions, sheetBody, localDateIso } from './itemSheet'
+import { notScheduledHeading, planItemStatus, bookingSummaryText, liveBookedOptionIds, itemMenuActions, sheetBody, localDateIso } from './itemSheet'
 
 const base = { date: null, optionId: 'o1', sectionId: 's1' }
+
+describe('planItemStatus from the real question state', () => {
+  const winner = { ...base, stage: 'proposal' as const, isUnscheduledWinner: true, vote: { sectionStatus: 'completed' } }
+  it('a decided winner is Decided, not Open', () => {
+    expect(planItemStatus(winner, '2026-08-01')?.label).toBe('Decided')
+    expect(planItemStatus(winner, '2026-08-01', { tripFinished: true })?.label).toBe('Decided')
+  })
+  it('an undecided question on a finished trip is Closed, never Open', () => {
+    const open = { ...base, stage: 'proposal' as const, vote: { sectionStatus: 'in_progress' } }
+    expect(planItemStatus(open, '2026-08-01', { tripFinished: true })?.label).toBe('Closed')
+    expect(planItemStatus(open, '2026-08-01')?.label).toBe('Open')
+  })
+  it('quiet heading on finished trips', () => {
+    expect(notScheduledHeading(true, 3)).toBe('Decided, not scheduled (3)')
+    expect(notScheduledHeading(false, 3)).toBe('Not scheduled yet (3)')
+  })
+})
 
 describe('planItemStatus', () => {
   it('uses only the approved statuses', () => {

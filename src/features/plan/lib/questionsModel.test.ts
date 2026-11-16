@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { daysBannerText, defaultLens, groupQuestions, questionsEmptyState, selectDaysItems, showAnswerAll } from './questionsModel'
+import { GROUP_HEADINGS, daysBannerText, defaultLens, groupQuestions, questionsEmptyState, selectDaysItems, showAnswerAll } from './questionsModel'
 import { option, section, vote } from '../../decisions/lib/answerFixtures'
 import type { PlanItem } from './planItems'
 
@@ -27,7 +27,8 @@ describe('groupQuestions', () => {
     expect(g.open.map((e) => e.section.id)).toEqual(['q2', 'q1'])
     expect(g.open.map((e) => e.needsAnswer)).toEqual([true, false])
     expect(g.decided.map((e) => e.section.id)).toEqual(['q3'])
-    expect(g.done.map((e) => e.section.id)).toEqual(['q4'])
+    expect(g.booked.map((e) => e.section.id)).toEqual(['q4'])
+    expect(g.closed).toHaveLength(0)
     expect(g.needsAnswerCount).toBe(1)
     expect(g.total).toBe(4)
   })
@@ -48,7 +49,9 @@ describe('groupQuestions', () => {
   it('on a finished trip an undecided question is closed, never "needs your answer"', () => {
     const g = run([two('q1')], { trip: finishedTrip })
     expect(g.open).toHaveLength(0)
-    expect(g.done.map((e) => e.stage)).toEqual(['closed'])
+    expect(g.closed.map((e) => e.stage)).toEqual(['closed'])
+    expect(g.booked).toHaveLength(0)
+    expect(GROUP_HEADINGS.closed).toBe('Closed \u2014 no decision')
     expect(g.needsAnswerCount).toBe(0)
   })
 })

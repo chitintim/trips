@@ -31,7 +31,7 @@ function item(overrides: Partial<PlanItem> & { id: string }): PlanItem {
     isMatrixSection: false,
     isPersonalOrder: false,
     vote: null,
-    costImpact: null,
+    price: null,
     booking: null,
     selections: [],
     isUnscheduledWinner: false,

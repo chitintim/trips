@@ -10,6 +10,8 @@ import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
 import { PlanItemCard } from './PlanItemCard'
+import { notScheduledHeading } from '../lib/itemSheet'
+import { isTripFinished } from '../../../lib/answers/answers'
 import { ConsolidatedTravelRow } from './ConsolidatedTravelRow'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
 import { CompanionSuggestionCard } from './CompanionSuggestionCard'
@@ -258,8 +260,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
   return (
     <div className="relative space-y-4">
       {days.notScheduled.length > 0 && (
-        <section aria-label={`Not scheduled yet (${days.notScheduled.length})`} className="space-y-2">
-          <h3 className="text-sm font-semibold text-[var(--text-primary)]">Not scheduled yet ({days.notScheduled.length})</h3>
+        <section aria-label={notScheduledHeading(isTripFinished(trip), days.notScheduled.length)} className="space-y-2">
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">{notScheduledHeading(isTripFinished(trip), days.notScheduled.length)}</h3>
           {days.notScheduled.map((item) => (
             <PlanItemCard
               trip={trip}

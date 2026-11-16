@@ -35,7 +35,7 @@ export const CATEGORY_CONFIG: Record<TimelineEventCategory, CategoryStyle> = {
     accentClassName: 'bg-neutral-500',
   },
   activity: {
-    emoji: '⛷️',
+    emoji: '🎟️',
     label: 'Activity',
     badgeClassName: 'bg-success-100 text-success-800 dark:bg-success-950 dark:text-success-300',
     accentClassName: 'bg-success-500',

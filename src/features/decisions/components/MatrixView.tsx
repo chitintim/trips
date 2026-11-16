@@ -1,4 +1,5 @@
 import { SelectionAvatars } from '../../../components/ui'
+import { formatMoney } from '../../../lib/money'
 import type { OptionWithSelections } from '../../../lib/queries/usePlanning'
 import { readOptionMetadata, getMatrixAxes } from '../lib/optionMetadata'
 
@@ -77,7 +78,7 @@ export function MatrixView({ options, currency = 'GBP' }: MatrixViewProps) {
                         <div className="sr-only">{option.title}</div>
                         {option.price != null && (
                           <div className="text-sm font-semibold text-[var(--text-primary)]">
-                            {option.currency || currency} {option.price.toFixed(0)}
+                            {formatMoney(option.price, option.currency || currency || 'GBP')}
                           </div>
                         )}
                         <div className={`text-xs ${n > 0 ? 'font-medium text-[var(--text-primary)]' : 'text-[var(--text-muted)]'}`}>

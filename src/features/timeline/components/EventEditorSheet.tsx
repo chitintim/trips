@@ -6,11 +6,13 @@ import { useCreateTimelineEvent, useUpdateTimelineEvent, useDeleteTimelineEvent 
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { PlacePicker, PlaceChip } from '../../places'
+import { formatMoney } from '../../../lib/money'
+import { EVENT_COST_BASES, applyEventCost, costFormFromEvent, validateEventCost, type EventCostFormValues } from '../lib/eventCostForm'
 import { CATEGORY_OPTIONS } from '../lib/categoryConfig'
 import type { Trip, TimelineEvent, TimelineEventCategory } from '../../../types'
 import type { Tables } from '../../../types/database.types'
 
-interface EventFormValues {
+interface EventFormValues extends EventCostFormValues {
   title: string
   category: TimelineEventCategory
   eventDate: string
@@ -31,7 +33,7 @@ export interface EventEditorDefaults {
   startTime?: string | null
 }
 
-function emptyValues(defaultDate: string, defaults?: EventEditorDefaults): EventFormValues {
+function emptyValues(defaultDate: string, currency: string, defaults?: EventEditorDefaults): EventFormValues {
   return {
     title: defaults?.title ?? '',
     category: defaults?.category ?? 'other',
@@ -43,11 +45,12 @@ function emptyValues(defaultDate: string, defaults?: EventEditorDefaults): Event
     placeId: null,
     description: '',
     participantIds: null,
+    ...costFormFromEvent(null, currency),
   }
 }
 
-function fromEvent(event: TimelineEvent | null, defaultDate: string, defaults?: EventEditorDefaults): EventFormValues {
-  if (!event) return emptyValues(defaultDate, defaults)
+function fromEvent(event: TimelineEvent | null, defaultDate: string, currency: string, defaults?: EventEditorDefaults): EventFormValues {
+  if (!event) return emptyValues(defaultDate, currency, defaults)
   return {
     title: event.title,
     category: event.category as TimelineEventCategory,
@@ -59,6 +62,7 @@ function fromEvent(event: TimelineEvent | null, defaultDate: string, defaults?: 
     placeId: event.place_id,
     description: event.description ?? '',
     participantIds: event.participant_ids ?? null,
+    ...costFormFromEvent(event.metadata, currency),
   }
 }
 
@@ -84,6 +88,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
   const { user } = useAuth()
   const { showToast } = useToast()
   const tripId = trip.id
+  const tripCurrency = trip.base_currency || trip.accommodation_cost_currency || 'GBP'
   const isEditing = !!event
 
   const createEvent = useCreateTimelineEvent(tripId)
@@ -98,12 +103,15 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
   const draftKey = isEditing
     ? `timeline-event-editor:${event!.id}`
     : `timeline-event-editor:new:${tripId}${defaults?.title ? `:${defaults.title}` : ''}`
-  const seed = fromEvent(event, defaultDate || trip.start_date, defaults)
-  const { values, setValues, updateField, clearDraft } = useFormDraft<EventFormValues>(draftKey, seed, {
+  const seed = fromEvent(event, defaultDate || trip.start_date, tripCurrency, defaults)
+  const { values: draftValues, setValues, updateField, clearDraft } = useFormDraft<EventFormValues>(draftKey, seed, {
     // Edit forms must always seed from the record, never restore a stale
     // autosaved draft (Form & Flow Standard §5.2).
     enabled: !isEditing,
   })
+
+  // Drafts saved before the cost fields existed lack them; fill from the seed.
+  const values: EventFormValues = { ...seed, ...draftValues }
 
   const [placePickerOpen, setPlacePickerOpen] = useState(false)
   const [pickedPlace, setPickedPlace] = useState<Tables<'places'> | null>(null)
@@ -112,7 +120,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
   // Fresh-state guarantee: reset to a clean seed every time the sheet opens.
   useEffect(() => {
     if (isOpen) {
-      setValues(fromEvent(event, defaultDate || trip.start_date, defaults))
+      setValues(fromEvent(event, defaultDate || trip.start_date, tripCurrency, defaults))
       setPickedPlace(null)
       setConfirmingDelete(false)
     }
@@ -126,6 +134,14 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
   const isSaving = createEvent.isPending || updateEvent.isPending
   const activeParticipants = (participants ?? []).filter((p) => p.active !== false)
   const allSelected = values.participantIds === null
+  const currencyChoices = Array.from(new Set([values.costCurrency, tripCurrency, 'GBP', 'EUR', 'USD', 'JPY', 'CHF', 'AUD', 'CAD']))
+  const costAmountNumber = Number(values.costAmount)
+  const costPreview =
+    Number.isFinite(costAmountNumber) && costAmountNumber > 0
+      ? values.costBasis === 'each'
+        ? `${formatMoney(costAmountNumber, values.costCurrency)} each`
+        : `${formatMoney(costAmountNumber, values.costCurrency)} total, split between everyone going`
+      : null
 
   const toggleParticipant = (userId: string) => {
     setValues((prev) => {
@@ -148,6 +164,12 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
       return
     }
 
+    const costProblem = validateEventCost(values)
+    if (costProblem) {
+      showToast({ type: 'error', message: costProblem })
+      return
+    }
+
     const fields = {
       title: values.title.trim(),
       category: values.category,
@@ -159,6 +181,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
       place_id: values.placeId,
       description: values.description.trim() || null,
       participant_ids: values.participantIds,
+      metadata: applyEventCost(event?.metadata, values),
     }
 
     try {
@@ -272,6 +295,39 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
           placeholder="Additional details, booking references..."
           rows={3}
         />
+
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
+            <Input
+              label="Cost (optional)"
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="any"
+              value={values.costAmount}
+              onChange={(e) => updateField('costAmount', e.target.value)}
+              placeholder="0.00"
+            />
+            <Select
+              label="Currency"
+              value={values.costCurrency}
+              onChange={(e) => updateField('costCurrency', e.target.value)}
+              options={currencyChoices.map((c) => ({ value: c, label: c }))}
+            />
+          </div>
+          {values.costAmount.trim() !== '' && (
+            <>
+              <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="Who pays this cost">
+                {EVENT_COST_BASES.map((b) => (
+                  <Chip key={b.value} selected={values.costBasis === b.value} onClick={() => updateField('costBasis', b.value)}>
+                    {b.label}
+                  </Chip>
+                ))}
+              </div>
+              {costPreview && <p className="text-xs text-[var(--text-muted)]">{costPreview}</p>}
+            </>
+          )}
+        </div>
 
         <div>
           <span className="mb-1.5 block text-sm font-medium text-[var(--text-primary)]">Who's this for?</span>

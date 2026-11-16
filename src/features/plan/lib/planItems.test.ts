@@ -306,7 +306,7 @@ describe('composePlanItems', () => {
     expect(items[0].startTime).toBe('14:00')
   })
 
-  it('computes cost impact per person for total_split options', () => {
+  it('prices a total_split option per person', () => {
     const { items } = composePlanItems({
       ...BASE_INPUT,
       confirmedCount: 4,
@@ -321,7 +321,21 @@ describe('composePlanItems', () => {
       ],
       votes: [vote({ option_id: 'o1', user_id: 'user-2' })],
     })
-    expect(items[0].costImpact).toEqual({ perPerson: 100, currency: 'GBP', isTiered: false, sensitivityLine: null, isEstimate: false, headcount: 4 })
+    expect(items[0].price?.perPerson).toBe(100)
+    expect(items[0].price?.headcount).toBe(4)
+  })
+
+  it('shows a cost saved on the event through the same price display', () => {
+    const { items } = composePlanItems({
+      ...BASE_INPUT,
+      confirmedCount: 4,
+      events: [
+        event({ id: 'e1', event_date: '2026-08-01', title: 'Onsen', metadata: { cost: { amount: 400, currency: 'GBP', basis: 'total_split' } } as never }),
+        event({ id: 'e2', event_date: '2026-08-02', title: 'Walk' }),
+      ],
+    })
+    expect(items.find((i) => i.id === 'e1')?.price?.perPerson).toBe(100)
+    expect(items.find((i) => i.id === 'e2')?.price).toBeNull()
   })
 
   it('is tier-aware when an option carries price_tiers metadata (UX_REDESIGN.md Part 5 shape 3)', () => {
@@ -346,14 +360,8 @@ describe('composePlanItems', () => {
       ],
       votes: [vote({ option_id: 'o1', user_id: 'user-2' })],
     })
-    expect(items[0].costImpact).toEqual({
-      perPerson: 50,
-      currency: 'GBP',
-      isTiered: true,
-      sensitivityLine: '£50/pp if 6 · £37.50/pp if 12',
-      isEstimate: false,
-      headcount: 9,
-    })
+    expect(items[0].price?.perPerson).toBe(50)
+    expect(items[0].price?.sensitivity).not.toBeNull()
   })
 
   it('never sets vote on options under a personal-order (shape 2) section, even with in_progress status', () => {

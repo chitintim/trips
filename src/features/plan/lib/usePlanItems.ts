@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import { useSections, useVotes } from '../../../lib/queries/usePlanning'
 import { useBookings } from '../../../lib/queries/useBookings'
+import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useAuth } from '../../../hooks/useAuth'
 import { inScopeHeadcount } from '../../people/lib/inScopePeople'
@@ -33,6 +34,7 @@ export function usePlanItems(tripId: string | undefined): UsePlanItemsResult {
   const bookingsQuery = useBookings(tripId)
   const participantsQuery = useParticipants(tripId)
   const { data: trip } = useTrip(tripId)
+  const { data: money } = useExpenses(tripId)
 
   const { data: events, isLoading: eventsLoading, isError: eventsError } = eventsQuery
   const { data: sections, isLoading: sectionsLoading, isError: sectionsError } = sectionsQuery
@@ -58,8 +60,11 @@ export function usePlanItems(tripId: string | undefined): UsePlanItemsResult {
         confirmedCount,
         headcountIsEstimate,
         currentUserId: user?.id ?? null,
+        trip: trip ?? null,
+        expenses: money?.expenses,
+        participantUserIds: (participants || []).map((p) => p.user_id),
       }),
-    [events, sections, votes, bookings, confirmedCount, headcountIsEstimate, user?.id]
+    [events, sections, votes, bookings, confirmedCount, headcountIsEstimate, user?.id, trip, money, participants]
   )
 
   return {

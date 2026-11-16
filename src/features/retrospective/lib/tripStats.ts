@@ -1,4 +1,4 @@
-import { toMinorUnits, fromMinorUnits } from '../../../lib/money'
+import { toMinorUnits, formatMoneyMinor } from '../../../lib/money'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 
 /**
@@ -115,16 +115,9 @@ export function computeTripStats(expenses: ExpenseWithDetails[], baseCurrency: s
   }
 }
 
-const CURRENCY_SYMBOLS: Record<string, string> = { GBP: '£', EUR: '€', USD: '$', JPY: '¥', CHF: 'CHF ', AUD: 'A$', CAD: 'C$' }
-
-/** Display a minor-unit amount in base currency, e.g. 123456 -> "£1,234.56". */
+/** Display a minor-unit amount in base currency, e.g. 123456 -> "£1,234.56" (the shared ledger formatter). */
 export function formatMinor(amountMinor: number, currency: string): string {
-  const major = fromMinorUnits(amountMinor, currency)
-  const symbol = CURRENCY_SYMBOLS[currency] ?? `${currency} `
-  return `${symbol}${major.toLocaleString(undefined, {
-    minimumFractionDigits: currency === 'JPY' ? 0 : 2,
-    maximumFractionDigits: currency === 'JPY' ? 0 : 2,
-  })}`
+  return formatMoneyMinor(amountMinor, currency)
 }
 
 const CATEGORY_META: Record<string, { icon: string; label: string }> = {

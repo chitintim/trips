@@ -1,12 +1,12 @@
 import { useId, useState, type ReactNode } from 'react'
-import { Badge, Button } from '../../../components/ui'
+import { Badge, Button, PriceTag } from '../../../components/ui'
 import type { OptionWithSelections, SectionWithOptions } from '../../../lib/queries/usePlanning'
 import type { Trip } from '../../../types'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useQuestionPasses, useVotes } from '../../../lib/queries/usePlanning'
 import { AnswerControl } from './AnswerControl'
 import { EveryonesAnswers } from './EveryonesAnswers'
-import { optionCostLines } from '../lib/answerModel'
+import { useOptionPrice } from '../lib/useOptionPrice'
 import { useQuestionAnswers } from '../lib/useQuestionAnswers'
 import { CHANGE_ANY_TIME, NO_OPTIONS_NOTE, NO_OPTIONS_ORGANIZER_NOTE } from '../lib/answerCopy'
 import type { CardChip, StripStep } from '../lib/questionCardModel'
@@ -23,7 +23,7 @@ export interface QuestionCardProps {
   onManage?: () => void
   /**
    * Price slot: rendered under each option row and under the decided option.
-   * Defaults to the existing cost text; Phase 3 passes the one money display.
+   * Defaults to the one price display (computeOptionPrice + PriceTag).
    */
   renderPrice?: (option: OptionWithSelections, section: SectionWithOptions) => ReactNode
   /** Override the starting state of the answer area (default: open only while this person still owes an answer). */
@@ -101,16 +101,13 @@ export function QuestionCard({ trip, section, onManage, renderPrice, defaultExpa
   const [showAll, setShowAll] = useState(false)
   const [showChoices, setShowChoices] = useState(false)
 
+  const priceOf = useOptionPrice(trip, section, headcount, card.stage === 'decided' || card.stage === 'booked')
   const decidedOption = card.decided ? section.options.find((o) => o.id === card.decided!.optionId) : undefined
   const decidedPrice = (() => {
     if (!decidedOption) return null
     if (renderPrice) return renderPrice(decidedOption, section)
-    const { text } = optionCostLines(decidedOption, headcount)
-    return text ? (
-      <Badge variant="info" size="sm">
-        {text}
-      </Badge>
-    ) : null
+    const p = priceOf(decidedOption)
+    return p ? <PriceTag price={p} className="w-full pl-7" /> : null
   })()
 
   return (
@@ -172,14 +169,6 @@ export function QuestionCard({ trip, section, onManage, renderPrice, defaultExpa
                 {expanded ? 'Done' : control.mode === 'own' ? 'Change' : 'Change my answer'}
               </Button>
             )}
-            {control.mode === 'own' && control.results.visible && card.viewerState !== 'no_options' && (
-              <>
-                <Button variant="ghost" size="sm" aria-expanded={showChoices} onClick={() => setShowChoices((v) => !v)}>
-                  {showChoices ? 'Hide what everyone chose ▴' : 'See what everyone chose ▾'}
-                </Button>
-                {showChoices && <ParticipantChoices trip={trip} section={section} />}
-              </>
-            )}
           </>
         )}
 
@@ -201,6 +190,16 @@ export function QuestionCard({ trip, section, onManage, renderPrice, defaultExpa
               {showAll ? 'Hide options and answers ▴' : 'See all options and answers ▾'}
             </Button>
             {showAll && <AnswerControl trip={trip} section={section} closed renderPrice={renderPrice} hideInstruction focusOptionId={focusOptionId} />}
+          </>
+        )}
+
+        {/* Own choice: everyone can see what everyone chose in every state, including closed and finished. */}
+        {control.mode === 'own' && control.results.visible && card.viewerState !== 'no_options' && (
+          <>
+            <Button variant="ghost" size="sm" aria-expanded={showChoices} onClick={() => setShowChoices((v) => !v)}>
+              {showChoices ? 'Hide what everyone chose ▴' : 'See what everyone chose ▾'}
+            </Button>
+            {showChoices && <ParticipantChoices trip={trip} section={section} />}
           </>
         )}
       </div>

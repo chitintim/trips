@@ -3,8 +3,8 @@ import { useAuth } from '../../../hooks/useAuth'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useSettlements, useSettlementCarryovers } from '../../../lib/queries/useSettlements'
-import { computeBalances, splitOwedAmounts, withMoneyParticipants } from '../../expenses'
-import { formatMoney } from '../../decisions/lib/costImpact'
+import { explainMoneyPosition } from '../../../lib/cost/moneyEquation'
+import { buildMoneyPositionView } from '../../expenses/money-space/moneyPositionView'
 import type { Trip } from '../../../types'
 
 export interface SettleStatusCardProps {
@@ -28,28 +28,31 @@ export function SettleStatusCard({ trip, onNavigate }: SettleStatusCardProps) {
   // Up. Same balance math, same inputs, everywhere.
   const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
 
-  const summary = useMemo(() => {
+  // The SAME headline the Money header prints (explainMoneyPosition + buildMoneyPositionView), so money
+  // already marked paid is never called "You owe", and a frozen trip with stale suggested rows is
+  // never called square.
+  const view = useMemo(() => {
     if (!user || participants.length === 0) return null
-    const { balances } = computeBalances(
-      expensesData?.expenses ?? [],
-      settlements,
-      withMoneyParticipants(participants.map((p) => p.user_id), expensesData?.expenses ?? [], settlements, trip.base_currency, carryovers),
-      trip.base_currency,
-      carryovers
+    const names: Record<string, string> = {}
+    for (const p of participants) names[p.user_id] = p.user?.full_name || p.user?.email || 'someone'
+    return buildMoneyPositionView(
+      explainMoneyPosition({
+        expenses: expensesData?.expenses ?? [],
+        settlements,
+        participantUserIds: participants.map((p) => p.user_id),
+        currentUserId: user.id,
+        baseCurrency: trip.base_currency,
+        carryovers,
+        frozen: trip.settlement_snapshot != null,
+        names,
+      })
     )
-    const mine = balances.find((b) => b.userId === user.id)
-    if (!mine) return null
-    return { ...splitOwedAmounts(mine.netBalanceMinor, trip.base_currency), isBalanced: mine.isBalanced }
-  }, [user, participants, expensesData, settlements, trip.base_currency, carryovers])
+  }, [user, participants, expensesData, settlements, trip.base_currency, trip.settlement_snapshot, carryovers])
 
-  if (!summary) return null
-  if (summary.isBalanced && (expensesData?.expenses ?? []).length === 0) return null
+  if (!view) return null
+  if (view.square && (expensesData?.expenses ?? []).length === 0) return null
 
-  const statusLine = summary.isBalanced
-    ? "You're all square 🎉"
-    : summary.youOwe > 0
-      ? `You owe ${formatMoney(summary.youOwe, trip.base_currency)}`
-      : `You're owed ${formatMoney(summary.owedToYou, trip.base_currency)}`
+  const statusLine = view.square ? "You're all square 🎉" : view.headline
 
   return (
     <button

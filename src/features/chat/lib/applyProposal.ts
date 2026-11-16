@@ -1,5 +1,5 @@
 import { supabase } from '../../../lib/supabase'
-import { largestRemainderDistribute, toMinorUnits, fromMinorUnits } from '../../../lib/money'
+import { largestRemainderDistribute, toMinorUnits, fromMinorUnits, formatMoney } from '../../../lib/money'
 import { resolveExpenseFxFields, splitBaseCurrencyAmount } from '../../../lib/fx/resolveExpenseFxFields'
 import { reportError } from '../../../lib/reportError'
 import { ProposedActionSchema, type ProposedAction } from '../../../shared/contracts/aiProposal'
@@ -91,7 +91,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
       return {
         icon: '💡',
         title: 'Add option',
-        summary: `"${action.title}"${action.price != null ? ` — ${action.currency ?? ''} ${action.price}`.trimEnd() : ''}`,
+        summary: `"${action.title}"${action.price != null ? ` — ${action.currency ? formatMoney(action.price, action.currency) : action.price}` : ''}`,
         target: 'Plan',
         isDelete: false,
       }
@@ -99,7 +99,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
       return {
         icon: '🧾',
         title: 'Track booking',
-        summary: `"${action.title}"${action.vendor ? ` via ${action.vendor}` : ''}${action.amount != null ? ` — ${action.currency ?? ''} ${action.amount}`.trimEnd() : ''}`,
+        summary: `"${action.title}"${action.vendor ? ` via ${action.vendor}` : ''}${action.amount != null ? ` — ${action.currency ? formatMoney(action.amount, action.currency) : action.amount}` : ''}`,
         target: 'Bookings',
         isDelete: false,
       }
@@ -107,7 +107,7 @@ export function describeAction(action: ProposedAction, ctx: DescribeContext = {}
       return {
         icon: '💰',
         title: 'Add expense',
-        summary: `"${action.description}" — ${action.currency} ${action.amount}${action.participant_ids?.length ? ` · ${action.participant_ids.length} people` : ''}`,
+        summary: `"${action.description}" — ${formatMoney(action.amount, action.currency, { mode: 'exact' })}${action.participant_ids?.length ? ` · ${action.participant_ids.length} people` : ''}`,
         target: 'Expenses',
         isDelete: false,
       }

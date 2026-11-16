@@ -45,9 +45,11 @@ import {
   answerSubtitle,
   bringTitle,
   claimTitle,
+  distinguishedTitle,
   closesLabel,
   confirmPaymentTitle,
   formatMoney,
+  formatDayMonth,
   orgBookTitle,
   orgDecideTitle,
   payTitle,
@@ -68,6 +70,7 @@ import type {
   SnapshotExpense,
   SnapshotParticipant,
   SnapshotSection,
+  SnapshotSettlement,
   Todo,
   TodoInfo,
   TodoKind,
@@ -390,7 +393,35 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
       )
     }
   }
-  return out
+  return disambiguatePayments(out, settlements)
+}
+
+/**
+ * Two payments can read identically (same people, same amount): a genuine
+ * double payment, or two organisers freezing at once. They are separate rows
+ * the person must act on separately, so tell them apart with the date / note
+ * (or "1 of 2" when even those match) instead of printing the same line twice.
+ */
+function disambiguatePayments(todos: Todo[], settlements: ReadonlyArray<SnapshotSettlement>): Todo[] {
+  const byTitle = new Map<string, Todo[]>()
+  for (const t of todos) {
+    if (t.kind !== 'pay' && t.kind !== 'confirm_payment') continue
+    byTitle.set(t.title, [...(byTitle.get(t.title) ?? []), t])
+  }
+  const rows = new Map(settlements.map((st) => [st.id, st]))
+  const retitled = new Map<Todo, string>()
+  for (const group of byTitle.values()) {
+    if (group.length < 2) continue
+    const stamps = group.map((t) => {
+      const st = rows.get(t.entityId)
+      const when = st?.settled_at ?? st?.created_at
+      const note = st?.notes?.trim()
+      return [when ? formatDayMonth(when) : '', note ? (note.length > 28 ? `${note.slice(0, 27)}…` : note) : ''].filter(Boolean).join(', ')
+    })
+    const distinct = stamps.every((x) => x !== '') && new Set(stamps).size === stamps.length
+    group.forEach((t, i) => retitled.set(t, distinct ? stamps[i] : [stamps[i], `${i + 1} of ${group.length}`].filter(Boolean).join(', ')))
+  }
+  return retitled.size === 0 ? todos : todos.map((t) => (retitled.has(t) ? { ...t, title: distinguishedTitle(t.title, retitled.get(t)!) } : t))
 }
 
 /** What a person still owes on a finished trip (base currency, major units), net of payments awaiting confirmation. */
@@ -691,7 +722,7 @@ export function computeWaitingOn(snapshot: TripSnapshot, now: Date = new Date(),
           overdue: t.overdue,
           userIds: [person.userId],
           todoIds: { [person.userId]: t.id },
-          ...(t.unblocks != null ? { detail: unblocksLabel(t.unblocks) } : {}),
+          ...(t.unblocks != null ? { detail: unblocksLabel(t.unblocks), unblocks: t.unblocks } : {}),
         })
       }
     }

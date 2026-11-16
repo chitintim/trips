@@ -153,6 +153,8 @@ export const unblocksLabel = (n: number) => `Unblocks ${n} ${n === 1 ? 'person' 
 export const freezeBalancesTitle = 'Freeze balances so people can settle'
 export const FREEZE_BALANCES_SUBTITLE = 'The trip is over and people owe money, but they cannot pay until you freeze balances'
 export const confirmPaymentTitle = (fromName: string, amount: string) => `Confirm ${fromName} paid you ${amount}`
+/** Tells two otherwise identical payment lines apart ("Confirm Tim paid you £619.18 (12 Jun)"). */
+export const distinguishedTitle = (title: string, label: string) => `${title} (${label})`
 export const claimTitle = (description: string, amount: string) => `Claim your items on ${description} (${amount})`
 export const TRAVEL_TITLE = 'Add your flights or travel times'
 export const waitlistOfferTitle = (tripName: string) => `A spot opened up on ${tripName}`

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Badge, Button, Input, Select, SelectionAvatars, useToast } from '../../../components/ui'
+import { Badge, Button, Input, PriceTag, Select, SelectionAvatars, useToast } from '../../../components/ui'
 import { useAnswer, type OptionWithSelections, type SectionWithOptions } from '../../../lib/queries/usePlanning'
-import { formatMoney } from '../lib/costImpact'
+import { formatMoney } from '../../../lib/money'
+import { useOptionPrice } from '../lib/useOptionPrice'
 import { CHANGE_ANY_TIME, TOAST_FAILED, describeAnswerError } from '../lib/answerCopy'
-import { optionCostLines, ownRowsToItems, ownTotals, recomputeOwnRow, type AnswerControlModel, type AnswerRow, type OwnRow } from '../lib/answerModel'
+import { ownRowsToItems, ownTotals, recomputeOwnRow, type AnswerControlModel, type AnswerRow, type OwnRow } from '../lib/answerModel'
 import { useQuestionAnswers } from '../lib/useQuestionAnswers'
 import type { AnswerPlan } from '../lib/answerModel'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
@@ -20,9 +21,8 @@ export interface AnswerControlProps {
    */
   closed?: boolean
   /**
-   * Price slot for each option row. Defaults to the existing cost text
-   * (`formatCostImpact`: "+£54/person", "≈£50/person at 9 people") and the
-   * tier sensitivity line. Phase 3 replaces this with the one money display.
+   * Price slot for each option row. Defaults to the one price display
+   * (`computeOptionPrice` + PriceTag: "≈£222 each" over "£2,000 total · 9 going · est.").
    */
   renderPrice?: (option: OptionWithSelections, section: SectionWithOptions) => ReactNode
   /** Hide the "Pick one / Pick any / Rank your top choices" line (the card header already says it). */
@@ -82,22 +82,13 @@ export function AnswerControl({ trip, section, closed, renderPrice, hideInstruct
   }
 
   const optionsById = useMemo(() => new Map(section.options.map((o) => [o.id, o])), [section.options])
+  const priceOf = useOptionPrice(trip, section, headcount, closed)
   const price = (optionId: string): ReactNode => {
     const option = optionsById.get(optionId)
     if (!option) return null
     if (renderPrice) return renderPrice(option, section)
-    const { text, sensitivity } = optionCostLines(option, headcount)
-    if (!text && !sensitivity) return null
-    return (
-      <span className="mt-1 flex flex-wrap items-center gap-2">
-        {text && (
-          <Badge variant="info" size="sm">
-            {text}
-          </Badge>
-        )}
-        {sensitivity && <span className="text-xs text-[var(--text-muted)]">{sensitivity}</span>}
-      </span>
-    )
+    const p = priceOf(option)
+    return p ? <PriceTag price={p} className="mt-1" /> : null
   }
 
   const voters = (ids: string[]): ReactNode => {
@@ -336,16 +327,8 @@ function OwnChoice({
               <span className="min-w-0 flex-1">
                 <span className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-[var(--text-primary)]">{row.title}</span>
-                  {row.perDay != null && (
-                    <Badge variant="neutral" size="sm">
-                      {formatMoney(row.perDay, row.currency)}/day
-                    </Badge>
-                  )}
-                  {row.flat != null && (
-                    <Badge variant="neutral" size="sm">
-                      {formatMoney(row.flat, row.currency)} flat
-                    </Badge>
-                  )}
+                  {row.perDay != null && <PriceTag text={{ headline: `${formatMoney(row.perDay, row.currency)}/day each` }} size="inline" />}
+                  {row.flat != null && <PriceTag text={{ headline: `${formatMoney(row.flat, row.currency)} each` }} size="inline" />}
                   {row.countLabel && <span className="text-xs text-[var(--text-muted)]">{row.countLabel}</span>}
                 </span>
                 {row.description && <span className="mt-0.5 block text-xs text-[var(--text-secondary)]">{row.description}</span>}
@@ -385,7 +368,7 @@ function OwnChoice({
                       +
                     </Button>
                   </div>
-                  {row.pricing && <span className="ml-auto text-sm font-semibold text-[var(--text-primary)]">{formatMoney(row.total, row.currency)}</span>}
+                  {row.pricing && row.total > 0 && <span className="ml-auto text-sm font-semibold text-[var(--text-primary)]">{formatMoney(row.total, row.currency)}</span>}
                 </div>
               </div>
             )}
@@ -393,10 +376,12 @@ function OwnChoice({
         ))}
       </div>
 
+      {totals.totalLabel && (
       <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] bg-[var(--surface-sunken)] p-3">
         <span className="text-sm font-medium text-[var(--text-primary)]">Your total</span>
-        <span className="text-lg font-semibold text-[var(--text-primary)]">{totals.totalLabel ?? formatMoney(0, draft[0]?.currency ?? 'GBP')}</span>
+        <span className="text-lg font-semibold text-[var(--text-primary)]">{totals.totalLabel}</span>
       </div>
+      )}
 
       {!disabled && (
         <Button onClick={() => onSave(draft)} isLoading={pending} disabled={!dirty || pending}>

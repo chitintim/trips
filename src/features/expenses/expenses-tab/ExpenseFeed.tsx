@@ -24,6 +24,8 @@ export interface ExpenseFeedProps {
   onOpenClaim: (code: string) => void
   editDisabled?: boolean
   onAddExpense?: () => void
+  /** Organisers / admins see payment memos on other people's payments; everyone else only on their own. */
+  canManage?: boolean
 }
 
 function expandedStorageKey(tripId: string): string {
@@ -81,6 +83,7 @@ export function ExpenseFeed({
   onOpenClaim,
   editDisabled,
   onAddExpense,
+  canManage = false,
 }: ExpenseFeedProps) {
   const [overrides, setOverrides] = useState<Record<string, boolean>>(() => loadExpandedOverrides(tripId))
   const today = todayDateOnly()
@@ -157,6 +160,9 @@ export function ExpenseFeed({
 
             {expanded && (
               <div className="space-y-2 stagger-list">
+                {dayExpenses.length > 0 && (
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">Expenses</p>
+                )}
                 {dayExpenses.map((expense) => (
                   <div key={expense.id} className="stagger-item">
                     <ExpenseCard
@@ -170,6 +176,11 @@ export function ExpenseFeed({
                     />
                   </div>
                 ))}
+                {daySettlements.length > 0 && (
+                  <p className="pt-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                    Payments between people <span className="normal-case font-normal">(not spending)</span>
+                  </p>
+                )}
                 {daySettlements.map((settlement) => (
                   <div key={settlement.id} className="stagger-item">
                     <SettlementFeedRow
@@ -177,6 +188,7 @@ export function ExpenseFeed({
                       participantsByUserId={participantsByUserId}
                       baseCurrency={baseCurrency}
                       currentUserId={currentUserId}
+                      canManage={canManage}
                     />
                   </div>
                 ))}

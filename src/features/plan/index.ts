@@ -64,7 +64,6 @@ export type {
   PlanItem,
   PlanItemStage,
   PlanItemVoteSummary,
-  PlanItemCostImpact,
   PlanItemBookingInfo,
   ComposePlanItemsInput,
   ComposePlanItemsResult,

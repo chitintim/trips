@@ -3,6 +3,7 @@ import { Badge, Button, Modal, useToast } from '../../../components/ui'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useQuestionPasses, useSections, useVotes } from '../../../lib/queries/usePlanning'
+import { isTripFinished } from '../../../lib/answers/answers'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useActions } from '../../../lib/queries/useActions'
@@ -107,6 +108,7 @@ function ManageBody({
   const available = getManageActions({
     canManage: canManageTrip,
     stage: card.stage,
+    finished: isTripFinished(trip),
     shape,
     hasOptions: liveOptions.length > 0,
     waitingCount: Math.max(card.counts.total - card.counts.answered, 0),

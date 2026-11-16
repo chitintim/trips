@@ -116,6 +116,10 @@ export interface SnapshotSettlement {
   amount: number
   currency: string | null
   status: string
+  /** Optional: when it was paid / created and the payer's note. Used only to tell identical payments apart. */
+  settled_at?: string | null
+  created_at?: string | null
+  notes?: string | null
 }
 
 export interface SnapshotTravelEvent {
@@ -260,6 +264,8 @@ export interface WaitingOnItem {
   todoIds: Record<string, string>
   /** Optional secondary line ("Unblocks 9 people", "4 payments to confirm"). */
   detail?: string
+  /** For the organiser's freeze item: how many people it unblocks (the number behind `detail`). */
+  unblocks?: number
   /** Present for answers and "Everyone" to-dos: "7 of 9 answered" / "8 of 10 done". */
   done?: number
   total?: number

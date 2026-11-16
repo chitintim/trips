@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Modal, Badge, Button, SelectionAvatars, useToast } from '../../../components/ui'
+import { Modal, Badge, Button, PriceTag, SelectionAvatars, useToast } from '../../../components/ui'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useVotes, useDeleteOption } from '../../../lib/queries/usePlanning'
 import { useTimeline, useDeleteTimelineEvent } from '../../../lib/queries/useTimeline'
@@ -8,8 +8,13 @@ import { PlaceMapThumb } from '../../places/components/PlaceMapThumb'
 import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
 import { BookingEditorSheet } from '../../organizer/components/BookingEditorSheet'
 import { useBookings } from '../../../lib/queries/useBookings'
+import { useExpenses } from '../../../lib/queries/useExpenses'
+import { useParticipants } from '../../../lib/queries/useTrip'
+import { actualFromExpenses, matchOptionExpenses } from '../../../lib/cost/yourCost'
+import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
-import { formatCostImpact } from '../../decisions/lib/costImpact'
+import { computeOptionPrice } from '../../../lib/cost/optionPrice'
+import { formatMoney } from '../../../lib/money'
 import { OptionEditorSheet } from '../../decisions/components/OptionEditorSheet'
 import { QuestionCard, QuestionManageSheet } from '../../decisions'
 import { isDecidedOption } from '../../decisions/lib/resolveDecision'
@@ -71,6 +76,8 @@ export function PlanItemSheet({
   const { data: votes } = useVotes(tripId)
   const { data: events } = useTimeline(tripId)
   const { data: bookings } = useBookings(tripId)
+  const { data: money } = useExpenses(tripId)
+  const { data: ledgerPeople = [] } = useParticipants(tripId)
 
   const deleteOption = useDeleteOption(tripId)
   const deleteEvent = useDeleteTimelineEvent(tripId)
@@ -91,8 +98,19 @@ export function PlanItemSheet({
   const booking = item.bookingId ? (bookings || []).find((b) => b.id === item.bookingId) : undefined
   const editTarget = planItemEditTarget(item, isOrganizer)
 
-  const costImpactLabel = option
-    ? formatCostImpact({ price: option.price, currency: option.currency, priceType: option.price_type, confirmedCount: headcount.count, isEstimate: headcount.isEstimate, metadata: option.metadata })
+  const bookingForPrice = booking && booking.status !== 'cancelled' ? { amount: booking.amount, currency: booking.currency, status: booking.status } : null
+  const optionPrice = option
+    ? computeOptionPrice(option, trip, headcount, {
+        decided: !!section && isDecidedOption(section, votes ?? [], option.id),
+        booking: bookingForPrice,
+        booked: option.status === 'booked',
+        confirmationEnabled: isConfirmationEnabled(trip),
+        actual: actualFromExpenses(
+          matchOptionExpenses(option.id, bookings ?? [], money?.expenses ?? []),
+          ledgerPeople.map((p) => p.user_id),
+          trip.base_currency || 'GBP'
+        ),
+      })
     : null
 
   const category = event ? CATEGORY_CONFIG[event.category] ?? CATEGORY_CONFIG.other : null
@@ -166,7 +184,6 @@ export function PlanItemSheet({
               </span>
             )}
             {item.sectionTitle && <Badge variant="neutral" size="sm">{item.sectionTitle}</Badge>}
-            {costImpactLabel && <Badge variant="info" size="sm">{costImpactLabel}</Badge>}
             {menuActions.length > 0 && (
               <Button
                 variant="ghost"
@@ -193,6 +210,9 @@ export function PlanItemSheet({
           )}
 
           {item.description && <p className="text-sm text-[var(--text-secondary)] whitespace-pre-wrap">{item.description}</p>}
+
+          {/* The question card prices its own options; every other body states the option's price once, here. */}
+          {optionPrice && body !== 'question' && <PriceTag price={optionPrice} size="detail" />}
 
           {/* Who's committed to this option (planItems.ts rule 7): covers
               both pre-v3 legacy picks and any decided/personal-order option
@@ -255,7 +275,7 @@ export function PlanItemSheet({
                 )}
                 {item.booking.amount != null && (
                   <span>
-                    {item.booking.currency} {item.booking.amount.toFixed(2)}
+                    {formatMoney(item.booking.amount, item.booking.currency || trip.base_currency || 'GBP', { mode: 'exact' })}
                   </span>
                 )}
               </div>

@@ -1,16 +1,14 @@
 import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
-import { Badge, Card, StatCard, UserAvatar } from '../../../components/ui'
+import { Badge, Card, UserAvatar } from '../../../components/ui'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
-import { formatMoney, splitAcrossNote } from '../../decisions/lib/costImpact'
-import type { CostBand } from '../lib/costBand'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Trip, TripStatus } from '../../../types'
 
 /**
  * The trip brief, decomposed into importable sections (UX_REDESIGN.md Part 2:
  * Today's invitee/pre-commit layout composes these — cover hero, organizer
- * message, cost band, RSVP card, who's-in row) so the brief is a set of
+ * message, RSVP card, who's-in row) so the brief is a set of
  * building blocks rather than one monolithic tab.
  */
 
@@ -38,42 +36,6 @@ export function OrganizerMessageCard({ message }: { message: string | null }) {
         <ReactMarkdown remarkPlugins={[remarkBreaks]}>{message}</ReactMarkdown>
       </Card.Content>
     </Card>
-  )
-}
-
-export function CostBandCard({ costBand, fullCostLink }: { costBand: CostBand | null; fullCostLink?: string | null }) {
-  if (!costBand) return null
-  const value =
-    costBand.low === costBand.high
-      ? formatMoney(costBand.low, costBand.currency)
-      : `${formatMoney(costBand.low, costBand.currency)} – ${formatMoney(costBand.high, costBand.currency)}`
-  return (
-    <div className="space-y-1.5">
-      <StatCard
-        label="Estimated cost per person"
-        value={value}
-        // Honest range label (UX_REDESIGN.md Part 5 "Estimator integration"):
-        // a spread means real uncertainty from open votes, not organizer
-        // sloppiness -- say so rather than hiding it.
-        delta={
-          [
-            costBand.low !== costBand.high ? 'depending on open questions' : null,
-            // Only figures that were actually divided by a headcount carry the
-            // split note; an organiser-entered per-person estimate is shown plainly.
-            costBand.dependsOnHeadcount && costBand.isEstimate && costBand.headcount > 0
-              ? `${splitAcrossNote(costBand.headcount)} (estimate)`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(' · ') || undefined
-        }
-      />
-      {fullCostLink && (
-        <a href={fullCostLink} target="_blank" rel="noreferrer" className="text-sm text-accent-700 hover:underline">
-          See full cost breakdown →
-        </a>
-      )}
-    </div>
   )
 }
 

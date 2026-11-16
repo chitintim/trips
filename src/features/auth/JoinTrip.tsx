@@ -7,7 +7,7 @@ import { useCurrentUserRow } from '../../lib/queries'
 import { Button, Card, Skeleton } from '../../components/ui'
 import { JoinCover } from '../../components/ui/illustrations'
 import { getTripAccentStyle } from '../../components/layout/tripAccent'
-import { formatMoney } from '../decisions/lib/costImpact'
+import { formatMoney } from '../../lib/money'
 
 interface InvitationPreview {
   trip_name: string

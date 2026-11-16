@@ -15,6 +15,7 @@ import {
   perPersonAtTier,
   tierSensitivity,
   getTierCostImpact,
+  withTripDays,
 } from './decisionShapes'
 
 describe('getDecisionShape', () => {
@@ -278,5 +279,37 @@ describe('getTierCostImpact', () => {
     const impact = getTierCostImpact(tiers, 30, 'GBP')
     expect(impact!.aboveTop).toBe(true)
     expect(impact!.perPerson).toBe(15) // 450/30
+  })
+})
+
+describe('review B2: readPriceTiers validates and coerces', () => {
+  it('skips rows with a missing or non-numeric total, bad max_people, or the wrong shape', () => {
+    const tiers = readPriceTiers({ price_tiers: [{ max_people: 12 }, { max_people: 6, total: 'x' }, { max_people: 6.5, total: 10 }, { max_people: 0, total: 10 }, null, 'a', { max_people: 4, total: null }, { max_people: 4, total: '' }, { max_people: 4, total: -1 }] } as never)
+    expect(tiers).toEqual([])
+  })
+  it('coerces numeric strings', () => {
+    expect(readPriceTiers({ price_tiers: [{ max_people: '12', total: '600' }, { max_people: 6, total: 300 }] } as never)).toEqual([
+      { max_people: 12, total: 600 },
+      { max_people: 6, total: 300 },
+    ])
+    expect(hasPriceTiers({ price_tiers: [{ max_people: 12 }] } as never)).toBe(false)
+  })
+  it('perPersonAtTier / tierSensitivity never throw on what the reader returns', () => {
+    const tiers = readPriceTiers({ price_tiers: [{ max_people: 12, total: '600' }, { max_people: 6 }] } as never)
+    expect(() => tierSensitivity(tiers, 'GBP')).not.toThrow()
+  })
+})
+
+describe('review C8: withTripDays', () => {
+  const trip = { start_date: '2027-03-01', end_date: '2027-03-09' }
+  it('fills missing dates for a per-day price from the trip', () => {
+    const r = withTripDays({ per_day: 12 }, {}, trip)
+    expect(r.assumedDays).toBe(9)
+    expect(computeOrderItemTotal({ per_day: 12 }, r.item, 'GBP')).toBe(108)
+  })
+  it('flat pricing, own dates or no trip dates assume nothing', () => {
+    expect(withTripDays({ flat: 30 }, {}, trip).assumedDays).toBeNull()
+    expect(withTripDays({ per_day: 12 }, { start_date: '2027-03-02', end_date: '2027-03-03' }, trip).assumedDays).toBeNull()
+    expect(withTripDays({ per_day: 12 }, {}, {}).assumedDays).toBeNull()
   })
 })

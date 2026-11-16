@@ -4,9 +4,9 @@ import type { OptionVoteWithUser, QuestionPass, SectionWithOptions } from '../..
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { areResultsVisible } from '../lib/answerModel'
 import { sectionHasMatrixLayout } from '../lib/optionMetadata'
-import { formatMoney } from '../lib/costImpact'
+import { formatMoney } from '../../../lib/money'
 import { ordinal, RESULTS_HIDDEN } from '../lib/answerCopy'
-import { buildAnswersText, buildEveryonesAnswers, type PersonAnswerRow } from '../lib/everyonesAnswers'
+import { buildAnswersText, buildEveryonesAnswers, groupTotalText, linePriceText, type PersonAnswerRow } from '../lib/everyonesAnswers'
 import { MatrixView } from './MatrixView'
 
 export interface EveryonesAnswersProps {
@@ -65,7 +65,7 @@ export function EveryonesAnswers({ section, participants, votes, passes, fallbac
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(buildAnswersText(section.title, data, fallbackCurrency))
+      await navigator.clipboard.writeText(buildAnswersText(section.title, data))
       setCopied(true)
       showToast({ type: 'success', message: 'Answers copied' })
       setTimeout(() => setCopied(false), 2000)
@@ -78,10 +78,7 @@ export function EveryonesAnswers({ section, participants, votes, passes, fallbac
     }
   }
 
-  const totalsText =
-    Object.entries(data.groupTotals)
-      .map(([c, n]) => formatMoney(n, c))
-      .join(' + ') || formatMoney(0, fallbackCurrency)
+  const totalsText = groupTotalText(data.groupTotals)
 
   return (
     <div className="min-w-0 space-y-4">
@@ -92,7 +89,7 @@ export function EveryonesAnswers({ section, participants, votes, passes, fallbac
       {hidden && (
         <p className="text-xs text-[var(--text-muted)]">
           {RESULTS_HIDDEN}
-          {participantView ? '' : ' Only organisers can see this until then.'}
+          {participantView ? '' : ' Only organizers can see this until then.'}
         </p>
       )}
       {lockedForViewer ? null : (
@@ -151,14 +148,16 @@ export function EveryonesAnswers({ section, participants, votes, passes, fallbac
                           <span className="min-w-0 break-words text-[var(--text-secondary)]">
                             {t.title} ({t.quantity})
                           </span>
-                          <span className="shrink-0 font-medium text-[var(--text-primary)]">{formatMoney(t.total, t.currency)}</span>
+                          <span className="shrink-0 font-medium text-[var(--text-primary)]">{t.priced ? formatMoney(t.total, t.currency) : 'No price set'}</span>
                         </div>
                       ))
                     )}
-                    <div className="flex items-center justify-between gap-3 border-t border-[var(--border-default)] pt-1.5 text-sm">
-                      <span className="font-semibold text-[var(--text-primary)]">Group total</span>
-                      <span className="font-semibold text-[var(--text-primary)]">{totalsText}</span>
-                    </div>
+                    {totalsText && (
+                      <div className="flex items-center justify-between gap-3 border-t border-[var(--border-default)] pt-1.5 text-sm">
+                        <span className="font-semibold text-[var(--text-primary)]">Group total</span>
+                        <span className="font-semibold text-[var(--text-primary)]">{totalsText}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="flex justify-end">
                     <Button variant="outline" size="sm" onClick={handleCopy}>
@@ -207,7 +206,7 @@ function PersonLines({ person, showMoney = true }: { person: PersonAnswerRow; sh
                 {l.quantity > 1 ? ` x${l.quantity}` : ''}
                 {lineDates(l.startDate, l.endDate) ? ` · ${lineDates(l.startDate, l.endDate)}` : ''}
               </span>
-              {showMoney && <span className="shrink-0 font-medium text-[var(--text-primary)]">{formatMoney(l.total, l.currency)}</span>}
+              {showMoney && linePriceText(l) && <span className="shrink-0 font-medium text-[var(--text-primary)]">{linePriceText(l)}</span>}
             </li>
           ))}
         </ul>

@@ -73,6 +73,11 @@ describe('resolveOpenParam', () => {
     expect(resolveOpenParam('actions-bring')).toEqual({ kind: 'actions', segment: 'bring' })
   })
 
+  it('todos-all is a link to the whole grouped To-dos sheet (todos only scrolls Today)', () => {
+    expect(resolveOpenParam('todos-all')).toEqual({ kind: 'actions', segment: 'actions' })
+    expect(resolveOpenParam('todos')).toEqual({ kind: 'todos' })
+  })
+
   it('keeps uuid ids intact, including extra colons', () => {
     expect(resolveOpenParam('question:3f2a9b1e-1111-4222-8333-944455556666')).toEqual({
       kind: 'question',
@@ -207,6 +212,13 @@ describe('planDeepLink', () => {
     it('stale ids fail soft', () => {
       expect(planDeepLink({ kind: 'todo', id: 'x' }, ctx())).toEqual({ space: 'today', toast: DEEP_LINK_TOASTS.todo })
       expect(planDeepLink({ kind: 'bring', id: 'x' }, ctx())).toEqual({ space: 'today', toast: DEEP_LINK_TOASTS.bring })
+    })
+
+    it('todos-all opens the To-dos sheet', () => {
+      expect(planDeepLink(resolveOpenParam('todos-all')!, ctx())).toEqual({
+        space: 'today',
+        open: { sheet: 'actions', segment: 'actions' },
+      })
     })
 
     it('legacy actions links open the sheet without a highlight', () => {

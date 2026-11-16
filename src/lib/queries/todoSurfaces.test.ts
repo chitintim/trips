@@ -244,3 +244,23 @@ describe('Today count = the To-dos sheet "Yours" group, for task-type items', ()
     expect(w.byItem.some((i) => i.entityId === 'anyone-unclaimed')).toBe(false)
   })
 })
+
+describe('blocked money: the freeze to-do is the organiser\'s, never the people it unblocks', () => {
+  it('only organisers hold it, on every surface (By person, By item, Today list)', () => {
+    const s = FIXTURES.unfrozen
+    const organisers = new Set(s.participants.filter((p) => p.role === 'organizer').map((p) => p.user_id))
+    const w = computeWaitingOn(s, NOW)
+    for (const row of w.byPerson) {
+      const hasFreeze = row.todos.some((t) => t.id === 'org_setup:freeze')
+      expect(hasFreeze).toBe(organisers.has(row.userId))
+    }
+    const item = w.byItem.find((i) => i.id === 'org_setup:' + `${s.trip.id}:freeze`)
+    expect(item).toBeDefined()
+    expect(item!.userIds.every((id) => organisers.has(id))).toBe(true)
+    expect(item!.unblocks).toBeGreaterThan(0)
+    // The people it unblocks get an info line, not a to-do, and are not counted.
+    for (const p of s.participants.filter((x) => !organisers.has(x.user_id))) {
+      expect(todoSurfaceCore(s, p.user_id, NOW).todos.some((t) => t.id === 'org_setup:freeze')).toBe(false)
+    }
+  })
+})

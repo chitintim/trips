@@ -4,6 +4,7 @@ import { useBookings, type Booking } from '../../../lib/queries/useBookings'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { PlaceChip } from '../../places'
 import { BookingEditorSheet } from './BookingEditorSheet'
+import { formatMoney } from '../../../lib/money'
 import type { Trip } from '../../../types'
 
 const STATUS_BADGE: Record<string, { label: string; variant: 'success' | 'info' | 'error' | 'neutral' }> = {
@@ -96,7 +97,7 @@ export function BookingsTracker({ trip }: BookingsTrackerProps) {
                           {[
                             booking.vendor,
                             booking.confirmation_ref ? `#${booking.confirmation_ref}` : null,
-                            booking.amount != null ? `${booking.currency ?? ''} ${booking.amount}`.trim() : null,
+                            booking.amount != null ? formatMoney(booking.amount, booking.currency || trip.base_currency || 'GBP', { mode: 'exact' }) : null,
                             booking.booking_date,
                           ]
                             .filter(Boolean)

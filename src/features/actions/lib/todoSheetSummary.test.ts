@@ -1,0 +1,20 @@
+import { describe, expect, it } from 'vitest'
+import { allTodosRowLabel, openSheetCount } from './todoSheetSummary'
+
+describe('allTodosRowLabel', () => {
+  it('shows the open count when the viewer has their own to-dos', () => {
+    expect(allTodosRowLabel({ openCount: 5, mine: 2, canCreate: true })).toBe('All to-dos (5 open) →')
+  })
+  it('still offers the sheet when the viewer personally has none', () => {
+    expect(allTodosRowLabel({ openCount: 3, mine: 0, canCreate: true })).toBe("See everyone's to-dos →")
+    expect(allTodosRowLabel({ openCount: 3, mine: 0, canCreate: false })).toBe("See everyone's to-dos →")
+  })
+  it('lets anyone who may create reach New to-do on an empty list, and hides the row otherwise', () => {
+    expect(allTodosRowLabel({ openCount: 0, mine: 0, canCreate: true })).toBe('Add a to-do →')
+    expect(allTodosRowLabel({ openCount: 0, mine: 0, canCreate: false })).toBeNull()
+  })
+  it('counts every open group, not Done', () => {
+    const g = { yours: [1], everyone: [1, 2], others: [], upForGrabs: [1] } as never
+    expect(openSheetCount(g)).toBe(4)
+  })
+})

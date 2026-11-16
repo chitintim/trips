@@ -28,7 +28,7 @@ const TIMELINE_CATEGORY_EMOJI: Record<TimelineEventCategory, string> = {
   flight: '✈️',
   accommodation: '🏠',
   transport: '🚗',
-  activity: '⛷️',
+  activity: '🎟️',
   dining: '🍽️',
   transfer: '🚌',
   meeting_point: '📍',

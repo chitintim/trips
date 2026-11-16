@@ -8,7 +8,7 @@
 import { answersFor, isAnswerer, isOwnChoice, passKindFor, type AnswerPass, type AnswerVote } from '../../../lib/answers/answers'
 import type { Json } from '../../../types/database.types'
 import { buildOrderLine, readOptionPricing, readOrderItemMetadata, sumOrderLinesByCurrency, type OrderLine } from './decisionShapes'
-import { formatMoney } from './costImpact'
+import { formatMoney } from '../../../lib/money'
 import { PASS_LABEL } from './answerCopy'
 
 export interface EAOption {
@@ -68,6 +68,8 @@ export interface ItemTotal {
   quantity: number
   total: number
   currency: string
+  /** False when no line of this item has a price: show no amount, never £0. */
+  priced: boolean
 }
 
 export interface EveryonesAnswers {
@@ -147,10 +149,13 @@ export function buildEveryonesAnswers(input: {
       if (lines.length === 0) continue
       const totals = sumOrderLinesByCurrency(lines)
       const [currency, total] = Object.entries(totals)[0] ?? [fallbackCurrency, 0]
-      itemTotals.push({ optionId: o.id, title: o.title, count: lines.length, quantity: lines.reduce((n, l) => n + (l.quantity || 1), 0), total, currency })
+      itemTotals.push({ optionId: o.id, title: o.title, count: lines.length, quantity: lines.reduce((n, l) => n + (l.quantity || 1), 0), total, currency, priced: total > 0 })
     }
   }
-  const groupTotals = own ? sumOrderLinesByCurrency(people.flatMap((r) => r.lines)) : {}
+  // Currencies with nothing priced are left out, so an unpriced question has no group total at all.
+  const groupTotals: Record<string, number> = own
+    ? Object.fromEntries(Object.entries(sumOrderLinesByCurrency(people.flatMap((r) => r.lines))).filter(([, n]) => n > 0))
+    : {}
 
   return {
     shape: own ? 'own' : 'group',
@@ -165,17 +170,30 @@ export function buildEveryonesAnswers(input: {
   }
 }
 
+/** "£12.00" for a priced line, null (show nothing) for an unpriced one. Never "£0". */
+export function linePriceText(line: Pick<OrderLine, 'total' | 'currency'>): string | null {
+  return line.total > 0 ? formatMoney(line.total, line.currency) : null
+}
+
+/** "£120.00" / "£120.00 + €40.00", or null when nothing is priced (omit the Group total row). */
+export function groupTotalText(groupTotals: Record<string, number>): string | null {
+  const parts = Object.entries(groupTotals)
+    .filter(([, n]) => n > 0)
+    .map(([c, n]) => formatMoney(n, c))
+  return parts.length ? parts.join(' + ') : null
+}
+
 function lineText(line: OrderLine): string {
   const parts = [line.optionTitle]
   if (line.variant) parts.push(`(${line.variant})`)
   if (line.quantity > 1) parts.push(`x${line.quantity}`)
   const dates = line.startDate && line.endDate && line.startDate !== line.endDate ? `${line.startDate} - ${line.endDate}` : line.startDate ?? ''
-  const suffix = [dates, formatMoney(line.total, line.currency)].filter(Boolean).join(' - ')
+  const suffix = [dates, linePriceText(line)].filter(Boolean).join(' - ')
   return `${parts.join(' ')}${suffix ? ` - ${suffix}` : ''}`
 }
 
 /** Plain text to paste to a supplier or the group chat (own choices). */
-export function buildAnswersText(title: string, data: EveryonesAnswers, fallbackCurrency: string): string {
+export function buildAnswersText(title: string, data: EveryonesAnswers): string {
   const out: string[] = [`${title} - answers`, '']
   for (const p of data.people) {
     if (p.state === 'waiting') continue
@@ -186,13 +204,11 @@ export function buildAnswersText(title: string, data: EveryonesAnswers, fallback
   }
   if (data.itemTotals.length) {
     out.push('Per item:')
-    for (const t of data.itemTotals) out.push(`  ${t.title}: ${t.count} ${t.count === 1 ? 'answer' : 'answers'} - ${formatMoney(t.total, t.currency)} total`)
+    for (const t of data.itemTotals) out.push(`  ${t.title}: ${t.count} ${t.count === 1 ? 'answer' : 'answers'} ${t.priced ? `- ${formatMoney(t.total, t.currency)} total` : '- No price set'}`)
     out.push('')
   }
-  const total = Object.entries(data.groupTotals)
-    .map(([c, n]) => formatMoney(n, c))
-    .join(' + ')
-  out.push(`Group total: ${total || formatMoney(0, fallbackCurrency)}`)
+  const total = groupTotalText(data.groupTotals)
+  if (total) out.push(`Group total: ${total}`)
   if (data.waiting.length) out.push('', `Not answered yet: ${data.waiting.map((w) => w.name).join(', ')}`)
   return out.join('\n')
 }

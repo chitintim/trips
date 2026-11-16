@@ -42,6 +42,8 @@ const BARE_KINDS: Record<string, OpenTarget> = {
   setup: { kind: 'setup' },
   // Older links (action notes, emails sent before the to-dos engine).
   actions: { kind: 'actions', segment: 'actions' },
+  // The whole grouped To-dos sheet (Today's "All to-dos" row, emails, the console).
+  'todos-all': { kind: 'actions', segment: 'actions' },
   'actions-bring': { kind: 'actions', segment: 'bring' },
 }
 

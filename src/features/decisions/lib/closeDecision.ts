@@ -4,7 +4,7 @@
  *
  * The model already had all the pieces but no explicit record of *what won*:
  *   - planning_sections.status: 'completed' = the question is closed
- *   - the winner was only ever inferred from tallies (brief/costBand.ts) or
+ *   - the winner was only ever inferred from tallies or
  *     from a timeline event's source_option_id (planItems.ts absorption)
  * Both inferences break when the organizer overrides the tally (picks a
  * non-leader) or when votes are tied. So the close flow now *stamps the

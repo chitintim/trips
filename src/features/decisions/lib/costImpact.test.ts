@@ -1,13 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  getPerPersonCostImpact,
-  getSectionRunningTotal,
-  formatCostImpact,
-  getTierSensitivityLine,
-  isTieredCostImpact,
-  isHeadcountDivided,
-  splitAcrossNote,
-} from './costImpact'
+import { getPerPersonCostImpact } from './costImpact'
 
 describe('getPerPersonCostImpact', () => {
   it('returns null when there is no price', () => {
@@ -41,116 +33,12 @@ describe('getPerPersonCostImpact', () => {
   })
 })
 
-describe('getSectionRunningTotal', () => {
-  it('sums cost impact across options grouped by currency', () => {
-    const options = [
-      { price: 100, currency: 'GBP', price_type: 'per_person_fixed' as const, status: 'available' },
-      { price: 50, currency: 'GBP', price_type: 'per_person_fixed' as const, status: 'available' },
-      { price: 30, currency: 'EUR', price_type: 'per_person_fixed' as const, status: 'available' },
-    ]
-    const totals = getSectionRunningTotal(options, 5, null, ['a', 'b', 'c'])
-    expect(totals.GBP).toBe(150)
-    expect(totals.EUR).toBe(30)
+describe('review B3: costImpact passes the trip so nights can be derived', () => {
+  const base = { price: 250, currency: 'GBP', priceType: 'total_split' as const, confirmedCount: 9, metadata: { price_basis: 'per_night' }, isEstimate: false }
+  it('with the trip, £250/night x 8 nights / 9', () => {
+    expect(getPerPersonCostImpact({ ...base, trip: { start_date: '2027-03-01', end_date: '2027-03-09' } })).toBe(222.22)
   })
-
-  it('excludes cancelled options', () => {
-    const options = [
-      { price: 100, currency: 'GBP', price_type: 'per_person_fixed' as const, status: 'cancelled' },
-      { price: 50, currency: 'GBP', price_type: 'per_person_fixed' as const, status: 'available' },
-    ]
-    const totals = getSectionRunningTotal(options, 5, null, ['a', 'b'])
-    expect(totals.GBP).toBe(50)
-  })
-
-  it('restricts to leadingOptionIds when provided', () => {
-    const options = [
-      { price: 100, currency: 'GBP', price_type: 'per_person_fixed' as const, status: 'available' },
-      { price: 50, currency: 'GBP', price_type: 'per_person_fixed' as const, status: 'available' },
-    ]
-    const totals = getSectionRunningTotal(options, 5, new Set(['a']), ['a', 'b'])
-    expect(totals.GBP).toBe(100)
-  })
-
-  it('is tier-aware when an option carries price_tiers metadata', () => {
-    const options = [
-      { price: null, currency: 'GBP', price_type: 'total_split' as const, status: 'available', metadata: { price_tiers: [{ max_people: 6, total: 300 }] } },
-    ]
-    const totals = getSectionRunningTotal(options, 6, null, ['a'])
-    expect(totals.GBP).toBe(50)
-  })
-})
-
-describe('tier-aware cost impact (UX_REDESIGN.md Part 5, shape 3)', () => {
-  const tieredMetadata = { price_tiers: [{ max_people: 6, total: 300 }, { max_people: 12, total: 450 }] }
-
-  it('isTieredCostImpact is true when price_tiers are present', () => {
-    expect(isTieredCostImpact(tieredMetadata)).toBe(true)
-    expect(isTieredCostImpact(null)).toBe(false)
-    expect(isTieredCostImpact({ grid_row: 'x' })).toBe(false)
-  })
-
-  it('getPerPersonCostImpact prefers price_tiers over price_type when both are present', () => {
-    const result = getPerPersonCostImpact({
-      price: 999, // should be ignored — tiers take precedence
-      currency: 'GBP',
-      priceType: 'total_split',
-      confirmedCount: 9,
-      metadata: tieredMetadata,
-    })
-    expect(result).toBe(50) // 450 / 9
-  })
-
-  it('falls back to price/price_type when metadata has no tiers', () => {
-    const result = getPerPersonCostImpact({
-      price: 100,
-      currency: 'GBP',
-      priceType: 'per_person_fixed',
-      confirmedCount: 9,
-      metadata: null,
-    })
-    expect(result).toBe(100)
-  })
-
-  it('formatCostImpact renders the tiered headline with headcount', () => {
-    const formatted = formatCostImpact({ price: null, currency: 'GBP', priceType: 'total_split', confirmedCount: 9, metadata: tieredMetadata })
-    expect(formatted).toBe('≈£50/person at 9 people')
-  })
-
-  it('formatCostImpact renders the non-tiered headline unchanged', () => {
-    const formatted = formatCostImpact({ price: 54, currency: 'GBP', priceType: 'per_person_fixed', confirmedCount: 5 })
-    expect(formatted).toBe('+£54/person')
-  })
-
-  it('getTierSensitivityLine renders both tier boundaries', () => {
-    const line = getTierSensitivityLine({ price: null, currency: 'GBP', priceType: 'total_split', confirmedCount: 9, metadata: tieredMetadata })
-    expect(line).toBe('£50/pp if 6 · £37.50/pp if 12')
-  })
-
-  it('getTierSensitivityLine is null for a non-tiered option', () => {
-    const line = getTierSensitivityLine({ price: 54, currency: 'GBP', priceType: 'per_person_fixed', confirmedCount: 5 })
-    expect(line).toBeNull()
-  })
-
-  it('flags aboveTop-derived headline still resolves a per-person figure beyond the top tier', () => {
-    const formatted = formatCostImpact({ price: null, currency: 'GBP', priceType: 'total_split', confirmedCount: 30, metadata: tieredMetadata })
-    expect(formatted).toBe('≈£15/person at 30 people') // 450 / 30
-  })
-
-  it('formatCostImpact labels a total_split headcount estimate honestly', () => {
-    const base = { price: 3000, currency: 'GBP', priceType: 'total_split' as const, confirmedCount: 10 }
-    expect(formatCostImpact({ ...base, isEstimate: true })).toBe('≈ £300 per person (split across 10 people)')
-    expect(formatCostImpact(base)).toBe('+£300/person')
-  })
-})
-
-describe('headcount wording helpers', () => {
-  it('only total_split and tiered options are headcount-divided', () => {
-    expect(isHeadcountDivided('total_split')).toBe(true)
-    expect(isHeadcountDivided('per_person_fixed')).toBe(false)
-    expect(isHeadcountDivided('per_person_tiered')).toBe(false)
-  })
-  it('splitAcrossNote pluralises', () => {
-    expect(splitAcrossNote(1)).toBe('split across 1 person')
-    expect(splitAcrossNote(10)).toBe('split across 10 people')
+  it('without a trip it assumes one night (the caller can no longer pretend that is exact)', () => {
+    expect(getPerPersonCostImpact(base)).toBe(27.78)
   })
 })

@@ -13,6 +13,10 @@ import {
   todoCountLabel,
 } from '../../../lib/todos/copy'
 import type { Todo } from '../../../lib/todos/types'
+import { useTodoGroups } from '../../actions/lib/useTodoGroups'
+import { allTodosRowLabel, openSheetCount } from '../../actions/lib/todoSheetSummary'
+import { canCreate } from '../../actions/lib/todoModel'
+import { useAuth } from '../../../hooks/useAuth'
 
 /** Anchor for `?open=todos` (the shell scrolls Today to this element). */
 export const YOUR_TODOS_ANCHOR = 'your-todos'
@@ -46,8 +50,10 @@ function TodoRow({ todo, onOpen }: { todo: Todo; onOpen: (todo: Todo) => void })
  * Rows come straight from useTodos; tapping follows the engine's `?open=` link.
  * The empty state only appears when the engine returns nothing at all.
  */
-export function YourTodosCard({ tripId }: { tripId: string }) {
+export function YourTodosCard({ tripId, onOpenAll }: { tripId: string; onOpenAll?: () => void }) {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const sheet = useTodoGroups(tripId)
   const { todos, info, isLoading, isError } = useTodos(tripId)
   const [expanded, setExpanded] = useState(false)
 
@@ -67,6 +73,14 @@ export function YourTodosCard({ tripId }: { tripId: string }) {
   const open = (todo: Todo) => navigate({ search: todo.link })
   const { personal, shownPersonal: shown, organiser } = todayListModel(todos, expanded)
   const answers = answerTodoList(todos)
+  // The card stays the personal list; this row is the way into the grouped To-dos sheet.
+  const allRow = onOpenAll
+    ? allTodosRowLabel({
+        openCount: sheet.isLoading || sheet.isError ? 0 : openSheetCount(sheet.groups),
+        mine: todos.length,
+        canCreate: canCreate({ userId: user?.id, isOrganizer: false, isParticipant: sheet.isParticipant, finished: sheet.finished, whoSupported: false }),
+      })
+    : null
 
   return (
     <section id={YOUR_TODOS_ANCHOR} aria-label="Your to-dos" className="scroll-mt-20">
@@ -126,6 +140,18 @@ export function YourTodosCard({ tripId }: { tripId: string }) {
                 </li>
               ))}
             </ul>
+          )}
+          {allRow && onOpenAll && (
+            <div className="border-t border-[var(--border-subtle)] pt-2">
+              <button
+                type="button"
+                data-testid="all-todos-row"
+                onClick={onOpenAll}
+                className="flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] py-1.5 text-left text-sm font-medium text-accent-700 hover:underline dark:text-accent-300"
+              >
+                {allRow}
+              </button>
+            </div>
           )}
         </Card.Content>
       </Card>

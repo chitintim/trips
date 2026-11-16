@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Modal, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import { useParticipants, useAllParticipants } from '../../../lib/queries/useTrip'
@@ -46,6 +47,7 @@ export interface MoneySpaceProps {
 export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null }: MoneySpaceProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const { canManageTrip } = useTripPermissions(trip)
   const { data, isLoading, isError, refetch } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
   const { data: allParticipants = [] } = useAllParticipants(trip.id)
@@ -114,6 +116,7 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
         allParticipants={allParticipants}
         currentUserId={user?.id}
         baseCurrency={trip.base_currency}
+        frozen={trip.settlement_snapshot != null}
         onSettleUp={() => setSettleUpOpen(true)}
         onSeeMyBreakdown={() => setMySpendingOpen(true)}
       />
@@ -157,6 +160,7 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
         onOpenClaim={(code) => navigate(`/claim/${code}`)}
         editDisabled={isFrozen}
         onAddExpense={openAdd}
+        canManage={canManageTrip}
       />
 
       <ExpenseEditorWizard

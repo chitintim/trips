@@ -798,3 +798,178 @@ SELECT count(*) AS linked_available_options FROM public.options o WHERE o.status
 -- 17g. Existing live options in a question whose titles collide case-insensitively
 --      (the duplicate rule would refuse a new one with that title). Informational.
 SELECT section_id, lower(btrim(title)) AS title_key, count(*) FROM public.options WHERE status <> 'cancelled' GROUP BY 1, 2 HAVING count(*) > 1;
+
+-- 18. 20261120090000_payment_confirm_tokens.sql (confirm a payment from the email button). All read-only.
+
+-- 18a. Names are free: none of these objects may exist yet (re-running the migration is fine, but a
+--      same-named table or function from something else is not).
+--      Safe: zero rows.
+SELECT 'table' AS kind, c.relname AS name FROM pg_class c
+WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('payment_confirm_tokens', 'payment_confirm_rate_limits')
+UNION ALL
+SELECT 'function', p.proname FROM pg_proc p
+WHERE p.pronamespace = 'public'::regnamespace
+  AND p.proname IN ('issue_payment_confirm_token', 'confirm_payment_by_token', 'dispute_payment_by_token',
+                    'payment_confirm_rate_hit', '_payment_token_check', '_payment_token_summary', '_payment_token_name');
+
+-- 18b. Columns and types the functions assume on settlements, notifications, activity_feed and users.
+--      Safe: settlements has id uuid, trip_id uuid, from_user_id uuid, to_user_id uuid, amount numeric,
+--      currency text (nullable), status text; activity_feed has trip_id uuid, actor uuid, verb text,
+--      entity jsonb, metadata jsonb; users has id uuid, first_name text, full_name text,
+--      email_notifications_enabled boolean; notifications has trip_id uuid, user_id uuid, kind text,
+--      entity_type text, entity_id uuid, channel text, dedupe_key text (the edge function writes
+--      'notice:paid:<settlement>:<receiver>:1' and 'notice:confirmed:<settlement>:<payer>:1').
+SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns
+WHERE table_schema = 'public'
+  AND ((table_name = 'settlements' AND column_name IN ('id', 'trip_id', 'from_user_id', 'to_user_id', 'amount', 'currency', 'status'))
+    OR (table_name = 'activity_feed' AND column_name IN ('trip_id', 'actor', 'verb', 'entity', 'metadata'))
+    OR (table_name = 'users' AND column_name IN ('id', 'first_name', 'full_name', 'email_notifications_enabled'))
+    OR (table_name = 'trips' AND column_name = 'base_currency')
+    OR (table_name = 'notifications' AND column_name IN ('trip_id', 'user_id', 'kind', 'entity_type', 'entity_id', 'channel', 'dedupe_key')))
+ORDER BY table_name, column_name;
+
+-- 18c. Triggers and policies on settlements (the migration changes neither).
+--      Safe: triggers trigger_guard_immutable_keys and trigger_guard_settlement_party_update (BEFORE UPDATE);
+--      the UPDATE policy admits creator <24h / is_trip_organizer / from / to.
+SELECT t.tgname, pg_get_triggerdef(t.oid) AS def FROM pg_trigger t
+WHERE NOT t.tgisinternal AND t.tgrelid = 'public.settlements'::regclass;
+SELECT policyname, cmd, qual, with_check FROM pg_policies WHERE schemaname = 'public' AND tablename = 'settlements';
+
+-- 18d. The guard still has the NULL-uid behaviour the token flow relies on (it sets auth.uid() to the receiver
+--      for its single UPDATE). Safe: has_party_branches = true (it distinguishes payer and payee by auth.uid()
+--      and ends with the fail-closed "Not permitted" exception, so a plain service-role update with a NULL uid is refused).
+SELECT p.prosecdef AS security_definer,
+       pg_get_functiondef(p.oid) LIKE '%auth.uid() = OLD.to_user_id%' AS has_party_branches,
+       pg_get_functiondef(p.oid) LIKE '%Not permitted to update this settlement%' AS fails_closed_for_null_uid
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'guard_settlement_party_update';
+
+-- 18e. auth.uid() reads request.jwt.claim.sub or request.jwt.claims->>'sub' (the migration sets both for the receiver).
+--      Safe: the body mentions request.jwt.claim.sub or request.jwt.claims; auth.role() the same for 'role'.
+SELECT p.proname, pg_get_functiondef(p.oid) AS def FROM pg_proc p
+WHERE p.pronamespace = 'auth'::regnamespace AND p.proname IN ('uid', 'role');
+
+-- 18f. notifications accepts the new kind/dedupe key format: no CHECK on kind or dedupe_key, and dedupe_key is UNIQUE.
+--      Safe: no CHECK constraint mentions kind/channel/dedupe_key; one unique constraint/index on dedupe_key.
+SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'public.notifications'::regclass;
+SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'notifications';
+-- How the existing keys look (the new kinds are payment_paid_notice and payment_confirmed_notice).
+SELECT kind, count(*) FROM public.notifications GROUP BY 1 ORDER BY 2 DESC;
+
+-- 18g. activity_feed has no verb CHECK (the migration writes settlement_confirmed_by_email and
+--      settlement_receipt_disputed). Safe: zero rows.
+SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.activity_feed'::regclass AND contype = 'c';
+
+-- 18h. Payments the new flow will touch: current marked_paid rows, and any with a null currency
+--      (the token captures trips.base_currency in that case). Informational.
+SELECT count(*) FILTER (WHERE status = 'marked_paid') AS marked_paid,
+       count(*) FILTER (WHERE status = 'marked_paid' AND currency IS NULL) AS marked_paid_null_currency
+FROM public.settlements;
+
+-- 18i. After applying: the functions are service-role only. Safe: anon_exec and authenticated_exec are false, service_exec true,
+--      and the tables show relrowsecurity = true with zero policies.
+SELECT f.sig, has_function_privilege('anon', f.sig, 'EXECUTE') AS anon_exec,
+       has_function_privilege('authenticated', f.sig, 'EXECUTE') AS authenticated_exec,
+       has_function_privilege('service_role', f.sig, 'EXECUTE') AS service_exec
+FROM (VALUES ('public.issue_payment_confirm_token(uuid,text)'), ('public.confirm_payment_by_token(text)'),
+             ('public.dispute_payment_by_token(text)'), ('public.payment_confirm_rate_hit(text,integer,integer)')) AS f(sig);
+SELECT c.relname, c.relrowsecurity, (SELECT count(*) FROM pg_policies p WHERE p.tablename = c.relname AND p.schemaname = 'public') AS policies
+FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('payment_confirm_tokens', 'payment_confirm_rate_limits');
+
+-- =====================================================================================
+-- 19. Migration 20261120100000_settlement_insert_guard.sql (the settlements INSERT hole).
+--     Apply it ONLY if 19a/19b show the hole. All read-only.
+-- =====================================================================================
+
+-- 19a. The exact INSERT / UPDATE / DELETE policies on settlements.
+--      Hole confirmed if: the INSERT with_check is only "participant AND created_by = auth.uid()"
+--      (no mention of status or from_user_id). Expected UPDATE: creator <24h / organizer / from / to;
+--      DELETE: creator <24h / organizer + suggested / admin.
+SELECT policyname, cmd, roles, qual, with_check FROM pg_policies WHERE schemaname = 'public' AND tablename = 'settlements' ORDER BY cmd, policyname;
+
+-- 19b. status default and constraint. Hole confirmed if the default is 'confirmed'::text.
+SELECT column_name, column_default, is_nullable FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'settlements' AND column_name IN ('status', 'created_by', 'currency');
+SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.settlements'::regclass AND contype = 'c';
+
+-- 19c. Existing triggers. Safe: exactly trigger_guard_immutable_keys and trigger_guard_settlement_party_update
+--      (both BEFORE UPDATE), nothing on INSERT. The migration adds trigger_guard_settlement_insert (BEFORE INSERT)
+--      and trigger_supersede_payment_tokens (AFTER UPDATE, from the tokens migration).
+SELECT t.tgname, pg_get_triggerdef(t.oid) AS def FROM pg_trigger t
+WHERE NOT t.tgisinternal AND t.tgrelid = 'public.settlements'::regclass;
+
+-- 19d. The live UPDATE guard is the body the migration re-declares (it has the created_by lock) and is
+--      currently NOT security definer. Safe: has_created_by_lock = true.
+SELECT p.prosecdef AS security_definer, p.proconfig,
+       pg_get_functiondef(p.oid) LIKE '%May not change who created this settlement%' AS has_created_by_lock,
+       pg_get_functiondef(p.oid) LIKE '%interval ''24 hours''%' AS has_creator_24h_branch
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'guard_settlement_party_update';
+
+-- 19e. Name clashes with objects ONLY the 100000 migration creates (supersede_payment_tokens_on_status_change
+--      belongs to group 18's migration and exists by then). Safe: zero rows.
+SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+  AND proname IN ('guard_settlement_insert', '_settlement_can_manage');
+SELECT tgname FROM pg_trigger WHERE tgrelid = 'public.settlements'::regclass AND tgname = 'trigger_guard_settlement_insert';
+
+-- 19h. Existing NaN / Infinity amounts would slip past a plain amount > 0 test. Safe: 0.
+SELECT count(*) FROM settlements WHERE amount = 'NaN' OR amount = 'Infinity';
+
+-- 19i. Owners of the SECURITY DEFINER functions must bypass RLS. Safe: postgres / true on both rows.
+SELECT p.proname, pg_get_userbyid(p.proowner), r.rolbypassrls FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+WHERE p.proname IN ('guard_settlement_party_update','is_trip_organizer');
+
+-- 19j. RLS is on for settlements. Safe: true.
+SELECT relrowsecurity FROM pg_class WHERE oid = 'public.settlements'::regclass;
+
+-- 19f. INFORMATIONAL: existing rows the new rule would not have allowed an ordinary participant to create,
+--      by trip. "Ordinary" = created_by cannot manage the trip (not an admin, an ACTIVE organizer, or the trip
+--      creator; note this uses today's roles, not the roles at creation time). Status is the CURRENT status
+--      (a legitimately suggested row may have moved on), so only not_payer / not_participants are violations
+--      by themselves; confirmed_by_ordinary is the interesting one to eyeball. Expect all zero on a healthy db.
+WITH s AS (
+  SELECT s.*,
+         (EXISTS (SELECT 1 FROM public.users u WHERE u.id = s.created_by AND u.role = 'admin')
+          OR EXISTS (SELECT 1 FROM public.trip_participants o WHERE o.trip_id = s.trip_id AND o.user_id = s.created_by AND o.role = 'organizer' AND o.active)
+          OR EXISTS (SELECT 1 FROM public.trips t WHERE t.id = s.trip_id AND t.created_by = s.created_by)) AS creator_can_manage
+  FROM public.settlements s
+)
+SELECT trip_id,
+       count(*) FILTER (WHERE NOT creator_can_manage) AS by_ordinary_creator,
+       count(*) FILTER (WHERE NOT creator_can_manage AND from_user_id <> created_by) AS not_payer,
+       count(*) FILTER (WHERE NOT creator_can_manage AND status = 'confirmed') AS confirmed_by_ordinary,
+       count(*) FILTER (WHERE NOT creator_can_manage AND (
+         NOT EXISTS (SELECT 1 FROM public.trip_participants p WHERE p.trip_id = s.trip_id AND p.user_id = s.from_user_id)
+         OR NOT EXISTS (SELECT 1 FROM public.trip_participants p WHERE p.trip_id = s.trip_id AND p.user_id = s.to_user_id))) AS not_participants,
+       count(*) FILTER (WHERE amount <= 0 OR from_user_id = to_user_id) AS bad_amount_or_same_person
+FROM s
+GROUP BY trip_id
+HAVING count(*) FILTER (WHERE NOT creator_can_manage) > 0 OR count(*) FILTER (WHERE amount <= 0 OR from_user_id = to_user_id) > 0
+ORDER BY 2 DESC;
+
+-- 19g. After applying: the helpers and trigger functions are not callable by clients. Safe: all false.
+SELECT f, has_function_privilege('anon', f, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', f, 'EXECUTE') AS authenticated_exec
+FROM unnest(array['public.guard_settlement_insert()', 'public._settlement_can_manage(uuid,uuid)',
+                  'public.supersede_payment_tokens_on_status_change()']) f;
+
+-- 19k. AFTER BOTH migrations (090000 then 100000): exactly these four non-internal triggers on settlements:
+--      trigger_guard_immutable_keys (BEFORE UPDATE), trigger_guard_settlement_party_update (BEFORE UPDATE),
+--      trigger_guard_settlement_insert (BEFORE INSERT), trigger_supersede_payment_tokens (AFTER UPDATE OF status).
+--      Safe: count = 4 and those four names.
+SELECT count(*) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid = 'public.settlements'::regclass;
+SELECT t.tgname, pg_get_triggerdef(t.oid) FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgrelid = 'public.settlements'::regclass ORDER BY 1;
+
+-- 19l. AFTER 100000: the update guard is SECURITY DEFINER with a pinned search_path. Safe: true, {search_path=public, pg_temp}.
+SELECT prosecdef, proconfig FROM pg_proc WHERE proname = 'guard_settlement_party_update';
+
+-- 19m. AFTER 100000: settlements.status defaults to 'suggested'. Safe: 'suggested'::text.
+SELECT column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'settlements' AND column_name = 'status';
+
+-- 19n. AFTER BOTH: clients cannot execute the trigger/helper functions, and the four token RPCs are service_role only.
+--      Safe: anon_exec and authenticated_exec false on every row; service_exec true on the four RPCs.
+SELECT f, has_function_privilege('anon', f, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', f, 'EXECUTE') AS authenticated_exec,
+       has_function_privilege('service_role', f, 'EXECUTE') AS service_exec
+FROM unnest(array[
+  'public.guard_settlement_party_update()', 'public.guard_settlement_insert()', 'public._settlement_can_manage(uuid,uuid)',
+  'public.supersede_payment_tokens_on_status_change()', 'public._payment_token_name(uuid)', 'public._payment_token_check(text)',
+  'public._payment_token_summary(public.payment_confirm_tokens,public.settlements,text)',
+  'public.issue_payment_confirm_token(uuid,text)', 'public.confirm_payment_by_token(text)',
+  'public.dispute_payment_by_token(text)', 'public.payment_confirm_rate_hit(text,integer,integer)']) f;

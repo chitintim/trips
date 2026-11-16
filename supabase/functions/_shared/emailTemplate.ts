@@ -142,6 +142,8 @@ export function renderBrandedEmail(opts: {
   ctaLabel: string
   ctaUrl: string
   footerLine: string
+  /** Trusted HTML rendered directly under the button (a secondary link, a one-line note). Escape user data first. */
+  afterCtaHtml?: string
 }): string {
   return `
   <div style="margin:0;padding:24px 12px;background:${COLORS.bg};font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
@@ -153,7 +155,7 @@ export function renderBrandedEmail(opts: {
         ${opts.bodyHtml}
         <div style="text-align:center;margin:24px 0 8px;">
           <a href="${escapeHtml(opts.ctaUrl)}" style="display:inline-block;background:${COLORS.brand};color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:12px 28px;border-radius:8px;">${escapeHtml(opts.ctaLabel)}</a>
-        </div>
+        </div>${opts.afterCtaHtml ? `\n        ${opts.afterCtaHtml}` : ''}
       </div>
       <div style="padding:16px 20px;text-align:center;">
         <p style="margin:0;font-size:12px;line-height:1.5;color:${COLORS.muted};">${escapeHtml(opts.footerLine)}<br>You can turn these emails off in your profile settings.</p>

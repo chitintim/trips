@@ -34,6 +34,9 @@ export type ActivityVerb =
   | 'settlement_marked_paid'
   | 'settlement_duplicate_removed'
   | 'settlement_recorded_on_behalf'
+  | 'settlement_confirmed_by_email'
+  | 'settlement_receipt_disputed'
+  | 'settlement_receipt_requested'
   | 'booking_added'
   | 'booking_updated'
   | 'event_added'
@@ -112,6 +115,9 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   settlement_marked_paid: { icon: '💸', phrase: (e) => `marked a payment as paid${e ? ` (${e})` : ''}` },
   settlement_duplicate_removed: { icon: '🧹', phrase: (e) => `removed a duplicate payment${e ? ` (${e})` : ''}` },
   settlement_recorded_on_behalf: { icon: '🛟', phrase: (e) => `recorded a payment as settled on someone's behalf${e ? ` (${e})` : ''}` },
+  settlement_confirmed_by_email: { icon: '📧', phrase: (e) => `confirmed receipt by email${e ? ` (${e})` : ''}` },
+  settlement_receipt_disputed: { icon: '⚠️', phrase: (e) => `says they haven't received a payment${e ? ` (${e})` : ''}` },
+  settlement_receipt_requested: { icon: '✉️', phrase: (e) => `emailed a receipt confirmation request${e ? ` (${e})` : ''}` },
   booking_added: { icon: '🧾', phrase: (e) => `marked${e ? ` "${e}"` : ' an item'} as booked` },
   booking_updated: { icon: '🧾', phrase: (e) => `updated the booking details${e ? ` for "${e}"` : ''}` },
   event_added: { icon: '📅', phrase: (e) => `added${e ? ` "${e}"` : ' something'} to the plan` },
@@ -182,6 +188,9 @@ const NOTIFICATION_KIND_LABELS: Record<string, NotificationKindInfo> = {
   waitlist_offer: { icon: '🎟️', label: 'Waitlist spot offered' },
   unpaid_settlement: { icon: '💸', label: 'Payment reminder' },
   unconfirmed_settlement: { icon: '🤝', label: 'Payment confirmation reminder' },
+  payment_paid_notice: { icon: '💸', label: 'Payment received? (sent right away)' },
+  payment_confirmed_notice: { icon: '🤝', label: 'Payment confirmed (sent right away)' },
+  payment_disputed_notice: { icon: '⚠️', label: 'Payment not received (sent right away)' },
   t30_no_transport: { icon: '✈️', label: 'No transport booked yet' },
   t14_missing_arrival: { icon: '🛬', label: 'Missing arrival details' },
   t1_checkin: { icon: '🛫', label: 'Flight check-in reminder' },

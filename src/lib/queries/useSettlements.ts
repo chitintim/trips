@@ -4,6 +4,7 @@ import { Tables, TablesInsert, Json } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { toRpcError } from './useDecide'
+import { notifyPaymentEvent, shouldNotifyPaymentEvent } from './notifyPaymentEvent'
 import { unresolvedDuplicateGroups } from '../../features/expenses/settle-up/settleUpLogic'
 import {
   isSettlementRpcMissing,
@@ -104,7 +105,17 @@ export function useUpdateSettlementStatus(tripId: string) {
       if (expectedPrior) query = query.eq('status', expectedPrior)
       const { data, error } = await query.select().maybeSingle()
       if (error) throw error
-      if (data) return data
+      if (data) {
+        // Fire-and-forget email to the other party; never delays or fails the mutation.
+        void supabase.auth
+          .getUser()
+          .then(({ data: auth }) => {
+            const event = shouldNotifyPaymentEvent({ newStatus: data.status, actorId: auth.user?.id, receiverId: data.to_user_id })
+            if (event) void notifyPaymentEvent(data.id, event)
+          })
+          .catch(() => undefined)
+        return data
+      }
       // Zero rows: either the row is already in the requested state (the same
       // action was submitted twice -- treat as success, idempotent) or RLS /
       // the lifecycle guard filtered it out.
@@ -192,6 +203,9 @@ export interface FreezeSettlementsResult {
 
 /** The pre-migration sequence: three separate client writes. Not atomic -- only used when the RPC is missing. */
 async function freezeClientSide(tripId: string, { userId, snapshot, suggestions, knownPaidIds, baseCurrency }: FreezeSettlementsVars): Promise<FreezeSettlementsResult> {
+  // The database only lets people who can manage the trip create payment rows, and only with a
+  // finite amount above zero; refuse a bad suggestion before changing anything.
+  if (suggestions.some(t => !Number.isFinite(t.amount) || t.amount <= 0)) throw new Error('A payment must have an amount above zero')
   // Same guards as the RPC, checked against fresh rows (not atomic, but the best the old path can do).
   const fresh = await fetchSettlements(tripId)
   if (unresolvedDuplicateGroups(fresh, baseCurrency).length > 0) throw new Error(FREEZE_BLOCKED_BY_DUPLICATES)
@@ -350,6 +364,9 @@ export function useSettleOnBehalf(tripId: string) {
         if (current && current.status === to) return { row: current, logged: true } // already done elsewhere
         throw new Error("This payment couldn't be updated: it may have changed, or you don't have permission.")
       }
+      // Only a payment recorded as paid asks the receiver to confirm; recording
+      // it as received (single or batch) sends nothing.
+      if (to === 'marked_paid') void notifyPaymentEvent(data.id, 'paid')
       const currency = data.currency ?? ''
       const { error: logError } = await supabase.from('activity_feed').insert({
         trip_id: tripId,

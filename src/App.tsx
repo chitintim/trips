@@ -7,6 +7,7 @@ import { ToastProvider } from './components/ui'
 import { authRoutes } from './features/auth/routes'
 import { AnnouncementGate } from './features/announcements'
 import { ClaimPage } from './features/expenses'
+import { ConfirmPaymentPage } from './features/payments'
 import { Dashboard } from './pages/Dashboard'
 import { TripDetail } from './pages/TripDetail'
 import { SharePage } from './pages/SharePage'
@@ -25,6 +26,9 @@ function App() {
           <Routes>
             {/* Public Routes (owned by the auth feature, see features/auth/routes.tsx) */}
             {authRoutes}
+
+            {/* Public: the button in the "X paid you" email (token is the credential) */}
+            <Route path="/confirm-payment" element={<ConfirmPaymentPage />} />
 
             {/* Protected Routes */}
             <Route

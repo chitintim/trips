@@ -64,7 +64,7 @@ node scripts/check-zindex.mjs           # z-index layering check
 Edge function tests (Deno, no install needed):
 
 ```bash
-npx -y deno test supabase/functions/auto-chase/
+npx -y deno test supabase/functions/payment-notice/ supabase/functions/payment-confirm/ supabase/functions/auto-chase/ supabase/functions/_shared/payment*.test.ts
 ```
 
 `deno test` leaves nothing behind except possibly a root `deno.lock`; delete it afterwards.
@@ -76,7 +76,7 @@ Environment variable names (values are never committed):
 | Where | Names |
 |---|---|
 | Frontend (`.env`, GitHub secrets) | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; optional `VITE_BASE` (build base path, default `/trips/`) |
-| Edge functions (Supabase secrets) | `ANTHROPIC_API_KEY`, `APP_BASE_URL`, `RESEND_API_KEY`, `RESEND_FROM`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`; `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` are provided by Supabase |
+| Edge functions (Supabase secrets) | `ANTHROPIC_API_KEY`, `APP_BASE_URL`, `RESEND_API_KEY`, `RESEND_FROM`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`; optional `PAYMENT_CONFIRM_ALLOWED_ORIGINS` (comma-separated extra origins `payment-confirm` accepts besides `APP_BASE_URL`); `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` are provided by Supabase |
 
 CI (`.github/workflows/ci.yml`, on pull requests and non-master pushes) runs typecheck, `npm run lint:ci`, z-index check, unit tests, drift check, build and the Playwright smoke suite.
 
@@ -89,6 +89,14 @@ CI (`.github/workflows/ci.yml`, on pull requests and non-master pushes) runs typ
   npx -y supabase@latest functions deploy <name> --remote=vrmhwfrpdaiovulornli --use-api
   ```
   (`--remote` is the flag the current CLI accepts here; add `--yes` in a non-interactive shell.) Deploy reads the `[functions.*]` blocks (`verify_jwt`, `import_map`) in `supabase/config.toml`.
+  The "X paid you" email touches two new functions and one changed one. Migrations first (apply by hand, in this order, after running the PRE_APPLY_CHECKS groups 18 and 19): `20261120090000_payment_confirm_tokens.sql`, then `20261120100000_settlement_insert_guard.sql` (closes the settlements INSERT hole; apply only if check 19a/19b shows it). Then the functions:
+  ```bash
+  npx -y supabase@latest functions deploy payment-notice  --remote=vrmhwfrpdaiovulornli --use-api   # verify_jwt = true (signed-in callers only)
+  npx -y supabase@latest functions deploy payment-confirm --remote=vrmhwfrpdaiovulornli --use-api --no-verify-jwt   # verify_jwt = false: public, the emailed token is the credential; POST only
+  npx -y supabase@latest functions deploy auto-chase      --remote=vrmhwfrpdaiovulornli --use-api   # changed: skips the daily reminder for a payment whose paid notice went out today
+  ```
+  `config.toml` carries the settings (`payment-notice` verify_jwt true, `payment-confirm` false). They need the same secrets as `auto-chase` (`RESEND_API_KEY` or `BREVO_API_KEY` with their sender settings, and `APP_BASE_URL`); `SUPABASE_*` are provided. **Order:** migrations, then `payment-notice`, `payment-confirm` and `auto-chase`, then the front end (a front end that calls `payment-notice` before it exists just logs a warning; it never blocks marking a payment paid; the page for the button is the public route `/confirm-payment`, which needs `payment-confirm` deployed first).
+  **Email provider setting:** keep click tracking OFF for these emails (Resend: Domains, your sending domain, Click tracking; Brevo: transactional tracking). The confirm link contains a secret token; a tracked link would route it through the provider and store it in their logs.
   `auto-chase` is invoked by a pg_cron job (`auto-chase-daily`) that authenticates with an `x-cron-secret` header read from the service-role-only `app_secrets` table.
 - **Auth email templates** (login code and sign-up verification) live in the Supabase dashboard. `supabase/templates/` mirrors them; `supabase/config.toml` configures local development (`supabase start`) and does not change the hosted auth settings or emails, except that its `[functions.*]` blocks are read by `supabase functions deploy`. Editing the template files does not change the hosted emails.
 
@@ -106,7 +114,7 @@ src/
   shared/contracts/  zod contracts mirrored to the edge functions
 supabase/
   migrations/     SQL, applied manually
-  functions/      auto-chase, ingest, trip-chat, parse-receipt, nudge-draft,
+  functions/      auto-chase, payment-notice, payment-confirm, ingest, trip-chat, parse-receipt, nudge-draft,
                   reorganize-plan, refresh-fx-rates, admin-invitation-account, _shared
   templates/      mirror of the dashboard auth email templates
 e2e/              Playwright smoke tests (no sign-in, no live writes)

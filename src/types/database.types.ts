@@ -896,6 +896,51 @@ export type Database = {
           },
         ]
       }
+      payment_confirm_tokens: {
+        Row: {
+          amount: number
+          created_at: string
+          currency: string | null
+          expires_at: string
+          id: string
+          receiver_id: string
+          settlement_id: string
+          token_hash: string
+          used_action: string | null
+          used_at: string | null
+        }
+        Insert: {
+          amount: number
+          created_at?: string
+          currency?: string | null
+          expires_at?: string
+          id?: string
+          receiver_id: string
+          settlement_id: string
+          token_hash: string
+          used_action?: string | null
+          used_at?: string | null
+        }
+        Update: {
+          amount?: number
+          created_at?: string
+          currency?: string | null
+          expires_at?: string
+          id?: string
+          receiver_id?: string
+          settlement_id?: string
+          token_hash?: string
+          used_action?: string | null
+          used_at?: string | null
+        }
+        Relationships: []
+      }
+      payment_confirm_rate_limits: {
+        Row: { key: string; hits: number; window_start: string }
+        Insert: { key: string; hits?: number; window_start?: string }
+        Update: { key?: string; hits?: number; window_start?: string }
+        Relationships: []
+      }
       notifications: {
         Row: {
           channel: string
@@ -2107,6 +2152,22 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      confirm_payment_by_token: {
+        Args: { p_token_hash: string }
+        Returns: Json
+      }
+      dispute_payment_by_token: {
+        Args: { p_token_hash: string }
+        Returns: Json
+      }
+      issue_payment_confirm_token: {
+        Args: { p_settlement_id: string; p_token_hash: string }
+        Returns: Json
+      }
+      payment_confirm_rate_hit: {
+        Args: { p_key: string; p_limit: number; p_window_seconds: number }
+        Returns: boolean
+      }
       assign_user_to_trip: {
         Args: { p_invitation_id: string; p_user_id: string }
         Returns: boolean

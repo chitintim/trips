@@ -51,4 +51,6 @@ export const RATE_LIMITS = {
   nudgeDraft: { feature: 'nudge_draft', capacity: 20, refillPerDay: 20 },
   /** reorganize-plan: 5/day/user (UPGRADE_MASTER_PLAN.md §13 build brief) -- a much heavier call than ingest/chat (full-trip snapshot, up to 60 generated actions). */
   reorganize: { feature: 'reorganize', capacity: 5, refillPerDay: 5 },
+  /** payment-notice: 60/day/user -- one call per payment marked paid or confirmed, so this only stops abuse. */
+  paymentNotice: { feature: 'payment_notice', capacity: 60, refillPerDay: 60 },
 } as const satisfies Record<string, RateLimitConfig>

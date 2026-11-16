@@ -1,0 +1,394 @@
+/**
+ * Pure rules for the two payment notice emails and the confirm-by-email page.
+ * No I/O here (see paymentNoticeSend.ts for the part that talks to Supabase),
+ * so every gate, state and string is unit-testable.
+ *
+ *  - "paid" notice: to the RECEIVER when a payment becomes marked_paid:
+ *    "<Payer> paid you £X" with a button to confirm receipt.
+ *  - "confirmed" notice: to the PAYER when the receiver themself confirms.
+ *  - "disputed" notice: to the PAYER when the receiver says "I haven't received it"
+ *    on the confirm page.
+ *
+ * All are transactional (not gated by the trip's reminder switch) and are
+ * outside the daily digest and its one-email-per-day cap.
+ */
+import { renderBrandedEmail, escapeHtml, BRAND_NAME } from './emailTemplate.ts'
+import { formatMoneyExact } from './paymentMoney.ts'
+
+export const PAID_NOTICE_KIND = 'payment_paid_notice'
+export const CONFIRMED_NOTICE_KIND = 'payment_confirmed_notice'
+export const DISPUTED_NOTICE_KIND = 'payment_disputed_notice'
+/** Most notices of one kind a single person may be sent per rolling 24 hours (abuse guard, not a feature). */
+export const NOTICE_DAILY_CAP_PER_RECIPIENT = 10
+export const TOKEN_TTL_DAYS = 14
+export const NOTE_MAX_CHARS = 300
+
+export const paidNoticeKey = (settlementId: string, receiverId: string) => `notice:paid:${settlementId}:${receiverId}:1`
+export const confirmedNoticeKey = (settlementId: string, payerId: string) => `notice:confirmed:${settlementId}:${payerId}:1`
+export const disputedNoticeKey = (settlementId: string, payerId: string) => `notice:disputed:${settlementId}:${payerId}:1`
+
+// ---------------------------------------------------------------------------
+// Who may ask for a notice (the function trusts nothing from the caller)
+// ---------------------------------------------------------------------------
+
+export interface ManagerFacts {
+  isSiteAdmin: boolean
+  isActiveOrganizer: boolean
+  isTripCreator: boolean
+}
+
+/** Same rule as settlement_assert_can_manage (20261118100000): site admin, ACTIVE organiser, or trip creator. */
+export function canManageTripFacts(f: ManagerFacts): boolean {
+  return f.isSiteAdmin || f.isActiveOrganizer || f.isTripCreator
+}
+
+/** "paid": the payer, or someone who can manage the trip (recording it on the payer's behalf). */
+export function mayRequestPaidNotice(input: { callerId: string; payerId: string; canManage: boolean }): boolean {
+  return input.callerId === input.payerId || input.canManage
+}
+
+/** "confirmed": only the receiver themself. An organiser confirming on someone's behalf never triggers it. */
+export function mayRequestConfirmedNotice(input: { callerId: string; receiverId: string }): boolean {
+  return input.callerId === input.receiverId
+}
+
+// ---------------------------------------------------------------------------
+// Gates
+// ---------------------------------------------------------------------------
+
+export interface RecipientFacts {
+  email: string | null | undefined
+  /** users.email_notifications_enabled: only an explicit false opts out. */
+  emailNotificationsEnabled: boolean | null | undefined
+  /** An email provider (Resend/Brevo) is configured. */
+  channelAvailable: boolean
+}
+
+export type NoticeSkipReason =
+  | 'not_marked_paid'
+  | 'not_confirmed'
+  | 'same_person'
+  | 'self_recorded'
+  | 'opt_out'
+  | 'no_email'
+  | 'no_channel'
+
+export interface NoticeDecision {
+  send: boolean
+  reason: NoticeSkipReason | null
+}
+
+const SEND: NoticeDecision = { send: true, reason: null }
+const skip = (reason: NoticeSkipReason): NoticeDecision => ({ send: false, reason })
+
+/** Same order of checks as decideEmailSuppression in auto-chase (opt-out first, then address, then provider). */
+function recipientDecision(r: RecipientFacts): NoticeDecision {
+  if (r.emailNotificationsEnabled === false) return skip('opt_out')
+  if (!r.email || !r.email.trim()) return skip('no_email')
+  if (!r.channelAvailable) return skip('no_channel')
+  return SEND
+}
+
+export function decidePaidNotice(input: {
+  status: string
+  payerId: string
+  receiverId: string
+  /** The caller asking for the notice. If it is the receiver, there is nobody to tell. */
+  callerId: string
+  receiver: RecipientFacts
+}): NoticeDecision {
+  if (input.status !== 'marked_paid') return skip('not_marked_paid')
+  if (input.payerId === input.receiverId) return skip('same_person')
+  if (input.callerId === input.receiverId) return skip('self_recorded')
+  return recipientDecision(input.receiver)
+}
+
+/** "Not received": the payment must still be marked_paid (nothing to dispute once it is confirmed). */
+export function decideDisputedNotice(input: { status: string; payerId: string; receiverId: string; payer: RecipientFacts }): NoticeDecision {
+  if (input.status !== 'marked_paid') return skip('not_marked_paid')
+  if (input.payerId === input.receiverId) return skip('same_person')
+  return recipientDecision(input.payer)
+}
+
+/** Over the per-recipient daily cap for one kind of notice. */
+export function overDailyCap(sentInLast24h: number | null | undefined): boolean {
+  return (sentInLast24h ?? NOTICE_DAILY_CAP_PER_RECIPIENT) >= NOTICE_DAILY_CAP_PER_RECIPIENT
+}
+
+export function decideConfirmedNotice(input: { status: string; payerId: string; receiverId: string; payer: RecipientFacts }): NoticeDecision {
+  if (input.status !== 'confirmed') return skip('not_confirmed')
+  if (input.payerId === input.receiverId) return skip('same_person')
+  return recipientDecision(input.payer)
+}
+
+/**
+ * "You're square" is only said when it is provably true from payment rows: the
+ * trip's balances are frozen (so the payment rows ARE the whole obligation),
+ * the payer has no other unfinished payment (to make or to receive), and no
+ * carried-over balance involves them. Anything unknown counts as not square.
+ */
+export function isPayerSquare(input: { tripFrozen: boolean; otherUnfinishedPaymentsByPayer: number | null; carryoversInvolvingPayer: number | null }): boolean {
+  return input.tripFrozen && input.otherUnfinishedPaymentsByPayer === 0 && input.carryoversInvolvingPayer === 0
+}
+
+// ---------------------------------------------------------------------------
+// Names and text hygiene
+// ---------------------------------------------------------------------------
+
+export function displayFirstName(u: { first_name?: string | null; full_name?: string | null } | null | undefined, fallback = 'Someone'): string {
+  const first = u?.first_name?.trim()
+  if (first) return first
+  const full = u?.full_name?.trim().split(/\s+/)[0]
+  return full || fallback
+}
+
+/** Header-safe single line (no CR/LF), trimmed. */
+export function oneLine(s: string): string {
+  return s.replace(/[\r\n\u2028\u2029]+/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
+export function trimNote(note: string | null | undefined): string | null {
+  const n = (note ?? '').replace(/\s+/g, ' ').trim()
+  if (!n) return null
+  return n.length > NOTE_MAX_CHARS ? `${n.slice(0, NOTE_MAX_CHARS - 1)}…` : n
+}
+
+// ---------------------------------------------------------------------------
+// Links
+// ---------------------------------------------------------------------------
+
+export function confirmPageUrl(appBaseUrl: string, token: string): string {
+  return `${appBaseUrl}/confirm-payment?t=${encodeURIComponent(token)}`
+}
+
+/** Same shape as DEEP_LINKS.payment: `/<tripId>?open=payment:<id>`. */
+export function paymentAppUrl(appBaseUrl: string, tripId: string, settlementId: string): string {
+  return `${appBaseUrl}/${tripId}?open=payment:${settlementId}`
+}
+
+export function tripUrl(appBaseUrl: string, tripId: string): string {
+  return `${appBaseUrl}/${tripId}`
+}
+
+// ---------------------------------------------------------------------------
+// Email rendering
+// ---------------------------------------------------------------------------
+
+export interface RenderedNotice {
+  subject: string
+  html: string
+  text: string
+}
+
+const INK = '#1c1917'
+const MUTED = '#78716c'
+const BRAND = '#0f766e'
+
+const OFF_LINE = 'To turn emails off, open your profile and go to Email notifications.'
+
+export interface PaidNoticeInput {
+  receiverFirstName: string
+  payerName: string
+  /** Set when someone other than the payer recorded the payment ("Tim recorded that Salim paid you"). */
+  recordedByName: string | null
+  amount: number
+  currency: string
+  tripName: string
+  /** settlements.notes; shown only if present. */
+  note: string | null
+  confirmUrl: string
+  appUrl: string
+}
+
+export function paidNoticeSubject(i: Pick<PaidNoticeInput, 'payerName' | 'amount' | 'currency' | 'tripName'>): string {
+  return oneLine(`${i.payerName} paid you ${formatMoneyExact(i.amount, i.currency)} — ${i.tripName}`)
+}
+
+export function renderPaidNotice(i: PaidNoticeInput): RenderedNotice {
+  const money = formatMoneyExact(i.amount, i.currency)
+  const note = trimNote(i.note)
+  const lead = i.recordedByName
+    ? `${i.recordedByName} recorded that ${i.payerName} paid you ${money} for ${i.tripName}.`
+    : `${i.payerName} says they paid you ${money} for ${i.tripName}.`
+  const noteLabel = i.recordedByName ? 'Note' : `${i.payerName}'s note`
+  const ask = 'Once it has arrived, let us know. Nothing changes until you choose.'
+  const body = `
+    <p style="margin:0 0 12px;font-size:15px;color:${INK};">Hi ${escapeHtml(i.receiverFirstName)},</p>
+    <p style="margin:0 0 8px;font-size:16px;line-height:1.5;color:${INK};font-weight:600;">${escapeHtml(lead)}</p>
+    ${note ? `<p style="margin:0 0 8px;font-size:14px;line-height:1.5;color:${MUTED};">${escapeHtml(noteLabel)}: &ldquo;${escapeHtml(note)}&rdquo;</p>` : ''}
+    <p style="margin:0;font-size:14px;line-height:1.5;color:${MUTED};">${escapeHtml(ask)}</p>`
+  const after = `<p style="margin:12px 0 0;text-align:center;font-size:13px;line-height:1.5;color:${MUTED};">Prefer to sign in? <a href="${escapeHtml(i.appUrl)}" style="color:${BRAND};">Open this payment in the app</a>.</p>`
+  const footerLine = `You're getting this because ${i.recordedByName ?? i.payerName} recorded a payment to you on ${i.tripName}. ${OFF_LINE}`
+  const html = renderBrandedEmail({ bodyHtml: body, ctaLabel: 'Yes, I received it', ctaUrl: i.confirmUrl, footerLine, afterCtaHtml: after })
+  const text = [
+    `Hi ${i.receiverFirstName},`,
+    '',
+    lead,
+    ...(note ? [`${noteLabel}: "${note}"`] : []),
+    '',
+    ask,
+    '',
+    `Yes, I received it: ${i.confirmUrl}`,
+    `Or open this payment in the app: ${i.appUrl}`,
+    '',
+    footerLine,
+  ].join('\n')
+  return { subject: paidNoticeSubject(i), html, text }
+}
+
+export interface ConfirmedNoticeInput {
+  payerFirstName: string
+  receiverName: string
+  amount: number
+  currency: string
+  tripName: string
+  square: boolean
+  tripUrl: string
+}
+
+export function confirmedNoticeSubject(i: Pick<ConfirmedNoticeInput, 'receiverName' | 'amount' | 'currency' | 'tripName'>): string {
+  return oneLine(`${i.receiverName} confirmed your ${formatMoneyExact(i.amount, i.currency)} — ${i.tripName}`)
+}
+
+export function renderConfirmedNotice(i: ConfirmedNoticeInput): RenderedNotice {
+  const money = formatMoneyExact(i.amount, i.currency)
+  const lead = i.square
+    ? `${i.receiverName} confirmed your ${money} — you're square for ${i.tripName}.`
+    : `${i.receiverName} confirmed your ${money} for ${i.tripName}.`
+  const body = `
+    <p style="margin:0 0 12px;font-size:15px;color:${INK};">Hi ${escapeHtml(i.payerFirstName)},</p>
+    <p style="margin:0;font-size:16px;line-height:1.5;color:${INK};font-weight:600;">${escapeHtml(lead)}</p>`
+  const footerLine = `You're getting this because you paid ${i.receiverName} on ${i.tripName}. ${OFF_LINE}`
+  const html = renderBrandedEmail({ bodyHtml: body, ctaLabel: `Open ${i.tripName}`, ctaUrl: i.tripUrl, footerLine })
+  const text = [`Hi ${i.payerFirstName},`, '', lead, '', `Open ${i.tripName}: ${i.tripUrl}`, '', footerLine].join('\n')
+  return { subject: confirmedNoticeSubject(i), html, text }
+}
+
+export interface DisputedNoticeInput {
+  payerFirstName: string
+  receiverName: string
+  amount: number
+  currency: string
+  tripName: string
+  tripUrl: string
+}
+
+export function disputedNoticeSubject(i: Pick<DisputedNoticeInput, 'receiverName' | 'amount' | 'currency'>): string {
+  return oneLine(`${i.receiverName} says they haven't received your ${formatMoneyExact(i.amount, i.currency)} yet`)
+}
+
+export function renderDisputedNotice(i: DisputedNoticeInput): RenderedNotice {
+  const money = formatMoneyExact(i.amount, i.currency)
+  const lead = `${i.receiverName} says they haven't received your ${money} yet for ${i.tripName}.`
+  const hint = 'It may still be on its way. If you have paid, it is worth checking the details with them.'
+  const body = `
+    <p style="margin:0 0 12px;font-size:15px;color:${INK};">Hi ${escapeHtml(i.payerFirstName)},</p>
+    <p style="margin:0 0 8px;font-size:16px;line-height:1.5;color:${INK};font-weight:600;">${escapeHtml(lead)}</p>
+    <p style="margin:0;font-size:14px;line-height:1.5;color:${MUTED};">${escapeHtml(hint)}</p>`
+  const footerLine = `You're getting this because you paid ${i.receiverName} on ${i.tripName}. ${OFF_LINE}`
+  const html = renderBrandedEmail({ bodyHtml: body, ctaLabel: `Open ${i.tripName}`, ctaUrl: i.tripUrl, footerLine })
+  const text = [`Hi ${i.payerFirstName},`, '', lead, hint, '', `Open ${i.tripName}: ${i.tripUrl}`, '', footerLine].join('\n')
+  return { subject: disputedNoticeSubject(i), html, text }
+}
+
+export { BRAND_NAME }
+
+// ---------------------------------------------------------------------------
+// Confirm page: state of a token
+// ---------------------------------------------------------------------------
+
+export type ConfirmState = 'valid' | 'confirmed' | 'disputed' | 'expired' | 'changed' | 'invalid'
+
+export interface TokenFacts {
+  receiver_id: string
+  amount: number
+  currency: string
+  expires_at: string
+  used_at: string | null
+  used_action: string | null
+}
+
+export interface SettlementFacts {
+  status: string
+  to_user_id: string
+  amount: number
+  /** Already coalesced with the trip's base currency (as the token captured it). */
+  currency: string
+}
+
+const sameAmount = (a: number, b: number) => Math.abs(a - b) < 0.0000005
+
+/** Mirrors _payment_token_check (SQL), for the read-only 'peek'. */
+export function mapTokenState(input: { token: TokenFacts | null; settlement: SettlementFacts | null; now: Date }): ConfirmState {
+  const { token, settlement, now } = input
+  if (!token) return 'invalid'
+  if (token.used_at || token.used_action) {
+    // The link shows the CURRENT truth: once the payment is confirmed (in the app, by an organizer,
+    // or by this link) that is what it says, whatever the token was used for.
+    if (settlement?.status === 'confirmed') return 'confirmed'
+    if (token.used_action === 'confirmed') return 'confirmed'
+    if (token.used_action === 'disputed') return 'disputed'
+    return 'expired' // superseded by a newer email
+  }
+  if (new Date(token.expires_at).getTime() <= now.getTime()) return 'expired'
+  if (!settlement) return 'changed'
+  if (settlement.status === 'confirmed') return 'confirmed'
+  if (
+    settlement.status !== 'marked_paid' ||
+    settlement.to_user_id !== token.receiver_id ||
+    !sameAmount(settlement.amount, token.amount) ||
+    settlement.currency !== token.currency
+  ) {
+    return 'changed'
+  }
+  return 'valid'
+}
+
+/** Map a confirm_payment_by_token / dispute_payment_by_token result to the page state. */
+export function mapRpcResult(result: unknown, usedAction: unknown): ConfirmState {
+  switch (result) {
+    case 'confirmed':
+    case 'already_confirmed':
+      return 'confirmed'
+    case 'disputed':
+      return 'disputed'
+    case 'used':
+      return usedAction === 'confirmed' ? 'confirmed' : usedAction === 'disputed' ? 'disputed' : 'expired'
+    case 'expired':
+      return 'expired'
+    case 'changed':
+      return 'changed'
+    default:
+      return 'invalid'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CORS for the public confirm function
+// ---------------------------------------------------------------------------
+
+/** Allowed browser origins: the app's own origin(s) only. `extra` is a comma-separated list. */
+export function allowedOrigins(appBaseUrl: string, extra: string | undefined): string[] {
+  const out = new Set<string>()
+  const add = (u: string) => {
+    try {
+      const o = new URL(u.trim())
+      if (o.protocol === 'https:' || o.hostname === 'localhost') out.add(o.origin)
+    } catch {
+      /* ignore junk */
+    }
+  }
+  add(appBaseUrl)
+  for (const e of (extra ?? '').split(',')) if (e.trim()) add(e)
+  return [...out]
+}
+
+export function isAllowedOrigin(origin: string | null, allowed: string[]): origin is string {
+  return !!origin && allowed.includes(origin)
+}
+
+/** Best-effort client IP behind the Supabase gateway. */
+export function clientIp(headers: Headers): string {
+  const fwd = headers.get('cf-connecting-ip') ?? headers.get('x-real-ip') ?? headers.get('x-forwarded-for') ?? ''
+  return fwd.split(',')[0].trim() || 'unknown'
+}

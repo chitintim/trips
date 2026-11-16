@@ -384,6 +384,19 @@ verify_jwt = true
 import_map = "./functions/auto-chase/deno.json"
 entrypoint = "./functions/auto-chase/index.ts"
 
+[functions.payment-notice]
+enabled = true
+verify_jwt = true
+import_map = "./functions/payment-notice/deno.json"
+entrypoint = "./functions/payment-notice/index.ts"
+
+# PUBLIC on purpose: the emailed one-time token is the credential (see the file header).
+[functions.payment-confirm]
+enabled = true
+verify_jwt = false
+import_map = "./functions/payment-confirm/deno.json"
+entrypoint = "./functions/payment-confirm/index.ts"
+
 [functions.parse-receipt]
 enabled = true
 verify_jwt = true

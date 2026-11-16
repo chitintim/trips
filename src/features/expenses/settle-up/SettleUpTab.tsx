@@ -46,6 +46,7 @@ import {
   type BatchOutcome,
   type OnBehalfAction,
 } from './settleOnBehalf'
+import { paymentNoticeBySettlement, paymentNoticeLines } from './paymentNoticeStatus'
 import { OnBehalfMenu } from './OnBehalfMenu'
 import { SettleAllDialog } from './SettleAllDialog'
 import { PaymentDetailsSheet } from './PaymentDetailsSheet'
@@ -195,6 +196,12 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
     [settlements, trip.base_currency, people]
   )
   const onBehalfRecords = useMemo(() => onBehalfRecordsBySettlement(activityEntries), [activityEntries])
+  // Who may legitimately have asked for a receipt: active organizers and the trip creator (the payer is checked per payment).
+  const managerIds = useMemo(
+    () => new Set<string>([...participants.filter((p) => p.role === 'organizer' && p.active).map((p) => p.user_id), ...(trip.created_by ? [trip.created_by] : [])]),
+    [participants, trip.created_by]
+  )
+  const noticeInfo = useMemo(() => paymentNoticeBySettlement(activityEntries, settlements, managerIds), [activityEntries, settlements, managerIds])
   const everythingSettled = isEverythingSettled(settlements) && (isFrozen || suggested.length === 0)
 
   const recordOnBehalf = async (s: Settlement, to: 'marked_paid' | 'confirmed', batch = false) => {
@@ -539,6 +546,8 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
             (iso) => new Date(iso).toLocaleDateString()
           )
 
+          const noticeLines = paymentNoticeLines(s, noticeInfo.get(s.id), { viewerId: user?.id, canManageTrip: isOrganizer }, toName, (iso) => new Date(iso).toLocaleDateString())
+
           // Bug #14: a bare status badge told nobody what it meant or whose
           // turn it was next. One caption per status/viewer, mirroring the
           // payment-details line's placement.
@@ -623,6 +632,12 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
               ) : (
                 caption && <p className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">{caption}</p>
               )}
+
+              {noticeLines.map((line) => (
+                <p key={line} className="text-xs text-[var(--text-muted)] pl-9 pt-0.5">
+                  {line}
+                </p>
+              ))}
 
               {s.status === 'marked_paid' && mismatchAmount !== undefined && (
                 <p className="text-xs text-warn-700 dark:text-warn-300 pl-9 pt-0.5">

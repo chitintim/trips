@@ -164,6 +164,8 @@ import {
   waitlistOfferDescription,
 } from './chaseCopy.ts'
 
+import { PAID_NOTICE_KIND, paidNoticeSentToday, type PaidNoticeRow } from './paymentNoticeToday.ts'
+
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
 
 /** One open loop targeting one user. */
@@ -777,6 +779,18 @@ Deno.serve(async (req) => {
             if (first) nameById.set(u.id as string, first)
           }
         }
+        // Payments whose "X paid you" notice already went out today (payment-notice function): not nudged again the same day.
+        const markedPaidIds = (settlements ?? []).filter((s) => s.status === 'marked_paid').map((s) => s.id as string)
+        let paidNoticesToday: PaidNoticeRow[] = []
+        if (markedPaidIds.length > 0) {
+          const { data: noticeRows } = await admin
+            .from('notifications')
+            .select('entity_id, user_id, sent_at')
+            .eq('kind', PAID_NOTICE_KIND)
+            .in('entity_id', markedPaidIds)
+            .gte('sent_at', todayStartIso)
+          paidNoticesToday = (noticeRows ?? []) as PaidNoticeRow[]
+        }
         for (const s of settlements ?? []) {
           if (s.status === 'suggested') {
             // Chase the payer to pay.
@@ -791,7 +805,8 @@ Deno.serve(async (req) => {
               deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.payment(s.id)),
             })
           } else {
-            // marked_paid: chase the recipient to confirm receipt.
+            // marked_paid: chase the recipient to confirm receipt (unless they were emailed about it today).
+            if (paidNoticeSentToday(paidNoticesToday, s.id, s.to_user_id, todayStartIso)) continue
             items.push({
               tripId: trip.id,
               tripName: trip.name,

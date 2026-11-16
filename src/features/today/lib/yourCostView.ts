@@ -23,6 +23,9 @@ export interface YourCostRowView {
   link: string | null
 }
 
+export const EXPENSE_ROWS_SHOWN = 8
+export const MY_SPENDING_LINK = '?tab=my-spending'
+
 export interface YourCostView {
   mode: YourCostModel['mode']
   /** Bold line: "Your cost so far: ≈£1,240", "Your share: £1,287.40", "Organizer's rough estimate: ~£800 each". Null when nothing is priced. */
@@ -42,6 +45,12 @@ export interface YourCostView {
   warnings: string[]
   /** Honest empty state when nothing is priced yet. */
   empty: { title: string; body: string } | null
+  /** Finished trips: how many further expenses are not listed (link: Money -> My spending). */
+  moreExpenses: { count: number; label: string; link: string } | null
+  /** "2 costs weren't shared with you", or null. */
+  notSharedNote: string | null
+  /** Toggle wording: "Show what's in it" / "Hide details". */
+  toggleLabel: { show: string; hide: string }
   /** Rows start open when there are few of them. */
   defaultOpen: boolean
 }
@@ -104,7 +113,23 @@ function rowFor(line: YourCostLine, currency: string): YourCostRowView {
 
 export function buildYourCostView(model: YourCostModel): YourCostView {
   const cur = model.currency
-  const rows = model.lines.map((l) => rowFor(l, cur))
+  const planningRows = model.lines.filter((l) => !l.notShared).map((l) => rowFor(l, cur))
+  const notSharedCount = model.lines.filter((l) => l.notShared).length
+  const notSharedNote = notSharedCount > 0 ? `${notSharedCount} ${notSharedCount === 1 ? "cost wasn't" : "costs weren't"} shared with you` : null
+  const expenseRowsAll: YourCostRowView[] = model.expenseShares.map((e) => ({
+    id: `expense:${e.id}`,
+    label: e.title,
+    amount: `your share ${formatMoney(e.share, cur, { mode: 'exact' })}`,
+    chip: '',
+    certainty: 'paid' as Certainty,
+    detail: null,
+    link: null,
+  }))
+  const finishedShare = model.mode === 'share' && model.share != null && expenseRowsAll.length > 0
+  const rows = finishedShare ? expenseRowsAll.slice(0, EXPENSE_ROWS_SHOWN) : planningRows
+  const moreCount = finishedShare ? Math.max(0, expenseRowsAll.length - EXPENSE_ROWS_SHOWN) : 0
+  const moreExpenses = moreCount > 0 ? { count: moreCount, label: `and ${moreCount} more →`, link: MY_SPENDING_LINK } : null
+  const toggleLabel = { show: "Show what's in it", hide: 'Hide details' }
   const countable = model.lines.filter((l) => !l.notShared && l.low != null)
   const onlyRough = model.lines.length > 0 && model.lines.every((l) => l.kind === 'estimate')
   const divided = model.lines.some((l) => !l.notShared && l.dividedByHeadcount)
@@ -136,7 +161,7 @@ export function buildYourCostView(model: YourCostModel): YourCostView {
       ? `${model.optionalNotChosen} optional ${model.optionalNotChosen === 1 ? 'question' : 'questions'} with a price ${model.optionalNotChosen === 1 ? "isn't" : "aren't"} counted until you pick.`
       : null
 
-  const base = { rows, basis, notIncluded, optionalNote, warnings, defaultOpen: rows.length <= 4 }
+  const base = { rows, moreExpenses, notSharedNote, toggleLabel, basis, notIncluded, optionalNote, warnings, defaultOpen: rows.length <= 4 }
 
   // Finished: the real figure, with the estimate faded underneath.
   if (model.mode === 'share' && model.share != null) {

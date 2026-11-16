@@ -27,16 +27,6 @@ import type { Json } from '../../types/database.types'
 
 export type PriceBasis = 'each' | 'total_split' | 'per_night' | 'by_group_size'
 
-export const PRICE_BASES: readonly PriceBasis[] = ['each', 'total_split', 'per_night', 'by_group_size']
-
-/** Short labels for the option editor's "How is this priced?" choices. */
-export const PRICE_BASIS_LABEL: Record<PriceBasis, string> = {
-  each: 'Each person',
-  total_split: 'Total for the group',
-  per_night: 'Per night (whole place)',
-  by_group_size: 'Depends on group size',
-}
-
 /** One-line explanations for under each choice. */
 export const PRICE_BASIS_HELP: Record<PriceBasis, string> = {
   each: 'Everyone who joins pays this amount.',

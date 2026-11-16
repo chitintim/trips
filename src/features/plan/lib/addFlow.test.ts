@@ -10,6 +10,11 @@ describe('addFlow', () => {
     expect(availableIntents(false)).toEqual([])
     expect(availableIntents(true)).toEqual(['happening', 'question', 'idea'])
     expect(availableIntents(true, true)).toEqual(['happening'])
+    // Phase 5A: a participant who may suggest gets exactly one intent; never on a finished trip; organizers keep all three.
+    expect(availableIntents(false, false, true)).toEqual(['idea'])
+    expect(availableIntents(false, true, true)).toEqual([])
+    expect(availableIntents(false, false, false)).toEqual([])
+    expect(availableIntents(true, false, true)).toEqual(['happening', 'question', 'idea'])
     expect(INTENT_TILES.map((t) => t.title)).toEqual(['Something that’s happening', 'A question for the group', 'An idea'])
   })
 

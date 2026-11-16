@@ -1,26 +1,4 @@
-/**
- * Largest-remainder distribution: split an integer total (minor units) across
- * a set of weights so that:
- *   1. Every share is an integer.
- *   2. The shares sum EXACTLY to the total (no float drift, no missing cent).
- *   3. Shares are as proportional to the weights as integer rounding allows.
- *
- * This is the standard "largest remainder method" (aka Hare-Niemeyer),
- * used for apportionment problems. It is the core primitive behind:
- *   - equal splits (equal weights)
- *   - shares/weights splits (couples count 2x, etc.)
- *   - proportional tax/tip/service allocation across item subtotals
- *   - split-by-nights-present
- *
- * Negative totals (refunds) are supported by distributing the absolute
- * value and re-applying the sign, which preserves exact-sum and
- * largest-remainder ordering.
- */
 
-export interface DistributeResult {
-  /** Integer minor-unit share per input weight, same order/length as `weights`. */
-  shares: number[]
-}
 
 /**
  * Distribute `totalMinor` (an integer, in minor units) across `weights`

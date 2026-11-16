@@ -62,5 +62,5 @@ export function buildWhosIn(people: WhosInPerson[], trackingOn: boolean): WhosIn
     const members = active.filter((p) => rsvpChipFor(p.status) === chip)
     if (members.length) groups.push({ chip, label: rsvpChipLabel(chip), count: members.length, people: members.map(entry) })
   }
-  return { heading: `Who's coming · ${goingCount} going of ${active.length}`, total: active.length, goingCount, groups }
+  return { heading: `Who's coming · ${goingCount} going · ${active.length} invited`, total: active.length, goingCount, groups }
 }

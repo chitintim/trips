@@ -92,7 +92,7 @@ export function YourCostCard({ trip }: { trip: Trip }) {
               aria-expanded={showRows}
               className="text-xs font-medium text-accent-700 dark:text-accent-400 press-scale"
             >
-              {showRows ? 'Hide' : 'Show'} what's in it ({view.rows.length}) {showRows ? '▲' : '▼'}
+              {showRows ? view.toggleLabel.hide : view.toggleLabel.show} {showRows ? '▲' : '▼'}
             </button>
             {showRows && (
               <ul className="divide-y divide-[var(--border-subtle)]">
@@ -101,9 +101,19 @@ export function YourCostCard({ trip }: { trip: Trip }) {
                 ))}
               </ul>
             )}
+            {showRows && view.moreExpenses && (
+              <button
+                type="button"
+                onClick={() => navigate({ search: view.moreExpenses!.link })}
+                className="text-xs font-medium text-accent-700 dark:text-accent-400 press-scale"
+              >
+                {view.moreExpenses.label}
+              </button>
+            )}
           </>
         )}
 
+        {view.notSharedNote && <p className="text-xs text-[var(--text-muted)]">{view.notSharedNote}</p>}
         {view.spent && <p className="text-sm text-[var(--text-primary)] pt-1 border-t border-[var(--border-subtle)]">{view.spent}</p>}
         {view.optionalNote && <p className="text-xs text-[var(--text-muted)]">{view.optionalNote}</p>}
         {view.notIncluded && !view.empty && view.mode === 'estimate' && <p className="text-xs text-[var(--text-muted)]">{view.notIncluded}</p>}

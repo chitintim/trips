@@ -29,7 +29,7 @@ describe('item 1: one price per item (actual replaces listed)', () => {
     expect(actual.splitCount).toBe(5)
     const p = computeOptionPrice(tokyoOption, TRIP, { count: 9, isEstimate: false }, { actual })!
     expect(p.headline).toBe('£397.92 — your share')
-    expect(p.basisLine).toBe('£1,989.60 total · split between 5 · paid · listed at £248.70')
+    expect(p.basisLine).toBe('£1,989.60 total · split between 5 · paid')
     expect(p.basisLine).not.toContain('9 going')
   })
 
@@ -38,7 +38,7 @@ describe('item 1: one price per item (actual replaces listed)', () => {
     expect(actual.viewerShare).toBeNull()
     const p = computeOptionPrice(tokyoOption, TRIP, { count: 9, isEstimate: false }, { actual })!
     expect(p.headline).toBe('£1,989.60 total · split between 5 · paid')
-    expect(p.basisLine).toBe('listed at £248.70')
+    expect(p.basisLine).toBe('')
     expect(p.headline).not.toContain('221.07')
   })
 
@@ -47,7 +47,6 @@ describe('item 1: one price per item (actual replaces listed)', () => {
     expect(matchOptionExpenses('osaka', [{ id: 'b1', option_id: 'osaka', amount: 78.58, status: 'paid', expense_id: 'e2' }], [e])).toHaveLength(1)
     const p = computeOptionPrice({ ...tokyoOption, price: 78.58 }, TRIP, { count: 9, isEstimate: false }, { actual: null })!
     expect(p.headline).toBe('≈£8.73 each')
-    expect(p.listedLine).toBeNull()
   })
 })
 
@@ -70,9 +69,9 @@ describe('item 2: Your cost when the viewer is not on the expense', () => {
     expect(model.emptyReason).toBe('no_costs')
     expect(view.headline).toBeNull()
     expect(view.empty?.title).toBe('You have no costs recorded on this trip.')
-    const row = view.rows.find((r) => r.label === 'Tokyo Airbnb')!
-    expect(row.amount).toBe('Not shared with you')
-    expect(row.chip).toBe('')
+    // Not-shared items are a separate quiet line, never rows.
+    expect(view.rows.some((r) => r.label === 'Tokyo Airbnb')).toBe(false)
+    expect(view.notSharedNote).toBe("1 cost wasn't shared with you")
     expect(view.rows.some((r) => r.label === 'Dinner')).toBe(false)
   })
 
@@ -80,6 +79,16 @@ describe('item 2: Your cost when the viewer is not on the expense', () => {
     const model = buildYourCost({ ...base, trip: FINISHED, userId: 'a', sections: [stay()], expenses: [tokyoExpense] })
     expect(model.mode).toBe('share')
     expect(model.share).toBe(397.92)
+  })
+
+  it('finished trip: the share is explained by the expenses that make it up', () => {
+    const model = buildYourCost({ ...base, trip: FINISHED, userId: 'a', sections: [stay()], expenses: [tokyoExpense] })
+    const view = buildYourCostView(model)
+    expect(view.toggleLabel).toEqual({ show: "Show what's in it", hide: 'Hide details' })
+    expect(view.rows).toHaveLength(1)
+    expect(view.rows[0].amount).toBe('your share £397.92')
+    expect(view.moreExpenses).toBeNull()
+    expect(model.expenseShares.reduce((a, e) => a + e.share, 0)).toBeCloseTo(model.share!, 2)
   })
 
   it('a viewer who is not going is told so', () => {

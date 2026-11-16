@@ -26,6 +26,8 @@ import {
   type QuestionValues,
 } from '../lib/addFlow'
 import { useAddToPlanSave } from '../lib/useAddToPlanSave'
+import { useCanSuggestIdea } from '../lib/useCanSuggestIdea'
+import { validateSuggestion } from '../../decisions/lib/suggestOption'
 import { IntentChooser } from './add/IntentChooser'
 import { HappeningForm } from './add/HappeningForm'
 import { QuestionForm } from './add/QuestionForm'
@@ -75,9 +77,12 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
   const tripId = trip.id
   const baseCurrency = trip.base_currency || 'GBP'
   const { canManageTrip, isLoading: permsLoading } = useTripPermissions(trip)
-  const intents = availableIntents(canManageTrip, isTripFinished(trip))
+  // People who are coming but cannot run the trip get exactly one intent, "An idea", wired to the suggest RPC.
+  const canSuggestIdea = useCanSuggestIdea(trip)
+  const intents = availableIntents(canManageTrip, isTripFinished(trip), canSuggestIdea)
+  const ideaOnly = !canManageTrip && canSuggestIdea
   const { data: participants } = useParticipants(tripId)
-  const save = useAddToPlanSave(tripId, user?.id)
+  const save = useAddToPlanSave(tripId, user?.id, ideaOnly)
 
   const seed = seedState(baseCurrency, defaultDate || trip.start_date, defaultIsVote)
   const { values, setValues, clearDraft } = useFormDraft<AddFormState>(`add-to-plan:v2:${tripId}`, seed)
@@ -99,7 +104,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
-  const intent = values.intent && intents.includes(values.intent) ? values.intent : null
+  const intent = values.intent && intents.includes(values.intent) ? values.intent : ideaOnly ? 'idea' : null
   const tile = INTENT_TILES.find((t) => t.intent === intent) ?? null
 
   const patch = <K extends 'happening' | 'question' | 'idea'>(key: K, p: Partial<AddFormState[K]>) =>
@@ -173,7 +178,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
         const row = await save.question.mutateAsync(values.question)
         finish('Question added', { type: 'question', id: row.id })
       } else {
-        const err = validateIdea(values.idea)
+        const err = ideaOnly ? validateSuggestion(values.idea) : validateIdea(values.idea)
         if (err) return fail(err)
         const row = await save.idea.mutateAsync(values.idea)
         finish('Idea added', { type: 'question', id: row.questionId })

@@ -253,7 +253,7 @@ function StatusModalBody({
   const [showCancelFlow, setShowCancelFlow] = useState(false)
   useEffect(() => {
     if (isOpen) setShowCancelFlow(false)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [isOpen, participant?.user_id])
 
   if (!participant) return null
@@ -406,8 +406,10 @@ function StatusModalBody({
     }
   }
 
+  // Editing an existing reply (the form is prefilled from it on purpose): say so in the title.
+  const hasExistingReply = (!!participant?.confirmation_status && participant.confirmation_status !== 'pending') || !!participant?.confirmation_note
   const stepTitles: Record<Step, string> = {
-    answer: RSVP_PROMPT,
+    answer: hasExistingReply ? 'Update your answer' : RSVP_PROMPT,
     'waiting-on': "What are you waiting on?",
     'condition-detail': 'A few more details',
     review: 'Review your answer',

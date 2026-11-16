@@ -29,15 +29,19 @@ export const INTENT_TILES: ReadonlyArray<{
   saveLabel: string
 }> = [
   { intent: 'happening', icon: '📅', title: 'Something that’s happening', hint: 'A dinner, a flight, a day out. It goes on the plan.', saveLabel: 'Add to plan' },
-  { intent: 'question', icon: '🗳️', title: 'A question for the group', hint: 'Not sure yet? Give people options to answer.', saveLabel: 'Ask the group' },
+  { intent: 'question', icon: '❓', title: 'A question for the group', hint: 'Not sure yet? Give people options to answer.', saveLabel: 'Ask the group' },
   { intent: 'idea', icon: '💡', title: 'An idea', hint: 'Just a thought or a link. The group can look at it later.', saveLabel: 'Add idea' },
 ]
 
 export { IDEAS_QUESTION_TITLE, IDEAS_BUCKET_KEY }
 
-/** The intents this viewer may save. Today only people who can run the trip can create anything; Phase 5 adds participant suggestions. */
-export function availableIntents(canManageTrip: boolean, tripFinished = false): AddIntent[] {
-  if (!canManageTrip) return []
+/**
+ * The intents this viewer may save. People who can run the trip get all three. Everyone else who is coming
+ * (`canSuggestIdea`, Phase 5A) gets exactly one, "An idea", which goes through the suggest RPC; they can
+ * never create a happening or a question (RLS would refuse).
+ */
+export function availableIntents(canManageTrip: boolean, tripFinished = false, canSuggestIdea = false): AddIntent[] {
+  if (!canManageTrip) return canSuggestIdea && !tripFinished ? ['idea'] : []
   // A finished trip has nothing left to ask or float: only recording what happened still makes sense.
   return tripFinished ? ['happening'] : ['happening', 'question', 'idea']
 }

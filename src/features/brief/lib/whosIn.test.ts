@@ -23,7 +23,7 @@ describe('buildWhosIn', () => {
       ['Waitlist', 1],
       ['Not going', 1],
     ])
-    expect(m.heading).toBe("Who's coming · 1 going of 7")
+    expect(m.heading).toBe("Who's coming · 1 going · 7 invited")
     expect(m.groups[0].people[0].firstName).toBe('Chai')
   })
   it('omits empty groups', () => {

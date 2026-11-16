@@ -12,9 +12,8 @@ import {
   Selection,
   User,
 } from '../../types'
-import { Tables, TablesInsert } from '../../types/database.types'
+import { Tables } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
-import { useOptimisticMutation } from './makeOptimisticMutation'
 import { useTripActivityLog } from '../../features/organizer/lib/activity'
 import { assertRowsAffected, throwIfError } from './assertRowsAffected'
 import { useTrip, useParticipants, type ParticipantWithUser } from './useTrip'
@@ -35,7 +34,6 @@ import {
 } from '../../features/decisions/lib/answerModel'
 
 export type OptionVote = Tables<'option_votes'>
-export type Reaction = Tables<'reactions'>
 export type Comment = Tables<'comments'>
 
 export interface SelectionWithUser extends Selection {
@@ -120,23 +118,6 @@ export function useOptions(tripId: string | undefined) {
   })
 }
 
-/** Selections for a set of option ids (used for expected_participants lookups, e.g. in expenses). */
-export function useSelections(optionIds: string[]) {
-  return useQuery({
-    queryKey: ['selectionsByOption', optionIds.slice().sort().join(',')] as const,
-    queryFn: async (): Promise<Pick<Selection, 'option_id' | 'user_id'>[]> => {
-      if (optionIds.length === 0) return []
-      const { data, error } = await supabase
-        .from('selections')
-        .select('option_id, user_id')
-        .in('option_id', optionIds)
-      throwIfError(error)
-      return data || []
-    },
-    enabled: optionIds.length > 0,
-  })
-}
-
 /**
  * option_votes for every option under this trip (poll voting substrate,
  * separate from selections), with the voting user embedded so the UI can
@@ -169,33 +150,6 @@ export function useVotes(tripId: string | undefined) {
         .in('option_id', optionIds)
       throwIfError(error)
       return (data as unknown as OptionVoteWithUser[]) || []
-    },
-    enabled: !!tripId,
-  })
-}
-
-/** Comments attached to options/sections for a trip. */
-export function useComments(tripId: string | undefined, sectionIds: string[]) {
-  return useQuery({
-    queryKey: queryKeys.comments(tripId || ''),
-    queryFn: async (): Promise<Comment[]> => {
-      if (sectionIds.length === 0) return []
-      const { data, error } = await supabase.from('comments').select('*').in('section_id', sectionIds)
-      throwIfError(error)
-      return data || []
-    },
-    enabled: !!tripId && sectionIds.length > 0,
-  })
-}
-
-/** Emoji quick-reactions on options/comments for a trip. */
-export function useReactions(tripId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.reactions(tripId || ''),
-    queryFn: async (): Promise<Reaction[]> => {
-      const { data, error } = await supabase.from('reactions').select('*').eq('trip_id', tripId as string)
-      throwIfError(error)
-      return data || []
     },
     enabled: !!tripId,
   })
@@ -245,17 +199,6 @@ export function useCreateOption(tripId: string) {
   })
 }
 
-export function useBulkCreateOptions(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (rows: OptionInsert[]) => {
-      const { error } = await supabase.from('options').insert(rows)
-      throwIfError(error)
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) }),
-  })
-}
-
 export function useUpdateOption(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
@@ -277,60 +220,6 @@ export function useDeleteOption(tripId: string) {
       assertRowsAffected(data, "You don't have permission to delete this option, or it no longer exists.")
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) }),
-  })
-}
-
-/** Reaction toggle (emoji quick-reactions) — optimistic. */
-export function useToggleReaction(tripId: string) {
-  return useOptimisticMutation<
-    void,
-    { targetType: 'option' | 'comment'; targetId: string; userId: string; emoji: string; action: 'add' | 'remove'; reactionId?: string },
-    Reaction[]
-  >({
-    mutationFn: async ({ targetType, targetId, userId, emoji, action, reactionId }) => {
-      if (action === 'remove' && reactionId) {
-        const { error } = await supabase.from('reactions').delete().eq('id', reactionId)
-        throwIfError(error)
-      } else {
-        const row: TablesInsert<'reactions'> = {
-          trip_id: tripId,
-          user_id: userId,
-          emoji,
-          option_id: targetType === 'option' ? targetId : null,
-          comment_id: targetType === 'comment' ? targetId : null,
-        }
-        const { error } = await supabase.from('reactions').insert(row)
-        throwIfError(error)
-      }
-    },
-    queryKey: () => queryKeys.reactions(tripId),
-    updater: (reactions, { targetType, targetId, userId, emoji, action, reactionId }) => {
-      const list = reactions || []
-      if (action === 'remove') return list.filter((r) => r.id !== reactionId)
-      return [
-        ...list,
-        {
-          id: `optimistic-${targetId}-${userId}-${emoji}`,
-          trip_id: tripId,
-          user_id: userId,
-          emoji,
-          option_id: targetType === 'option' ? targetId : null,
-          comment_id: targetType === 'comment' ? targetId : null,
-          created_at: new Date().toISOString(),
-        },
-      ]
-    },
-  })
-}
-
-export function useCreateComment(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: TablesInsert<'comments'>) => {
-      const { error } = await supabase.from('comments').insert(input)
-      throwIfError(error)
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.comments(tripId) }),
   })
 }
 

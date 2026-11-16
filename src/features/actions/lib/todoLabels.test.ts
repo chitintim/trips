@@ -19,7 +19,7 @@ describe('todoLabels', () => {
   it('pluralises the to-do count', () => {
     expect(todoCountLabel(1)).toBe('1 to-do')
     expect(todoCountLabel(4)).toBe('4 to-dos')
-    expect(TODOS_TITLE).toBe('To-dos')
+    expect(TODOS_TITLE).toBe('Shared to-dos')
   })
 })
 
@@ -41,7 +41,7 @@ describe('grouped sheet wording', () => {
   })
 
   it('keeps the 5.8 empty state', () => {
-    expect(TODOS_EMPTY_TITLE).toBe('No to-dos.')
-    expect(TODOS_EMPTY_BODY).toContain('Book the transfer')
+    expect(TODOS_EMPTY_TITLE).toBe('No shared to-dos yet.')
+    expect(TODOS_EMPTY_BODY).toContain('Book airport transfer')
   })
 })

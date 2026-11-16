@@ -38,7 +38,7 @@ jobs:
       - name: Typecheck
         run: npx tsc -b
       - name: Lint
-        run: npx eslint src --max-warnings 75
+        run: npm run lint:ci
       - name: z-index layering check
         run: node scripts/check-zindex.mjs
       - name: Unit tests

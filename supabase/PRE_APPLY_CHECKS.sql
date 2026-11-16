@@ -698,3 +698,103 @@ SELECT p.proname, has_function_privilege('service_role', p.oid, 'EXECUTE') AS se
 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
   AND p.proname IN ('freeze_settlements', 'unfreeze_settlements', 'remove_duplicate_settlement', 'settlement_assert_can_manage');
 NOTIFY pgrst, 'reload schema';
+
+-- ============================================================================
+-- 16. 20261119090000_suggest_option.sql  (suggest_option, withdraw_suggestion)
+--     All read-only. Additive migration: two functions, no table/policy/trigger change.
+-- ============================================================================
+
+-- 16a. Name clash: neither function exists yet. Safe: zero rows.
+--      Gates: a clash (CREATE OR REPLACE would replace an unrelated function).
+SELECT proname, oidvectortypes(proargtypes) AS args FROM pg_proc
+WHERE pronamespace = 'public'::regnamespace AND proname IN ('suggest_option', 'withdraw_suggestion');
+
+-- 16b. Columns the functions read/write, and their defaults.
+--      Safe: options.status default 'available', locked default false, price_type default per_person_fixed,
+--      metadata default '{}' (currency default 'EUR' is overridden with NULL on purpose);
+--      planning_sections has all 12 insert columns; trips.status exists.
+--      Gates: a missing column or a changed default (the "safe defaults" promise).
+SELECT table_name, column_name, data_type, column_default, is_nullable
+FROM information_schema.columns
+WHERE table_schema = 'public' AND (
+  (table_name = 'options' AND column_name IN ('section_id', 'title', 'description', 'price', 'currency', 'order_index', 'metadata', 'status', 'locked', 'price_type'))
+  OR (table_name = 'planning_sections' AND column_name IN ('trip_id', 'title', 'description', 'metadata', 'section_type', 'status', 'allow_multiple_selections', 'order_index', 'voting_method', 'hide_votes_until_close', 'vote_deadline', 'quorum', 'created_at'))
+  OR (table_name = 'trip_participants' AND column_name IN ('trip_id', 'user_id', 'active', 'confirmation_status'))
+  OR (table_name = 'trips' AND column_name = 'status')
+  OR (table_name = 'activity_feed' AND column_name IN ('trip_id', 'actor', 'verb', 'entity', 'metadata'))
+)
+ORDER BY table_name, column_name;
+
+-- 16c. Triggers on options (expect only set_updated_at BEFORE UPDATE) and any INSERT/DELETE guard.
+--      Gates: an INSERT or DELETE trigger on options that would reject a definer-inserted/deleted row.
+SELECT tgname, pg_get_triggerdef(oid) AS def FROM pg_trigger
+WHERE tgrelid = 'public.options'::regclass AND NOT tgisinternal;
+
+-- 16d. Policies on options today (expect the organizer create/update/delete policy + the view policy).
+--      Informational: the migration adds NO policy, so participants still cannot write options directly.
+SELECT policyname, cmd, qual, with_check FROM pg_policies WHERE schemaname = 'public' AND tablename = 'options';
+
+-- 16e. The function owner bypasses RLS (the definer functions insert into options / activity_feed / planning_sections).
+--      Expect: rolbypassrls = true (or rolsuper) for the owner of an existing definer RPC.
+SELECT p.proname, r.rolname AS owner, r.rolbypassrls, r.rolsuper
+FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('decide_question', 'delete_question');
+
+-- 16f. Existing Ideas buckets: at most one OPEN bucket per trip (the RPC reuses the oldest open one).
+--      Safe: zero rows. Informational otherwise (extra open buckets are left alone).
+SELECT trip_id, count(*) AS open_buckets FROM public.planning_sections
+WHERE jsonb_typeof(metadata) = 'object' AND metadata -> 'ideas_bucket' = 'true'::jsonb AND status <> 'completed'
+GROUP BY 1 HAVING count(*) > 1;
+
+-- 16g. Existing options that already carry metadata.suggested_by (should be none; the limits count this key).
+SELECT count(*) AS options_with_suggested_by FROM public.options WHERE jsonb_typeof(metadata) = 'object' AND metadata ? 'suggested_by';
+
+-- 16h. Trips whose status label for "finished" is 'trip_completed' (the RPC's finished test).
+SELECT e.enumlabel FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid WHERE t.typname = 'trip_status' ORDER BY e.enumsortorder;
+
+-- 16i. AFTER applying: privileges. Expect anon=f, authenticated=t for both. Then NOTIFY pgrst, 'reload schema'.
+SELECT f.fn,
+       has_function_privilege('anon', f.sig, 'EXECUTE') AS anon_can,
+       has_function_privilege('authenticated', f.sig, 'EXECUTE') AS authenticated_can
+FROM (VALUES
+  ('suggest_option', 'public.suggest_option(uuid,text,text,text,boolean,uuid)'),
+  ('withdraw_suggestion', 'public.withdraw_suggestion(uuid)')
+) AS f(fn, sig);
+
+-- 17. 20261119090000_suggest_option.sql: extra read-only checks from the phase 5 review
+--     (run alongside group 16; 16e needs 20261118 applied because it looks up decide_question).
+
+-- 17a. No INSERT/DELETE triggers on the tables the RPCs write.
+--      Gates: any row other than set_updated_at-style BEFORE UPDATE triggers.
+SELECT c.relname, t.tgname, pg_get_triggerdef(t.oid) AS def
+FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+WHERE NOT t.tgisinternal AND c.relname IN ('options', 'planning_sections', 'activity_feed') AND c.relnamespace = 'public'::regnamespace;
+
+-- 17b. CHECK constraints the inserts must satisfy.
+--      Safe: title <= 200, description <= 10000, currency <= 10 on options; title <= 200 on sections; none on activity_feed.
+SELECT conrelid::regclass AS tbl, conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
+WHERE contype = 'c' AND conrelid IN ('public.options'::regclass, 'public.planning_sections'::regclass, 'public.activity_feed'::regclass);
+
+-- 17c. What deleting an option cascades to / nulls (withdraw_suggestion).
+--      Informational: confdeltype 'c' = CASCADE (comments, reactions), 'n' = SET NULL (bookings, expenses, timeline events).
+SELECT conrelid::regclass AS tbl, conname, confdeltype FROM pg_constraint WHERE contype = 'f' AND confrelid = 'public.options'::regclass;
+
+-- 17d. Enum labels the functions use.
+--      Safe: option_status has available; section_status has completed; section_type has activities;
+--      confirmation_status has declined and cancelled.
+SELECT t.typname, e.enumlabel FROM pg_type t JOIN pg_enum e ON e.enumtypid = t.oid
+WHERE t.typname IN ('option_status', 'section_status', 'section_type', 'confirmation_status', 'price_type') ORDER BY 1, e.enumsortorder;
+
+-- 17e. Default privileges that would re-grant to anon on CREATE (informational; the migration's REVOKE handles it).
+SELECT defaclrole::regrole AS role, defaclobjtype, defaclacl FROM pg_default_acl WHERE defaclnamespace = 'public'::regnamespace;
+
+-- 17f. Options already linked to bookings/expenses/timeline events while still 'available'
+--      (the scope of the option_in_use guard in withdraw_suggestion). Informational; those links would otherwise be nulled.
+SELECT count(*) AS linked_available_options FROM public.options o WHERE o.status = 'available' AND (
+  EXISTS (SELECT 1 FROM public.bookings b WHERE b.option_id = o.id)
+  OR EXISTS (SELECT 1 FROM public.expenses e WHERE e.option_id = o.id)
+  OR EXISTS (SELECT 1 FROM public.trip_timeline_events t WHERE t.source_option_id = o.id));
+
+-- 17g. Existing live options in a question whose titles collide case-insensitively
+--      (the duplicate rule would refuse a new one with that title). Informational.
+SELECT section_id, lower(btrim(title)) AS title_key, count(*) FROM public.options WHERE status <> 'cancelled' GROUP BY 1, 2 HAVING count(*) > 1;

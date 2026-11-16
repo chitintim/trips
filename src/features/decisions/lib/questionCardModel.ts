@@ -163,7 +163,9 @@ export function buildQuestionCardModel(input: CardInput): QuestionCardModel {
 
   const subtitleParts: string[] = [SHAPE_LABEL[shape]]
   if (stage === 'open') subtitleParts.push(INSTRUCTION[mode])
-  subtitleParts.push(countLabel(shape, counts.answered, counts.total))
+  // A decided/booked/closed question nobody answered (legacy decisions) must not say "0 of 9 answered".
+  const hideCount = stage !== 'open' && counts.answered === 0
+  if (!hideCount) subtitleParts.push(countLabel(shape, counts.answered, counts.total))
   if (deadline) subtitleParts.push(deadline.label)
 
   const strip: StripStep[] | null =
@@ -189,7 +191,7 @@ export function buildQuestionCardModel(input: CardInput): QuestionCardModel {
     closedNote: stage === 'closed' ? CLOSED_NO_DECISION : null,
     shape,
     subtitle: subtitleParts.join(' · '),
-    counts: { answered: counts.answered, total: counts.total, label: countLabel(shape, counts.answered, counts.total) },
+    counts: { answered: counts.answered, total: counts.total, label: hideCount ? '' : countLabel(shape, counts.answered, counts.total) },
     deadline,
     strip,
     decided,

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Badge, Button, Input, PriceTag, Select, SelectionAvatars, useToast } from '../../../components/ui'
-import { useAnswer, type OptionWithSelections, type SectionWithOptions } from '../../../lib/queries/usePlanning'
+import { useAnswer, useVotes, type OptionWithSelections, type SectionWithOptions } from '../../../lib/queries/usePlanning'
 import { formatMoney } from '../../../lib/money'
 import { useOptionPrice } from '../lib/useOptionPrice'
 import { CHANGE_ANY_TIME, TOAST_FAILED, describeAnswerError } from '../lib/answerCopy'
 import { ownRowsToItems, ownTotals, recomputeOwnRow, type AnswerControlModel, type AnswerRow, type OwnRow } from '../lib/answerModel'
 import { useQuestionAnswers } from '../lib/useQuestionAnswers'
+import { canWithdrawSuggestion, suggestedByLabel, suggestedSourceUrl } from '../lib/suggestOption'
+import { SuggestedMeta } from './SuggestionMeta'
 import type { AnswerPlan } from '../lib/answerModel'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Trip } from '../../../types'
@@ -50,7 +52,8 @@ const FOCUS_RING = 'focus-visible:outline-none focus-visible:ring-2 focus-visibl
  */
 export function AnswerControl({ trip, section, closed, renderPrice, hideInstruction, hideResults, onStateChange, onAnswered, focusOptionId = null, className = '' }: AnswerControlProps) {
   const rootRef = useRef<HTMLDivElement>(null)
-  const { control, passesAvailable, headcount, participants } = useQuestionAnswers(trip, section, { closed })
+  const { control, passesAvailable, headcount, participants, viewer } = useQuestionAnswers(trip, section, { closed })
+  const { data: allVotes } = useVotes(trip.id)
   const { showToast } = useToast()
   const { answer, pendingSectionId } = useAnswer(trip.id)
   const pending = pendingSectionId === section.id
@@ -119,6 +122,17 @@ export function AnswerControl({ trip, section, closed, renderPrice, hideInstruct
     )
   }
 
+  // "Suggested by <first name>" under an option a participant suggested; the suggester can withdraw while nobody has answered with it.
+  const suggestionMeta = (optionId: string): ReactNode => {
+    const option = optionsById.get(optionId)
+    if (!option) return null
+    const label = suggestedByLabel(option, participants, viewer.userId)
+    if (!label) return null
+    const answered = option.selections.length > 0 || (allVotes ?? []).some((v) => v.option_id === optionId)
+    const canWithdraw = canWithdrawSuggestion({ option, userId: viewer.userId, questionOpen: !closed && section.status !== 'completed', tripFinished: viewer.tripFinished, answered })
+    return <SuggestedMeta tripId={trip.id} optionId={optionId} label={label} canWithdraw={canWithdraw} sourceUrl={suggestedSourceUrl(option)} />
+  }
+
   const { gate, pass } = control
   const showPass = pass.visible && passesAvailable && !(pass.disabled && !pass.active)
 
@@ -160,6 +174,7 @@ export function AnswerControl({ trip, section, closed, renderPrice, hideInstruct
                 price={price(row.optionId)}
               />
               {voters(row.voterIds)}
+              {suggestionMeta(row.optionId)}
             </div>
           ))}
         </div>

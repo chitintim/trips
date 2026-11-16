@@ -1,3 +1,5 @@
+> Historical document. The current product model is in docs/PRODUCT_MODEL.md.
+
 # Trips v3 — Ground-Up Experience Redesign
 
 **Status:** approved direction (Tim, 2026-07-07). Supersedes the tab layout shipped in v2.0; all other v2 systems (data layer, money, AI, security) unchanged.

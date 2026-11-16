@@ -1,173 +1,114 @@
-# Tim's Super Trip Planner
+# Trips
 
-A personal, invitation-only trip planning application for organizing ski trips with friends. Built with React, TypeScript, and Supabase.
+A private, invitation-only group trip planner (served at https://trips.fontem.ai). A trip organiser puts questions to the group ("Which chalet?"), people answer them, the group decides, someone books, and the app keeps a single list of what each person still owes the trip (answers, RSVPs, to-dos, payments). It also tracks shared expenses in several currencies and settles up at the end.
 
-## Features
+The product model (what the words mean and how things move) is in [docs/PRODUCT_MODEL.md](docs/PRODUCT_MODEL.md). Read that first if you are changing behaviour. `UX_REDESIGN.md`, `UPGRADE_MASTER_PLAN.md` and `CONFIRMATION_SYSTEM_PLAN.md` are historical.
 
-- **Trip Management**: Create and manage multiple ski trips with public visibility options
-- **Confirmation System**: Track participant commitments with conditional logic, waitlists, and capacity management
-- **Collaboration**: Share planning decisions with team members
-- **Planning Sections**: Organize accommodation, flights, transport, equipment, and more
-- **Expense Tracking**: Multi-currency expenses with flexible splitting (even/custom/percentage), receipt uploads with HEIC conversion, and debt minimization
-- **Balance Tracking**: See who owes what with optimized settlement suggestions
-- **Notes & Announcements**: Markdown-supported communications for trip updates
-- **Secure**: Row-level security ensures users only see authorized trips
+## Vocabulary
 
-## Tech Stack
+Eight nouns, six statuses, three RSVP words. Everything in the UI uses these and nothing else.
 
-- **Frontend**: React 18 + TypeScript + Vite
-- **Styling**: Tailwind CSS
-- **Backend**: Supabase (Auth, Database, Storage, Realtime)
-- **Deployment**: GitHub Pages
+| Noun | Meaning |
+|---|---|
+| Trip | The whole thing. |
+| Plan | What is happening, day by day. An entry on it is just its title. |
+| Question | Something the group needs to settle. A Group choice has one answer for everyone; an Own choice is something each person picks for themselves. |
+| Option | One possible answer to a question. |
+| Answer | Your response to a question: your vote(s), your picks, or "No preference" / "None for me". |
+| To-do | Something one specific person has to do (answer, RSVP, task, bring item, pay, confirm a payment). |
+| Expense | Money someone actually paid for the group. |
+| Payment | Money moving between people to settle up. |
 
-## Getting Started
+| Status | Applies to |
+|---|---|
+| Open | A question that is taking answers. |
+| Decided | A question (and its winning option) that has an answer. |
+| Booked | A decided option with a live booking. |
+| Done | A to-do that is finished. |
+| Needs your answer | A question you have not answered yet (your side). |
+| Answered ✓ | A question you have answered (your side). |
 
-### Prerequisites
+RSVP: the prompt is "Are you coming?" with three buttons, **I'm in**, **Not sure yet**, **Can't make it**. The chips are Going, Not sure, Not going, No reply yet and Waitlist (seven stored `confirmation_status` values map onto these five chips).
 
-- Node.js 18+
-- A Supabase account ([supabase.com](https://supabase.com))
+Trip stages shown to people: Who's coming, Planning, Ready to go, On the trip, Finished. The Who's coming heading reads "Who's coming · N going · M invited", and with a capacity limit the capacity card reads "N of CAP places taken · X left".
 
-### Installation
+## Architecture in brief
 
-1. Clone the repository:
-```bash
-git clone https://github.com/chitintim/trips.git
-cd trips
-```
+- **Frontend:** React 18 + TypeScript + Vite, Tailwind, TanStack Query for all server state, React Router. Four spaces per trip: Today, Plan, Money, People. Deep links use `/{tripId}?open=<target>` (see `src/pages/tripDeepLinks.ts` and section 7 of the product model). Today's personal list is "Your to-dos"; the "Shared to-dos" sheet lists only the shared task-type to-dos.
+- **Backend:** Supabase (Postgres, Auth, Storage, Realtime, Edge Functions). Row-level security protects every table. Writes that must be atomic or privileged go through `SECURITY DEFINER` RPCs with a pinned `search_path` (for example `decide_question`, `mark_booked`, `freeze_settlements`, `reset_trip_confirmations`). The migrations are in `supabase/migrations/`.
+- **One to-dos engine.** `src/lib/todos/computeTodos.ts` is the only place that decides what a person owes on a trip. The header count, Today's "Your to-dos", the dashboard badge, the organiser's "Waiting on" board and the reminder emails all read it, so they cannot disagree. Every string and deep link it produces lives in `src/lib/todos/copy.ts`. Whether someone has answered a question is decided in one place too, `src/lib/answers/answers.ts`.
+- **Suggest an option.** People who are coming (but do not run the trip) can add an option to an open Group-choice question, or an idea to the Ideas list, through the `suggest_option` and `withdraw_suggestion` RPCs (`supabase/migrations/20261119090000_suggest_option.sql`, rules in `src/features/decisions/lib/suggestOption.ts`). The rules are in the product model, section 3.
+- **Mirror in the edge function.** Deno edge functions cannot import from `src/`, so the engine (`src/lib/todos`, `src/lib/answers`, the pure modules they import), `src/lib/money` and the shared contracts are hand-copied into `supabase/functions/_shared/`. `node scripts/check-contract-drift.mjs` fails CI if the copies differ in anything but import specifiers and comments. Change both sides together.
+- **The "one truth" invariant** is pinned by the unit test `src/lib/queries/todoSurfaces.test.ts`: for any trip and person, the header pill, Today's list, the dashboard badge and that person's row in "Waiting on" are the same number.
+- **One answer control.** Every question is answered through the same control (`src/features/decisions/components/AnswerControl.tsx`), either on the question card or in the answer-all flow (`src/features/plan/components/AnswerFlow.tsx`). Voting, picking and passing all write through it.
+- **One money formatter and one price model.** `formatMoney` in `src/lib/money/format.ts` prints every amount. `computeOptionPrice` (`src/lib/cost/optionPrice.ts`) prices an option (per person, total, certainty). `src/lib/cost/yourCost.ts` builds "Your cost", the per-person running figure on Today. All arithmetic is in integer minor units (`src/lib/money/minorUnits.ts`).
+- **The daily auto-chase job** (`supabase/functions/auto-chase`, cron at 09:00 UTC) runs with the service role and does five things: sends reminders (one digest email per person per day, deep-linked to the exact thing); auto-decides Group-choice questions whose deadline just passed when there is a clear leader (never a tie). It runs only on trips whose reminder emails are on (`chase_settings.enabled`, off by default for every trip) and only while `chase_settings.auto_decide` is not false; announces decisions with the "We have an answer" email; syncs the stored trip stage forward when the dates say the trip has started or ended (a status someone changed by hand after that date boundary is left alone, and Finished waits until the day after `end_date`, UTC); and escalates items that hit the reminder cap. The engine acts as a filter on reminders: it can remove a recipient, never add one.
 
-2. Install dependencies:
+## Run and test
+
+Prerequisites: Node 20 (CI uses 20) and a Supabase project (or the shared one).
+
 ```bash
 npm install
+cp .env.example .env     # then fill in the two VITE_ variables below
+npm run dev              # http://localhost:5173/trips/  (base path is /trips/ by default)
+npm run build            # tsc -b && vite build
+npm run lint             # eslint . (everything)
+npm run lint:ci          # eslint src --max-warnings 60 (the gate CI uses)
+npm test                 # vitest run (unit tests)
+npx playwright test      # unauthenticated smoke tests in e2e/ (starts the dev server itself)
+node scripts/check-contract-drift.mjs   # mirror drift check
+node scripts/check-zindex.mjs           # z-index layering check
 ```
 
-3. Set up environment variables:
+Edge function tests (Deno, no install needed):
+
 ```bash
-cp .env.example .env
+npx -y deno test supabase/functions/auto-chase/
 ```
 
-Edit `.env` and add your Supabase credentials:
-```
-VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-```
+`deno test` leaves nothing behind except possibly a root `deno.lock`; delete it afterwards.
 
-4. Start the development server:
-```bash
-npm run dev
-```
+Warning: do not run `deno check --node-modules-dir=auto` inside this repo. It overwrites `node_modules` (found the hard way), and the fix is `rm -rf node_modules && npm ci`.
 
-5. Open [http://localhost:5173](http://localhost:5173) in your browser.
+Environment variable names (values are never committed):
 
-## Project Structure
+| Where | Names |
+|---|---|
+| Frontend (`.env`, GitHub secrets) | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; optional `VITE_BASE` (build base path, default `/trips/`) |
+| Edge functions (Supabase secrets) | `ANTHROPIC_API_KEY`, `APP_BASE_URL`, `RESEND_API_KEY`, `RESEND_FROM`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`; `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` are provided by Supabase |
+
+CI (`.github/workflows/ci.yml`, on pull requests and non-master pushes) runs typecheck, `npm run lint:ci`, z-index check, unit tests, drift check, build and the Playwright smoke suite.
+
+## Deployment
+
+- **Frontend:** push to `master`. `.github/workflows/deploy.yml` runs the same gates as CI (except Playwright), builds with the production secrets, and publishes `dist/` to GitHub Pages. The site is served at https://trips.fontem.ai: the custom domain is set in the repository's Pages settings, and the repository variable `VITE_BASE` is `/`, which `deploy.yml` passes to the build (`vars.VITE_BASE || '/trips/'`; without the variable the base is `/trips/`, the default github.io project path).
+- **Database migrations are applied by hand.** Nothing applies `supabase/migrations/*.sql` automatically. Paste each new file into the Supabase SQL editor, then record it in `supabase_migrations.schema_migrations` so the history stays accurate. Before applying a risky batch, run the read-only checks in `supabase/PRE_APPLY_CHECKS.sql` against the live database and read each result against its "safe result" comment. Each new migration states in its header whether it is additive and re-runnable (most recent ones are: `CREATE OR REPLACE`, `IF NOT EXISTS`); not every historical file is, so read the header before running a file twice.
+- **Edge functions** are deployed one at a time:
+  ```bash
+  npx -y supabase@latest functions deploy <name> --remote=vrmhwfrpdaiovulornli --use-api
+  ```
+  (`--remote` is the flag the current CLI accepts here; add `--yes` in a non-interactive shell.) Deploy reads the `[functions.*]` blocks (`verify_jwt`, `import_map`) in `supabase/config.toml`.
+  `auto-chase` is invoked by a pg_cron job (`auto-chase-daily`) that authenticates with an `x-cron-secret` header read from the service-role-only `app_secrets` table.
+- **Auth email templates** (login code and sign-up verification) live in the Supabase dashboard. `supabase/templates/` mirrors them; `supabase/config.toml` configures local development (`supabase start`) and does not change the hosted auth settings or emails, except that its `[functions.*]` blocks are read by `supabase functions deploy`. Editing the template files does not change the hosted emails.
+
+## Layout
 
 ```
 src/
-├── components/      # React components
-├── pages/          # Page components
-├── lib/
-│   └── supabase.ts # Supabase client
-├── types/          # TypeScript types
-├── hooks/          # Custom React hooks
-│   └── useAuth.ts  # Authentication hook
-├── App.tsx         # Main app component
-└── main.tsx        # Entry point
+  lib/todos/      the to-dos engine (+ copy.ts: all strings and deep links)
+  lib/answers/    "has this person answered?"
+  lib/cost/       option price, Your cost, money position
+  lib/money/      the one formatter, minor units, distribution
+  lib/queries/    TanStack Query hooks (todoSurfaces.ts feeds every count)
+  features/       today, plan, decisions, expenses, people, organizer, ...
+  pages/          TripDetail (spaces, deep links), Dashboard
+  shared/contracts/  zod contracts mirrored to the edge functions
+supabase/
+  migrations/     SQL, applied manually
+  functions/      auto-chase, ingest, trip-chat, parse-receipt, nudge-draft,
+                  reorganize-plan, refresh-fx-rates, admin-invitation-account, _shared
+  templates/      mirror of the dashboard auth email templates
+e2e/              Playwright smoke tests (no sign-in, no live writes)
+scripts/          drift and z-index checks
 ```
-
-## Available Scripts
-
-- `npm run dev` - Start development server
-- `npm run build` - Build for production
-- `npm run preview` - Preview production build
-- `npm run lint` - Run ESLint
-
-## Database Schema
-
-The app uses the following main tables:
-
-- **users** - User profiles (extends auth.users) with custom avatar data
-- **trips** - Trip information with confirmation settings, public visibility, and enhanced status workflow
-- **trip_participants** - Links users to trips with roles and confirmation status tracking
-- **planning_sections** - Trip planning categories (accommodation, flights, transport, etc.)
-- **options** - Choices within planning sections with dynamic pricing
-- **selections** - User selections and votes
-- **comments** - Collaboration and discussion
-- **expenses** - Trip expenses with multi-currency support, FX conversion, and receipt storage
-- **expense_splits** - Flexible splitting (equal/custom/percentage)
-- **settlements** - Payment tracking between users
-- **invitations** - Secure invitation codes for signup with lifecycle tracking
-- **trip_notes** - Notes and announcements for trips (Markdown supported)
-
-## Current Status
-
-**Phase 9 Complete ✅** - Confirmation System, Public Trips, Markdown Support, UI Polish!
-**Phase 8 Complete ✅** - Enhanced Invitation System with Status Tracking!
-**Phase 7 Complete ✅** - Full Expense Tracking with Multi-Currency & Receipt Uploads!
-**Phase 5 Complete ✅** - Full Planning System with Optimistic Updates!
-**Progress**: 99% overall (Core features complete, production ready)
-**Next**: Testing & QA (Phase 10) or Real-time collaboration (Phase 6)
-
-**What's Working:**
-- ✅ **Complete authentication system** with invitation-based signup
-  - Multi-step signup flow (invitation validation → account creation → welcome)
-  - Email verification with automatic status tracking
-  - Invitation lifecycle management (active→pending→completed)
-  - Auto-fill invitation codes from URL
-  - SECURITY DEFINER functions for RLS bypass
-- ✅ Custom emoji avatar builder
-- ✅ Admin dashboard (Trips, Users, Invitations management)
-- ✅ **Full trip planning system** with sections, options, and selections
-- ✅ **Dynamic pricing** (per-person, split, tiered)
-- ✅ **Optimistic UI updates** - instant selections with zero scroll jumping
-- ✅ **Expense tracking** with comprehensive features:
-  - Multi-currency support (GBP, EUR, USD, CHF, JPY, AUD, CAD) with automatic FX conversion
-  - Three split types: equal, custom amounts, percentage-based
-  - Receipt uploads with HEIC/HEIF conversion and compression (70-80% reduction)
-  - Balance tracking showing net positions
-  - Debt minimization algorithm for optimal settlements
-  - Category filtering (accommodation, transport, food, activities, equipment, other)
-  - Admin delete capabilities
-- ✅ **Trip Confirmation System** - Complete commitment tracking
-  - 7 confirmation statuses (pending, confirmed, interested, conditional, waitlist, declined, cancelled)
-  - Conditional confirmations (date-based, user-based, or either)
-  - Automatic waitlist when capacity reached
-  - Circular dependency detection
-  - Effective deadline calculations
-  - Commitment terms agreement
-  - FIFO waitlist with timestamps
-- ✅ **Public Trip Visibility** - Discovery for authenticated users
-  - is_public toggle for trip organizers
-  - Dashboard separation (My Trips vs Other Public Trips)
-  - Greyed-out cards for non-participant trips
-- ✅ **Markdown Support** - Rich text formatting
-  - Confirmation messages with live preview
-  - Trip notes and announcements
-  - Bold, italic, lists, line breaks
-- ✅ **Notes & Announcements** with filtering by category
-- ✅ **Auto-redirect for single-trip users** with session tracking
-- ✅ **Edit/delete** for sections, options, and expenses
-- ✅ Selection avatars showing participant choices
-- ✅ Mobile-optimized responsive design with tab structure (People → Planning → Expenses → Notes)
-- ✅ **14 database tables** with comprehensive RLS policies
-- ✅ **Supabase Storage** for receipt uploads (3MB limit, RLS protected)
-- ✅ **10+ SECURITY DEFINER functions** for complex operations
-- ✅ **Character limits** on all text fields for data protection
-- ✅ GitHub Pages deployment: **https://chitintim.github.io/trips/**
-
-## Authentication
-
-Users sign up and log in with email and password. All features require authentication.
-
-## Contributing
-
-This is a personal project, but suggestions and feedback are welcome! Please open an issue to discuss proposed changes.
-
-## License
-
-MIT
-
-## Author
-
-**Tim** - Creator & Admin
-[GitHub](https://github.com/chitintim)
-
-**Note**: This is an invitation-only app. Contact Tim for access.

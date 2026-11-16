@@ -6,7 +6,7 @@
  * (coordinator note: v2 supersedes with the settlements-row status flow but
  * MUST keep reading legacy snapshots for a trip that already has one).
  */
-import { minimizeTransactions, getUserTransactions, type Person, type Transaction } from '../../../lib/debtMinimization'
+import { minimizeTransactions, type Person, type Transaction } from '../../../lib/debtMinimization'
 import { fromMinorUnits, toMinorUnits } from '../../../lib/money'
 
 /** Matches computeBalances' BALANCE_EPSILON_MINOR=1 threshold, currency-aware (0.01 for GBP/USD/EUR, 1 for JPY, 0.001 for BHD/KWD/JOD/OMR) -- see the doc comment on minimizeTransactions' `epsilon` param for why a hardcoded 0.01 was wrong. */
@@ -118,10 +118,6 @@ function computeDirectPayments(
     }
   }
   return transactions
-}
-
-export function getMyTransactions(allTransactions: Transaction[], userId: string) {
-  return getUserTransactions(allTransactions, userId)
 }
 
 /** True once every participant's net balance is within epsilon of zero. */

@@ -116,59 +116,6 @@ export function useExpenses(tripId: string | undefined) {
   })
 }
 
-/** Single expense by id (detail view / edit prefill / claim page). */
-export function useExpense(expenseId: string | undefined) {
-  return useQuery({
-    queryKey: ['expense', expenseId] as const,
-    queryFn: async (): Promise<Expense | null> => {
-      const { data, error } = await supabase.from('expenses').select('*').eq('id', expenseId as string).single()
-      if (error) throw error
-      return data
-    },
-    enabled: !!expenseId,
-  })
-}
-
-export function useExpenseLineItems(expenseId: string | undefined) {
-  return useQuery({
-    queryKey: ['expenseLineItems', expenseId] as const,
-    queryFn: async (): Promise<ExpenseLineItem[]> => {
-      const { data, error } = await supabase
-        .from('expense_line_items')
-        .select('*')
-        .eq('expense_id', expenseId as string)
-        .order('line_number')
-      if (error) throw error
-      return data || []
-    },
-    enabled: !!expenseId,
-  })
-}
-
-export function useExpenseClaims(expenseId: string | undefined) {
-  return useQuery({
-    queryKey: ['expenseClaims', expenseId] as const,
-    queryFn: async (): Promise<ExpenseItemClaim[]> => {
-      const { data, error } = await supabase.from('expense_item_claims').select('*').eq('expense_id', expenseId as string)
-      if (error) throw error
-      return data || []
-    },
-    enabled: !!expenseId,
-  })
-}
-
-export function useExpenseSplits(expenseId: string | undefined) {
-  return useQuery({
-    queryKey: ['expenseSplits', expenseId] as const,
-    queryFn: async (): Promise<ExpenseSplit[]> => {
-      const { data, error } = await supabase.from('expense_splits').select('*').eq('expense_id', expenseId as string)
-      if (error) throw error
-      return data || []
-    },
-    enabled: !!expenseId,
-  })
-}
-
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
@@ -282,42 +229,6 @@ export function useDeleteExpense(tripId: string) {
       const { data, error } = await supabase.from('expenses').delete().eq('id', expenseId).select('id')
       if (error) throw error
       assertRowsAffected(data, "You don't have permission to delete this expense, or it no longer exists.")
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
-  })
-}
-
-/** Claim/unclaim itemized receipt line items (upsert on (line_item_id,user_id) semantics via delete+insert). */
-export function useUpsertItemClaim(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (claim: TablesInsert<'expense_item_claims'>) => {
-      const { error } = await supabase.from('expense_item_claims').upsert(claim, { onConflict: 'line_item_id,user_id' })
-      if (error) throw error
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
-  })
-}
-
-export function useDeleteItemClaim(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (claimId: string) => {
-      const { data, error } = await supabase.from('expense_item_claims').delete().eq('id', claimId).select('id')
-      if (error) throw error
-      assertRowsAffected(data, "You don't have permission to remove this claim, or it no longer exists.")
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
-  })
-}
-
-export function useCreateAllocationLink(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: TablesInsert<'expense_allocation_links'>) => {
-      const { data, error } = await supabase.from('expense_allocation_links').insert(input).select().single()
-      if (error) throw error
-      return data
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
   })
@@ -587,47 +498,5 @@ export function useSaveItemClaims() {
         predicate: (q) => q.queryKey.length === 3 && q.queryKey[0] === 'trip' && q.queryKey[2] === 'expenses',
       })
     },
-  })
-}
-
-/** Bulk FX-rate refresh across an expense list (mirrors ExpensesTab's "Update FX rates" action). */
-export function useUpdateExpenseFxRate(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async ({
-      expenseId,
-      baseCurrencyAmount,
-      fxRate,
-      fxRateDate,
-    }: {
-      expenseId: string
-      baseCurrencyAmount: number
-      fxRate: number
-      fxRateDate: string
-    }) => {
-      const { data: updateRows, error } = await supabase
-        .from('expenses')
-        .update({ base_currency_amount: baseCurrencyAmount, fx_rate: fxRate, fx_rate_date: fxRateDate })
-        .eq('id', expenseId)
-        .select('id')
-      if (error) throw error
-      assertRowsAffected(updateRows, "You don't have permission to edit this expense, or it no longer exists.")
-
-      const { data: splits } = await supabase.from('expense_splits').select('id, amount').eq('expense_id', expenseId)
-      if (splits) {
-        await Promise.all(
-          splits.map(async (split) => {
-            const { data: splitRows, error: splitError } = await supabase
-              .from('expense_splits')
-              .update({ base_currency_amount: split.amount * fxRate })
-              .eq('id', split.id)
-              .select('id')
-            if (splitError) throw splitError
-            assertRowsAffected(splitRows, "You don't have permission to update this expense's split, or it no longer exists.")
-          })
-        )
-      }
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
   })
 }

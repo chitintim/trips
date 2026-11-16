@@ -7,8 +7,6 @@ import type { Enums } from '../../types/database.types'
 import type { ExpenseWithDetails } from '../../lib/queries/useExpenses'
 
 export type ExpenseCategory = Enums<'expense_category'>
-export type ExpenseStatus = Enums<'expense_status'>
-export type SplitType = Enums<'split_type'>
 
 export type { ExpenseWithDetails }
 

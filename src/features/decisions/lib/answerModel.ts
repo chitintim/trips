@@ -28,7 +28,7 @@
  * person's leftover `selections` as approvals (read-time) and the plan removes
  * them when the person changes their answer, so one tap really changes it.
  */
-import { areVotesVisible, type VotingMethod } from './voting'
+import { areVotesVisible } from './voting'
 import { resolveWinner } from './resolveDecision'
 import {
   buildOrderItemMetadata,
@@ -180,10 +180,6 @@ export function answerMode(section: Pick<ModelSection, 'metadata' | 'voting_meth
   if (section.voting_method === 'approval') return 'any'
   if (section.voting_method === 'ranked') return 'ranked'
   return 'single'
-}
-
-export function votingMethodOf(mode: AnswerMode): VotingMethod {
-  return mode === 'any' ? 'approval' : mode === 'ranked' ? 'ranked' : 'single'
 }
 
 export function liveOptions(section: Pick<ModelSection, 'options'>): ModelOption[] {

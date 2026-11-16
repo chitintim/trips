@@ -251,8 +251,7 @@ function ManageBody({
               </Badge>
             </div>
             <p className="text-xs text-[var(--text-muted)]">
-              {card.counts.label}
-              {card.deadline ? ` · ${card.deadline.label}` : ''}
+              {[card.counts.label, card.deadline?.label].filter(Boolean).join(' · ')}
             </p>
             {decidedOption && (
               <p className="min-w-0 break-words text-sm font-medium text-[var(--text-primary)]">

@@ -29,8 +29,8 @@ export interface ChaseSettings {
    * "Decide questions automatically at their deadline" (Phase 4D). OPT-OUT:
    * absent = ON; only an explicit off value (false / "false" / "off" / "no" /
    * "0" / 0) turns it off. Same rule as the SQL function auto_decide_question,
-   * which re-checks it itself. Not gated by `enabled`: it is a trip rule, not
-   * a reminder email.
+   * which re-checks it itself. It only runs on trips with `enabled` (reminder
+   * emails) on, which is off by default: see tripAutoDecideOn in autoDecide.ts.
    */
   auto_decide: boolean
 }

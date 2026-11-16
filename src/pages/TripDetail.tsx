@@ -37,6 +37,7 @@ import {
 
 import { todayTabConfig } from '../features/today'
 import { planTabConfig, AddToPlanSheet, AnswerFlow } from '../features/plan'
+import { useCanSuggestIdea } from '../features/plan/lib/useCanSuggestIdea'
 import type { PlanFocus } from '../features/plan'
 import { QuestionManageSheet } from '../features/decisions'
 import { peopleTabConfig, StatusModal, TravelDetailsSheet } from '../features/people'
@@ -146,6 +147,9 @@ export function TripDetail() {
 
   const myParticipant = participants.find((p) => p.user_id === user?.id) || null
   const { canManageTrip: isOrganizer } = useTripPermissions(trip)
+  // Participants who are coming get the Add entry with exactly one intent ("An idea").
+  const canSuggestIdea = useCanSuggestIdea(trip)
+  const canAdd = isOrganizer || canSuggestIdea
 
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
@@ -444,8 +448,8 @@ export function TripDetail() {
   const fabForSpace = (): { icon: string; label: string; onClick: () => void } | null => {
     switch (activeSpace) {
       case 'plan':
-        // Only organizers can save to the plan (RLS), so everyone else gets no Add entry (until Phase 4 rewrites it).
-        return !isOrganizer
+        // Organizers add anything; participants only suggest ideas (server-checked RPC); everyone else gets no Add entry.
+        return !canAdd
           ? null
           : {
               icon: '➕',
@@ -750,7 +754,7 @@ export function TripDetail() {
       )}
 
       {/* FAB targets */}
-      {isOrganizer && <AddToPlanSheet isOpen={addToPlanOpen} onClose={() => setAddToPlanOpen(false)} trip={trip} defaultIsVote={addToPlanAsQuestion} />}
+      {canAdd && <AddToPlanSheet isOpen={addToPlanOpen} onClose={() => setAddToPlanOpen(false)} trip={trip} defaultIsVote={addToPlanAsQuestion} />}
 
       {myParticipant && (
         <StatusModal

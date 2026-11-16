@@ -1,3 +1,5 @@
+> Historical document. The current product model is in docs/PRODUCT_MODEL.md.
+
 # Trips v2 — Upgrade Master Plan
 
 **Status:** Planning complete, ready for orchestrated implementation.

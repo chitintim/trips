@@ -37,10 +37,6 @@ function cacheKey(date: string, from: string, to: string): string {
   return `${date}_${from}_${to}`
 }
 
-export function clearFxMemoryCache(): void {
-  memoryCache.clear()
-}
-
 async function fetchFromFrankfurter(date: string, from: string, to: string): Promise<FxRate | null> {
   try {
     const controller = new AbortController()

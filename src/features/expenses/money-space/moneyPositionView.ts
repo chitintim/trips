@@ -68,8 +68,10 @@ export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
       })
     }
 
-    if (eq.kind === 'owe') rows.push({ key: 'ledger', label: 'So far you owe', amount: money(eq.ledgerAmount), sign: '=', strong: true })
-    else if (eq.kind === 'owed') rows.push({ key: 'ledger', label: "So far you're owed", amount: money(eq.ledgerAmount), sign: '=', strong: true })
+    // With unconfirmed payments below, this row is only the middle of the sum, so it must not read as the conclusion.
+    const hasWaiting = eq.sentWaiting > 0 || eq.receivedWaiting > 0
+    if (eq.kind === 'owe') rows.push({ key: 'ledger', label: hasWaiting ? 'Before payments you owed' : 'So far you owe', amount: money(eq.ledgerAmount), sign: '=', strong: true })
+    else if (eq.kind === 'owed') rows.push({ key: 'ledger', label: hasWaiting ? 'Before payments you were owed' : "So far you're owed", amount: money(eq.ledgerAmount), sign: '=', strong: true })
     else rows.push({ key: 'ledger', label: 'Square on confirmed payments', amount: null, sign: '=', strong: true })
   }
 
@@ -83,9 +85,9 @@ export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
   }
 
   if (eq.sentWaiting > 0 || eq.receivedWaiting > 0) {
-    if (eq.overpaid > 0) rows.push({ key: 'left', label: "More than you owe, if all of it is confirmed", amount: money(eq.overpaid), sign: '=', strong: true })
+    if (eq.overpaid > 0) rows.push({ key: 'left', label: `You've sent ${money(eq.overpaid)} too much`, amount: null, sign: '=', strong: true })
     else if (eq.kind === 'owe') rows.push({ key: 'left', label: eq.remainingToPay > 0 ? 'Still to pay' : 'Nothing more to pay once confirmed', amount: eq.remainingToPay > 0 ? money(eq.remainingToPay) : null, sign: '=', strong: true })
-    else if (eq.kind === 'owed') rows.push({ key: 'left', label: eq.remainingToReceive > 0 ? 'Still to come' : 'Nothing more due once you confirm', amount: eq.remainingToReceive > 0 ? money(eq.remainingToReceive) : null, sign: '=', strong: true })
+    else if (eq.kind === 'owed') rows.push({ key: 'left', label: eq.remainingToReceive > 0 ? `You're owed ${money(eq.remainingToReceive)}` : 'Nothing more due once you confirm', amount: null, sign: '=', strong: true })
   }
 
   // Suggested rows only mean something while balances are frozen (computeTodos). Never printed next to "square".

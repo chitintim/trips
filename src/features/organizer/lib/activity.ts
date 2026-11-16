@@ -28,6 +28,7 @@ export type ActivityVerb =
   | 'decision_reopened'
   | 'question_deleted'
   | 'option_added'
+  | 'option_suggested'
   | 'expense_added'
   | 'settlement_confirmed'
   | 'settlement_marked_paid'
@@ -99,11 +100,12 @@ interface VerbTemplate {
 const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   rsvp_changed: { icon: '📝', phrase: (e) => `updated their reply to Are you coming?${e ? `: ${e}` : ''}` },
   confirmations_reset: { icon: '🧹', phrase: (e) => `reset replies to Are you coming?${e ? ` (${e} cleared)` : ''}` },
-  vote_cast: { icon: '🗳️', phrase: (e) => `answered${e ? ` "${e}"` : ' a question'}` },
+  vote_cast: { icon: '❓', phrase: (e) => `answered${e ? ` "${e}"` : ' a question'}` },
   poll_closed: { icon: '🏁', phrase: (e) => `closed the question${e ? ` "${e}"` : ''}` },
   decision_reopened: { icon: '↩️', phrase: (e) => `reopened the question${e ? ` "${e}"` : ''}` },
   question_deleted: { icon: '🗑️', phrase: (e) => `deleted the question${e ? ` "${e}"` : ''}` },
   option_added: { icon: '💡', phrase: (e) => `added the option${e ? ` "${e}"` : ''}` },
+  option_suggested: { icon: '💡', phrase: (e) => `suggested${e ? ` "${e}"` : ' an option'}` },
   expense_added: { icon: '💰', phrase: (e) => `added the expense${e ? ` "${e}"` : ''}` },
   settlement_confirmed: { icon: '🤝', phrase: (e) => `confirmed a payment${e ? ` (${e})` : ''}` },
   settlement_marked_paid: { icon: '💸', phrase: (e) => `marked a payment as paid${e ? ` (${e})` : ''}` },
@@ -172,7 +174,7 @@ const NOTIFICATION_KIND_LABELS: Record<string, NotificationKindInfo> = {
   overdue_action: { icon: '🚨', label: 'Overdue to-do' },
   unclaimed_items: { icon: '🧾', label: 'Expense items to claim' },
   unfilled_order: { icon: '🎿', label: 'Question not answered (own choice)' },
-  unvoted_poll: { icon: '🗳️', label: 'Question not answered' },
+  unvoted_poll: { icon: '❓', label: 'Question not answered' },
   pending_rsvp: { icon: '📝', label: 'Are you coming? reminder' },
   conditional_date_arrived: { icon: '⏳', label: 'Not sure: follow-up' },
   waitlist_offer: { icon: '🎟️', label: 'Waitlist spot offered' },

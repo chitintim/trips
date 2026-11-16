@@ -47,6 +47,13 @@ describe('QuestionCard model: four states', () => {
     expect(m.subtitle).toBe('Group choice · 1 of 4 answered')
   })
 
+  it('Decided with nobody having answered (legacy): no "0 of 4 answered"', () => {
+    const decided = { ...rankedStay, status: 'completed', metadata: { decided_option_id: 'o-granvia' } }
+    const m = card({ section: decided, votes: [] })
+    expect(m.subtitle).toBe('Group choice')
+    expect(m.counts.label).toBe('')
+  })
+
   it('Booked: a live booking on the decided option', () => {
     const decided = { ...rankedStay, status: 'completed', metadata: { decided_option_id: 'o-granvia' } }
     const m = card({ section: decided, bookedOptionIds: new Set(['o-granvia']) })

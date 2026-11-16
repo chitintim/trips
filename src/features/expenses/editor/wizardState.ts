@@ -67,5 +67,3 @@ export const WIZARD_STEPS = [
   { key: 'split', label: 'Split' },
   { key: 'review', label: 'Review' },
 ] as const
-
-export type WizardStepKey = (typeof WIZARD_STEPS)[number]['key']

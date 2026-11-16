@@ -1,4 +1,5 @@
 import { HTMLAttributes } from 'react'
+import { capacityLine, invitedOverCapacityNote } from '../../../lib/capacityText'
 
 // ============================================================================
 // TYPES
@@ -30,6 +31,9 @@ export interface CapacityProgressBarProps extends HTMLAttributes<HTMLDivElement>
    */
   waitlistCount?: number
 
+  /** People invited (active on the roster); adds a quiet note when it exceeds the capacity. */
+  invitedCount?: number
+
   /**
    * Show detailed text below the bar
    */
@@ -51,6 +55,7 @@ export function CapacityProgressBar({
   interestedCount = 0,
   conditionalCount = 0,
   waitlistCount = 0,
+  invitedCount,
   size = 'md',
   className = '',
   ...props
@@ -100,8 +105,6 @@ export function CapacityProgressBar({
     lg: 'text-base',
   }
 
-  const spotsRemaining = capacityLimit ? Math.max(0, capacityLimit - confirmedCount) : null
-  const isFull = capacityLimit && confirmedCount >= capacityLimit
 
   return (
     <div className={`space-y-2 ${className}`} {...props}>
@@ -128,15 +131,7 @@ export function CapacityProgressBar({
         {/* Simplified text - single line */}
         <div className={`flex items-center justify-between ${textSizeClasses[size]}`}>
           <span className="font-medium text-[var(--text-primary)]">
-            {capacityLimit ? (
-              <>
-                {confirmedCount}/{capacityLimit} going
-                {isFull && ' · Full'}
-                {!isFull && spotsRemaining !== null && ` · ${spotsRemaining} ${spotsRemaining === 1 ? 'spot' : 'spots'} left`}
-              </>
-            ) : (
-              <>{confirmedCount} going · No limit</>
-            )}
+            {capacityLine(confirmedCount, capacityLimit || null)}
           </span>
           {conditionalCount > 0 && (
             <span className="text-sm text-[var(--text-muted)]">
@@ -144,6 +139,10 @@ export function CapacityProgressBar({
             </span>
           )}
         </div>
+
+        {invitedOverCapacityNote(invitedCount, capacityLimit) && (
+          <div className="text-xs text-[var(--text-muted)]">{invitedOverCapacityNote(invitedCount, capacityLimit)}</div>
+        )}
 
         {/* Waitlist indicator */}
         {waitlistCount > 0 && (

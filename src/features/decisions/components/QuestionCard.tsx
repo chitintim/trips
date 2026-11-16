@@ -3,11 +3,15 @@ import { Badge, Button, PriceTag } from '../../../components/ui'
 import type { OptionWithSelections, SectionWithOptions } from '../../../lib/queries/usePlanning'
 import type { Trip } from '../../../types'
 import { useParticipants } from '../../../lib/queries/useTrip'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
+import { useSuggestionsAvailable } from '../../../lib/queries/useSuggestions'
 import { useQuestionPasses, useVotes } from '../../../lib/queries/usePlanning'
 import { AnswerControl } from './AnswerControl'
 import { EveryonesAnswers } from './EveryonesAnswers'
 import { useOptionPrice } from '../lib/useOptionPrice'
 import { useQuestionAnswers } from '../lib/useQuestionAnswers'
+import { canSuggestOption } from '../lib/suggestOption'
+import { SuggestOptionRow } from './SuggestionMeta'
 import { CHANGE_ANY_TIME, NO_OPTIONS_NOTE, NO_OPTIONS_ORGANIZER_NOTE } from '../lib/answerCopy'
 import type { CardChip, StripStep } from '../lib/questionCardModel'
 
@@ -96,7 +100,19 @@ function LifecycleStrip({ steps }: { steps: StripStep[] }) {
 export function QuestionCard({ trip, section, onManage, renderPrice, defaultExpanded, bookedOptionIds, bookedSummary, bookingNote, footer, focusOptionId = null, className = '' }: QuestionCardProps) {
   const titleId = useId()
   const bodyId = useId()
-  const { card, control, headcount } = useQuestionAnswers(trip, section, { bookedOptionIds })
+  const { card, control, headcount, viewer } = useQuestionAnswers(trip, section, { bookedOptionIds })
+  const suggestionsAvailable = useSuggestionsAvailable()
+  const { canManageTrip } = useTripPermissions(trip)
+  const { data: participants } = useParticipants(trip.id)
+  // Organizers add options through Manage; everyone else who is coming can suggest one.
+  const canSuggest = canSuggestOption({
+    rpcAvailable: suggestionsAvailable,
+    userId: (participants ?? []).some((p) => p.user_id === viewer.userId) ? viewer.userId : null,
+    viewerOut: !!viewer.out,
+    tripFinished: !!viewer.tripFinished,
+    canManageTrip: canManageTrip || !!onManage,
+    section,
+  })
   const [expanded, setExpanded] = useState(defaultExpanded ?? card.defaultExpanded)
   const [showAll, setShowAll] = useState(false)
   const [showChoices, setShowChoices] = useState(false)
@@ -169,6 +185,7 @@ export function QuestionCard({ trip, section, onManage, renderPrice, defaultExpa
                 {expanded ? 'Done' : control.mode === 'own' ? 'Change' : 'Change my answer'}
               </Button>
             )}
+            {canSuggest && <SuggestOptionRow tripId={trip.id} sectionId={section.id} onAdded={() => setExpanded(true)} />}
           </>
         )}
 

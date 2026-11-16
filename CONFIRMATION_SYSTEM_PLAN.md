@@ -1,3 +1,5 @@
+> Historical document. The current product model is in docs/PRODUCT_MODEL.md.
+
 # Trip Confirmation System - Implementation Plan
 
 **Status**: 🟡 In Progress - Phase A & B Complete, Phase C Next

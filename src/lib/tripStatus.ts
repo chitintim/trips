@@ -61,13 +61,6 @@ export function getTripStatusLabel(status: TripStatus): string {
 }
 
 /**
- * Check if trip options should be locked (cannot be edited)
- */
-export function isTripLocked(status: TripStatus): boolean {
-  return status === 'booked_awaiting_departure' || status === 'trip_ongoing' || status === 'trip_completed'
-}
-
-/**
  * Get trip timing information based on dates
  * Returns an object with label and badge variant
  */

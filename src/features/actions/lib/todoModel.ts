@@ -232,11 +232,6 @@ export function groupTodos(views: ReadonlyArray<TodoView>, opts: { userId: strin
   return groups
 }
 
-/** Open to-dos that are the viewer's own job (the sheet's "Yours" count). */
-export function yoursCount(groups: TodoGroups): number {
-  return groups.yours.length
-}
-
 // ---------------------------------------------------------------------------
 // Due chip (calm: overdue is amber, never red; finished trips show none)
 // ---------------------------------------------------------------------------

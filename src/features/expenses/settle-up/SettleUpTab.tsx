@@ -29,7 +29,7 @@ import {
   unresolvedDuplicateGroups,
 } from './settleUpLogic'
 import { DuplicatePaymentsNotice } from './DuplicatePaymentsNotice'
-import { buildFreezeSuggestions, knownPaidIds, FREEZE_BLOCKED_BY_DUPLICATES } from './settlementFreeze'
+import { buildFreezeSuggestions, knownPaidIds, FREEZE_BLOCKED_BY_DUPLICATES, UNFREEZE_BLOCKED_BY_DUPLICATES } from './settlementFreeze'
 import { computeBalances, partitionCarryovers } from '../lib/balances'
 import { buildSettleUpPeople, LEFT_TRIP_SUFFIX } from './settleUpPeople'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
@@ -117,7 +117,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   const [isUnfreezing, setIsUnfreezing] = useState(false)
   const { data: carryoverCandidates = [] } = useCarryoverCandidates(trip.id, user?.id)
 
-  const expenses = expensesData?.expenses ?? []
+  const expenses = useMemo(() => expensesData?.expenses ?? [], [expensesData])
   // Everyone who appears in the money, not just the active roster: someone
   // removed earlier (or via the API) with expense history keeps their
   // balance and is shown as "left the trip", so the ledger always sums to zero.
@@ -219,7 +219,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   }
 
   const handleUnfreeze = async () => {
-    if (!user) return
+    if (!user || freezeBlockedByDuplicates) return
     setIsUnfreezing(true)
     try {
       await unfreezeSettlements.mutateAsync({ userId: user.id })
@@ -326,7 +326,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
           <div className="flex items-center justify-between">
             <Badge variant="info">🔒 Balances frozen</Badge>
             {isOrganizer ? (
-              <Button variant="ghost" size="sm" onClick={handleUnfreeze} disabled={isUnfreezing} isLoading={isUnfreezing}>
+              <Button variant="ghost" size="sm" onClick={handleUnfreeze} disabled={isUnfreezing || freezeBlockedByDuplicates} isLoading={isUnfreezing}>
                 Unfreeze
               </Button>
             ) : (
@@ -336,6 +336,11 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
           <p className="text-sm text-[var(--text-secondary)]">
             Expense edits are blocked while frozen. Unfreezing is audit-logged to the activity feed.
           </p>
+          {isOrganizer && freezeBlockedByDuplicates && (
+            <p className="text-xs text-[var(--text-muted)]" role="status">
+              {UNFREEZE_BLOCKED_BY_DUPLICATES}
+            </p>
+          )}
         </Card>
       ) : (
         <Card noPadding className="p-4 space-y-3">

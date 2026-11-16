@@ -1,3 +1,8 @@
+# NOTE: this file configures LOCAL development (`supabase start`). The hosted project's auth
+# settings, email templates and SMTP live in the Supabase dashboard; editing them here does not
+# change production. The exception is the [functions.*] blocks (verify_jwt, import_map,
+# entrypoint): `supabase functions deploy` reads those when it deploys an edge function.
+
 # For detailed configuration reference documentation, visit:
 # https://supabase.com/docs/guides/local-development/cli/config
 # A string used to distinguish different Supabase projects on the same host. Defaults to the

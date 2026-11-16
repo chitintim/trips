@@ -30,7 +30,7 @@ type WaitingView = 'person' | 'item'
 
 const KIND_ICON: Record<Todo['kind'], string> = {
   rsvp: '📝',
-  answer: '🗳️',
+  answer: '❓',
   task: '✅',
   pay: '💸',
   confirm_payment: '🤝',

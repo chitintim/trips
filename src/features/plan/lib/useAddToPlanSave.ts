@@ -4,6 +4,8 @@ import { queryKeys } from '../../../lib/queries/queryKeys'
 import { throwIfError } from '../../../lib/queries/assertRowsAffected'
 import { useSections } from '../../../lib/queries/usePlanning'
 import { useTripActivityLog } from '../../organizer/lib/activity'
+import { useSuggestOption } from '../../../lib/queries/useSuggestions'
+import { normalizeSuggestionLink } from '../../decisions/lib/suggestOption'
 import {
   buildEventInsert, buildIdeaOptionRow, buildIdeasSectionInsert, buildQuestionOptionRows, buildSectionInsert, findIdeasQuestion,
   type HappeningValues, type IdeaValues, type QuestionValues,
@@ -13,10 +15,11 @@ import {
  * The three Add saves. New file (not usePlanning.ts) because the existing hooks do not hand back the new
  * row's id, which the toast's "View" link needs. Every failure is thrown to the caller, which shows it.
  */
-export function useAddToPlanSave(tripId: string, userId: string | undefined) {
+export function useAddToPlanSave(tripId: string, userId: string | undefined, asParticipant = false) {
   const queryClient = useQueryClient()
   const logActivity = useTripActivityLog(tripId)
   const { data: sections } = useSections(tripId)
+  const suggest = useSuggestOption(tripId)
 
   const happening = useMutation({
     mutationFn: async (v: HappeningValues): Promise<{ id: string }> => {
@@ -56,7 +59,21 @@ export function useAddToPlanSave(tripId: string, userId: string | undefined) {
 
   const idea = useMutation({
     mutationFn: async (v: IdeaValues): Promise<{ questionId: string }> => {
-      let sectionId = findIdeasQuestion(sections)?.id
+      if (asParticipant) {
+        // People who are not organizers cannot write options or questions; the RPC adds one safe option to the Ideas
+        // question (creating it on first use) and writes the activity row itself.
+        const res = await suggest.mutateAsync({ sectionId: null, idea: true, title: v.title, link: normalizeSuggestionLink(v.link) ?? '' })
+        return { questionId: res.section_id }
+      }
+      // Find-or-create defensively: re-query before inserting, and if two buckets ever exist always use the oldest.
+      const { data: existing, error: lookupError } = await supabase
+        .from('planning_sections')
+        .select('id, status, title, metadata, created_at')
+        .eq('trip_id', tripId)
+        .order('created_at', { ascending: true })
+        .order('id', { ascending: true })
+      throwIfError(lookupError)
+      let sectionId = findIdeasQuestion(existing ?? sections)?.id
       if (!sectionId) {
         const { data, error } = await supabase
           .from('planning_sections')
@@ -71,6 +88,7 @@ export function useAddToPlanSave(tripId: string, userId: string | undefined) {
       return { questionId: sectionId }
     },
     onSuccess: (row, v) => {
+      if (asParticipant) return queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
       logActivity({ verb: 'option_added', entity: { type: 'section', id: row.questionId, label: v.title.trim() } })
       return queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
     },

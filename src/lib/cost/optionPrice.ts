@@ -147,8 +147,6 @@ export interface OptionPrice {
   sensitivity: TierSensitivityInfo | null
   /** Set when the figure comes from a real expense that knows who it was split between. `viewerShare` null = viewer not on it. */
   actualSplit: { viewerShare: number | null; splitCount: number } | null
-  /** The quiet "listed at £248.70" line, only when a real expense replaced a different listed price. */
-  listedLine: string | null
 }
 
 function normaliseHeadcount(headcount: InScopeHeadcount | number): { count: number; isEstimate: boolean } {
@@ -222,7 +220,6 @@ export function computeOptionPrice(
   let perPersonMinor = 0
   let sensitivity: TierSensitivityInfo | null = null
   let actualSplit: OptionPrice['actualSplit'] = null
-  let listedTotalMinor: number | null = null
 
   const listedCurrency = optionCurrency ?? currency
   if (hasListedPrice || tiers.length > 0) {
@@ -264,7 +261,6 @@ export function computeOptionPrice(
     sensitivity = null
   }
   if (context.actual) {
-    listedTotalMinor = totalMinor
     totalMinor = toMinorUnits(context.actual.total, currency)
     const a = context.actual
     if (a.viewerShare !== undefined && a.splitCount != null && a.splitCount > 0) {
@@ -311,15 +307,9 @@ export function computeOptionPrice(
     basisLine = `${money(total)} total · ${hc} · ${word}`
   }
 
-  // The listed estimate stays as a quiet secondary line when a real expense replaced a different figure.
-  let listedLine: string | null = null
-  if (context.actual && hasListedPrice && listedTotalMinor != null && listedTotalMinor !== totalMinor && optionCurrency === currency) {
-    const unit = formatMoney(entered as number, currency, { mode: 'headline' })
-    listedLine = `listed at ${effectiveBasis === 'each' ? `${unit} each` : effectiveBasis === 'per_night' ? `${unit}/night` : unit}`
-    basisLine = `${basisLine} · ${listedLine}`
-  }
-  // Not on the expense: the headline already says total, split and paid; keep only the quiet listed line.
-  if (actualSplit && actualSplit.viewerShare == null) basisLine = listedLine ?? ''
+  // A paid actual never shows the listed figure underneath (legacy rows stored nightly rates as totals, so "listed at" only confuses).
+  // Not on the expense: the headline already says total, split and paid.
+  if (actualSplit && actualSplit.viewerShare == null) basisLine = ''
 
   const exactMoney = (v: number) => formatMoney(v, currency, { mode: 'exact' })
   const headline = actualSplit
@@ -347,6 +337,5 @@ export function computeOptionPrice(
     basisLine,
     sensitivity,
     actualSplit,
-    listedLine,
   }
 }

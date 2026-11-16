@@ -147,6 +147,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
               interestedCount={counts.interested}
               conditionalCount={counts.conditional}
               waitlistCount={counts.waitlist}
+              invitedCount={(participants ?? []).filter((p) => p.active !== false).length}
             />
 
             {trip.confirmation_deadline && (

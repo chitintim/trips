@@ -9,10 +9,9 @@
  * | [Name]                        | one named person                         |
  * | Anyone — first to grab it     | one person needed, nobody named (checklist, no assignee) |
  */
-export const TODOS_TITLE = 'To-dos'
+export const TODOS_TITLE = 'Shared to-dos'
 export const NEW_TODO_LABEL = 'New to-do'
 export const ADD_TODO_LABEL = 'Add to-do'
-export const BRING_TAG = '🎒 Bring'
 
 export type WhoMode = 'everyone' | 'person' | 'anyone'
 
@@ -53,14 +52,14 @@ export const SECTION_LEFT_OPEN = 'Left open'
 export const YOURS_EMPTY = 'Nothing for you right now.'
 export const GRABS_HINT = 'Nobody is on these yet. Take one and it moves to your list.'
 
-export const TODOS_EMPTY_TITLE = 'No to-dos.'
-export const TODOS_EMPTY_BODY = "Add one for the group — like 'Book the transfer' or 'Bring a speaker'."
+export const TODOS_EMPTY_TITLE = 'No shared to-dos yet.'
+export const TODOS_EMPTY_BODY = "Add one for the group — e.g. 'Book airport transfer'."
 export const TODOS_FINISHED_NOTE = 'This trip has finished, so to-dos are shown as history.'
 /** Finished trip, nothing in the sheet: the sheet only lists shared task to-dos; answering, paying and freezing live on Today. */
 export const TODOS_FINISHED_EMPTY_TITLE = 'No shared to-dos were left open on this trip.'
 export const TODOS_FINISHED_EMPTY_BODY = 'This list holds shared tasks. Answering, paying and freezing balances show on Today.'
-export const NO_LONGER_NEEDED = '🗳️ No longer needed — the question is closed'
-export const TICKS_WHEN_ANSWERED = '🗳️ Ticks off when you answer'
+export const NO_LONGER_NEEDED = '❓ No longer needed — the question is closed'
+export const TICKS_WHEN_ANSWERED = '❓ Ticks off when you answer'
 
 export const CLAIM_TODO = "I'll do it"
 export const CLAIM_BRING = "I'll bring it"

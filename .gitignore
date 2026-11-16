@@ -87,7 +87,6 @@ temp-uploads/
 
 # Demo/Test Pages
 public/test-*.html
-src/pages/ComponentShowcase.tsx
 
 # Optional: Personal Notes (uncomment if needed)
 # PERSONAL_NOTES.md

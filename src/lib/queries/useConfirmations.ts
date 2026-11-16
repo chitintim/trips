@@ -1,33 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { ParticipantWithUser } from './useTrip'
-import { assertCountAffected, assertRowsAffected, throwIfError } from './assertRowsAffected'
+import { assertCountAffected, throwIfError } from './assertRowsAffected'
 import { Enums } from '../../types/database.types'
 import { useTripActivityLog } from '../../features/organizer/lib/activity'
 
 export type ConfirmationStatus = Enums<'confirmation_status'>
 export type ConditionalType = Enums<'conditional_type'>
-
-export interface ConfirmationSummaryRow {
-  status: ConfirmationStatus
-  count: number
-  user_ids: string[]
-}
-
-/** Server-computed per-status counts, via the get_confirmation_summary RPC. */
-export function useConfirmationSummary(tripId: string | undefined) {
-  return useQuery({
-    queryKey: queryKeys.confirmationSummary(tripId || ''),
-    queryFn: async (): Promise<ConfirmationSummaryRow[]> => {
-      const { data, error } = await supabase.rpc('get_confirmation_summary', { p_trip_id: tripId as string })
-      throwIfError(error)
-      return (data as ConfirmationSummaryRow[]) || []
-    },
-    enabled: !!tripId,
-  })
-}
 
 export interface UpdateConfirmationInput {
   tripId: string
@@ -139,23 +120,6 @@ export function useSetParticipantActive(tripId: string) {
         .eq('user_id', userId)
       throwIfError(error)
       assertCountAffected(count, 'You don\'t have permission to change this person, or they are no longer on the trip.')
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) }),
-  })
-}
-
-export function useChangeParticipantRole(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async ({ userId, role }: { userId: string; role: 'organizer' | 'participant' }) => {
-      const { data, error } = await supabase
-        .from('trip_participants')
-        .update({ role })
-        .eq('trip_id', tripId)
-        .eq('user_id', userId)
-        .select('user_id')
-      throwIfError(error)
-      assertRowsAffected(data, 'You don\'t have permission to change this person\'s role.')
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.participants(tripId) }),
   })

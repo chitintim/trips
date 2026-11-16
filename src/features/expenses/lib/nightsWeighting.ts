@@ -19,10 +19,6 @@
  */
 import type { TimelineEvent } from '../../../types'
 
-export interface NightsWeightInput {
-  participantId: string
-}
-
 export interface NightsWeightResult {
   participantId: string
   nights: number

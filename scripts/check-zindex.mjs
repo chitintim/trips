@@ -60,8 +60,6 @@ const ALLOWLIST = [
   // `position:relative` wrapper (not fixed/portal, but bounded and never
   // competing with page-scroll chrome) — dropdown-scale is appropriate.
   'features/expenses/components/AmountCurrencyInput.tsx',
-  // Dev-only component gallery, not real app chrome.
-  'pages/ComponentShowcase.tsx',
 ]
 
 // Named token-scale utilities that are only for chrome/overlays.

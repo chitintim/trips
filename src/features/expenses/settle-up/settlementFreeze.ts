@@ -93,6 +93,8 @@ export function paymentsChangedSince(settlements: Settlement[], known: string[])
 }
 
 export const FREEZE_BLOCKED_BY_DUPLICATES = 'Sort out the payments recorded twice first (see the notice below), then freeze.'
+/** Unfreezing is paused too: after an unfreeze nobody could freeze again until the twins are sorted out. */
+export const UNFREEZE_BLOCKED_BY_DUPLICATES = 'Sort out the payments recorded twice first (see the notice below). Unfreezing is paused too, because balances could not be frozen again until they are resolved.'
 export const PAYMENTS_CHANGED_MESSAGE = 'Payments changed while you were freezing — try again'
 
 export function canRemoveAsDuplicate(target: Settlement, all: Settlement[], baseCurrency: string): boolean {

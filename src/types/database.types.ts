@@ -2163,6 +2163,14 @@ export type Database = {
         Args: { p_section_id: string }
         Returns: Json
       }
+      suggest_option: {
+        Args: { p_idea?: boolean; p_link?: string; p_note?: string; p_section_id: string | null; p_title: string; p_trip_id?: string }
+        Returns: Json
+      }
+      withdraw_suggestion: {
+        Args: { p_option_id: string }
+        Returns: Json
+      }
       decide_question: {
         Args: { p_book_todo?: Json; p_option_id?: string; p_put_on_plan?: Json; p_section_id: string }
         Returns: Json

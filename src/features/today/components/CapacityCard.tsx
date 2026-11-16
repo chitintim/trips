@@ -23,6 +23,7 @@ export function CapacityCard({ trip, participants, myParticipant, confirmedCount
         <CapacityProgressBar
           confirmedCount={confirmedCount}
           capacityLimit={trip.capacity_limit}
+          invitedCount={participants.filter((p) => p.active !== false).length}
           waitlistCount={participants.filter((p) => p.confirmation_status === 'waitlist').length}
         />
         {trip.confirmation_deadline && (

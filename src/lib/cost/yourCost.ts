@@ -298,6 +298,8 @@ export interface YourCostModel {
   headcountNoun: 'going' | 'invited'
   /** An honest sentence about the figure (finished trip without your expenses, ...), else null. */
   note: string | null
+  /** The viewer's share of each real expense (base currency, > 0), biggest first. Powers the "what's in it" list on a finished trip. */
+  expenseShares: Array<{ id: string; title: string; share: number }>
   /** 'no_costs': finished trip and the viewer is on no expense. 'not_going': the viewer is not in scope. */
   emptyReason: 'no_costs' | 'not_going' | null
   isEmpty: boolean
@@ -842,12 +844,20 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
   let alreadySpent: number | null = null
   let expensesMissingRate: string[] = []
   let involved = false
+  const expenseShares: Array<{ id: string; title: string; share: number }> = []
   if (expenses.length > 0 && userId) {
     const { balances, expensesMissingRate: missing } = computeBalances([...expenses], [], ledgerIds, base)
     const mine = balances.find((b) => b.userId === userId)
     alreadySpent = fromMinorUnits(mine?.totalOwedMinor ?? 0, base)
     involved = (mine?.totalOwedMinor ?? 0) > 0 || (mine?.totalPaidMinor ?? 0) > 0
     expensesMissingRate = missing
+    // Per-expense share through the same engine (one expense at a time), so the rows add up to the headline.
+    for (const e of expenses) {
+      const one = computeBalances([e], [], ledgerIds, base).balances.find((b) => b.userId === userId)
+      const minor = one?.totalOwedMinor ?? 0
+      if (minor > 0) expenseShares.push({ id: e.id, title: (e.description ?? '').trim() || 'Expense', share: fromMinorUnits(minor, base) })
+    }
+    expenseShares.sort((a, b) => b.share - a.share)
   } else if (userId && input.expenses) {
     alreadySpent = 0
   }
@@ -889,6 +899,7 @@ export function buildYourCost(input: YourCostInput): YourCostModel {
     optionalNotChosen,
     missingRates: [...conv.missing],
     expensesMissingRate,
+    expenseShares,
     failedLines,
     headcountNoun: countNoun(hc.isEstimate, confirmationEnabled),
     note,

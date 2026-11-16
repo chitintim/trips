@@ -11,187 +11,36 @@ export type Comment = Tables<'comments'>
 export type Expense = Tables<'expenses'>
 export type ExpenseSplit = Tables<'expense_splits'>
 export type Invitation = Tables<'invitations'>
-export type InvitationAttempt = Tables<'invitation_attempts'>
 export type TripNote = Tables<'trip_notes'>
 export type TimelineEvent = Tables<'trip_timeline_events'>
 export type ChatMessage = Tables<'trip_chat_messages'>
 export type SiteAnnouncement = Tables<'site_announcements'>
-export type AnnouncementDismissal = Tables<'announcement_dismissals'>
-
-// Insert types (for creating new records)
-export type UserInsert = TablesInsert<'users'>
 export type TripInsert = TablesInsert<'trips'>
-export type TripParticipantInsert = TablesInsert<'trip_participants'>
 export type PlanningSectionInsert = TablesInsert<'planning_sections'>
 export type OptionInsert = TablesInsert<'options'>
-export type SelectionInsert = TablesInsert<'selections'>
-export type CommentInsert = TablesInsert<'comments'>
 export type ExpenseInsert = TablesInsert<'expenses'>
-export type ExpenseSplitInsert = TablesInsert<'expense_splits'>
-export type InvitationInsert = TablesInsert<'invitations'>
-export type InvitationAttemptInsert = TablesInsert<'invitation_attempts'>
 export type TripNoteInsert = TablesInsert<'trip_notes'>
 export type TimelineEventInsert = TablesInsert<'trip_timeline_events'>
 export type TimelineEventUpdate = TablesUpdate<'trip_timeline_events'>
-export type ChatMessageInsert = TablesInsert<'trip_chat_messages'>
 export type SiteAnnouncementInsert = TablesInsert<'site_announcements'>
-export type AnnouncementDismissalInsert = TablesInsert<'announcement_dismissals'>
 
 // Update types (for updating records)
 export type UserUpdate = TablesUpdate<'users'>
 export type TripUpdate = TablesUpdate<'trips'>
-export type TripParticipantUpdate = TablesUpdate<'trip_participants'>
 export type PlanningSectionUpdate = TablesUpdate<'planning_sections'>
 export type OptionUpdate = TablesUpdate<'options'>
-export type SelectionUpdate = TablesUpdate<'selections'>
-export type CommentUpdate = TablesUpdate<'comments'>
 export type ExpenseUpdate = TablesUpdate<'expenses'>
-export type ExpenseSplitUpdate = TablesUpdate<'expense_splits'>
-export type InvitationUpdate = TablesUpdate<'invitations'>
-export type InvitationAttemptUpdate = TablesUpdate<'invitation_attempts'>
-export type TripNoteUpdate = TablesUpdate<'trip_notes'>
-export type SiteAnnouncementUpdate = TablesUpdate<'site_announcements'>
-
-// Enum types
-export type UserRole = Enums<'user_role'>
 export type TripStatus = Enums<'trip_status'>
-export type ParticipantRole = Enums<'participant_role'>
-export type SectionType = Enums<'section_type'>
-export type SectionStatus = Enums<'section_status'>
-export type OptionStatus = Enums<'option_status'>
 export type PriceType = Enums<'price_type'>
 export type NoteType = Enums<'note_type'>
-export type InvitationStatus = Enums<'invitation_status'>
 export type TimelineEventCategory = Enums<'timeline_event_category'>
-export type ChatMessageRole = Enums<'chat_message_role'>
-
-// Extended types with relationships
-export interface TripWithCreator extends Trip {
-  creator?: User
-}
-
-export interface TripWithParticipants extends Trip {
-  participants?: Array<TripParticipant & { user?: User }>
-}
-
-export interface TripFull extends Trip {
-  creator?: User
-  participants?: Array<TripParticipant & { user?: User }>
-}
-
-export interface UserWithTrips extends User {
-  created_trips?: Trip[]
-  participating_trips?: Array<TripParticipant & { trip?: Trip }>
-}
-
-export interface PlanningSectionWithOptions extends PlanningSection {
-  options?: Option[]
-}
 
 export interface OptionWithSelections extends Option {
   selections?: Array<Selection & { user?: User }>
 }
 
-export interface SelectionWithDetails extends Selection {
-  option?: Option
-  user?: User
-}
-
-export interface CommentWithUser extends Comment {
-  user?: User
-}
-
-export interface ExpenseWithSplits extends Expense {
-  splits?: Array<ExpenseSplit & { user?: User }>
-  paid_by_user?: User
-}
-
-export interface ExpenseSplitWithDetails extends ExpenseSplit {
-  expense?: Expense
-  user?: User
-}
-
 export interface TripNoteWithUser extends TripNote {
   user?: User
-}
-
-// Form types
-export interface CreateTripForm {
-  name: string
-  location: string
-  start_date: string
-  end_date: string
-  status?: TripStatus
-}
-
-export interface UpdateTripForm {
-  name?: string
-  location?: string
-  start_date?: string
-  end_date?: string
-  status?: TripStatus
-}
-
-export interface UpdateProfileForm {
-  full_name?: string
-  avatar_url?: string
-}
-
-export interface CreatePlanningSectionForm {
-  trip_id: string
-  section_type: SectionType
-  title: string
-  description?: string
-  order_index?: number
-}
-
-export interface CreateOptionForm {
-  section_id: string
-  title: string
-  description?: string
-  price?: number
-  currency?: string
-  price_type?: PriceType
-  status?: OptionStatus
-  locked?: boolean
-  metadata?: Record<string, any>
-}
-
-export interface CreateSelectionForm {
-  option_id: string
-  metadata?: Record<string, any>
-}
-
-export interface CreateCommentForm {
-  section_id?: string
-  option_id?: string
-  content: string
-}
-
-export interface CreateExpenseForm {
-  trip_id: string
-  amount: number
-  currency?: string
-  description: string
-  receipt_url?: string
-}
-
-export interface CreateExpenseSplitForm {
-  expense_id: string
-  user_id: string
-  amount: number
-}
-
-export interface CreateInvitationForm {
-  trip_id?: string // Optional - admin can assign later
-  max_uses?: number
-  expires_at?: string
-}
-
-export interface CreateTripNoteForm {
-  trip_id: string
-  note_type: NoteType
-  content: string
 }
 
 // Avatar types
@@ -229,15 +78,6 @@ export function isAvatarIconData(data: unknown): data is AvatarIconData {
   )
 }
 
-export interface SignupForm {
-  invitationCode: string
-  email: string
-  password: string
-  firstName: string
-  lastName: string
-  avatarData: AvatarData
-}
-
 // Avatar builder options
 export const AVATAR_EMOJIS = [
   '😊', '😎', '🎿', '⛷️', '🏂', '🥳',
@@ -265,7 +105,3 @@ export const AVATAR_BG_COLORS = [
   { value: '#ef4444', label: 'Red', preview: '#ef4444' },
   { value: '#eab308', label: 'Yellow', preview: '#eab308' },
 ] as const
-
-export type AvatarEmoji = typeof AVATAR_EMOJIS[number]
-export type AvatarAccessory = typeof AVATAR_ACCESSORIES[number]['value']
-export type AvatarBgColor = typeof AVATAR_BG_COLORS[number]['value']

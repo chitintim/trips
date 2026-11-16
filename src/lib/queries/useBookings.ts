@@ -58,18 +58,6 @@ export function useUpdateBooking(tripId: string) {
   })
 }
 
-export function useDeleteBooking(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (id: string) => {
-      const { data, error } = await supabase.from('bookings').delete().eq('id', id).select('id')
-      throwIfError(error)
-      assertRowsAffected(data, "You don't have permission to delete this booking, or it no longer exists.")
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.bookings(tripId) }),
-  })
-}
-
 export interface CancelBookingFollowUps {
   bookingId: string
   /** Delete the linked expense (and unlink it). Omit/false to keep it. */

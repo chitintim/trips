@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
-import { Tables, TablesInsert } from '../../types/database.types'
+import { Tables } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 
 export type AiProposal = Tables<'ai_proposals'>
@@ -19,22 +19,6 @@ export function useProposals(tripId: string | undefined) {
       return data || []
     },
     enabled: !!tripId,
-  })
-}
-
-export function useCreateProposal(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (input: Omit<TablesInsert<'ai_proposals'>, 'trip_id'>) => {
-      const { data, error } = await supabase
-        .from('ai_proposals')
-        .insert({ trip_id: tripId, ...input })
-        .select()
-        .single()
-      if (error) throw error
-      return data
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.proposals(tripId) }),
   })
 }
 

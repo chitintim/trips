@@ -43,14 +43,3 @@ export function useUpdatePlace(tripId: string) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.places(tripId) }),
   })
 }
-
-export function useDeletePlace(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from('places').delete().eq('id', id)
-      if (error) throw error
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.places(tripId) }),
-  })
-}

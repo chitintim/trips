@@ -20,7 +20,7 @@
  * src/lib/money (integer minor units), converted to base-currency minor
  * units using the resolved rate, then summed as integers -- no float drift.
  */
-import { toMinorUnits, fromMinorUnits, sumMinorUnits } from '../../../lib/money'
+import { toMinorUnits, fromMinorUnits } from '../../../lib/money'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
@@ -314,9 +314,4 @@ export function splitOwedAmounts(netBalanceMinor: number, baseCurrency: string):
     return { youOwe: 0, owedToYou: fromMinorUnits(netBalanceMinor, baseCurrency) }
   }
   return { youOwe: fromMinorUnits(-netBalanceMinor, baseCurrency), owedToYou: 0 }
-}
-
-/** Sums a list of minor-unit amounts across possibly-different currencies is never valid -- this guards the group-total display path to same-currency (base) sums only. */
-export function sumBaseCurrencyMinor(amounts: number[]): number {
-  return sumMinorUnits(amounts)
 }

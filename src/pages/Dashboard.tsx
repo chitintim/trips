@@ -1,3 +1,4 @@
+import { dashboardCapacityLabel } from '../lib/capacityText'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -305,7 +306,7 @@ function AdminTripsTab() {
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-sm text-[var(--text-secondary)]">
                         {isConfirmationEnabled(trip)
-                          ? `👥 ${trip.capacity_limit ? `${trip.confirmed_count}/${trip.capacity_limit}` : trip.confirmed_count}`
+                          ? `👥 ${dashboardCapacityLabel(trip.confirmed_count, trip.capacity_limit)}`
                           : '—'}
                       </td>
                       <td className="whitespace-nowrap px-4 py-3 text-right">

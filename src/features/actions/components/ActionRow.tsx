@@ -109,7 +109,7 @@ export function ActionRow({
         )}
         {action.section_id && (
           <p className="text-xs italic text-[var(--text-muted)]">
-            {noLongerNeeded ? '🗳️ No longer needed — vote closed' : '🗳️ Ticks off when you vote'}
+            {noLongerNeeded ? '🗳️ No longer needed — voting has closed' : '🗳️ Ticks off when you vote'}
           </p>
         )}
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--text-muted)]">

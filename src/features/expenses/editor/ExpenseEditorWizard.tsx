@@ -183,7 +183,7 @@ export function ExpenseEditorWizard({
     onClose()
   }
 
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty && !isSaving)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty && !isSaving)
   const requestClose = () => confirmClose(handleClosed)
 
   const participantNames = useMemo(

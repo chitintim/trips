@@ -696,7 +696,7 @@ function CreateInvitationSheet({ isOpen, onClose, trips }: { isOpen: boolean; on
   const initial: InvitationFormValues = { tripId: '', expiresInDays: '7' }
   const { values, updateField, clearDraft } = useFormDraft<InvitationFormValues>('admin-create-invitation', initial)
   const isDirty = !createdCode && JSON.stringify(values) !== JSON.stringify(initial)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const handleCreate = async () => {

@@ -35,7 +35,7 @@ export function AddParticipantModal({
   // prompting a discard-confirm for a form nobody has actually interacted
   // with yet.
   const [touched, setTouched] = useState(false)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(touched)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && touched)
   const handleClose = () => confirmClose(onClose)
 
   useEffect(() => {

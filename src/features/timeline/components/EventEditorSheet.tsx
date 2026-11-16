@@ -120,7 +120,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
   }, [isOpen, event?.id, defaults?.title])
 
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const isSaving = createEvent.isPending || updateEvent.isPending

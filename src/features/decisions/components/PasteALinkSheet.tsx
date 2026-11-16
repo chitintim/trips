@@ -48,7 +48,7 @@ export function PasteALinkSheet({ isOpen, onClose, tripId, onApproved }: PasteAL
   }
 
   const isDirty = url.trim().length > 0
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(closeAndReset)
 
   const handleFetch = async () => {

@@ -69,7 +69,13 @@ describe('computeCostBand', () => {
       breakdown: [{ label: 'Accommodation (estimate)', amount: 500, currency: 'GBP' }],
       headcount: 4,
       isEstimate: false,
+      dependsOnHeadcount: false,
     })
+  })
+
+  it('an organiser-entered per-person accommodation estimate is never headcount-dependent, even with an estimated headcount', () => {
+    const band = computeCostBand({ estimated_accommodation_cost: 1, accommodation_cost_currency: 'GBP' }, [], [], { count: 8, isEstimate: true })
+    expect(band).toMatchObject({ low: 1, high: 1, dependsOnHeadcount: false })
   })
 
   it('splits a total_split option across the in-scope headcount and flags an estimate (tracking off / nobody confirmed)', () => {
@@ -83,7 +89,7 @@ describe('computeCostBand', () => {
       }),
     ]
     const band = computeCostBand(TRIP, sections, [], { count: 6, isEstimate: true })
-    expect(band).toMatchObject({ low: 100, high: 100, headcount: 6, isEstimate: true })
+    expect(band).toMatchObject({ low: 100, high: 100, headcount: 6, isEstimate: true, dependsOnHeadcount: true })
   })
 
   it('a closed poll that ended tied resolves with the shared tie-break (lowest order_index), not array order', () => {

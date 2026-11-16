@@ -146,7 +146,7 @@ export function OptionEditorSheet({ isOpen, onClose, tripId, sectionId, option, 
 
   const seed = option ? fromOption(option) : prefillDraft ? fromDraft(prefillDraft) : EMPTY_VALUES
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const isPending = createOption.isPending || updateOption.isPending || deleteOption.isPending

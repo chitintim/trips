@@ -2,7 +2,7 @@ import ReactMarkdown from 'react-markdown'
 import remarkBreaks from 'remark-breaks'
 import { Badge, Button, Card, CapacityProgressBar, Deadline, StatCard, UserAvatar } from '../../../components/ui'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
-import { formatMoney } from '../../decisions/lib/costImpact'
+import { formatMoney, splitAcrossNote } from '../../decisions/lib/costImpact'
 import { FaqAccordion } from './FaqAccordion'
 import type { CostBand } from '../lib/costBand'
 import type { FaqEntry } from '../lib/autoFaq'
@@ -60,8 +60,10 @@ export function CostBandCard({ costBand, fullCostLink }: { costBand: CostBand | 
         delta={
           [
             costBand.low !== costBand.high ? 'depending on open votes' : null,
-            costBand.isEstimate && costBand.headcount > 0
-              ? `≈ across ${costBand.headcount} ${costBand.headcount === 1 ? 'person' : 'people'}`
+            // Only figures that were actually divided by a headcount carry the
+            // split note; an organiser-entered per-person estimate is shown plainly.
+            costBand.dependsOnHeadcount && costBand.isEstimate && costBand.headcount > 0
+              ? `${splitAcrossNote(costBand.headcount)} (estimate)`
               : null,
           ]
             .filter(Boolean)

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Button, Badge, Deadline, EmptyState, Modal, useToast, SelectionAvatars } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
@@ -177,6 +177,17 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
   const byDate = useMemo(() => groupPlanItemsByDate(items), [items])
   const undatedBySection = useMemo(() => groupUndatedBySection(items), [items])
   const hasUndated = undatedBySection.size > 0
+  // The tray holds every undated question, but a question whose vote has been
+  // closed (section.status 'completed') is DECIDED, not open -- it keeps its
+  // card (outcome + Reopen) under its own "Decided" heading so the "Open
+  // questions (N)" count only ever counts questions still awaiting an answer.
+  const { trayGroups, openCount, decidedCount, firstDecidedIndex } = useMemo(() => {
+    const decided = (sectionId: string | null) => !!sectionId && (sections || []).find((s) => s.id === sectionId)?.status === 'completed'
+    const entries = Array.from(undatedBySection.entries())
+    const open = entries.filter(([id]) => !decided(id))
+    const closed = entries.filter(([id]) => decided(id))
+    return { trayGroups: [...open, ...closed], openCount: open.length, decidedCount: closed.length, firstDecidedIndex: open.length }
+  }, [undatedBySection, sections])
 
   // Same-flight/same-minute travel consolidation (travelGrouping.ts):
   // display-level only — the per-person DB rows are untouched, each day
@@ -396,18 +407,20 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
            read as one crowded pile on the trip color. Now the accent stays on
            the section HEADER only (with an explicit count), and each question
            renders as its own raised card on the neutral surface below. */
-        <section aria-label={`Open questions (${undatedBySection.size})`} className="space-y-2">
+        <section aria-label={openCount > 0 ? `Open questions (${openCount})` : `Decided (${decidedCount})`} className="space-y-2">
           <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-accent-700 dark:text-accent-400">
-              ❔ Open questions ({undatedBySection.size})
-            </h3>
+            {openCount > 0 ? (
+              <h3 className="text-sm font-semibold text-accent-700 dark:text-accent-400">❔ Open questions ({openCount})</h3>
+            ) : (
+              <h3 className="text-sm font-semibold text-[var(--text-primary)]">🏁 Decided ({decidedCount})</h3>
+            )}
             {isOrganizer && onNewQuestion && (
               <Button variant="ghost" size="sm" onClick={onNewQuestion}>
                 + New question
               </Button>
             )}
           </div>
-          {Array.from(undatedBySection.entries()).map(([sectionId, sectionItems]) => {
+          {trayGroups.map(([sectionId, sectionItems], groupIndex) => {
             const section = sectionId ? (sections || []).find((s) => s.id === sectionId) : undefined
             const isMatrix = sectionItems.some((i) => i.isMatrixSection)
             const isPersonalOrder = section ? getDecisionShape(section.metadata) === 'personal' : false
@@ -429,10 +442,15 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
             // badge/chrome, no uppercase label treatment. Sections remain
             // the storage grouping only.
             return (
-              /* One raised card per question: neutral surface + real border +
-                 shadow so adjacent questions can never read as one block. */
+              <Fragment key={sectionId ?? 'none'}>
+              {/* Decided questions follow the open ones under their own heading
+                  (the heading above already says "Decided" when none are open). */}
+              {openCount > 0 && groupIndex === firstDecidedIndex && (
+                <h3 className="pt-1 text-sm font-semibold text-[var(--text-primary)]">🏁 Decided ({decidedCount})</h3>
+              )}
+              {/* One raised card per question: neutral surface + real border +
+                 shadow so adjacent questions can never read as one block. */}
               <div
-                key={sectionId ?? 'none'}
                 className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--surface-raised)] shadow-[var(--shadow-sm)] p-3.5 space-y-2.5"
               >
                 {section && (
@@ -613,6 +631,7 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem, onSche
                   isOrganizer && <ScheduleWinnerAffordance items={sectionItems} onScheduleIt={onScheduleIt} />
                 )}
               </div>
+              </Fragment>
             )
           })}
         </section>

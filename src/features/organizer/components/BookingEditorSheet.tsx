@@ -141,7 +141,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
 
   const seed = fromBooking(booking, baseCurrency)
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const isSaving = createBooking.isPending || updateBooking.isPending || createExpense.isPending || cancelFollowUps.isPending
@@ -459,14 +459,14 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking }: BookingEd
       <Modal isOpen={cancelStep} onClose={() => setCancelStep(false)} size="sm" title="Booking cancelled">
         <div className="space-y-3">
           <p className="text-sm text-[var(--text-secondary)]">
-            This booking has linked records. Nothing is removed unless you tick it — leave unticked to keep them.
+            This booking has linked records. Nothing is removed unless you tick it.
           </p>
           {booking?.expense_id && (
             <label className="flex items-start gap-3 cursor-pointer">
               <input type="checkbox" checked={removeExpense} onChange={(e) => setRemoveExpense(e.target.checked)} className="mt-0.5 w-5 h-5 accent-accent-600" />
               <span className="text-sm text-[var(--text-primary)]">
                 Remove the linked expense
-                <span className="block text-xs text-[var(--text-muted)]">It will leave everyone's balances. Only the payer or an organiser can do this.</span>
+                <span className="block text-xs text-[var(--text-muted)]">It will leave everyone's balances. Only the payer or an organizer can do this.</span>
               </span>
             </label>
           )}

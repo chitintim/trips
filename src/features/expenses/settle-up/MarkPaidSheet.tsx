@@ -66,7 +66,7 @@ export function MarkPaidSheet({ isOpen, onClose, settlement, tripId, toName }: M
     customMethod !== initial.current.customMethod ||
     date !== initial.current.date ||
     note !== initial.current.note
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   if (!settlement) return null

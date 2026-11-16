@@ -204,7 +204,7 @@ export function StatusModal({
   const isDirty = participant
     ? JSON.stringify(values) !== JSON.stringify(seedFromParticipant(participant))
     : false
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
 
   const handleClose = () => confirmClose(onClose)
 

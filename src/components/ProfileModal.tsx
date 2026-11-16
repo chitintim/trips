@@ -99,7 +99,7 @@ export function ProfileModal({ isOpen, onClose, user, onUpdate }: ProfileModalPr
       (avatarTab === 'emoji' && JSON.stringify(avatarData) !== JSON.stringify(user.avatar_data ?? DEFAULT_EMOJI)) ||
       (avatarTab !== initialTabFor(user)) ||
       emailNotificationsEnabled !== (user.email_notifications_enabled ?? true))
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const handleSubmit = async (e: FormEvent) => {

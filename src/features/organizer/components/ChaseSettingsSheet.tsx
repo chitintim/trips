@@ -71,7 +71,7 @@ export function ChaseSettingsSheet({ isOpen, onClose, trip }: ChaseSettingsSheet
   }, [isOpen, trip.id])
 
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const handleSave = async () => {

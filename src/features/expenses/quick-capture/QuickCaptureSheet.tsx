@@ -79,7 +79,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
   // parsed receipt to lose, and leaving it (save, or falling back to
   // manual/full-editor) always means it no longer applies.
   const isConfirmDirty = state.stage === 'confirm'
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isConfirmDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isConfirmDirty)
   const requestClose = () => confirmClose(resetAndClose)
 
   const handleFilePicked = async (file: File) => {

@@ -6,7 +6,7 @@
  * priciest option — "£680–840/person depending on open votes" rather than a
  * single misleadingly-precise number.
  */
-import { getPerPersonCostImpact } from '../../decisions/lib/costImpact'
+import { getPerPersonCostImpact, isHeadcountDivided } from '../../decisions/lib/costImpact'
 import {
   isPersonalOrderSection,
   readOptionPricing,
@@ -31,6 +31,13 @@ export interface CostBand {
   /** People the cost is split across (in-scope headcount) and whether that is an estimate rather than a confirmed count. */
   headcount: number
   isEstimate: boolean
+  /**
+   * True only when at least one figure in the band was computed by dividing a
+   * total by the headcount (total_split / tiered options). The organiser's own
+   * per-person accommodation estimate is NOT divided, so a band built only
+   * from it must not carry any "split across N people" wording.
+   */
+  dependsOnHeadcount: boolean
 }
 
 function leadingOptionForSection(
@@ -109,6 +116,7 @@ export function computeCostBand(
   const breakdown: Array<{ label: string; amount: number; currency: string }> = []
   let low = 0
   let high = 0
+  let dependsOnHeadcount = false
 
   if (trip.estimated_accommodation_cost) {
     breakdown.push({ label: 'Accommodation (estimate)', amount: trip.estimated_accommodation_cost, currency })
@@ -137,6 +145,7 @@ export function computeCostBand(
         metadata: winner.metadata,
       })
       if (impact !== null && winner.currency) {
+        if (isHeadcountDivided(winner.price_type, winner.metadata)) dependsOnHeadcount = true
         low += impact
         high += impact
         breakdown.push({ label: section.title, amount: impact, currency: winner.currency })
@@ -157,6 +166,7 @@ export function computeCostBand(
         metadata: opt.metadata,
       })
       if (impact === null) continue
+      if (isHeadcountDivided(opt.price_type, opt.metadata)) dependsOnHeadcount = true
       sectionLow = Math.min(sectionLow, impact)
       sectionHigh = Math.max(sectionHigh, impact)
       sectionCurrency = opt.currency || sectionCurrency
@@ -192,5 +202,5 @@ export function computeCostBand(
 
   if (breakdown.length === 0) return null
 
-  return { low, high, currency, breakdown, headcount: confirmedCount, isEstimate }
+  return { low, high, currency, breakdown, headcount: confirmedCount, isEstimate, dependsOnHeadcount }
 }

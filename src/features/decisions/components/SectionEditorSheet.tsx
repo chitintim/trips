@@ -69,7 +69,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
 
   const seed = fromSection(section)
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const handleSave = async () => {

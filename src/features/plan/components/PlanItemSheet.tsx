@@ -480,7 +480,7 @@ export function PlanItemSheet({
           <div className="space-y-4">
             {deletingDecidedOption ? (
               <p className="text-sm text-[var(--text-secondary)]">
-                This option is the group's recorded decision. Reopen the decision first, then delete it -- otherwise the runner-up would silently become the decision.
+                This option is the group's recorded decision. Reopen the decision first, then delete it, otherwise the runner-up would silently become the decision.
               </p>
             ) : (
               <p className="text-sm text-[var(--text-secondary)]">This can't be undone.</p>

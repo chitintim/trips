@@ -5,6 +5,8 @@ import {
   formatCostImpact,
   getTierSensitivityLine,
   isTieredCostImpact,
+  isHeadcountDivided,
+  splitAcrossNote,
 } from './costImpact'
 
 describe('getPerPersonCostImpact', () => {
@@ -136,7 +138,19 @@ describe('tier-aware cost impact (UX_REDESIGN.md Part 5, shape 3)', () => {
 
   it('formatCostImpact labels a total_split headcount estimate honestly', () => {
     const base = { price: 3000, currency: 'GBP', priceType: 'total_split' as const, confirmedCount: 10 }
-    expect(formatCostImpact({ ...base, isEstimate: true })).toBe('≈£300/person across 10 people')
+    expect(formatCostImpact({ ...base, isEstimate: true })).toBe('≈ £300 per person (split across 10 people)')
     expect(formatCostImpact(base)).toBe('+£300/person')
+  })
+})
+
+describe('headcount wording helpers', () => {
+  it('only total_split and tiered options are headcount-divided', () => {
+    expect(isHeadcountDivided('total_split')).toBe(true)
+    expect(isHeadcountDivided('per_person_fixed')).toBe(false)
+    expect(isHeadcountDivided('per_person_tiered')).toBe(false)
+  })
+  it('splitAcrossNote pluralises', () => {
+    expect(splitAcrossNote(1)).toBe('split across 1 person')
+    expect(splitAcrossNote(10)).toBe('split across 10 people')
   })
 })

@@ -42,7 +42,7 @@ export function ProposalActionEditSheet({ isOpen, onClose, tripId, action, onSav
     setValues((prev) => ({ ...prev, [key]: e.target.value }))
 
   const isDirty = JSON.stringify(values) !== JSON.stringify(initialValues.current)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const sectionOptions = useMemo(

@@ -153,7 +153,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
   }, [isOpen])
 
   const isDirty = JSON.stringify(values) !== JSON.stringify(seed)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const isSaving = createEvent.isPending || createSection.isPending || bulkCreateOptions.isPending

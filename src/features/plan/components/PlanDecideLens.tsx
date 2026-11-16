@@ -6,6 +6,9 @@ import { useSections, useVotes, useToggleVote } from '../../../lib/queries/usePl
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { DecisionOutcomePanel } from '../../decisions/components/DecisionOutcomePanel'
+import { ReopenDecisionDialog } from '../../decisions/components/ReopenDecisionDialog'
+import { canReopenDecision } from '../../decisions/lib/resolveDecision'
+import { resolveDecidedOptionId } from '../../decisions/lib/closeDecision'
 import { getDecisionShape, sectionHasCatalogPricing } from '../../decisions/lib/decisionShapes'
 import { replaceableSiblingVoteIds, votingInstruction, type VotingMethod } from '../../decisions/lib/voting'
 import { computeQuestionState, formatEntryCardLabel, type QuestionState } from '../lib/responseState'
@@ -258,6 +261,10 @@ function QuestionCard({
   const isClosed = section.status === 'completed'
   const method = (section.voting_method as VotingMethod) || 'single'
   const activeOptionCount = section.options.filter((o) => o.status !== 'cancelled').length
+  // Same entry point (and same gate) as the Plan list tray and PlanItemSheet.
+  const [reopenOpen, setReopenOpen] = useState(false)
+  const canReopen = isOrganizer && !isPersonal && canReopenDecision(section)
+  const decidedId = canReopen ? resolveDecidedOptionId(section, votes) : null
 
   return (
     <div className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--border-default)] bg-[var(--surface-raised)] p-3 space-y-2">
@@ -284,7 +291,21 @@ function QuestionCard({
             {!isClosed && section.vote_deadline && <Deadline date={section.vote_deadline} kind="vote" compact size="sm" />}
           </div>
         </div>
+        {canReopen && (
+          <Button variant="ghost" size="sm" className="shrink-0" onClick={() => setReopenOpen(true)}>
+            Reopen
+          </Button>
+        )}
       </div>
+      {canReopen && (
+        <ReopenDecisionDialog
+          isOpen={reopenOpen}
+          onClose={() => setReopenOpen(false)}
+          tripId={trip.id}
+          section={section}
+          decidedTitle={section.options.find((o) => o.id === decidedId)?.title ?? null}
+        />
+      )}
 
       {isPersonal ? (
         !isClosed && (

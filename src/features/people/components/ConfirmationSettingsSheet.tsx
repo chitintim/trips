@@ -100,7 +100,7 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
       }
     : EMPTY_VALUES
   const isDirty = JSON.stringify(values) !== JSON.stringify(seedForDirtyCheck)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   if (!isOrganizer) return null
@@ -216,7 +216,7 @@ export function ConfirmationSettingsSheet({ isOpen, onClose, tripId, isOrganizer
 
             <div className="grid grid-cols-2 gap-3">
               <Input
-                label="Estimated accommodation cost"
+                label="Estimated accommodation cost per person"
                 type="number"
                 value={values.estimatedCost}
                 onChange={(e) => updateField('estimatedCost', e.target.value)}

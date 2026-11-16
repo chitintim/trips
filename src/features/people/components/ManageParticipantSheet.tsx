@@ -94,7 +94,7 @@ export function ManageParticipantSheet({
     }
     try {
       await setActive.mutateAsync({ userId: participant.user_id, active: false })
-      showToast({ type: 'success', message: `${name} removed from the trip.`, description: 'Their past expenses stay in the ledger; add them back any time.' })
+      showToast({ type: 'success', message: `${name} removed from the trip`, description: 'Their past expenses stay in the ledger; add them back any time.' })
       onClose()
     } catch (err) {
       showToast({ type: 'error', message: 'Could not remove participant', description: err instanceof Error ? err.message : undefined })

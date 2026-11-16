@@ -25,13 +25,29 @@ export interface CostImpactInput {
   confirmedCount: number
   /** Option metadata — read for `price_tiers` (shape 3). Optional/omittable everywhere price_type-based pricing is all that's needed. */
   metadata?: Json | null
-  /** True when `confirmedCount` is an in-scope headcount estimate (RSVP tracking off, or nobody confirmed yet) rather than a real confirmed count. total_split figures then read "≈ £X per person across N people". */
+  /** True when `confirmedCount` is an in-scope headcount estimate (RSVP tracking off, or nobody confirmed yet) rather than a real confirmed count. total_split figures then read "≈ £X per person (split across N people)". */
   isEstimate?: boolean
 }
 
 /** True when this option's metadata carries at least one price tier — tiered pricing takes over from price/price_type when present. */
 export function isTieredCostImpact(metadata: Json | null | undefined): boolean {
   return readPriceTiers(metadata).length > 0
+}
+
+/**
+ * True when this option's per-person figure is a total divided by a
+ * headcount (total_split, or tiered group pricing) rather than a price that
+ * is already per person. Only these figures need "split across N people"
+ * wording -- a per-person price (or an organiser-entered per-person
+ * estimate) must never be decorated with headcount text.
+ */
+export function isHeadcountDivided(priceType: PriceType, metadata?: Json | null): boolean {
+  return priceType === 'total_split' || isTieredCostImpact(metadata)
+}
+
+/** "split across 10 people" -- the one phrasing for a headcount-divided figure (used inside parentheses or after an amount). */
+export function splitAcrossNote(count: number): string {
+  return `split across ${count} ${count === 1 ? 'person' : 'people'}`
 }
 
 /**
@@ -114,7 +130,7 @@ export function formatCostImpact(input: CostImpactInput): string | null {
   }
 
   if (input.isEstimate && input.priceType === 'total_split' && input.confirmedCount > 0) {
-    return `≈${formatMoney(perPerson, input.currency)}/person across ${input.confirmedCount} ${input.confirmedCount === 1 ? 'person' : 'people'}`
+    return `≈ ${formatMoney(perPerson, input.currency)} per person (${splitAcrossNote(input.confirmedCount)})`
   }
 
   return `+${formatMoney(perPerson, input.currency)}/person`

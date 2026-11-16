@@ -44,7 +44,7 @@ export function PaymentDetailsSheet({ isOpen, onClose, currentPaymentDetails }: 
   }, [isOpen, currentPaymentDetails])
 
   const isDirty = JSON.stringify(rails) !== JSON.stringify(initial.current.rails) || notes !== (initial.current.notes ?? '')
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const updateRail = (index: number, patch: Partial<PaymentRail>) => {

@@ -94,7 +94,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
       status !== editTrip.status ||
       isPublic !== editTrip.is_public
     : !!(name || location || startDate || endDate || candidates.some((c) => c.start || c.end) || estimatedCost)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty && !saving)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty && !saving)
 
   const reset = () => {
     setStep('basics')

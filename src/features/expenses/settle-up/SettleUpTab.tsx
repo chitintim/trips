@@ -296,8 +296,8 @@ export function SettleUpTab({ trip }: SettleUpTabProps) {
       {leftPeople.length > 0 && (
         <Card variant="sunken" noPadding className="p-3.5">
           <p className="text-sm text-[var(--text-secondary)]">
-            {leftPeople.map((p) => p.name).join(', ')} left the trip but {leftPeople.length === 1 ? 'is' : 'are'} still part of the
-            expenses and payments below, so balances stay complete.
+            {leftPeople.map((p) => p.name).join(', ')} left the trip. Their expenses and payments below still
+            count, so balances stay complete.
           </p>
         </Card>
       )}

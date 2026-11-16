@@ -83,7 +83,7 @@ export function NudgeDraftSheet({ isOpen, onClose, tripId, targetUserId, targetN
   }, [isOpen, tripId, targetUserId, targetName, blocker])
 
   const isDirty = message !== baselineMessage.current
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const handleCopy = async () => {

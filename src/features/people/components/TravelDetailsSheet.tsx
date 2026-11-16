@@ -84,7 +84,7 @@ export function TravelDetailsSheet({ isOpen, onClose, tripId }: TravelDetailsShe
     departure: legFromEvent(existing.departure),
   }
   const isDirty = JSON.stringify(values) !== JSON.stringify(seedForDirtyCheck)
-  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
   const firstName = userRow?.first_name || userRow?.full_name?.split(' ')[0] || 'You'

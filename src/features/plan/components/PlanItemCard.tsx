@@ -1,7 +1,7 @@
 import { Badge, Button, Deadline, SelectionAvatars } from '../../../components/ui'
 import { PlaceChip } from '../../places/components/PlaceChip'
 import { CATEGORY_CONFIG, formatTimeRange } from '../../timeline/lib/categoryConfig'
-import { formatMoney } from '../../decisions/lib/costImpact'
+import { formatMoney, splitAcrossNote } from '../../decisions/lib/costImpact'
 import { areVotesVisible } from '../../decisions/lib/voting'
 import type { PlanItem } from '../lib/planItems'
 import type { OptionVoteWithUser } from '../../../lib/queries/usePlanning'
@@ -247,9 +247,11 @@ export function PlanItemCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-2">
             {item.costImpact?.perPerson != null && item.costImpact.currency && (
               <Badge variant="info" size="sm">
-                {item.costImpact.isTiered || item.costImpact.isEstimate ? '≈' : '+'}
-                {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}/person
-                {item.costImpact.isEstimate && item.costImpact.headcount > 0 ? ` across ${item.costImpact.headcount} ${item.costImpact.headcount === 1 ? 'person' : 'people'}` : ''}
+                {item.costImpact.isEstimate ? '≈ ' : item.costImpact.isTiered ? '≈' : '+'}
+                {formatMoney(item.costImpact.perPerson, item.costImpact.currency)}
+                {item.costImpact.isEstimate && item.costImpact.headcount > 0
+                  ? ` per person (${splitAcrossNote(item.costImpact.headcount)})`
+                  : '/person'}
               </Badge>
             )}
             {item.expenseId && (

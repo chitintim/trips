@@ -8,13 +8,13 @@ import { useEffect, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../../lib/supabase'
 import type { RealtimeChannel } from '@supabase/supabase-js'
-import type { ExpenseLineItem, ExpenseItemClaim } from '../../../lib/queries/useExpenses'
+import type { ClaimRow, LineRow } from './claimMath'
 import type { Expense, User } from '../../../types'
 
 export interface ClaimLinkResolution {
   expense: Expense
-  lineItems: ExpenseLineItem[]
-  claims: Array<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_url' | 'avatar_data'> }>
+  lineItems: LineRow[]
+  claims: Array<ClaimRow & { user: Pick<User, 'id' | 'full_name' | 'avatar_url' | 'avatar_data'> }>
   tripId: string
   code: string
   expiresAt: string | null
@@ -39,7 +39,7 @@ export function useClaimLink(code: string | undefined) {
           supabase.from('expense_line_items').select('*').eq('expense_id', link.expense_id).order('line_number'),
           supabase
             .from('expense_item_claims')
-            .select('*, user:user_id (id, full_name, avatar_url, avatar_data)')
+            .select('*, user:users!expense_item_claims_user_id_fkey (id, full_name, avatar_url, avatar_data)')
             .eq('expense_id', link.expense_id),
         ])
 
@@ -49,7 +49,7 @@ export function useClaimLink(code: string | undefined) {
 
       return {
         expense: expense as Expense,
-        lineItems: lineItems || [],
+        lineItems: (lineItems || []) as LineRow[],
         claims: (claims || []) as ClaimLinkResolution['claims'],
         tripId: link.trip_id,
         code: link.code,

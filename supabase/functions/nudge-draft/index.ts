@@ -15,8 +15,9 @@ import { handleCorsPreflight } from '../_shared/cors.ts'
 import { errorResponse, jsonResponse } from '../_shared/errors.ts'
 import { callerClient, requireUser, requireTripParticipant } from '../_shared/supabaseClients.ts'
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
-import { createMessage, padForCaching, CLAUDE_MODEL } from '../_shared/anthropic.ts'
-import { logAiUsage } from '../_shared/usage.ts'
+import { createMessage, extractText, MODEL_NUDGE_DRAFT } from '../_shared/anthropic.ts'
+import { AiCallError } from '../_shared/aiError.ts'
+import { logAiUsage, logBilledFailure } from '../_shared/usage.ts'
 import {
   NudgeDraftRequestSchema,
   NudgeDraftResponseSchema,
@@ -131,12 +132,15 @@ ${request.tone_hint ? `Tone hint from the organizer: ${request.tone_hint}` : ''}
 Draft the nudge message now.`
 
     const response = await createMessage({
-      model: CLAUDE_MODEL,
-      max_tokens: 1024,
+      // Haiku 5.5, text only. Thinking counts toward max_tokens, so leave room
+      // for it above the ~300-token draft even at effort low.
+      model: MODEL_NUDGE_DRAFT,
+      max_tokens: 2048,
+      timeoutMs: 30_000,
       system: [
         {
           type: 'text',
-          text: padForCaching(SYSTEM_PROMPT_STATIC),
+          text: SYSTEM_PROMPT_STATIC,
           cache_control: { type: 'ephemeral' },
         },
       ],
@@ -145,14 +149,21 @@ Draft the nudge message now.`
         effort: 'low',
         format: { type: 'json_schema', schema: NudgeDraftResponseJsonSchema.schema as Record<string, unknown>},
       },
+    }).catch(async (callError) => {
+      // Charged but unusable (max_tokens / refusal): still record the spend.
+      await logBilledFailure({ userId: user.id, tripId: request.trip_id, functionName: 'nudge-draft', error: callError })
+      throw callError
     })
 
     await logAiUsage({ userId: user.id, tripId: request.trip_id, functionName: 'nudge-draft', model: response.model, usage: response.usage })
 
-    const textBlock = response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
-    if (!textBlock?.text) throw new Error('No content in Claude response')
-
-    const draft = NudgeDraftResponseSchema.parse(JSON.parse(textBlock.text))
+    let draft: ReturnType<typeof NudgeDraftResponseSchema.parse>
+    try {
+      draft = NudgeDraftResponseSchema.parse(JSON.parse(extractText(response)))
+    } catch (parseError) {
+      if (parseError instanceof AiCallError) throw parseError
+      throw new AiCallError('unreadable', 'response did not match NudgeDraftResponse', "Couldn't draft that message. Please try again.")
+    }
 
     // Never trust model-authored links/ids: override with computed values.
     const result = {

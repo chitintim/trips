@@ -497,3 +497,38 @@ describe('isFullySettled with folded settlement_carryovers', () => {
     expect(isFullySettled(people, expenses, [], 'GBP', carryovers)).toBe(false)
   })
 })
+
+describe('suggestions with unclaimed receipt value (the payer\'s pending bucket)', () => {
+  const people: SettleUpPerson[] = [
+    { userId: 'alice', name: 'Alice' },
+    { userId: 'bob', name: 'Bob' },
+    { userId: 'cy', name: 'Cy' },
+  ]
+  const line = (id: string, total: number) => ({ id, quantity: 1, total_amount: total })
+  const claim = (id: string, lineId: string, userId: string, owed: number) => ({ id, line_item_id: lineId, user_id: userId, quantity_claimed: 1, amount_owed: owed })
+  // 120 dinner paid by alice: bob 24, cy 24, alice 24; 48 unclaimed.
+  const dinner = makeExpense({
+    id: 'din',
+    amount: 120,
+    paid_by: 'alice',
+    ai_parsed: true,
+    status: 'pending_allocation',
+    line_items: [line('a', 24), line('b', 24), line('c', 24), line('d', 48)] as never,
+    claims: [claim('1', 'a', 'bob', 24), claim('2', 'b', 'cy', 24), claim('3', 'c', 'alice', 24)] as never,
+  })
+
+  it.each([true, false])('asks only for what people actually owe (simplify=%s): no phantom credit for the payer', (simplify) => {
+    const t = computeSuggestedPayments([dinner], [], people, 'GBP', simplify)
+    expect(t.map((x) => [x.from, x.to, x.amount]).sort()).toEqual([['bob', 'alice', 24], ['cy', 'alice', 24]])
+  })
+
+  it('computeRemainingSuggestions and isFullySettled use the corrected balances too', () => {
+    const paid: Settlement[] = [
+      { id: 's1', trip_id: 'trip-1', from_user_id: 'bob', to_user_id: 'alice', amount: 24, currency: 'GBP', status: 'marked_paid', created_at: '2026-08-02T00:00:00Z', settled_at: '2026-08-02T00:00:00Z', created_by: 'bob', notes: null, payment_method: null },
+      { id: 's2', trip_id: 'trip-1', from_user_id: 'cy', to_user_id: 'alice', amount: 24, currency: 'GBP', status: 'confirmed', created_at: '2026-08-02T00:00:00Z', settled_at: '2026-08-02T00:00:00Z', created_by: 'cy', notes: null, payment_method: null },
+    ] as Settlement[]
+    expect(computeRemainingSuggestions([dinner], paid, people, 'GBP', true)).toEqual([])
+    // Once both payments are confirmed the payer is square: before the fix alice would still be "owed" the unclaimed 48.
+    expect(isFullySettled(people, [dinner], paid.map((p) => ({ ...p, status: 'confirmed' })) as Settlement[], 'GBP')).toBe(true)
+  })
+})

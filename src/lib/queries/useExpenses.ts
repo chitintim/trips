@@ -5,6 +5,7 @@ import { Expense, ExpenseSplit, ExpenseInsert, ExpenseUpdate, User } from '../..
 import { Tables, TablesInsert } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { assertRowsAffected } from './assertRowsAffected'
+import { toMinorUnits } from '../money'
 
 export type ExpenseLineItem = Tables<'expense_line_items'>
 export type ExpenseItemClaim = Tables<'expense_item_claims'>
@@ -62,7 +63,7 @@ export function useExpenses(tripId: string | undefined) {
         itemizedExpenseIds.length > 0
           ? supabase
               .from('expense_item_claims')
-              .select('*, user:user_id (id, full_name, avatar_url, avatar_data)')
+              .select('*, user:users!expense_item_claims_user_id_fkey (id, full_name, avatar_url, avatar_data)')
               .in('expense_id', itemizedExpenseIds)
           : emptyResult<ExpenseItemClaim & { user: Pick<User, 'id' | 'full_name' | 'avatar_url' | 'avatar_data'> }>(),
         itemizedExpenseIds.length > 0
@@ -426,11 +427,210 @@ export function useConvertFromItemizedExpense(tripId: string) {
   })
 }
 
+// ---------------------------------------------------------------------------
+// Receipt claims v2: RPC helpers. The functions below are added by the
+// receipt-claims migration; the front end may ship before it is applied, so
+// every caller probes once (useReceiptRpcSupport) and fails soft.
+// ---------------------------------------------------------------------------
+
+interface RpcError {
+  code?: string
+  message: string
+}
+async function callRpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: RpcError | null }> {
+  const client = supabase as unknown as {
+    rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: RpcError | null }>
+  }
+  return client.rpc(fn, args)
+}
+
+function isMissingRpc(error: RpcError | null): boolean {
+  if (!error) return false
+  const msg = error.message || ''
+  return error.code === 'PGRST202' || error.code === '42883' || error.code === '404' || /could not find the function|does not exist/i.test(msg)
+}
+
+function isNetworkError(error: RpcError | null): boolean {
+  return !!error && !error.code && /failed to fetch|network|load failed/i.test(error.message || '')
+}
+
+const NIL_UUID = '00000000-0000-0000-0000-000000000000'
+
+export interface ReceiptRpcSupport {
+  /** `set_receipt_claims` exists: "Who had what", shared claims. */
+  setClaims: boolean
+  /** `share_receipt_leftovers` exists: the leftovers sheet. */
+  leftovers: boolean
+}
+
 /**
- * Save a claimer's item claims on the public claim-link page: replace
- * their existing claims for this expense, then recompute + persist the
- * expense's allocation status ('allocated' when every item is fully
- * claimed, else 'pending_allocation'). Mirrors ClaimItemsPage's save flow.
+ * Probes ONCE per session whether the receipt-claims functions exist, by
+ * calling each with a nil expense id (it is refused with a normal error when
+ * the function exists, and with "could not find the function" when it does
+ * not). While the answer is unknown (loading, offline) both read as false, so
+ * the new actions stay hidden and today's own-claim behaviour keeps working.
+ */
+export function useReceiptRpcSupport(): ReceiptRpcSupport {
+  const { data } = useQuery({
+    queryKey: ['receiptRpcSupport'] as const,
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: 1,
+    queryFn: async (): Promise<ReceiptRpcSupport> => {
+      const [a, b] = await Promise.all([
+        callRpc('set_receipt_claims', { p_expense_id: NIL_UUID, p_claims: [] }),
+        callRpc('share_receipt_leftovers', { p_expense_id: NIL_UUID, p_mode: 'everyone', p_user_id: null, p_preview: true }),
+      ])
+      if (isNetworkError(a.error) || isNetworkError(b.error)) throw new Error('Could not check receipt claim support')
+      return { setClaims: !isMissingRpc(a.error), leftovers: !isMissingRpc(b.error) }
+    },
+  })
+  return data ?? { setClaims: false, leftovers: false }
+}
+
+function invalidateReceiptQueries(queryClient: ReturnType<typeof useQueryClient>, expenseId: string) {
+  queryClient.invalidateQueries({ queryKey: ['expenseClaims', expenseId] })
+  queryClient.invalidateQueries({ queryKey: ['expense', expenseId] })
+  // ClaimPage reads from useClaimLink's ['claimLink', code] cache (we don't
+  // have the share code here, so match every entry).
+  queryClient.invalidateQueries({ queryKey: ['claimLink'] })
+  // Trip expenses (claims included) feed the to-dos, balances and settle-up,
+  // so one predicate covers the expenses / settlements / to-do snapshots.
+  queryClient.invalidateQueries({
+    predicate: (q) =>
+      q.queryKey[0] === 'trip' && (q.queryKey[2] === 'expenses' || q.queryKey[2] === 'settlements' || q.queryKey[2] === 'actions'),
+  })
+}
+
+/** One line's new owners. user_ids = that line shared equally between those people ([] clears it). */
+export type ReceiptClaimEntry =
+  | { line_item_id: string; user_ids: string[]; shared_by_all?: undefined }
+  | { line_item_id: string; shared_by_all: true; user_ids?: undefined }
+
+/**
+ * "Who had what": replaces, per listed line, who is paying for it. Lines you
+ * do not list are untouched, so sending only the lines that changed is safe
+ * to retry. The payer and anyone who can manage the trip may do this for
+ * others; anyone may do it for lines they share in.
+ */
+export function useSetReceiptClaims() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ expenseId, claims }: { expenseId: string; claims: ReceiptClaimEntry[] }) => {
+      const { data, error } = await callRpc('set_receipt_claims', { p_expense_id: expenseId, p_claims: claims })
+      if (error) throw Object.assign(new Error(error.message), { hint: (error as { hint?: string }).hint, code: (error as { code?: string }).code })
+      return data
+    },
+    onSuccess: (_d, vars) => invalidateReceiptQueries(queryClient, vars.expenseId),
+  })
+}
+
+/** `same` repeats the last mode used for this receipt (re-run after someone edits their claims). */
+export type LeftoverMode = 'everyone' | 'person' | 'payer' | 'same'
+
+export interface LeftoverShare {
+  userId: string
+  /** What this person is charged from the leftovers, minor units. */
+  amountMinor: number
+  /** What they had already claimed, minor units (when the server says). */
+  alreadyClaimedMinor: number | null
+  /** Their total on the receipt afterwards, minor units (when the server says). */
+  totalAfterMinor: number | null
+}
+export interface LeftoversResult {
+  shares: LeftoverShare[]
+  /** Unclaimed value being placed, minor units. */
+  totalMinor: number | null
+  /** An even share of the bill, minor units, when the server says. */
+  evenShareMinor: number | null
+}
+
+function normalizeLeftovers(raw: unknown, currency: string): LeftoversResult {
+  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+  const minor = (v: unknown): number | null => (typeof v === 'number' ? toMinorUnits(v, currency) : null)
+  const shares: LeftoverShare[] = []
+  if (Array.isArray(obj.people)) {
+    for (const item of obj.people as Array<Record<string, unknown>>) {
+      const userId = item.user_id as string | undefined
+      if (!userId) continue
+      shares.push({
+        userId,
+        amountMinor: minor(item.amount) ?? 0,
+        alreadyClaimedMinor: minor(item.already_claimed),
+        totalAfterMinor: minor(item.total_after),
+      })
+    }
+  }
+  return { shares, totalMinor: minor(obj.unclaimed_total), evenShareMinor: minor(obj.even_share) }
+}
+
+export interface ShareLeftoversArgs {
+  expenseId: string
+  mode: LeftoverMode
+  /** Required for mode 'person'. */
+  userId?: string | null
+  /** Currency of the expense, to read amounts the server sends in major units. */
+  currency?: string
+}
+
+/** Preview of who would get what (writes nothing). */
+export async function previewLeftovers({ expenseId, mode, userId, currency = 'GBP' }: ShareLeftoversArgs): Promise<LeftoversResult> {
+  const { data, error } = await callRpc('share_receipt_leftovers', {
+    p_expense_id: expenseId,
+    p_mode: mode,
+    p_user_id: userId ?? null,
+    p_preview: true,
+  })
+  if (error) throw new Error(error.message)
+  return normalizeLeftovers(data, currency)
+}
+
+/** Query wrapper for the preview, used by the leftovers sheet. */
+export function useLeftoversPreview(args: ShareLeftoversArgs | null) {
+  return useQuery({
+    queryKey: ['leftoversPreview', args?.expenseId, args?.mode, args?.userId ?? null] as const,
+    queryFn: () => previewLeftovers(args as ShareLeftoversArgs),
+    enabled: !!args && (args.mode !== 'person' || !!args.userId),
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+  })
+}
+
+/**
+ * Places a receipt's unclaimed value on people for real (payer / managers).
+ * `mutateAsync({ expenseId, mode: 'everyone' | 'person' | 'payer', userId? })`
+ * resolves to the same shape the preview returns. Used by the leftovers sheet
+ * and by the Freeze dialog.
+ */
+export function useShareLeftovers() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ expenseId, mode, userId, currency = 'GBP' }: ShareLeftoversArgs): Promise<LeftoversResult> => {
+      const { data, error } = await callRpc('share_receipt_leftovers', {
+        p_expense_id: expenseId,
+        p_mode: mode,
+        p_user_id: userId ?? null,
+        p_preview: false,
+      })
+      if (error) throw new Error(error.message)
+      return normalizeLeftovers(data, currency)
+    },
+    onSuccess: (_d, vars) => invalidateReceiptQueries(queryClient, vars.expenseId),
+  })
+}
+
+/**
+ * Save a person's OWN item claims (whole-unit steppers) on the claim page.
+ * When `lineItemIds` is given only those lines are replaced -- the person's
+ * shared / leftover rows on other lines are left alone. Without it, every
+ * claim they have on the expense is replaced (the old behaviour). Then
+ * recomputes + persists the expense's allocation status.
+ *
+ * The receipt-claims RPC is for the payer / managers recording who had what
+ * for others, and replaces a whole line with an equal share between people, so
+ * it cannot express "2 of the 3 beers". A person's own whole-unit claims keep
+ * this direct path (allowed by the claims policy for your own rows).
  */
 export function useSaveItemClaims() {
   const queryClient = useQueryClient()
@@ -439,16 +639,19 @@ export function useSaveItemClaims() {
       expenseId,
       userId,
       claims,
+      lineItemIds,
     }: {
       expenseId: string
       userId: string
       claims: Array<Pick<TablesInsert<'expense_item_claims'>, 'line_item_id' | 'quantity_claimed' | 'amount_owed'>>
+      lineItemIds?: string[]
     }) => {
-      const { error: delError } = await supabase
-        .from('expense_item_claims')
-        .delete()
-        .eq('expense_id', expenseId)
-        .eq('user_id', userId)
+      let del = supabase.from('expense_item_claims').delete().eq('expense_id', expenseId).eq('user_id', userId)
+      if (lineItemIds) {
+        if (lineItemIds.length === 0 && claims.length === 0) return { allClaims: [], status: undefined }
+        del = del.in('line_item_id', lineItemIds)
+      }
+      const { error: delError } = await del
       if (delError) throw delError
 
       if (claims.length > 0) {
@@ -480,23 +683,6 @@ export function useSaveItemClaims() {
 
       return { allClaims, status: newStatus }
     },
-    onSuccess: (_data, vars) => {
-      queryClient.invalidateQueries({ queryKey: ['expenseClaims', vars.expenseId] })
-      queryClient.invalidateQueries({ queryKey: ['expense', vars.expenseId] })
-      // ClaimPage/ClaimMatrix actually read from useClaimLink's
-      // ['claimLink', code] cache, not ['expense', ...] -- without this,
-      // a user's OWN successful save only refreshed their own screen's
-      // available/maxQty numbers via the realtime postgres_changes
-      // side-channel (useClaimData.ts), which is fragile if realtime lags
-      // or is briefly disconnected. Partial key match invalidates every
-      // ['claimLink', *] entry (we don't have the share code here).
-      queryClient.invalidateQueries({ queryKey: ['claimLink'] })
-      // The to-dos snapshot reads the trip's expenses list (claims included), so
-      // a claim must clear its "Claim your items" to-do straight away. The hook
-      // has no trip id (the public claim page), so match every trip's list.
-      queryClient.invalidateQueries({
-        predicate: (q) => q.queryKey.length === 3 && q.queryKey[0] === 'trip' && q.queryKey[2] === 'expenses',
-      })
-    },
+    onSuccess: (_data, vars) => invalidateReceiptQueries(queryClient, vars.expenseId),
   })
 }

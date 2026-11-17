@@ -1,7 +1,7 @@
 // Reorganize Plan Edge Function (NEW, UPGRADE_MASTER_PLAN.md §13 build
 // brief): the "tidy up my messy plan" entry point. Input {trip_id,
 // instructions?, context_text?} -> reads the trip's sections/options/
-// timeline under the CALLER's JWT -> asks claude-sonnet-5 for a batch of
+// timeline under the CALLER's JWT -> asks MODEL_REORGANIZE_PLAN (claude-sonnet-5-5, effort medium) for a batch of
 // ProposedAction suggestions against the full aiProposal contract (create/
 // update/move sections & options, never a silent delete) -> chunks the
 // result into <=20-action proposals (<=60 actions total) -> inserts each
@@ -20,10 +20,18 @@ import { handleCorsPreflight } from '../_shared/cors.ts'
 import { errorResponse, jsonResponse, ForbiddenError, ValidationError } from '../_shared/errors.ts'
 import { callerClient, requireUser, requireTripParticipant, isTripOrganizer } from '../_shared/supabaseClients.ts'
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
-import { createMessage, padForCaching, CLAUDE_MODEL } from '../_shared/anthropic.ts'
-import { logAiUsage } from '../_shared/usage.ts'
+import { createMessageStreamed, extractText, MODEL_REORGANIZE_PLAN } from '../_shared/anthropic.ts'
+import { AiCallError } from '../_shared/aiError.ts'
+import { logAiUsage, logBilledFailure } from '../_shared/usage.ts'
 import { ProposalSchema, ProposedActionSchema, ProposedActionJsonSchema, type ProposedAction } from '../_shared/contracts/aiProposal.ts'
 
+/**
+ * Whole-call budget for the model (first attempt + the one retry), measured from when the
+ * call starts. The Supabase edge request limit is 150 s (platform setting, not an API fact);
+ * 135 s leaves room for the snapshot reads before and the proposal inserts after. A 120 s
+ * attempt plus a retry used to be able to run past it.
+ */
+const MODEL_BUDGET_MS = 135_000
 const MAX_ACTIONS_TOTAL = 60
 const MAX_ACTIONS_PER_PROPOSAL = 20
 /** Action types that carry a `trip_id` field the model is asked to fill in -- always force-overwritten with the request's real trip_id before validation, never trusted from the model (same defensive posture as nudge-draft's deep_link). */
@@ -228,13 +236,19 @@ Deno.serve(async (req) => {
     }
     userPromptParts.push('Propose the reorganization now.')
 
-    const response = await createMessage({
-      model: CLAUDE_MODEL,
+    // Streamed under the hood: up to 16k output tokens can outlast a buffered
+    // request; a stall or overload mid-stream is retried once from scratch.
+    let response: Awaited<ReturnType<typeof createMessageStreamed>>
+    try {
+    response = await createMessageStreamed({
+      model: MODEL_REORGANIZE_PLAN,
       max_tokens: 16000,
+      timeoutMs: 120_000,
+      deadlineAt: Date.now() + MODEL_BUDGET_MS,
       system: [
         {
           type: 'text',
-          text: padForCaching(SYSTEM_PROMPT_STATIC),
+          text: SYSTEM_PROMPT_STATIC,
           cache_control: { type: 'ephemeral' },
         },
       ],
@@ -259,13 +273,21 @@ Deno.serve(async (req) => {
         effort: 'medium',
       },
     })
+    } catch (callError) {
+      // Charged but unusable (max_tokens, refusal, dead stream): still counts towards spend.
+      await logBilledFailure({ userId: user.id, tripId, functionName: 'reorganize-plan', error: callError })
+      throw callError
+    }
 
     await logAiUsage({ userId: user.id, tripId, functionName: 'reorganize-plan', model: response.model, usage: response.usage })
 
-    const textBlock = response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
-    if (!textBlock?.text) throw new Error('No content in Claude response')
-
-    const parsedOutput = JSON.parse(textBlock.text) as { actions?: unknown[] }
+    let parsedOutput: { actions?: unknown[] }
+    try {
+      parsedOutput = JSON.parse(extractText(response)) as { actions?: unknown[] }
+    } catch (parseError) {
+      if (parseError instanceof AiCallError) throw parseError
+      throw new AiCallError('unreadable', 'response was not JSON', "Couldn't read the suggested plan. Please try again.")
+    }
     const rawActions = Array.isArray(parsedOutput.actions) ? parsedOutput.actions : []
 
     const { valid, droppedCount } = sanitizeAndValidate(rawActions, tripId)

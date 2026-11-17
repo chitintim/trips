@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Modal, Button, Stepper, Skeleton, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import {
@@ -66,6 +67,7 @@ export function ExpenseEditorWizard({
 }: ExpenseEditorWizardProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
+  const navigate = useNavigate()
   const { data: timelineEvents = [] } = useTimeline(trip.id)
   const createExpense = useCreateExpense(trip.id)
   const updateExpense = useUpdateExpense(trip.id)
@@ -394,6 +396,7 @@ export function ExpenseEditorWizard({
         rate_source: fx.rate_source,
       }
 
+      let goToWhoHadWhat: string | null = null
       if (isEditMode && editingExpense) {
         // UPDATE the record being edited -- never insert a new one (that
         // was the bug: this always called the create/insert path
@@ -410,7 +413,8 @@ export function ExpenseEditorWizard({
           allocationCode: code,
           createdBy: user.id,
         })
-        showToast({ type: 'success', message: 'Itemized expense updated', description: `Share code: ${result.code}` })
+        showToast({ type: 'success', message: 'Itemized expense updated' })
+        goToWhoHadWhat = result.code
       } else {
         const code = generateLinkCode()
         const created = await createItemizedExpense.mutateAsync({
@@ -420,10 +424,15 @@ export function ExpenseEditorWizard({
           createdBy: user.id,
         })
         logActivity({ verb: 'expense_added', entity: { type: 'expense', id: created.id, label: created.description } })
-        showToast({ type: 'success', message: 'Itemized expense created', description: `Share code: ${code}` })
+        showToast({ type: 'success', message: 'Itemized expense created' })
+        goToWhoHadWhat = code
       }
       clearDraft()
       handleClosed()
+      // Straight on to "who had what" (the payer's phone at the table); the
+      // claim screen shows it to the payer / organizers and the plain claim
+      // list to anyone else.
+      if (goToWhoHadWhat) navigate(`/claim/${encodeURIComponent(goToWhoHadWhat)}?assign=1`)
       return true
     } catch (err) {
       showToast({ type: 'error', message: 'Failed to save itemized expense', description: err instanceof Error ? err.message : undefined })

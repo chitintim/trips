@@ -16,6 +16,16 @@
  * via `expensesMissingRate`, so callers can render a prominent "N expenses
  * missing FX rates" warning chip instead of a silently wrong number.
  *
+ * Unclaimed itemised value (receipts 2026-11): money on a receipt that nobody
+ * has claimed is owed by nobody, so it used to leave the ledger summing to +U
+ * with the payer silently absorbing it. It is now the payer's own share until
+ * it is shared (`pendingUnclaimedMinor`, per person and per receipt), so the
+ * ledger always sums to exactly zero and the payer's credit never includes
+ * money no one owes. Rounding dust (claims that differ from the line value by
+ * pennies) goes to the same bucket and is exposed as `dustMinor`; what any
+ * claimer owes is never changed. Fully claimed receipts without dust compute
+ * exactly as before.
+ *
  * All arithmetic here is done in the expense's own currency exponent via
  * src/lib/money (integer minor units), converted to base-currency minor
  * units using the resolved rate, then summed as integers -- no float drift.
@@ -34,10 +44,78 @@ export interface ParticipantBalance {
   settlementsReceivedMinor: number
   netBalanceMinor: number
   isBalanced: boolean
+  /**
+   * Part of `totalOwedMinor`: itemised-receipt value nobody has claimed (yet),
+   * counted as the PAYER's own share until it is shared, plus rounding dust.
+   * Always 0 for people who paid for no itemised receipt. Signed (an
+   * over-claimed receipt makes it negative) so the ledger sums to exactly zero.
+   */
+  pendingUnclaimedMinor: number
+}
+
+/** Where a claim row came from. Rows written before the claims v2 migration have no `source`: those are 'self'. */
+export type ClaimSource = 'self' | 'on_behalf' | 'shared' | 'leftover'
+
+export function claimSource(claim: { source?: string | null }): ClaimSource {
+  const s = claim.source
+  return s === 'on_behalf' || s === 'shared' || s === 'leftover' ? s : 'self'
+}
+
+/**
+ * How much of one itemised receipt has an owner. All `*Minor` fields are in
+ * the trip's BASE currency (the ledger's unit); `unclaimedOwnMinor` and
+ * `currency` are the receipt's own currency, for printing "EUR 48.00".
+ *
+ *   totalMinor    what the payer paid (base)
+ *   claimedMinor  sum of every claim's amount_owed (base), whoever made it,
+ *                 leftover rows included
+ *   pendingMinor  totalMinor - claimedMinor, signed. This is exactly what is
+ *                 added to the payer's owed so the ledger sums to zero.
+ *   unclaimedMinor the part of pendingMinor that is REAL unclaimed value: money
+ *                 on lines that still have quantity nobody took (>= 0)
+ *   dustMinor     pendingMinor - unclaimedMinor: rounding residue on lines that
+ *                 are fully claimed (or an over-claim). Small and signed.
+ */
+export interface ReceiptClaimStatus {
+  expenseId: string
+  description: string
+  paidBy: string
+  currency: string
+  /** expense_allocation_links.code: the receipt's claim page is /claim/<code>. */
+  claimCode: string | null
+  totalMinor: number
+  claimedMinor: number
+  /** Part of claimedMinor that arrived as 'leftover' rows (shared out at the end). */
+  leftoverClaimedMinor: number
+  pendingMinor: number
+  unclaimedMinor: number
+  dustMinor: number
+  /** Real unclaimed value in the receipt's own currency (what the receipt itself says is left). */
+  unclaimedOwnMinor: number
+  /**
+   * Own-currency value left on lines by the raw rule (line total minus claimed
+   * amount_owed, summed over lines, over-claimed lines count as 0), dust
+   * included. Informational only: nothing in the UI gates on it, use
+   * `unclaimedOwnMinor` (see isLineReallyUnclaimed).
+   */
+  shortfallOwnMinor: number
+  /**
+   * Own-currency value of DISCOUNT lines (negative total) that nobody holds a claim on. Nobody can claim a voucher, so these are
+   * shared equally between everyone on the receipt by "Share leftovers"; until then they block a freeze (the server mirrors this).
+   */
+  openDiscountOwnMinor: number
 }
 
 export interface BalanceComputationResult {
   balances: ParticipantBalance[]
+  /** Every itemised receipt that counted in the ledger, with its claimed / unclaimed split. */
+  receipts: ReceiptClaimStatus[]
+  /** Receipts with real unclaimed value (unclaimedMinor > 0), largest first. */
+  unclaimedReceipts: ReceiptClaimStatus[]
+  /** Sum of pendingMinor over all receipts (what sits in payers' pendingUnclaimedMinor). */
+  pendingUnclaimedTotalMinor: number
+  /** Sum of unclaimedMinor over all receipts. */
+  unclaimedTotalMinor: number
   /** Base-currency minor-unit sum of every expense counted (excludes expensesMissingRate). */
   groupTotalMinor: number
   /** Expense ids that could not be converted to base currency (fx_rate null and currency != base) -- excluded from totals, must be surfaced as a warning, never silently zeroed. */
@@ -49,6 +127,118 @@ function resolveExpenseRate(expense: ExpenseWithDetails, baseCurrency: string): 
   if (expense.currency === baseCurrency) return 1
   if (expense.fx_rate != null) return expense.fx_rate
   return null
+}
+
+/** A line counts as fully claimed when at most this much quantity is left (claim steps are hundredths; thirds leave 0.01). */
+const LINE_QUANTITY_TOLERANCE = 0.011
+
+/**
+ * THE client rule for "is this line unclaimed?" (used by balances, the header
+ * and Settle up notices, the Freeze dialog gate and the claim page).
+ *
+ * A line whose claimed QUANTITY is complete (within LINE_QUANTITY_TOLERANCE) is
+ * fully claimed: a few minor units of amount dust left over from legacy
+ * per-claim rounding (0.33 x 3, 7-way JPY splits) is not "unclaimed". It is
+ * absorbed invisibly into the payer's pending bucket and never listed, never
+ * blocks and never opens a dialog. "A few" = the value of the quantity
+ * tolerance itself (0.33 x 3 of a line leaves 0.01 of a unit, i.e. about 1% of
+ * the line) plus one minor unit per claim row on the line; anything larger on
+ * a fully claimed line (an edited line total) is real money nobody owes, so it
+ * still counts. A line with real quantity left counts for all of its missing value.
+ */
+export function isLineReallyUnclaimed(lineQuantity: number, claimedQuantity: number, leftMinor: number, claimRows: number, lineTotalMinor: number): boolean {
+  if (leftMinor <= 0 || lineQuantity <= 0) return false
+  // Rounded to 6 places so float noise (1.001 - 0.99 = 0.011000000000000010) cannot disagree with the server's exact numeric maths.
+  if (Math.round((lineQuantity - claimedQuantity) * 1e6) / 1e6 > LINE_QUANTITY_TOLERANCE) return true
+  // The 1e-9 guard keeps 1000 * 0.011 (= 11.000000000000002 in floats) at 11, as in SQL: ceil(abs(total) * 0.011 / quantity).
+  const dustAllowance = Math.max(1, claimRows) + Math.ceil((Math.abs(lineTotalMinor) * LINE_QUANTITY_TOLERANCE) / lineQuantity - 1e-9)
+  return leftMinor > dustAllowance
+}
+
+export function isItemizedExpense(expense: ExpenseWithDetails): boolean {
+  return !!expense.ai_parsed && !!expense.status && expense.line_items.length > 0
+}
+
+/**
+ * Splits one itemised receipt into claimed / unclaimed / dust, per the rules in
+ * ReceiptClaimStatus. Returns null when the receipt is not itemised or cannot
+ * be converted to the base currency. Never changes what any claimer owes: it
+ * only describes the difference between what was paid and what was claimed.
+ */
+export function analyseReceiptClaims(expense: ExpenseWithDetails, baseCurrency: string): ReceiptClaimStatus | null {
+  if (!isItemizedExpense(expense)) return null
+  const rate = resolveExpenseRate(expense, baseCurrency)
+  if (rate == null) return null
+  const own = expense.currency
+  const totalMinor = toMinorUnits(expense.amount * rate, baseCurrency)
+
+  let claimedMinor = 0
+  let leftoverClaimedMinor = 0
+  const qtyByLine = new Map<string, number>()
+  const ownMinorByLine = new Map<string, number>()
+  for (const c of expense.claims) {
+    const base = toMinorUnits(c.amount_owed * rate, baseCurrency)
+    claimedMinor += base
+    if (claimSource(c as { source?: string | null }) === 'leftover') leftoverClaimedMinor += base
+    qtyByLine.set(c.line_item_id, (qtyByLine.get(c.line_item_id) ?? 0) + c.quantity_claimed)
+    ownMinorByLine.set(c.line_item_id, (ownMinorByLine.get(c.line_item_id) ?? 0) + toMinorUnits(c.amount_owed, own))
+  }
+
+  let unclaimedOwnMinor = 0
+  let shortfallOwnMinor = 0
+  let openDiscountOwnMinor = 0
+  const rowsByLine = new Map<string, number>()
+  for (const c of expense.claims) rowsByLine.set(c.line_item_id, (rowsByLine.get(c.line_item_id) ?? 0) + 1)
+  for (const line of expense.line_items) {
+    const lineMinor = toMinorUnits(line.total_amount, own)
+    const leftMinor = Math.max(0, lineMinor - (ownMinorByLine.get(line.id) ?? 0))
+    shortfallOwnMinor += leftMinor
+    if (lineMinor < 0 && (rowsByLine.get(line.id) ?? 0) === 0) openDiscountOwnMinor += -lineMinor
+    if (isLineReallyUnclaimed(line.quantity, qtyByLine.get(line.id) ?? 0, leftMinor, rowsByLine.get(line.id) ?? 0, lineMinor)) unclaimedOwnMinor += leftMinor
+  }
+
+  const pendingMinor = totalMinor - claimedMinor
+  const unclaimedOwnBaseMinor = own === baseCurrency ? unclaimedOwnMinor : toMinorUnits(fromMinorUnits(unclaimedOwnMinor, own) * rate, baseCurrency)
+  const unclaimedMinor = Math.max(0, Math.min(unclaimedOwnBaseMinor, pendingMinor))
+  return {
+    expenseId: expense.id,
+    description: expense.description,
+    paidBy: expense.paid_by,
+    currency: own,
+    claimCode: expense.allocation_link?.code ?? null,
+    totalMinor,
+    claimedMinor,
+    leftoverClaimedMinor,
+    pendingMinor,
+    unclaimedMinor,
+    dustMinor: pendingMinor - unclaimedMinor,
+    unclaimedOwnMinor: unclaimedMinor > 0 ? unclaimedOwnMinor : 0,
+    shortfallOwnMinor,
+    openDiscountOwnMinor,
+  }
+}
+
+/** True when a receipt must be sorted out before balances can freeze: real unclaimed value, or an unshared discount. */
+export function blocksFreeze(r: Pick<ReceiptClaimStatus, 'unclaimedOwnMinor' | 'openDiscountOwnMinor'>): boolean {
+  return r.unclaimedOwnMinor > 0 || r.openDiscountOwnMinor > 0
+}
+
+/** Receipts the Freeze dialog gate lists: only real unclaimed value (see isLineReallyUnclaimed), never legacy dust. Largest first. */
+export function findFreezeBlockingReceipts(expenses: ExpenseWithDetails[], baseCurrency: string): ReceiptClaimStatus[] {
+  return expenses
+    // A foreign-currency receipt with no FX rate cannot be converted, but its unclaimed items are still real: it is analysed (and
+    // listed) in its OWN currency, exactly as the server does (rate 1, no conversion), never silently dropped.
+    .map((e) => analyseReceiptClaims(e, baseCurrency) ?? (isItemizedExpense(e) ? analyseReceiptClaims(e, e.currency) : null))
+    .filter((r): r is ReceiptClaimStatus => r != null && blocksFreeze(r))
+    .sort((a, b) => b.pendingMinor - a.pendingMinor || a.expenseId.localeCompare(b.expenseId))
+}
+
+/** Itemised receipts with real unclaimed value, largest first. Pure; shared by every surface that warns about them. */
+export function findUnclaimedReceipts(expenses: ExpenseWithDetails[], baseCurrency: string): ReceiptClaimStatus[] {
+  return expenses
+    .map((e) => analyseReceiptClaims(e, baseCurrency))
+    .filter((r): r is ReceiptClaimStatus => r != null && r.unclaimedMinor > 0)
+    .sort((a, b) => b.unclaimedMinor - a.unclaimedMinor || a.expenseId.localeCompare(b.expenseId))
 }
 
 /**
@@ -163,7 +353,7 @@ export function collectMoneyUserIds(
   for (const expense of expenses) {
     if (resolveExpenseRate(expense, baseCurrency) == null) continue
     ids.add(expense.paid_by)
-    const isItemized = !!expense.ai_parsed && !!expense.status && expense.line_items.length > 0
+    const isItemized = isItemizedExpense(expense)
     if (isItemized) for (const c of expense.claims) ids.add(c.user_id)
     else for (const sp of expense.splits) ids.add(sp.user_id)
   }
@@ -209,11 +399,16 @@ export function computeBalances(
   const owedMinor = new Map<string, number>()
   const settlementsPaidMinor = new Map<string, number>()
   const settlementsReceivedMinor = new Map<string, number>()
+  const pendingMinor = new Map<string, number>()
+  const receipts: ReceiptClaimStatus[] = []
+  let pendingTotalMinor = 0
+  let unclaimedTotalMinor = 0
   for (const id of participantUserIds) {
     paidMinor.set(id, 0)
     owedMinor.set(id, 0)
     settlementsPaidMinor.set(id, 0)
     settlementsReceivedMinor.set(id, 0)
+    pendingMinor.set(id, 0)
   }
 
   // Mismatched-currency / missing-participant carryovers are excluded from
@@ -241,9 +436,21 @@ export function computeBalances(
       paidMinor.set(expense.paid_by, (paidMinor.get(expense.paid_by) ?? 0) + amountBaseMinor)
     }
 
-    const isItemized = !!expense.ai_parsed && !!expense.status && expense.line_items.length > 0
+    const isItemized = isItemizedExpense(expense)
 
     if (isItemized) {
+      // --- unclaimed value: nobody owes it yet, so until it is shared it is the PAYER's own share.
+      // pendingMinor = paid - claimed (signed), which makes the ledger sum to exactly zero. ---
+      const status = analyseReceiptClaims(expense, baseCurrency)
+      if (status) {
+        receipts.push(status)
+        pendingTotalMinor += status.pendingMinor
+        unclaimedTotalMinor += status.unclaimedMinor
+        if (owedMinor.has(expense.paid_by)) {
+          owedMinor.set(expense.paid_by, (owedMinor.get(expense.paid_by) ?? 0) + status.pendingMinor)
+          pendingMinor.set(expense.paid_by, (pendingMinor.get(expense.paid_by) ?? 0) + status.pendingMinor)
+        }
+      }
       // --- totalOwed (itemized): each claimant owes their claimed amount, converted at this expense's rate ---
       for (const claim of expense.claims) {
         const claimBaseMinor = toBaseMinor(claim.amount_owed, expense, baseCurrency)
@@ -302,10 +509,14 @@ export function computeBalances(
       settlementsReceivedMinor: sReceived,
       netBalanceMinor,
       isBalanced: Math.abs(netBalanceMinor) < BALANCE_EPSILON_MINOR,
+      pendingUnclaimedMinor: pendingMinor.get(userId) ?? 0,
     }
   })
 
-  return { balances, groupTotalMinor, expensesMissingRate }
+  const unclaimedReceipts = receipts
+    .filter((r) => r.unclaimedMinor > 0)
+    .sort((a, b) => b.unclaimedMinor - a.unclaimedMinor || a.expenseId.localeCompare(b.expenseId))
+  return { balances, receipts, unclaimedReceipts, pendingUnclaimedTotalMinor: pendingTotalMinor, unclaimedTotalMinor, groupTotalMinor, expensesMissingRate }
 }
 
 /** Convenience: current user's "you owe" / "owed to you" split from their net balance, in base-currency major units. */

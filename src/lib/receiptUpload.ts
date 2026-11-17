@@ -9,8 +9,12 @@
  */
 
 import { supabase } from './supabase'
+import { RECEIPT_MAX_PDF_MB } from './receiptParsing'
 
-const MAX_FILE_SIZE_MB = 3 // Final size after compression
+// Final size after compression. Must stay below the server's raw image cap
+// (MAX_IMAGE_BYTES = 3_600_000 in supabase/functions/parse-receipt/fileType.ts, chosen so the
+// base64 request stays under the API's 5 MB per-image limit). 3 MiB = 3_145_728 < 3_600_000.
+const MAX_FILE_SIZE_MB = 3
 const MAX_ORIGINAL_FILE_SIZE_MB = 15 // Maximum original file size (before compression)
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/heic', 'image/heif', 'application/pdf']
 
@@ -78,8 +82,8 @@ async function compressImage(file: File): Promise<File> {
   if (file.type === 'application/pdf') {
     // Check PDF size
     const pdfSizeMB = file.size / 1024 / 1024
-    if (pdfSizeMB > MAX_FILE_SIZE_MB) {
-      throw new Error(`PDF too large (${pdfSizeMB.toFixed(1)}MB). Maximum: ${MAX_FILE_SIZE_MB}MB. Please compress the PDF before uploading.`)
+    if (pdfSizeMB > RECEIPT_MAX_PDF_MB) {
+      throw new Error(`PDF too large (${pdfSizeMB.toFixed(1)}MB). Maximum: ${RECEIPT_MAX_PDF_MB}MB. Please compress the PDF before uploading.`)
     }
     return file
   }

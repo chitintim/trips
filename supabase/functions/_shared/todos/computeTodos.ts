@@ -417,7 +417,7 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
       if (e.paid_by === userId) continue // the payer is not chased on their own receipt
       const involved = e.participant_ids && e.participant_ids.length > 0 ? e.participant_ids : everyone
       if (!involved.includes(userId)) continue
-      if (e.claims.some((c) => c.user_id === userId)) continue
+      if (e.claims.some((c) => isSelfMadeClaim(c, userId))) continue
       out.push(
         finish(ctx, userId, {
           kind: 'claim',
@@ -469,6 +469,18 @@ function settleOwed(ctx: Ctx, userId: string): number {
     .filter((st) => st.from_user_id === userId && st.status === 'marked_paid' && (st.currency ?? trip.base_currency) === trip.base_currency)
     .reduce((sum, st) => sum + st.amount, 0)
   return -balance - awaitingConfirmation
+}
+
+/**
+ * A claim row the person made themselves. Legacy rows (no source, no created_by)
+ * are 'self'. A 'shared' or 'on_behalf' row counts only when they created it;
+ * 'leftover' rows never do.
+ */
+function isSelfMadeClaim(c: { user_id: string; source?: string | null; created_by?: string | null }, userId: string): boolean {
+  if (c.user_id !== userId) return false
+  if (c.source === 'leftover') return false
+  if (c.source === 'shared' || c.source === 'on_behalf') return c.created_by === userId
+  return true
 }
 
 function hasUsableClaimLink(e: SnapshotExpense, now: Date): boolean {

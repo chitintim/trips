@@ -123,7 +123,7 @@ export function useCarryoverCandidates(currentTripId: string | undefined, curren
             ? supabase.from('expense_line_items').select('*').in('expense_id', itemizedExpenseIds).order('line_number')
             : emptyResult<ExpenseLineItem>(),
           itemizedExpenseIds.length > 0
-            ? supabase.from('expense_item_claims').select('*, user:user_id (id, full_name, avatar_url, avatar_data)').in('expense_id', itemizedExpenseIds)
+            ? supabase.from('expense_item_claims').select('*, user:users!expense_item_claims_user_id_fkey (id, full_name, avatar_url, avatar_data)').in('expense_id', itemizedExpenseIds)
             : emptyResult<ClaimWithUser>(),
         ])
 

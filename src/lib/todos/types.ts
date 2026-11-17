@@ -104,7 +104,7 @@ export interface SnapshotExpense {
   ai_parsed: boolean | null
   status: string | null
   participant_ids: ReadonlyArray<string> | null
-  claims: ReadonlyArray<{ user_id: string }>
+  claims: ReadonlyArray<{ user_id: string; source?: string | null; created_by?: string | null }>
   /** The claim link (`expense_allocation_links` row). No link = nobody can claim, so there is no claim to-do. */
   allocation_link?: { code: string; expires_at?: string | null } | null
 }

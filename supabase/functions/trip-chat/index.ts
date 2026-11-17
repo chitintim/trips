@@ -34,6 +34,7 @@ import {
   type AnthropicContentBlock,
 } from '../_shared/anthropic.ts'
 import { logAiUsage } from '../_shared/usage.ts'
+import { chatStreamErrorLog, chatStreamErrorPayload } from './streamError.ts'
 import { buildAnthropicToolDefs, executeReadTool } from './tools.ts'
 import { READ_TOOL_NAMES, type ChatToolName } from '../_shared/contracts/chatToolContracts.ts'
 import { ProposalSchema, ProposedActionSchema } from '../_shared/contracts/aiProposal.ts'
@@ -351,8 +352,9 @@ Deno.serve(async (req) => {
           })
           controller.close()
         } catch (streamError) {
-          console.error('[trip-chat] stream error:', streamError)
-          send({ type: 'error', error: streamError instanceof Error ? streamError.message : 'Stream interrupted' })
+          // Status/code only: no upstream body or message ever reaches the log or the client.
+          console.error('[trip-chat] stream error:', chatStreamErrorLog(streamError))
+          send(chatStreamErrorPayload(streamError))
           controller.close()
         }
       },

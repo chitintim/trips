@@ -80,6 +80,38 @@ Environment variable names (values are never committed):
 
 CI (`.github/workflows/ci.yml`, on pull requests and non-master pushes) runs typecheck, `npm run lint:ci`, z-index check, unit tests, drift check, build and the Playwright smoke suite.
 
+## AI models
+
+Each AI call has its own model constant in `supabase/functions/_shared/anthropic.ts`, and an environment variable that overrides it (set with `supabase secrets set NAME=value`, then redeploy or restart the function; only plain `claude-...` ids are accepted, anything else is ignored). Every call sets `output_config.effort` explicitly. Prices are in `supabase/functions/_shared/pricing.ts` (per model: input, output, cache read, cache write), used for the `ai_usage` cost estimate.
+
+| Call | Constant / override | Default | Effort |
+|---|---|---|---|
+| `parse-receipt` | `MODEL_PARSE_RECEIPT` / `CLAUDE_MODEL_PARSE_RECEIPT` | `claude-sonnet-5-5` | low |
+| `ingest` | `MODEL_INGEST` / `CLAUDE_MODEL_INGEST` | `claude-sonnet-5-5` | low |
+| `nudge-draft` | `MODEL_NUDGE_DRAFT` / `CLAUDE_MODEL_NUDGE_DRAFT` | `claude-haiku-5-5` (text only, `max_tokens` 2048) | low |
+| `reorganize-plan` | `MODEL_REORGANIZE_PLAN` / `CLAUDE_MODEL_REORGANIZE_PLAN` | `claude-sonnet-5-5` (streamed) | medium |
+| `trip-chat` | `MODEL_TRIP_CHAT` (pinned, no override) | `claude-sonnet-5`, unchanged until its streaming fixes land | not set |
+
+The shared caller (`createMessage`, `createMessageStreamed`) checks `stop_reason` before using any content (`refusal` becomes `refused`, `max_tokens` becomes `unreadable`), retries once with a 1 to 2 second jittered backoff on 429, 529, 5xx, network errors and timeouts (never on other 4xx), enforces a per-attempt timeout and an optional whole-call deadline, and throws an `AiCallError` with a stable `code`. It never logs prompts, images, keys or response bodies. Server-side `fallbacks` is deliberately not used. `parse-receipt` answers failures with `{ success: false, error, message, code }`, `code` being `unreadable`, `too_large`, `unsupported_type`, `rate_limited`, `busy`, `refused` or `unknown`; images are capped at 3.6 MB raw (the API's 5 MB limit applies to the base64 text, about a third larger), PDFs at 10 MB and 100 pages; a bigger file is `too_large` with a message saying so. A call that fails after the model was billed (`max_tokens`, `refusal`, a failing repair pass) is still written to `ai_usage` so the monthly breaker counts it, and the rate-limit token is returned (`refund_rate_limit`, service role only) only when the model was never billed.
+
+**Receipt model eval** (`scripts/eval-receipts.ts`, written but not run by default; running it spends real money). It needs Deno, a service-role key (read-only use) and an Anthropic key in the shell, and prints only numbers:
+
+```bash
+# See what it would do and the estimated spend; calls no Anthropic API.
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... npx -y deno run -A --node-modules-dir=none scripts/eval-receipts.ts --dry-run
+# Real run, default hard cap $1.00 (raise with --max-spend), 6 receipts, 1 run each:
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... ANTHROPIC_API_KEY=... \
+  npx -y deno run -A --node-modules-dir=none scripts/eval-receipts.ts --max-spend 2 --limit 10 --runs 2 --csv /tmp/eval.csv
+```
+
+Options: `--candidates "claude-haiku-5-5@low,claude-sonnet-5-5@medium"` (default: Sonnet 5 low as baseline, Sonnet 5.5 low and medium, Haiku 5.5 low and medium), `--trip <uuid>`. Step 0 asks the Models API for each candidate's vision and PDF capability and drops candidates that lack them. It then takes itemised expenses that have stored `expense_line_items` and a receipt file, downloads each file to a temp directory (deleted at the end, never printed), re-parses with each candidate through the same request builder and pipeline as the function (`parse-receipt/receiptRequest.ts`, `pipeline.ts`), and reports per candidate: receipts parsed, total correct, line recall and precision (price within 1 minor unit, name similarity breaks ties), reconciled rate, repair attempted/adopted, latency p50/p95, tokens and estimated cost. The cap is checked before every model call, so the run stops before it would exceed `--max-spend`.
+
+## Receipt claiming (migration `20261124090000_receipt_claims_v2.sql`, not applied yet)
+
+Rules for who may do what, the 0.011 dust tolerance, the leftover modes and the freeze guard are in `docs/PRODUCT_MODEL.md` (Receipt claiming). In one line: the payer and organizers can put anyone on any line and share the leftovers; everyone else tagged on the receipt can only toggle themselves ("I had some of this too" / "Not mine"); "Share between everyone" is a plain equal split in phase 1.
+
+**Deploy order.** (1) Run `supabase/PRE_APPLY_CHECKS.sql` group 21 and read every result against its "Safe" line (SQL-1 must show `flagged_with_rule_minor = 0` for the real trips; dump `auto_update_expense_status` and read it; check `expense_item_claims_user_id_fkey` exists). (2) Ship the front end (it fails soft while the functions are missing). (3) Apply the migration by hand in one transaction, then run the post-apply checks 21i-21m (the new `freeze_settlements` md5 is `7b507c2ec453c532fd598e533d2625c5`, length 9076). (4) Redeploy the edge functions that changed: `parse-receipt` (needs `refund_rate_limit` from the migration), `reorganize-plan`, `trip-chat`, `ingest`, `nudge-draft`. The to-do engine change is front end plus the `_shared/todos` mirror (no deployed function reads the claim to-do, so `auto-chase` is unchanged).
+
 ## Deployment
 
 - **Frontend:** push to `master`. `.github/workflows/deploy.yml` runs the same gates as CI (except Playwright), builds with the production secrets, and publishes `dist/` to GitHub Pages. The site is served at https://trips.fontem.ai: the custom domain is set in the repository's Pages settings, and the repository variable `VITE_BASE` is `/`, which `deploy.yml` passes to the build (`vars.VITE_BASE || '/trips/'`; without the variable the base is `/trips/`, the default github.io project path).

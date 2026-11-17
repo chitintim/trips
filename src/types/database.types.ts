@@ -456,10 +456,12 @@ export type Database = {
           amount_owed: number
           claimed_at: string | null
           confirmed: boolean | null
+          created_by?: string | null
           expense_id: string
           id: string
           line_item_id: string
           quantity_claimed: number
+          source?: string
           updated_at: string | null
           user_id: string
         }
@@ -467,10 +469,12 @@ export type Database = {
           amount_owed: number
           claimed_at?: string | null
           confirmed?: boolean | null
+          created_by?: string | null
           expense_id: string
           id?: string
           line_item_id: string
           quantity_claimed: number
+          source?: string
           updated_at?: string | null
           user_id: string
         }
@@ -478,10 +482,12 @@ export type Database = {
           amount_owed?: number
           claimed_at?: string | null
           confirmed?: boolean | null
+          created_by?: string | null
           expense_id?: string
           id?: string
           line_item_id?: string
           quantity_claimed?: number
+          source?: string
           updated_at?: string | null
           user_id?: string
         }
@@ -522,6 +528,7 @@ export type Database = {
           notes: string | null
           quantity: number
           service_amount: number | null
+          shared_by_all?: boolean
           subtotal: number
           tax_amount: number | null
           total_amount: number
@@ -539,6 +546,7 @@ export type Database = {
           notes?: string | null
           quantity: number
           service_amount?: number | null
+          shared_by_all?: boolean
           subtotal: number
           tax_amount?: number | null
           total_amount: number
@@ -556,6 +564,7 @@ export type Database = {
           notes?: string | null
           quantity?: number
           service_amount?: number | null
+          shared_by_all?: boolean
           subtotal?: number
           tax_amount?: number | null
           total_amount?: number
@@ -2257,6 +2266,14 @@ export type Database = {
       }
       freeze_settlements: {
         Args: { p_known_paid_ids: string[]; p_snapshot: Json; p_suggestions: Json; p_trip_id: string }
+        Returns: Json
+      }
+      set_receipt_claims: {
+        Args: { p_claims: Json; p_expense_id: string }
+        Returns: Json
+      }
+      share_receipt_leftovers: {
+        Args: { p_expense_id: string; p_mode: string; p_preview?: boolean; p_user_id?: string }
         Returns: Json
       }
       unfreeze_settlements: {

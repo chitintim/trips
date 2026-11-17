@@ -5,7 +5,9 @@
 // app keeps working until cutover -- new v2 fields are ADDED alongside the
 // legacy flat fields inside `data`, never replacing them.
 //
-// Model: claude-sonnet-5, structured outputs against ReceiptParseResult.
+// Model: MODEL_PARSE_RECEIPT (claude-sonnet-5-5 at effort low; env override
+// CLAUDE_MODEL_PARSE_RECEIPT), structured outputs against ReceiptParseResult.
+// Request + prompt: receiptRequest.ts; first pass + repair: pipeline.ts.
 // Then the adjustment disambiguation engine (pure TS, not the model) in
 // _shared/receiptReconciliation.ts verifies Σ(lines)=subtotal and
 // subtotal±adjustments=total in integer minor units; on mismatch, hypothesis-
@@ -13,41 +15,33 @@
 // One repair re-prompt if nothing reconciles; still failing -> printed-total-
 // trusted result with per-line review flags. Never silently adjusts.
 //
-// Rate limit: 20 parses/day/user (plan §10).
+// Errors are CODED (see _shared/aiError.ts): { success:false, error, message,
+// code } with code unreadable | too_large | unsupported_type | rate_limited |
+// busy | refused | unknown. `error` is kept for the current client.
+//
+// Rate limit: 20 parses/day/user (plan §10). The token is given back (refund_rate_limit
+// RPC via the service client, best effort) ONLY when no model call ran; once the API may
+// have charged (success or billed failure) it is kept (see refund.ts). Billed failures are
+// still written to ai_usage so the monthly breaker counts them.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { handleCorsPreflight } from '../_shared/cors.ts'
-import { errorResponse, jsonResponse } from '../_shared/errors.ts'
-import { callerClient, requireUser, requireTripParticipant } from '../_shared/supabaseClients.ts'
+import { jsonResponse } from '../_shared/errors.ts'
+import { callerClient, serviceClient, requireUser, requireTripParticipant } from '../_shared/supabaseClients.ts'
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
-import { createMessage, padForCaching, CLAUDE_MODEL, type AnthropicContentBlock } from '../_shared/anthropic.ts'
-import { logAiUsage } from '../_shared/usage.ts'
-import { reconcileReceipt, buildRepairPrompt, type ReconciliationResult } from '../_shared/receiptReconciliation.ts'
-import { ReceiptParseResultSchema, ReceiptParseResultJsonSchema, type ReceiptParseResult } from '../_shared/contracts/receiptParseResult.ts'
+import { type AnthropicContentBlock } from '../_shared/anthropic.ts'
+import { logAiUsage, logBilledFailure } from '../_shared/usage.ts'
+import { AiCallError, codedErrorResponse } from '../_shared/aiError.ts'
+import { type ReconciliationResult } from '../_shared/receiptReconciliation.ts'
+import { type ReceiptParseResult } from '../_shared/contracts/receiptParseResult.ts'
+import { checkReceiptFile, toBase64 } from './fileType.ts'
+import { runReceiptPipeline } from './pipeline.ts'
+import { refundIfUnbilled } from './refund.ts'
 
-const MAX_FILE_SIZE = 5 * 1024 * 1024 // 5MB, matches existing bucket cap
-
-const SYSTEM_PROMPT_STATIC = `You are an expert receipt-parsing assistant. You will be shown an image (or PDF) of a purchase receipt and must extract every piece of structured information from it, precisely, into the ReceiptParseResult JSON schema you have been given as your required output format.
-
-CORE PRINCIPLES
-
-1. Extract EVERY line item visible on the receipt. Do not summarize or omit items, including small ones (side dishes, garnishes, single drinks). \`line_items\` must NEVER be an empty array if the image shows a purchase receipt at all -- if you can read a vendor name or a total, there is at least one line item to extract, even if you can only make out a partial description for it (use your best reading and lower \`confidence\` rather than dropping the line). Only omit line items entirely for a document that isn't a line-itemized receipt at all (e.g. a bank transfer confirmation with no purchased items).
-2. For each line item, determine whether the printed number next to the quantity is a UNIT PRICE or a LINE TOTAL, and record which in \`printed_field\`:
-   - If a receipt shows "2x ¥900" and the line reads ¥1800, the printed number is more likely the line total already reflecting quantity -- but you must reason from context. Cross-check: if summing the numbers-as-shown for all lines gets you close to the printed subtotal, they are line totals; if summing (quantity * number-as-shown) gets you close to the printed subtotal, they are unit prices.
-   - If you cannot tell with confidence, set printed_field to "ambiguous" rather than guessing.
-   - If both a unit price AND a line total are printed and they agree (unit_price * quantity == line_total), set printed_field to "both".
-3. Translate non-English item names into \`name_english\` while preserving \`name_original\` exactly as printed (including diacritics/non-Latin scripts).
-4. Extract EVERY tax line as a separate entry in the \`tax\` array with its rate (as a decimal, e.g. 0.08 for 8%) and whether it is already included in the displayed prices (\`inclusive: true\`) or an additional charge on top (\`inclusive: false\`). Japanese receipts often show a dual 8%/10% breakdown (8%対象／10%対象) -- these are informational breakdowns of tax ALREADY INCLUDED in the displayed prices; set inclusive: true for each. European VAT/TVA/MwSt/IVA lines are almost always inclusive: true (prices already include VAT by law). US sales tax and similar add-on taxes are inclusive: false.
-5. Extract the service charge (if any) as a single object noting whether it is automatic/mandatory (\`auto: true\`) or a voluntary suggestion (\`auto: false\`), and its amount or percent as printed.
-6. Extract any discounts (loyalty, voucher, promotional) at the receipt level in \`discounts\`, and any item-specific discounts nested under that line item's \`discounts\`.
-7. Extract a \`rounding_adjustment\` if the receipt shows cash-rounding (common in countries without 1-cent/1-yen coins in circulation, or JPY consumption-tax rounding).
-8. Record your confidence (0-1) for uncertain fields in the \`confidence\` array, and use \`notes\` for anything unusual you noticed.
-9. Do NOT perform any arithmetic reconciliation yourself, and do NOT adjust any number you read from the receipt to make totals match -- report exactly what is printed, even if it looks internally inconsistent. A separate verification pass handles reconciliation.
-10. The currency must be a 3-letter ISO 4217 code inferred from symbols/context (¥ + Japanese text -> JPY, € -> EUR, £ -> GBP, $ + US context -> USD, etc).
-11. \`receipt_date\` must be YYYY-MM-DD, or null if no date is visible.
-12. If the receipt is a PDF (e.g. an emailed invoice), read it the same way as an image.
-
-Return ONLY the structured ReceiptParseResult -- no prose commentary outside the schema.`
+/** Whole-parse budget (first pass + retry + repair) so we fail cleanly before the edge worker limit. */
+const PARSE_BUDGET_MS = 100_000
+/** Per model call. */
+const CALL_TIMEOUT_MS = 45_000
 
 interface LegacyLineItem {
   line_number: number
@@ -168,156 +162,67 @@ function toLegacyShape(receipt: ReceiptParseResult, reconciliation: Reconciliati
   }
 }
 
-async function callClaudeForReceipt(
-  fileBlock: AnthropicContentBlock,
-  repairContext?: { previousReceipt: ReceiptParseResult; repairPrompt: string }
-) {
-  const messages = repairContext
-    ? [
-        {
-          role: 'user' as const,
-          content: [fileBlock, { type: 'text' as const, text: 'Extract this receipt into the ReceiptParseResult schema.' }],
-        },
-        {
-          role: 'assistant' as const,
-          content: JSON.stringify(repairContext.previousReceipt),
-        },
-        {
-          role: 'user' as const,
-          content: repairContext.repairPrompt,
-        },
-      ]
-    : [
-        {
-          role: 'user' as const,
-          content: [fileBlock, { type: 'text' as const, text: 'Extract this receipt into the ReceiptParseResult schema.' }],
-        },
-      ]
-
-  return await createMessage({
-    model: CLAUDE_MODEL,
-    max_tokens: 8192,
-    system: [
-      {
-        type: 'text',
-        text: padForCaching(SYSTEM_PROMPT_STATIC),
-        cache_control: { type: 'ephemeral' },
-      },
-    ],
-    messages,
-    output_config: {
-      // Extraction, not deliberation: low effort curbs Sonnet 5's default
-      // adaptive thinking (on when 'thinking' is omitted) for fast parses.
-      effort: 'low',
-      format: { type: 'json_schema', schema: ReceiptParseResultJsonSchema.schema},
-    },
-  })
-}
-
-function extractJsonFromResponse(content: AnthropicContentBlock[]): unknown {
-  const textBlock = content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
-  if (!textBlock?.text) {
-    throw new Error('No text content in Claude response')
-  }
-  return JSON.parse(textBlock.text)
-}
-
 Deno.serve(async (req) => {
   const preflight = handleCorsPreflight(req)
   if (preflight) return preflight
 
-  let tripId: string | null = null
+  let supabaseClient: ReturnType<typeof callerClient> | null = null
+  let tokenConsumed = false
+  let userId: string | null = null
+  let loggedTripId: string | null = null
+  let modelRan = false
 
   try {
-    const supabaseClient = callerClient(req)
+    supabaseClient = callerClient(req)
     const user = await requireUser(supabaseClient)
+    userId = user.id
 
-    const { receiptPath, tripId: bodyTripId } = await req.json()
-    if (!receiptPath || !bodyTripId) {
-      throw new Error('Missing receiptPath or tripId')
+    const { receiptPath, tripId } = await req.json()
+    if (!receiptPath || !tripId) {
+      throw new AiCallError('unknown', 'missing receiptPath or tripId', 'Missing receiptPath or tripId', 400)
     }
-    const currentTripId: string = bodyTripId
-    tripId = currentTripId
 
-    await requireTripParticipant(supabaseClient, currentTripId, user.id)
+    await requireTripParticipant(supabaseClient, tripId, user.id)
+    loggedTripId = typeof tripId === 'string' ? tripId : null
 
     await consumeRateLimit(supabaseClient, RATE_LIMITS.parseReceipt)
+    tokenConsumed = true
 
     // Download receipt from storage (via caller's client so RLS/storage policy applies)
-    const { data: imageData, error: downloadError } = await supabaseClient
+    const { data: fileData, error: downloadError } = await supabaseClient
       .storage
       .from('receipts')
       .download(receiptPath)
 
-    if (downloadError || !imageData) {
-      throw new Error(`Failed to download receipt from path "${receiptPath}": ${downloadError?.message ?? 'no data'}`)
+    if (downloadError || !fileData) {
+      console.error('[parse-receipt] download failed:', downloadError?.message ?? 'no data')
+      throw new AiCallError('unknown', 'storage download failed', "We couldn't open the uploaded file. Please try again.", 502)
     }
 
-    if (imageData.size > MAX_FILE_SIZE) {
-      throw new Error('Image too large. Maximum 5MB allowed.')
-    }
+    const bytes = new Uint8Array(await fileData.arrayBuffer())
+    const mediaType = checkReceiptFile(bytes, fileData.type, receiptPath)
+    const base64 = toBase64(bytes)
 
-    let mimeType = imageData.type || 'image/jpeg'
-    if (!mimeType || mimeType === 'application/octet-stream') {
-      const ext = receiptPath.toLowerCase().split('.').pop()
-      const mimeTypes: Record<string, string> = {
-        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', pdf: 'application/pdf',
-      }
-      mimeType = mimeTypes[ext || ''] || 'image/jpeg'
-    }
-
-    const arrayBuffer = await imageData.arrayBuffer()
-    const uint8Array = new Uint8Array(arrayBuffer)
-    let binaryString = ''
-    const chunkSize = 8192
-    for (let i = 0; i < uint8Array.length; i += chunkSize) {
-      binaryString += String.fromCharCode(...uint8Array.subarray(i, i + chunkSize))
-    }
-    const base64 = btoa(binaryString)
-
-    const isPdf = mimeType === 'application/pdf'
-    const fileBlock: AnthropicContentBlock = isPdf
+    const fileBlock: AnthropicContentBlock = mediaType === 'application/pdf'
       ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } }
-      : { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } }
+      : { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } }
 
-    // --- First pass ---
-    const response = await callClaudeForReceipt(fileBlock)
-    let totalUsage = { ...response.usage }
-    let parsed = ReceiptParseResultSchema.parse(extractJsonFromResponse(response.content))
-    let reconciliation = reconcileReceipt(parsed)
+    const result = await runReceiptPipeline(fileBlock, {
+      control: { timeoutMs: CALL_TIMEOUT_MS, deadlineAt: Date.now() + PARSE_BUDGET_MS },
+    })
 
-    // --- One repair re-prompt if nothing reconciled ---
-    if (!reconciliation.reconciled) {
-      const repairPrompt = buildRepairPrompt(parsed, reconciliation)
-      try {
-        const repairResponse = await callClaudeForReceipt(fileBlock, { previousReceipt: parsed, repairPrompt })
-        totalUsage = {
-          input_tokens: totalUsage.input_tokens + repairResponse.usage.input_tokens,
-          output_tokens: totalUsage.output_tokens + repairResponse.usage.output_tokens,
-          cache_creation_input_tokens: (totalUsage.cache_creation_input_tokens ?? 0) + (repairResponse.usage.cache_creation_input_tokens ?? 0),
-          cache_read_input_tokens: (totalUsage.cache_read_input_tokens ?? 0) + (repairResponse.usage.cache_read_input_tokens ?? 0),
-        }
-        const repairedParsed = ReceiptParseResultSchema.parse(extractJsonFromResponse(repairResponse.content))
-        const repairedReconciliation = reconcileReceipt(repairedParsed)
-        // Only adopt the repair if it actually reconciles -- otherwise keep
-        // the original extraction (still printed-total-trusted either way).
-        if (repairedReconciliation.reconciled) {
-          parsed = repairedParsed
-          reconciliation = repairedReconciliation
-        }
-      } catch (repairError) {
-        console.error('[parse-receipt] repair re-prompt failed:', repairError)
-        // fall through with original (unreconciled) parse
-      }
-    }
+    modelRan = true // the model was billed: from here on the scan token is kept whatever happens
+    await logAiUsage({ userId: user.id, tripId, functionName: 'parse-receipt', model: result.model, usage: result.usage })
 
-    await logAiUsage({ userId: user.id, tripId, functionName: 'parse-receipt', model: response.model, usage: totalUsage })
-
-    const legacyData = toLegacyShape(parsed, reconciliation)
-
-    return jsonResponse({ success: true, data: legacyData })
+    return jsonResponse({ success: true, data: toLegacyShape(result.parsed, result.reconciliation) })
   } catch (error) {
-    return errorResponse(error)
+    // A call the API charged for but that failed (max_tokens, refusal, unparseable) still costs money.
+    if (userId) await logBilledFailure({ userId, tripId: loggedTripId, functionName: 'parse-receipt', error })
+    // Give the daily token back only if the model never ran.
+    if (tokenConsumed && userId && !modelRan) {
+      await refundIfUnbilled(serviceClient(), userId, RATE_LIMITS.parseReceipt, error)
+    }
+    return codedErrorResponse(error)
   }
 })
 

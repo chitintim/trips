@@ -17,8 +17,9 @@ import { handleCorsPreflight } from '../_shared/cors.ts'
 import { errorResponse, jsonResponse, ValidationError } from '../_shared/errors.ts'
 import { callerClient, requireUser, requireTripParticipant } from '../_shared/supabaseClients.ts'
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
-import { createMessage, padForCaching, CLAUDE_MODEL, type AnthropicContentBlock } from '../_shared/anthropic.ts'
-import { logAiUsage } from '../_shared/usage.ts'
+import { createMessage, extractText, MODEL_INGEST, type AnthropicContentBlock } from '../_shared/anthropic.ts'
+import { AiCallError } from '../_shared/aiError.ts'
+import { logAiUsage, logBilledFailure } from '../_shared/usage.ts'
 import { IngestResultSchema, IngestResultJsonSchema, type IngestResult } from '../_shared/contracts/ingestResult.ts'
 import { ProposalSchema, type ProposedAction } from '../_shared/contracts/aiProposal.ts'
 import { reconcileReceipt } from '../_shared/receiptReconciliation.ts'
@@ -226,12 +227,13 @@ Deno.serve(async (req) => {
     // supported by structured outputs); we validate with Zod afterwards
     // regardless, so a schema drift fails loudly rather than silently.
     const response = await createMessage({
-      model: CLAUDE_MODEL,
+      model: MODEL_INGEST,
       max_tokens: 8192,
+      timeoutMs: 60_000,
       system: [
         {
           type: 'text',
-          text: padForCaching(SYSTEM_PROMPT_STATIC),
+          text: SYSTEM_PROMPT_STATIC,
           cache_control: { type: 'ephemeral' },
         },
       ],
@@ -240,16 +242,21 @@ Deno.serve(async (req) => {
         effort: 'low',
         format: { type: 'json_schema', schema: IngestResultJsonSchema.schema as Record<string, unknown>},
       },
+    }).catch(async (callError) => {
+      // Charged but unusable (max_tokens / refusal): still record the spend.
+      await logBilledFailure({ userId: user.id, tripId: trip_id, functionName: 'ingest', error: callError })
+      throw callError
     })
 
     await logAiUsage({ userId: user.id, tripId: trip_id, functionName: 'ingest', model: response.model, usage: response.usage })
 
-    const textBlock = response.content.find((b) => b.type === 'text') as { type: 'text'; text: string } | undefined
-    if (!textBlock?.text) {
-      throw new Error('No content in Claude response')
+    let result: IngestResult
+    try {
+      result = IngestResultSchema.parse(JSON.parse(extractText(response)))
+    } catch (parseError) {
+      if (parseError instanceof AiCallError) throw parseError
+      throw new AiCallError('unreadable', 'response did not match IngestResult', "We couldn't make sense of that. Try pasting less, or add it by hand.")
     }
-
-    const result = IngestResultSchema.parse(JSON.parse(textBlock.text))
 
     // For receipts, run the reconciliation engine so the review UI can show
     // whether the extraction is trustworthy.

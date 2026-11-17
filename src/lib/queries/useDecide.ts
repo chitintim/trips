@@ -77,10 +77,11 @@ export function isRpcMissingError(err: unknown, fn: string): boolean {
 export function toRpcError(err: unknown, fallback = 'Something went wrong'): Error {
   if (err instanceof Error) return err
   if (err && typeof err === 'object') {
-    const { message, hint, code } = err as { message?: unknown; hint?: unknown; code?: unknown }
-    const e = new Error(typeof message === 'string' && message ? message : fallback) as Error & { code?: string; hint?: string }
+    const { message, hint, code, details } = err as { message?: unknown; hint?: unknown; code?: unknown; details?: unknown }
+    const e = new Error(typeof message === 'string' && message ? message : fallback) as Error & { code?: string; hint?: string; details?: string }
     if (typeof code === 'string') e.code = code
     if (typeof hint === 'string') e.hint = hint
+    if (typeof details === 'string') e.details = details
     return e
   }
   return new Error(fallback)

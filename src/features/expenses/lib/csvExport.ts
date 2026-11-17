@@ -6,6 +6,14 @@
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement } from '../../../lib/queries/useSettlements'
 import { isItemizedExpense } from '../types'
+import { fromMinorUnits, toMinorUnits } from '../../../lib/money'
+
+/** One entry per person: a person can hold several claim rows on a receipt (own + leftover/shared), all counted. */
+function sumClaimsByUser(claims: ExpenseWithDetails['claims'], currency: string): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const c of claims) out.set(c.user_id, (out.get(c.user_id) ?? 0) + toMinorUnits(c.amount_owed, currency))
+  return out
+}
 
 function csvEscape(value: string | number | null | undefined): string {
   const s = value == null ? '' : String(value)
@@ -43,7 +51,7 @@ export function buildExpenseLedgerCsv(expenses: ExpenseWithDetails[], userName: 
   const rows = expenses.map((e) => {
     const itemized = isItemizedExpense(e)
     const splitsSummary = itemized
-      ? e.claims.map((c) => `${userName(c.user_id)}:${c.amount_owed}`).join('; ')
+      ? [...sumClaimsByUser(e.claims, e.currency)].map(([id, minor]) => `${userName(id)}:${fromMinorUnits(minor, e.currency)}`).join('; ')
       : e.splits.map((s) => `${userName(s.user_id)}:${s.amount}`).join('; ')
     const splitType = itemized ? 'itemized' : e.splits[0]?.split_type ?? 'equal'
 

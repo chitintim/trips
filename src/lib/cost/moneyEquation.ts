@@ -101,6 +101,30 @@ export interface PositionHeadline {
   note: string | null
 }
 
+/** A receipt you paid for that has value nobody has claimed yet (counted as yours until it is shared). */
+export interface UnclaimedReceiptRef {
+  expenseId: string
+  description: string
+  /** Unclaimed value in the receipt's own currency. */
+  amount: number
+  /** The receipt's own currency. */
+  currency: string
+  /** The claim page is /claim/<claimCode>; null when the receipt has no claim link. */
+  claimCode: string | null
+}
+
+/**
+ * Unclaimed value on receipts YOU paid for. It sits inside `share` (the payer's
+ * own share, never a second cost), so `paid − share` already reflects it.
+ */
+export interface UnclaimedForYou {
+  /** Real unclaimed value, base currency. > 0 whenever this object exists. */
+  amount: number
+  /** Everything in your share that is pending rather than claimed (unclaimed value plus rounding dust), base currency. */
+  pendingInShare: number
+  receipts: UnclaimedReceiptRef[]
+}
+
 export interface MoneyEquation {
   currency: string
   /** What you paid out of pocket (confirmed expenses, base currency). */
@@ -147,6 +171,8 @@ export interface MoneyEquation {
   /** "You paid £11,563.80 − your share £5,719.28 − paid back to you £10,543.13 = you owe £4,698.61". */
   equationText: string
   expensesMissingRate: string[]
+  /** Set only when you paid for itemised receipts with unclaimed value; others never see it. */
+  unclaimed: UnclaimedForYou | null
 }
 
 export interface ExplainMoneyInput {
@@ -182,9 +208,28 @@ export function explainMoneyPosition(input: ExplainMoneyInput): MoneyEquation {
   const nameOf = (id: string) => input.names?.[id]?.trim() || 'someone'
 
   const ledgerIds = withMoneyParticipants(participantUserIds, expenses, settlements, baseCurrency, carryovers)
-  const { balances, expensesMissingRate } = computeBalances(expenses, settlements, ledgerIds, baseCurrency, carryovers)
+  const { balances, expensesMissingRate, receipts } = computeBalances(expenses, settlements, ledgerIds, baseCurrency, carryovers)
   const mine = balances.find((b) => b.userId === currentUserId)
   const position = computeMoneyPosition(expenses, settlements, participantUserIds, currentUserId, baseCurrency, carryovers)
+
+  const myUnclaimed = receipts.filter((r) => r.paidBy === currentUserId && r.unclaimedMinor > 0)
+  const unclaimed: UnclaimedForYou | null =
+    myUnclaimed.length === 0
+      ? null
+      : {
+          amount: fromMinorUnits(
+            myUnclaimed.reduce((acc, r) => acc + r.unclaimedMinor, 0),
+            baseCurrency
+          ),
+          pendingInShare: fromMinorUnits(mine?.pendingUnclaimedMinor ?? 0, baseCurrency),
+          receipts: myUnclaimed.map((r) => ({
+            expenseId: r.expenseId,
+            description: r.description,
+            amount: fromMinorUnits(r.unclaimedOwnMinor, r.currency),
+            currency: r.currency,
+            claimCode: r.claimCode,
+          })),
+        }
 
   const paid = fromMinorUnits(mine?.totalPaidMinor ?? 0, baseCurrency)
   const share = fromMinorUnits(mine?.totalOwedMinor ?? 0, baseCurrency)
@@ -374,5 +419,6 @@ export function explainMoneyPosition(input: ExplainMoneyInput): MoneyEquation {
     terms,
     equationText,
     expensesMissingRate,
+    unclaimed,
   }
 }

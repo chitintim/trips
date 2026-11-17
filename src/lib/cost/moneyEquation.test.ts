@@ -279,3 +279,38 @@ describe('explainMoneyPosition: a payment the receiver says has not arrived', ()
     expect(c.sentPayments[0].disputed).toBe(false)
   })
 })
+
+describe('explainMoneyPosition: unclaimed receipt value', () => {
+  const lines = [
+    { id: 'steak', quantity: 1, total_amount: 24 },
+    { id: 'wine', quantity: 1, total_amount: 36 },
+    { id: 'dessert', quantity: 1, total_amount: 12 },
+    { id: 'mains', quantity: 1, total_amount: 48 },
+  ]
+  const dinner = {
+    id: 'din', trip_id: 't', description: 'Dinner at Le Bistrot', amount: 120, currency: 'GBP', fx_rate: null, paid_by: ME,
+    payment_date: '2026-09-01', ai_parsed: true, status: 'pending_allocation', line_items: lines, splits: [],
+    allocation_link: { code: 'abc123' },
+    claims: [
+      { id: 'c1', line_item_id: 'steak', user_id: ALEX, quantity_claimed: 1, amount_owed: 24 },
+      { id: 'c2', line_item_id: 'mains', user_id: ME, quantity_claimed: 1, amount_owed: 48 },
+    ],
+  } as unknown as ExpenseWithDetails
+  const run = (who: string) => explainMoneyPosition({ expenses: [dinner], settlements: [], participantUserIds: PEOPLE, currentUserId: who, baseCurrency: 'GBP', names: NAMES })
+
+  it('the payer sees the unclaimed value, counted inside their own share (never a second cost)', () => {
+    const eq = run(ME)
+    expect(eq.unclaimed).toMatchObject({ amount: 48, pendingInShare: 48 })
+    expect(eq.unclaimed?.receipts).toEqual([{ expenseId: 'din', description: 'Dinner at Le Bistrot', amount: 48, currency: 'GBP', claimCode: 'abc123' }])
+    expect(eq.paid).toBe(120)
+    expect(eq.share).toBe(96) // 48 claimed + 48 pending: not 144
+    expect(eq.net).toBe(24) // exactly what Alex owes
+    expect(eq.kind).toBe('owed')
+  })
+
+  it('other people see nothing extra', () => {
+    expect(run(ALEX).unclaimed).toBeNull()
+    expect(run(BEN).unclaimed).toBeNull()
+    expect(run(ALEX).net).toBe(-24)
+  })
+})

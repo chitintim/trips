@@ -20,6 +20,12 @@ export interface EquationRowView {
   strong?: boolean
 }
 
+/** "€48.00 of your receipts isn't claimed yet — it's counted as yours until it's shared", with a link per receipt. */
+export interface UnclaimedNoticeView {
+  text: string
+  receipts: Array<{ key: string; label: string; amount: string; claimCode: string | null }>
+}
+
 export interface MoneyPositionView {
   headline: string
   note: string | null
@@ -33,6 +39,8 @@ export interface MoneyPositionView {
   settleHint: string | null
   /** Where the hint points (the Settle up deep link). */
   settleHintLink: string
+  /** Only for the payer of receipts with unclaimed value; null for everyone else. */
+  unclaimedNotice: UnclaimedNoticeView | null
   /** True only when truly settled (nothing owed either way, nothing waiting). */
   square: boolean
 }
@@ -43,6 +51,10 @@ function who(names: string[]): string {
 }
 
 export const DUPLICATE_PAYMENTS_HINT = 'Some payments look recorded twice — check Settle up'
+export function unclaimedNoticeText(amount: string): string {
+  return `${amount} of your receipts isn't claimed yet — it's counted as yours until it's shared`
+}
+
 export const SETTLE_UP_LINK = '?open=settle'
 
 export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
@@ -56,6 +68,10 @@ export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
   if (eq.paid > 0 || eq.share > 0 || eq.sentConfirmed > 0 || eq.receivedConfirmed > 0 || eq.carriedOver.length > 0) {
     rows.push({ key: 'paid', label: 'You paid for the group', amount: money(eq.paid), sign: '' })
     rows.push({ key: 'share', label: 'Your share of everything', amount: money(eq.share), sign: '−' })
+    // Already inside the share above: a memo line, not a second cost.
+    if (eq.unclaimed && eq.unclaimed.pendingInShare > 0) {
+      rows.push({ key: 'share-pending', label: 'includes receipts not claimed yet, counted as yours', amount: money(eq.unclaimed.pendingInShare), sign: '' })
+    }
     if (eq.sentConfirmed > 0) rows.push({ key: 'sent', label: 'Payments you sent (confirmed)', amount: money(eq.sentConfirmed), sign: '+' })
     if (eq.receivedConfirmed > 0) rows.push({ key: 'received', label: 'Payments you received (confirmed)', amount: money(eq.receivedConfirmed), sign: '−' })
 
@@ -98,6 +114,17 @@ export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
     return `${amount} ${verb} ${eq.sentPayments.some((x) => x.id === p.id) ? 'to' : 'by'} ${p.counterpartyName}`
   })
   const foreignNote = foreign.length > 0 ? `${foreign.join(', ')} ${foreign.length === 1 ? "isn't" : "aren't"} counted above (different currency)` : null
+  const unclaimedNotice: UnclaimedNoticeView | null = eq.unclaimed
+    ? {
+        text: unclaimedNoticeText(money(eq.unclaimed.amount)),
+        receipts: eq.unclaimed.receipts.map((r) => ({
+          key: r.expenseId,
+          label: r.description,
+          amount: formatMoney(r.amount, r.currency, { mode: 'exact' }),
+          claimCode: r.claimCode,
+        })),
+      }
+    : null
   return {
     headline: square ? "You're square ✓" : h.text,
     note: h.note,
@@ -107,6 +134,7 @@ export function buildMoneyPositionView(eq: MoneyEquation): MoneyPositionView {
     foreignNote,
     settleHint: eq.hasDuplicatePayments ? DUPLICATE_PAYMENTS_HINT : null,
     settleHintLink: SETTLE_UP_LINK,
+    unclaimedNotice,
     square,
   }
 }

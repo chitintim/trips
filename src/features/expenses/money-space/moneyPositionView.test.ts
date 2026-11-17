@@ -160,3 +160,30 @@ describe('review D1/D2/D3/E1 in the view', () => {
     expect(v.settleHint).toBeNull()
   })
 })
+
+describe('buildMoneyPositionView: unclaimed receipt value', () => {
+  const dinner = {
+    id: 'din', trip_id: 't', description: 'Dinner at Le Bistrot', amount: 120, currency: 'GBP', fx_rate: null, paid_by: 'me',
+    payment_date: '2027-01-01', ai_parsed: true, status: 'pending_allocation', option_id: null, booking_id: null, splits: [],
+    allocation_link: { code: 'abc123' },
+    line_items: [
+      { id: 'a', quantity: 1, total_amount: 72 },
+      { id: 'b', quantity: 1, total_amount: 48 },
+    ],
+    claims: [{ id: 'c1', line_item_id: 'a', user_id: 'a', quantity_claimed: 1, amount_owed: 72 }],
+  } as unknown as ExpenseWithDetails
+
+  it('the payer gets the notice with a link per receipt and a memo row inside the share', () => {
+    const v = run([dinner], [])
+    expect(v.unclaimedNotice?.text).toBe("£48.00 of your receipts isn't claimed yet — it's counted as yours until it's shared")
+    expect(v.unclaimedNotice?.receipts).toEqual([{ key: 'din', label: 'Dinner at Le Bistrot', amount: '£48.00', claimCode: 'abc123' }])
+    expect(v.rows.map((r) => r.label)).toContain('includes receipts not claimed yet, counted as yours')
+    expect(v.headline).toBe("You're owed £72.00")
+  })
+
+  it('someone else on the receipt sees no notice', () => {
+    const v = buildMoneyPositionView(explainMoneyPosition({ expenses: [dinner], settlements: [], participantUserIds: USERS, currentUserId: 'a', baseCurrency: 'GBP', names: NAMES }))
+    expect(v.unclaimedNotice).toBeNull()
+    expect(v.rows.map((r) => r.key)).not.toContain('share-pending')
+  })
+})

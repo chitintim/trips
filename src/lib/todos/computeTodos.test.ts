@@ -430,6 +430,23 @@ describe('claim, travel, waitlist, scope', () => {
     expect(kinds(snap({ expenses: [{ ...receipt, participant_ids: ['chai'] }] }), 'sam')).toEqual([])
   })
 
+  it('claim: only a row the person made themselves clears the claim to-do', () => {
+    const has = (claims: Array<{ user_id: string; source?: string | null; created_by?: string | null }>) =>
+      kinds(snap({ expenses: [{ ...receipt, claims }] }), 'sam').includes('claim')
+    expect(has([{ user_id: 'sam', source: 'self', created_by: 'sam' }])).toBe(false)
+    expect(has([{ user_id: 'sam', source: 'self' }])).toBe(false)
+    expect(has([{ user_id: 'sam', source: 'shared', created_by: 'sam' }])).toBe(false)
+    expect(has([{ user_id: 'sam', source: 'on_behalf', created_by: 'sam' }])).toBe(false)
+    expect(has([{ user_id: 'sam' }])).toBe(false) // legacy: no source, null created_by
+    expect(has([{ user_id: 'sam', created_by: null }])).toBe(false)
+    expect(has([{ user_id: 'sam', source: 'leftover', created_by: 'tim' }])).toBe(true)
+    expect(has([{ user_id: 'sam', source: 'leftover', created_by: 'sam' }])).toBe(true)
+    expect(has([{ user_id: 'sam', source: 'on_behalf', created_by: 'tim' }])).toBe(true)
+    expect(has([{ user_id: 'sam', source: 'shared', created_by: 'tim' }])).toBe(true)
+    expect(has([{ user_id: 'sam', source: 'shared', created_by: null }])).toBe(true)
+    expect(has([{ user_id: 'chai', source: 'self' }])).toBe(true) // someone else's row
+  })
+
   it('D5: no claim to-do without a usable link, or while balances are frozen', () => {
     expect(kinds(snap({ expenses: [{ ...receipt, allocation_link: null }] }), 'sam')).toEqual([])
     expect(kinds(snap({ expenses: [{ ...receipt, allocation_link: { code: 'x', expires_at: '2026-11-01T00:00:00Z' } }] }), 'sam')).toEqual([])

@@ -147,9 +147,10 @@ export function computeExpenseStake(expense: ExpenseWithDetails, viewerId: strin
       return { kind: null, involved: true }
     }
 
-    const viewerClaim = expense.claims.find((c) => c.user_id === viewerId)
-    if (viewerClaim) {
-      const mineMinor = toMinorUnits(viewerClaim.amount_owed, currency)
+    // A person can hold several rows (own + leftover/shared): sum them all.
+    const viewerRows = expense.claims.filter((c) => c.user_id === viewerId)
+    if (viewerRows.length > 0) {
+      const mineMinor = viewerRows.reduce((s, c) => s + toMinorUnits(c.amount_owed, currency), 0)
       if (mineMinor > BALANCE_EPSILON_MINOR) return { kind: 'owe', amountMinor: mineMinor, currency, involved: true }
       return { kind: null, involved: true }
     }

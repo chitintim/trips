@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Card, Button, Badge, EmptyState, Skeleton, UserAvatar, useToast, SegmentedControl } from '../../../components/ui'
 import { AllSettled } from '../../../components/ui/illustrations'
 import { useAuth } from '../../../hooks/useAuth'
-import { useExpenses } from '../../../lib/queries/useExpenses'
+import { useExpenses, useReceiptRpcSupport, type ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import { useParticipants, useAllParticipants, useCurrentUserRow } from '../../../lib/queries/useTrip'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import {
@@ -32,7 +32,7 @@ import {
 } from './settleUpLogic'
 import { DuplicatePaymentsNotice } from './DuplicatePaymentsNotice'
 import { buildFreezeSuggestions, knownPaidIds, FREEZE_BLOCKED_BY_DUPLICATES, UNFREEZE_BLOCKED_BY_DUPLICATES } from './settlementFreeze'
-import { computeBalances, partitionCarryovers } from '../lib/balances'
+import { computeBalances, findFreezeBlockingReceipts, partitionCarryovers } from '../lib/balances'
 import { buildSettleUpPeople, LEFT_TRIP_SUFFIX } from './settleUpPeople'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
 import {
@@ -51,6 +51,9 @@ import { OnBehalfMenu } from './OnBehalfMenu'
 import { DisputeActions } from './DisputeActions'
 import { DISPUTED_PAYMENT_PAUSE, disputedPayments, disputeSupported, disputeView, reAsksUsed } from './paymentDispute'
 import { SettleAllDialog } from './SettleAllDialog'
+import { UnclaimedReceiptsNotice } from './UnclaimedReceiptsNotice'
+import { FreezeUnclaimedDialog, type ReceiptCandidate } from './FreezeUnclaimedDialog'
+import { freezeGate, isOverclaimedReceiptsError, isUnclaimedReceiptsError, parseServerReceiptDetail, receiptsForNotice, type ServerReceiptReport } from './unclaimedReceipts'
 import { PaymentDetailsSheet } from './PaymentDetailsSheet'
 import { MarkPaidSheet } from './MarkPaidSheet'
 import { parsePaymentDetails, formatPaymentDetailsForCopy } from './paymentDetails'
@@ -134,6 +137,9 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   const [paymentDetailsOpen, setPaymentDetailsOpen] = useState(false)
   const [markPaidTargetId, setMarkPaidTargetId] = useState<string | null>(null)
   const [isFreezing, setIsFreezing] = useState(false)
+  const [unclaimedDialogOpen, setUnclaimedDialogOpen] = useState(false)
+  const [serverRefusedUnclaimed, setServerRefusedUnclaimed] = useState(false)
+  const [serverReport, setServerReport] = useState<ServerReceiptReport | null>(null)
   const [settleAllOpen, setSettleAllOpen] = useState(false)
   const [settleAllRunning, setSettleAllRunning] = useState(false)
   const [settleAllOutcome, setSettleAllOutcome] = useState<BatchOutcome | null>(null)
@@ -171,6 +177,13 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   const { canManageTrip } = useTripPermissions(trip)
 
   const isFrozen = !!trip.settlement_snapshot
+
+  // Receipts with items nobody has claimed: counted as the payer's own share until shared (balances.ts), and the
+  // server refuses to freeze over them. The share/assign function is probed once per session; until it exists
+  // (migration not applied) nothing here blocks a freeze and the notice only gives advice.
+  const { leftovers: leftoversLive } = useReceiptRpcSupport()
+  const blockingReceipts = useMemo(() => findFreezeBlockingReceipts(expenses, trip.base_currency), [expenses, trip.base_currency])
+  const noticeReceipts = useMemo(() => (isFrozen ? [] : receiptsForNotice(blockingReceipts, user?.id, canManageTrip)), [isFrozen, blockingReceipts, user?.id, canManageTrip])
   const legacySnapshot = useMemo(() => readLegacySnapshot(trip.settlement_snapshot), [trip.settlement_snapshot])
 
   const suggested = useMemo(
@@ -277,7 +290,53 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   )
   const excludedCarryoverCount = carryoverPartition.excludedCurrency.length + carryoverPartition.excludedParticipant.length
 
-  const handleFreeze = async () => {
+  /** The people a receipt's leftovers can go to: those tagged on it, else everyone currently on the trip. */
+  const candidatesFor = (expenseId: string): ReceiptCandidate[] => {
+    const e = expenses.find((x) => x.id === expenseId)
+    const tagged = e?.participant_ids && e.participant_ids.length > 0 ? new Set(e.participant_ids) : null
+    return people.filter((p) => !p.left && (!tagged || tagged.has(p.userId))).map((p) => ({ userId: p.userId, name: p.name }))
+  }
+
+  /** The Freeze button: with unclaimed receipts (and the share function live) it opens the dialog instead of freezing. */
+  const handleFreezeClick = () => {
+    const gate = freezeGate(blockingReceipts, leftoversLive)
+    if (gate.kind === 'dialog') {
+      setServerRefusedUnclaimed(false)
+      setServerReport(null)
+      setUnclaimedDialogOpen(true)
+      return
+    }
+    void handleFreeze()
+  }
+
+  /** After every receipt's leftovers were placed: re-read the expenses, then freeze on the fresh figures. */
+  const handleLeftoversShared = async () => {
+    await queryClient.refetchQueries({ queryKey: queryKeys.expenses(trip.id), exact: true })
+    const fresh = queryClient.getQueryData<{ expenses: ExpenseWithDetails[] }>(queryKeys.expenses(trip.id))?.expenses ?? expenses
+    if (findFreezeBlockingReceipts(fresh, trip.base_currency).length > 0) {
+      showToast({ type: 'warning', message: 'Some receipts still have unclaimed items', description: 'Choose what happens to the rest, then try again.' })
+      return
+    }
+    setUnclaimedDialogOpen(false)
+    const freshPeople = buildSettleUpPeople({ expenses: fresh, settlements, carryovers, baseCurrency: trip.base_currency, active: participants, all: allParticipants })
+    await handleFreeze(fresh, freshPeople)
+  }
+
+  /** The server report's "Refresh": reload the expenses (claims) and settlements, then let the user try again from fresh figures. */
+  const handleRefreshAfterRefusal = async () => {
+    await Promise.all([
+      queryClient.refetchQueries({ queryKey: queryKeys.expenses(trip.id), exact: true }),
+      queryClient.refetchQueries({ queryKey: queryKeys.settlements(trip.id), exact: true }),
+    ])
+    const fresh = queryClient.getQueryData<{ expenses: ExpenseWithDetails[] }>(queryKeys.expenses(trip.id))?.expenses ?? expenses
+    setServerReport(null)
+    if (findFreezeBlockingReceipts(fresh, trip.base_currency).length === 0) {
+      setUnclaimedDialogOpen(false)
+      showToast({ type: 'info', message: 'Refreshed', description: 'Try freezing again.' })
+    }
+  }
+
+  const handleFreeze = async (expensesNow: ExpenseWithDetails[] = expenses, peopleNow = people) => {
     if (!user) return
     setIsFreezing(true)
     try {
@@ -293,11 +352,11 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
       // only what is STILL owed is suggested, so a freeze never re-creates a
       // payment the payer has already sent.
       const toInsert = dedupeTransactions(
-        computeRemainingSuggestions(expenses, freshSettlements, people, trip.base_currency, simplify, carryovers)
+        computeRemainingSuggestions(expensesNow, freshSettlements, peopleNow, trip.base_currency, simplify, carryovers)
       )
-      const { balances } = computeBalances(expenses, freshSettlements, people.map((p) => p.userId), trip.base_currency, carryovers)
+      const { balances } = computeBalances(expensesNow, freshSettlements, peopleNow.map((p) => p.userId), trip.base_currency, carryovers)
       const balancesMinor = new Map(balances.map((b) => [b.userId, b.netBalanceMinor]))
-      const snapshot = buildSnapshot(toInsert, people, balancesMinor, trip.base_currency)
+      const snapshot = buildSnapshot(toInsert, peopleNow, balancesMinor, trip.base_currency)
 
       // One atomic write (snapshot + replace the 'suggested' rows). Before the
       // migration is applied the hook falls back to the old client sequence.
@@ -310,7 +369,21 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
       })
       showToast({ type: 'success', message: 'Balances frozen — suggested payments created' })
     } catch (err) {
-      showToast({ type: 'error', message: 'Failed to freeze balances', description: err instanceof Error ? err.message : undefined })
+      const overclaimed = isOverclaimedReceiptsError(err)
+      if (isUnclaimedReceiptsError(err) && blockingReceipts.length > 0 && leftoversLive) {
+        // The server's guard caught receipts the screen did not (or the list changed): same dialog, not an error toast.
+        setServerRefusedUnclaimed(true)
+        setServerReport(null)
+        setUnclaimedDialogOpen(true)
+      } else if (overclaimed || isUnclaimedReceiptsError(err)) {
+        // The server and the screen disagree (the screen has nothing to offer): never a bare error toast. Show what the server
+        // reported, from the error's DETAIL, with a Refresh that reloads the latest claims.
+        setServerRefusedUnclaimed(true)
+        setServerReport({ kind: overclaimed ? 'overclaimed' : 'unclaimed', items: parseServerReceiptDetail(err) })
+        setUnclaimedDialogOpen(true)
+      } else {
+        showToast({ type: 'error', message: 'Failed to freeze balances', description: err instanceof Error ? err.message : undefined })
+      }
     } finally {
       setIsFreezing(false)
     }
@@ -483,7 +556,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
             />
           </div>
           {canManageTrip ? (
-            <Button variant="primary" fullWidth onClick={handleFreeze} disabled={suggested.length === 0 || isFreezing || freezeBlockedByDuplicates || freezeBlockedByDisputes} isLoading={isFreezing}>
+            <Button variant="primary" fullWidth onClick={handleFreezeClick} disabled={suggested.length === 0 || isFreezing || freezeBlockedByDuplicates || freezeBlockedByDisputes} isLoading={isFreezing}>
               Freeze balances & suggest payments
             </Button>
           ) : (
@@ -504,6 +577,8 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
           )}
         </Card>
       )}
+
+      <UnclaimedReceiptsNotice receipts={noticeReceipts} canManageTrip={canManageTrip} leftoversLive={leftoversLive} />
 
       {everythingSettled && (
         <Card variant="sunken" noPadding className="p-4 flex items-center gap-3">
@@ -801,6 +876,20 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
         isWorking={settleAllRunning}
         outcome={settleAllOutcome}
         onConfirm={handleSettleAll}
+      />
+
+      <FreezeUnclaimedDialog
+        isOpen={unclaimedDialogOpen}
+        onClose={() => setUnclaimedDialogOpen(false)}
+        receipts={blockingReceipts}
+        viewerId={user?.id}
+        nameOf={(id) => nameById[id] ?? 'Someone'}
+        candidatesFor={candidatesFor}
+        onAllShared={handleLeftoversShared}
+        serverRefused={serverRefusedUnclaimed}
+        serverReport={serverReport}
+        onRefresh={handleRefreshAfterRefusal}
+        currencyOf={(id) => expenses.find((x) => x.id === id)?.currency ?? trip.base_currency}
       />
 
       <MarkPaidSheet

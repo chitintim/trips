@@ -5,6 +5,8 @@ import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { toRpcError } from './useDecide'
 import { invokePaymentNotice, notifyPaymentEventAndRefresh, shouldNotifyPaymentEvent } from './notifyPaymentEvent'
+import { findFreezeBlockingReceipts } from '../../features/expenses/lib/balances'
+import type { ExpenseWithDetails } from './useExpenses'
 import { unresolvedDuplicateGroups } from '../../features/expenses/settle-up/settleUpLogic'
 import {
   isSettlementRpcMissing,
@@ -202,6 +204,26 @@ export interface FreezeSettlementsResult {
   skippedDuplicates: number
 }
 
+/**
+ * The server's freeze guard does not exist on this path, so run the same check
+ * here against fresh rows: itemised receipts with real unclaimed items (legacy
+ * rounding dust excluded, see isLineReallyUnclaimed) stop the freeze. The error
+ * carries the server's hint so the Settle up screen treats both alike.
+ */
+async function assertNoUnclaimedReceipts(tripId: string, baseCurrency: string): Promise<void> {
+  const { data, error } = await supabase
+    .from('expenses')
+    .select('*, line_items:expense_line_items(*), claims:expense_item_claims(*)')
+    .eq('trip_id', tripId)
+    .eq('ai_parsed', true)
+  if (error) throw toRpcError(error, 'Could not check the receipts before freezing')
+  const blocking = findFreezeBlockingReceipts((data ?? []) as unknown as ExpenseWithDetails[], baseCurrency)
+  if (blocking.length === 0) return
+  const err = new Error(`${blocking.length === 1 ? '1 receipt still has' : `${blocking.length} receipts still have`} unclaimed items. Ask people to claim them, or claim for them, then freeze.`)
+  ;(err as Error & { hint?: string }).hint = 'unclaimed_receipts'
+  throw err
+}
+
 /** The pre-migration sequence: three separate client writes. Not atomic -- only used when the RPC is missing. */
 async function freezeClientSide(tripId: string, { userId, snapshot, suggestions, knownPaidIds, baseCurrency }: FreezeSettlementsVars): Promise<FreezeSettlementsResult> {
   // The database only lets people who can manage the trip create payment rows, and only with a
@@ -211,6 +233,7 @@ async function freezeClientSide(tripId: string, { userId, snapshot, suggestions,
   const fresh = await fetchSettlements(tripId)
   if (unresolvedDuplicateGroups(fresh, baseCurrency).length > 0) throw new Error(FREEZE_BLOCKED_BY_DUPLICATES)
   if (paymentsChangedSince(fresh, knownPaidIds)) throw new Error(PAYMENTS_CHANGED_MESSAGE)
+  await assertNoUnclaimedReceipts(tripId, baseCurrency)
   const { data: trip, error: tripError } = await supabase
     .from('trips')
     .update({ settlement_snapshot: snapshot as Json, settlement_snapshot_at: new Date().toISOString(), settlement_snapshot_by: userId })

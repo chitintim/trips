@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Badge, Button, UserAvatar } from '../../../components/ui'
 import { formatMoneyMinor } from '../lib/formatMoney'
 import { withMoneyParticipants } from '../lib/balances'
@@ -141,6 +142,25 @@ export function MoneyPositionHeader({
             >
               {view.settleHint}
             </a>
+          )}
+          {view?.unclaimedNotice && (
+            <div className="mt-1.5 text-sm text-[var(--text-secondary)]" role="status">
+              <p>{view.unclaimedNotice.text}</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {view.unclaimedNotice.receipts.map((r) => (
+                  <li key={r.key}>
+                    {r.claimCode ? (
+                      <Link to={`/claim/${r.claimCode}`} className="font-medium text-accent-700 dark:text-accent-400 underline">
+                        {r.label}
+                      </Link>
+                    ) : (
+                      <span className="font-medium">{r.label}</span>
+                    )}{' '}
+                    <span className="tabular-nums">— {r.amount} not claimed</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </div>
 

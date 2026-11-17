@@ -46,6 +46,17 @@ import {
   answerSubtitle,
   bringTitle,
   claimTitle,
+  claimPutDownTitle,
+  claimFinishTitle,
+  claimSubtitle,
+  CLAIM_CHECK_LABEL,
+  CLAIM_FINISH_LABEL,
+  sendToTableTitle,
+  sendToTableSubtitle,
+  SEND_TO_TABLE_LABEL,
+  sortOutRestTitle,
+  SORT_OUT_LABEL,
+  repliedLabel,
   distinguishedTitle,
   closesLabel,
   anyOrganizerLabel,
@@ -403,10 +414,18 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
   // claim: itemised receipts I am on and have not claimed anything from. Not
   // while balances are frozen (claims are locked), and not without a usable
   // claim link (there is nowhere to claim).
+  //
+  // A receipt the payer SENT to the table (claims_sent_at set) has its own, stricter rules (sentClaimTodo): the to-do stays until the person
+  // replies. Every other receipt keeps the rules below exactly as they were.
   if (!ctx.frozen) {
     const everyone = ctx.s.participants.map((p) => p.user_id)
     for (const e of expenses) {
       if (!e.ai_parsed || !e.status) continue
+      if (receiptSent(e)) {
+        const sent = sentClaimTodo(ctx, e, userId)
+        if (sent) out.push(sent)
+        continue
+      }
       if (e.status === 'allocated' || e.status === 'confirmed') continue
       if (receiptFullyClaimed(e)) continue
       if (!hasUsableClaimLink(e, ctx.now)) continue
@@ -424,6 +443,7 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
         })
       )
     }
+    out.push(...payerReceiptTodos(ctx, userId))
   }
   return disambiguatePayments(out, settlements)
 }
@@ -513,6 +533,221 @@ function hasUsableClaimLink(e: SnapshotExpense, now: Date): boolean {
   const link = e.allocation_link
   if (!link || !link.code) return false
   return !link.expires_at || new Date(link.expires_at).getTime() > now.getTime()
+}
+
+// ---- receipts sent to the table (claims_sent_at set) -------------------------
+
+/** Most "Send to the table" / "Sort out the rest" to-dos a payer sees at once (like MAX_BOOK_TODOS for organisers). */
+export const MAX_PAYER_RECEIPT_TODOS = 3
+
+/** "Send <receipt> to the table" is only offered for receipts this recent (older ones were settled the old way), and never on a finished trip. */
+export const SEND_TO_TABLE_WINDOW_DAYS = 14
+
+/** The daily job applies a passed deadline at 09:00 UTC; "Sort out the rest" waits this long after the deadline so it does not nag in between. */
+export const SORT_OUT_GRACE_HOURS = 20
+
+function recentEnoughToSend(e: SnapshotExpense, now: Date): boolean {
+  if (!e.created_at) return false
+  const t = Date.parse(e.created_at)
+  return Number.isFinite(t) && now.getTime() - t <= SEND_TO_TABLE_WINDOW_DAYS * 86_400_000
+}
+
+/** True when the receipt went to the table AND the responses table is readable. Anything else keeps the old claim rules. */
+function receiptSent(e: SnapshotExpense): boolean {
+  return !!e.claims_sent_at && e.responses !== undefined
+}
+
+/**
+ * A person's own (non-leftover) quantity on the receipt: the database tags anyone who holds some, whatever the list says. A share of a
+ * table item (`shared_by_all` line: bread, wine) is derived by the database and is NEVER an own claim; so is a leftover-only row.
+ */
+function holdsOwnQuantity(e: Pick<ReceiptPeopleExpense, 'claims' | 'line_items'>, userId: string): boolean {
+  const table = new Set((e.line_items ?? []).filter((l) => l.shared_by_all === true).map((l) => l.id))
+  return e.claims.some((c) => {
+    if (c.user_id !== userId) return false
+    if (c.line_item_id != null && table.has(c.line_item_id)) return false
+    if (typeof c.quantity_claimed === 'number') return Math.round((c.quantity_claimed - (c.leftover_quantity ?? 0)) * 100) > 0
+    return c.source !== 'leftover'
+  })
+}
+
+/** What `receiptPeopleIds` needs to know about a receipt. */
+export interface ReceiptPeopleExpense {
+  paid_by: string
+  participant_ids?: ReadonlyArray<string> | null
+  claims: ReadonlyArray<{ user_id: string; source?: string | null; line_item_id?: string; quantity_claimed?: number; leftover_quantity?: number | null }>
+  /** The receipt's lines: lets a share of a table item (`shared_by_all`) be told apart from a claim of one's own. */
+  line_items?: ReadonlyArray<{ id: string; shared_by_all?: boolean | null }>
+  responses?: ReadonlyArray<{ user_id: string; response: string }>
+}
+
+/**
+ * THE ONE definition of "who is on this receipt" (mirrors the database's `_receipt_tagged`; the to-dos, Who had what, the send sheet's count
+ * and the status line all use it, so they cannot disagree):
+ *  - the explicit list when there is one (only people who have a row on the trip), else the active people who are in (with RSVP tracking on:
+ *    declined/cancelled are out, and so is everyone unconfirmed once somebody has confirmed; with it off: all of them) plus the payer;
+ *  - plus anyone holding a claim of their own (a row that only carries a share of the leftovers, or a share of a table item, does not count);
+ *  - minus those who said "I wasn't there" (never the payer, never someone holding a claim of their own).
+ * `participants` is the roster the list-less rule reads (inactive rows are ignored); `knownIds` is everyone with a row on the trip (default:
+ * the roster), which the explicit list and the own-claim rule are checked against.
+ */
+export function receiptPeopleIds(
+  e: ReceiptPeopleExpense,
+  participants: ReadonlyArray<{ user_id: string; active?: boolean | null; confirmation_status?: string | null }>,
+  confirmationEnabled: boolean,
+  knownIds?: ReadonlySet<string>
+): Set<string> {
+  const known = knownIds ?? new Set(participants.map((p) => p.user_id))
+  const people = new Set<string>()
+  const roster = participants.filter((p) => p.active !== false)
+  if (e.participant_ids && e.participant_ids.length > 0) {
+    for (const id of e.participant_ids) if (known.has(id)) people.add(id)
+  } else {
+    const anyConfirmed = roster.some((p) => p.confirmation_status === 'confirmed')
+    for (const p of roster) {
+      if (confirmationEnabled) {
+        const st = p.confirmation_status ?? ''
+        if (st === 'declined' || st === 'cancelled') continue
+        if (st !== 'confirmed' && anyConfirmed) continue
+      }
+      people.add(p.user_id)
+    }
+    people.add(e.paid_by)
+  }
+  const holds = (userId: string) => holdsOwnQuantity(e, userId)
+  for (const c of e.claims) if (known.has(c.user_id) && holds(c.user_id)) people.add(c.user_id)
+  for (const r of e.responses ?? []) {
+    if (r.response === 'not_there' && r.user_id !== e.paid_by && !holds(r.user_id)) people.delete(r.user_id)
+  }
+  return people
+}
+
+function receiptPeople(ctx: Ctx, e: SnapshotExpense): Set<string> {
+  return receiptPeopleIds(e, ctx.s.participants, ctx.confirmationEnabled, new Set(ctx.namesById.keys()))
+}
+
+/** Receipt people the payer is waiting to hear from: on the receipt, not the payer, no response yet. */
+function notReplied(ctx: Ctx, e: SnapshotExpense): string[] {
+  const replied = new Set((e.responses ?? []).map((r) => r.user_id))
+  return [...receiptPeople(ctx, e)].filter((id) => id !== e.paid_by && !replied.has(id))
+}
+
+/** A row someone ELSE made for this person ("Tim put you down for ..."). */
+function putDownRows(e: SnapshotExpense, userId: string) {
+  return e.claims.filter(
+    (c) =>
+      c.user_id === userId &&
+      (c.source === 'on_behalf' || c.source === 'shared') &&
+      !!c.created_by &&
+      c.created_by !== userId &&
+      (typeof c.quantity_claimed !== 'number' || Math.round((c.quantity_claimed - (c.leftover_quantity ?? 0)) * 100) > 0)
+  )
+}
+
+/** Money on lines nobody has claimed (dust tolerated), in the receipt's own currency. 0 when the snapshot has no lines. */
+function unassignedAmount(e: SnapshotExpense): number {
+  if (!e.line_items || e.line_items.length === 0) return 0
+  const claimed = new Map<string, number>()
+  for (const c of e.claims) {
+    if (c.line_item_id == null || typeof c.quantity_claimed !== 'number') continue
+    claimed.set(c.line_item_id, (claimed.get(c.line_item_id) ?? 0) + c.quantity_claimed)
+  }
+  let total = 0
+  for (const l of e.line_items) {
+    const amount = l.total_amount ?? 0
+    if (!(amount > 0) || !(l.quantity > 0)) continue
+    const left = Math.round((l.quantity - (claimed.get(l.id) ?? 0)) * 1e6) / 1e6
+    if (left <= CLAIM_QUANTITY_TOLERANCE) continue
+    total += amount * Math.min(1, left / l.quantity)
+  }
+  return Math.round(total * 100) / 100
+}
+
+/**
+ * The claim to-do on a receipt sent to the table: the person is on the receipt and has not replied ("That's everything" or "I wasn't there").
+ * It stays after their first claim, and for someone the payer put down. Gone when the claims are closed (the caller already skips frozen).
+ * Never the payer's: they get payerReceiptTodos instead.
+ */
+function sentClaimTodo(ctx: Ctx, e: SnapshotExpense, userId: string): Todo | null {
+  if (e.claims_closed_at) return null
+  if (e.paid_by === userId) return null
+  if ((e.responses ?? []).some((r) => r.user_id === userId)) return null
+  if (!receiptPeople(ctx, e).has(userId)) return null
+  const due = e.claim_deadline ?? null
+  const putDown = putDownRows(e, userId)
+  const base = { kind: 'claim' as const, entityId: e.id, due, link: DEEP_LINKS.claim(e.id), subtitle: claimSubtitle(e.description, due) }
+  if (putDown.length > 0) {
+    const amount = Math.round(putDown.reduce((n, c) => n + Math.max(0, (c.amount_owed ?? 0) - (c.leftover_amount ?? 0)), 0) * 100) / 100
+    const creators = [...new Set(putDown.map((c) => c.created_by as string))]
+    const who = creators.includes(e.paid_by) ? e.paid_by : creators[0]
+    return finish(ctx, userId, {
+      ...base,
+      title: claimPutDownTitle(firstName(ctx.namesById.get(who)), amount > 0 ? formatMoney(amount, e.currency) : null, e.description),
+      actionLabel: CLAIM_CHECK_LABEL,
+    })
+  }
+  if (e.claims.some((c) => isSelfMadeClaim(c, userId))) {
+    return finish(ctx, userId, { ...base, title: claimFinishTitle(e.description), actionLabel: CLAIM_FINISH_LABEL })
+  }
+  return finish(ctx, userId, { ...base, title: claimTitle(e.description, formatMoney(e.amount, e.currency)) })
+}
+
+/**
+ * The payer's own receipts (one to-do per receipt, at most MAX_PAYER_RECEIPT_TODOS):
+ *  - never sent: "Send <receipt> to the table", only when people are put down or items are unassigned, the receipt is under
+ *    SEND_TO_TABLE_WINDOW_DAYS old and the trip is not finished (so old receipts do not flood the payer when this ships);
+ *  - sent, deadline passed, not applied (the job has not run or applying failed), and items are unassigned or people have not replied:
+ *    "Sort out the rest of <receipt>".
+ * Only once the claim columns exist (claims_sent_at is null or a date, never undefined), so nothing changes before the migration.
+ */
+function payerReceiptTodos(ctx: Ctx, userId: string): Todo[] {
+  const candidates: Array<{ e: SnapshotExpense; sort: number; draft: Parameters<typeof finish>[2] }> = []
+  for (const e of ctx.s.expenses) {
+    if (e.paid_by !== userId || !e.ai_parsed || !e.status) continue
+    if (e.claims_sent_at === undefined || e.claims_closed_at) continue
+    const unassigned = unassignedAmount(e)
+    const unassignedText = unassigned > 0 ? formatMoney(unassigned, e.currency) : null
+    if (!e.claims_sent_at) {
+      if (ctx.finished || !recentEnoughToSend(e, ctx.now)) continue
+      const people = new Set(e.claims.filter((c) => c.user_id !== userId && putDownRows(e, c.user_id).length > 0).map((c) => c.user_id)).size
+      if (people === 0 && unassigned <= 0) continue
+      candidates.push({
+        e,
+        sort: Number.POSITIVE_INFINITY,
+        draft: {
+          kind: 'claim',
+          id: `claim:${e.id}:payer`,
+          entityId: `${e.id}:payer`,
+          title: sendToTableTitle(e.description),
+          subtitle: sendToTableSubtitle(people, unassignedText) || null,
+          actionLabel: SEND_TO_TABLE_LABEL,
+          due: null,
+          link: DEEP_LINKS.claim(e.id),
+        },
+      })
+      continue
+    }
+    if (!e.claim_deadline || !isPast(e.claim_deadline, ctx.now)) continue
+    if (ctx.now.getTime() - dueMs(e.claim_deadline) < SORT_OUT_GRACE_HOURS * 3_600_000) continue
+    const waiting = notReplied(ctx, e).length
+    if (unassigned <= 0 && waiting === 0) continue
+    candidates.push({
+      e,
+      sort: dueMs(e.claim_deadline),
+      draft: {
+        kind: 'claim',
+        id: `claim:${e.id}:payer`,
+        entityId: `${e.id}:payer`,
+        title: sortOutRestTitle(e.description, unassignedText, waiting),
+        subtitle: waiting > 0 ? `${waiting} ${waiting === 1 ? 'person has' : 'people have'} not replied` : null,
+        actionLabel: SORT_OUT_LABEL,
+        due: e.claim_deadline,
+        link: DEEP_LINKS.claim(e.id),
+      },
+    })
+  }
+  candidates.sort((a, b) => a.sort - b.sort)
+  return candidates.slice(0, MAX_PAYER_RECEIPT_TODOS).map((c) => finish(ctx, userId, c.draft))
 }
 
 /** Organiser: the trip is over and someone owes money, but balances are not frozen so nobody can pay yet. */
@@ -865,6 +1100,15 @@ export function computeWaitingOn(snapshot: TripSnapshot, now: Date = new Date(),
   const roster = snapshot.participants.filter((p) => !isOut(p))
   for (const item of items.values()) {
     if (item.kind === 'confirm_payment' && item.entityId.startsWith('from:')) item.detail = confirmPaymentGroupDetail(item.userIds.length)
+    if (item.kind === 'claim') {
+      // A receipt sent to the table: "3 of 8 have replied" (the people still listed under it are the ones who have not).
+      const e = snapshot.expenses.find((x) => x.id === item.entityId)
+      if (e && receiptSent(e) && !e.claims_closed_at) {
+        const people = [...receiptPeople(ctx, e)].filter((id) => id !== e.paid_by)
+        const replied = new Set((e.responses ?? []).map((r) => r.user_id))
+        item.detail = repliedLabel(people.filter((id) => replied.has(id)).length, people.length)
+      }
+    }
     // Decide / tie / book can be done by ANY organiser; none of them individually owes it.
     if (item.kind === 'org_decide' || item.kind === 'org_tie' || item.kind === 'org_book') item.detail = anyOrganizerLabel(item.userIds.length)
     if (item.kind === 'answer' && sectionById.has(item.entityId)) {

@@ -185,6 +185,12 @@ export interface ExplainMoneyInput {
   carryovers?: SettlementCarryover[]
   /** The trip's balances are frozen (trips.settlement_snapshot is set): the pay to-dos come from the suggested rows. */
   frozen?: boolean
+  /**
+   * False while any input (expenses and claims, settlements, carryovers, the trip's freeze state) is still loading or refetching.
+   * The "balances changed since they were frozen" claim needs a stable mismatch from inputs of one generation, so it is never made
+   * from half-refreshed data. Default true.
+   */
+  inputsSettled?: boolean
   /** Base units per 1 unit of the key currency, to convert marked-paid money in other currencies. Without a rate such a payment is excluded and listed. */
   fxRates?: Readonly<Record<string, number>>
   /** carryover.source_trip_id -> trip name, for "carried over from Sicily". */
@@ -360,7 +366,7 @@ export function explainMoneyPosition(input: ExplainMoneyInput): MoneyEquation {
     .filter((p) => p.status === 'suggested' && p.currency === baseCurrency)
     .reduce((acc, p) => acc + toMinorUnits(p.amount, baseCurrency), 0)
   const remainingMinor = toMinorUnits(remainingToPay, baseCurrency)
-  const stale = !!input.frozen && suggestedMinor > 0 && suggestedMinor !== remainingMinor
+  const stale = !!input.frozen && input.inputsSettled !== false && suggestedMinor > 0 && suggestedMinor !== remainingMinor
   if (stale) {
     if (headline.kind === 'settled') {
       headline = { kind: 'stale', amount: fromMinorUnits(suggestedMinor, baseCurrency), text: STALE_BALANCES_NOTE, note: null }

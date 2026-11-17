@@ -9,14 +9,23 @@
  */
 
 import { supabase } from './supabase'
-import { RECEIPT_MAX_PDF_MB } from './receiptParsing'
+import { RECEIPT_MAX_PDF_BYTES, RECEIPT_MAX_PDF_MB } from './receiptParsing'
 
 // Final size after compression. Must stay below the server's raw image cap
 // (MAX_IMAGE_BYTES = 3_600_000 in supabase/functions/parse-receipt/fileType.ts, chosen so the
 // base64 request stays under the API's 5 MB per-image limit). 3 MiB = 3_145_728 < 3_600_000.
 const MAX_FILE_SIZE_MB = 3
 const MAX_ORIGINAL_FILE_SIZE_MB = 15 // Maximum original file size (before compression)
-const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/heic', 'image/heif', 'application/pdf']
+const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/heic', 'image/heif', 'image/webp', 'image/gif', 'application/pdf']
+
+/** The `accept` attribute for every receipt file picker; mirrors what checkReceiptFile lets through. */
+export const RECEIPT_ACCEPT = ALLOWED_TYPES.join(',')
+
+/** One PDF test for the whole upload path: by MIME type, or by extension when the phone reports no type. */
+export function isPdfFile(file: { name: string; type: string }): boolean {
+  const type = (file.type || '').toLowerCase()
+  return type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+}
 
 export interface UploadResult {
   path: string
@@ -65,7 +74,7 @@ async function convertHeicToJpeg(file: File): Promise<File> {
     })
 
     // HEIC conversion is required - cannot proceed without it
-    throw new Error(`Failed to convert HEIC image. This browser may not support HEIC conversion.\n\nPlease either:\n1. Use a different browser (Chrome/Edge recommended)\n2. Convert the image to JPEG manually before uploading\n3. Take a screenshot of the image and upload that instead\n\nTechnical details: ${error.message}`)
+    throw new ReceiptUploadError("We couldn't open this photo. Try taking a screenshot of it and choosing that instead.", false)
   }
 }
 
@@ -79,11 +88,11 @@ async function convertHeicToJpeg(file: File): Promise<File> {
  */
 async function compressImage(file: File): Promise<File> {
   // Don't compress PDFs
-  if (file.type === 'application/pdf') {
+  if (isPdfFile(file)) {
     // Check PDF size
     const pdfSizeMB = file.size / 1024 / 1024
     if (pdfSizeMB > RECEIPT_MAX_PDF_MB) {
-      throw new Error(`PDF too large (${pdfSizeMB.toFixed(1)}MB). Maximum: ${RECEIPT_MAX_PDF_MB}MB. Please compress the PDF before uploading.`)
+      throw new ReceiptUploadError(`This PDF is too large to scan (${pdfSizeMB.toFixed(1)} MB). Use one under ${RECEIPT_MAX_PDF_MB} MB, or enter it yourself.`, false)
     }
     return file
   }
@@ -99,7 +108,7 @@ async function compressImage(file: File): Promise<File> {
       maxSizeMB: 0.5, // Target 500KB
       maxWidthOrHeight: 1920,
       useWebWorker: true,
-      fileType: file.type as any
+      fileType: file.type || undefined
     }
 
     const compressed = await imageCompression(file, options)
@@ -111,36 +120,54 @@ async function compressImage(file: File): Promise<File> {
   } catch (error) {
     console.error('Compression failed:', error)
     // Compression is required - we cannot upload uncompressed files
-    throw new Error('Image compression failed. Please try a different image or reduce its size manually.')
+    throw new ReceiptUploadError("We couldn't shrink this photo. Try a different photo or a screenshot.", false)
+  }
+}
+
+export type ReceiptFileCheck = { ok: true } | { ok: false; message: string }
+
+const ALLOWED_EXTENSIONS = ['jpg', 'jpeg', 'png', 'heic', 'heif', 'webp', 'gif', 'pdf']
+
+/**
+ * Error thrown by uploadReceipt. `message` is always plain, user-facing copy;
+ * `retryable` says whether trying the same file again could help.
+ */
+export class ReceiptUploadError extends Error {
+  retryable: boolean
+  constructor(message: string, retryable: boolean) {
+    super(message)
+    this.name = 'ReceiptUploadError'
+    this.retryable = retryable
   }
 }
 
 /**
- * Validate file before upload
+ * Pre-flight check that mirrors the server (supabase/functions/parse-receipt/fileType.ts):
+ * PDFs up to 10 MB; images up to 15 MB as picked (they are compressed to <= 3 MiB
+ * before upload, under the server's raw image cap).
  */
-function validateFile(file: File): { valid: boolean; error?: string } {
-  // Check file type
-  const isAllowedType = ALLOWED_TYPES.includes(file.type) ||
-                       file.name.toLowerCase().endsWith('.heic') ||
-                       file.name.toLowerCase().endsWith('.heif')
-
-  if (!isAllowedType) {
-    return {
-      valid: false,
-      error: `File type not supported. Please use: JPEG, PNG, PDF, or HEIC`
-    }
+export function checkReceiptFile(file: { name: string; type: string; size: number }): ReceiptFileCheck {
+  const name = file.name.toLowerCase()
+  const ext = name.includes('.') ? name.split('.').pop() ?? '' : ''
+  const type = (file.type || '').toLowerCase()
+  const typeOk = ALLOWED_TYPES.includes(type)
+  // Some phones report an empty type for library files, so a known extension counts too.
+  if (!typeOk && !ALLOWED_EXTENSIONS.includes(ext)) {
+    return { ok: false, message: "This file type can't be scanned. Use a JPG, PNG, HEIC, WebP, GIF or PDF." }
   }
-
-  // Check original file size (before compression/conversion)
-  const fileSizeMB = file.size / 1024 / 1024
-  if (fileSizeMB > MAX_ORIGINAL_FILE_SIZE_MB) {
-    return {
-      valid: false,
-      error: `File too large (${fileSizeMB.toFixed(1)}MB). Maximum file size: ${MAX_ORIGINAL_FILE_SIZE_MB}MB.\n\nTip: Modern phone photos can be 10MB+. Try:\n1. Taking a screenshot instead\n2. Using your phone's "optimize" or "reduce size" feature\n3. Using an online image compressor first`
-    }
+  if (file.size <= 0) {
+    return { ok: false, message: "This file looks empty. Try taking the photo again." }
   }
-
-  return { valid: true }
+  const isPdf = isPdfFile(file)
+  const mb = file.size / 1024 / 1024
+  if (isPdf) {
+    if (file.size > RECEIPT_MAX_PDF_BYTES) {
+      return { ok: false, message: `This PDF is too large to scan (${mb.toFixed(1)} MB). Use one under ${RECEIPT_MAX_PDF_MB} MB, or enter it yourself.` }
+    }
+  } else if (mb > MAX_ORIGINAL_FILE_SIZE_MB) {
+    return { ok: false, message: `This photo is too big to scan (${mb.toFixed(1)} MB). Try a screenshot or a smaller photo, or enter it yourself.` }
+  }
+  return { ok: true }
 }
 
 /**
@@ -157,9 +184,9 @@ export async function uploadReceipt(
   expenseId?: string
 ): Promise<UploadResult> {
   // Validate file
-  const validation = validateFile(file)
-  if (!validation.valid) {
-    throw new Error(validation.error)
+  const check = checkReceiptFile(file)
+  if (!check.ok) {
+    throw new ReceiptUploadError(check.message, false)
   }
 
   try {
@@ -172,7 +199,7 @@ export async function uploadReceipt(
     // Step 3: Check final size
     const finalSizeMB = processedFile.size / 1024 / 1024
     if (finalSizeMB > MAX_FILE_SIZE_MB) {
-      throw new Error(`File still too large after compression (${finalSizeMB.toFixed(1)}MB). Maximum: ${MAX_FILE_SIZE_MB}MB`)
+      throw new ReceiptUploadError(`This photo is still too big after shrinking it (${finalSizeMB.toFixed(1)} MB). Try a screenshot or a smaller photo.`, false)
     }
 
     // Step 4: Generate unique filename
@@ -198,7 +225,7 @@ export async function uploadReceipt(
 
     if (error) {
       console.error('Upload error:', error)
-      throw new Error(`Upload failed: ${error.message}`)
+      throw new ReceiptUploadError("We couldn't upload the photo. Check your connection and try again.", true)
     }
 
     // Bucket is private: callers derive display URLs from `path` via
@@ -209,7 +236,9 @@ export async function uploadReceipt(
     }
   } catch (error: any) {
     console.error('Receipt upload failed:', error)
-    throw error
+    if (error instanceof ReceiptUploadError) throw error
+    // Anything else (a dropped connection mid-upload, a library error) must not leak raw text.
+    throw new ReceiptUploadError("We couldn't upload the photo. Check your connection and try again.", true)
   }
 }
 

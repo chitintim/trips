@@ -23,6 +23,8 @@ export interface MoneyPositionHeaderProps {
   baseCurrency: string
   /** trips.settlement_snapshot is set: balances are frozen and the pay to-dos come from the suggested rows. The headline then never contradicts them. */
   frozen?: boolean
+  /** False while expenses, settlements or the trip are still (re)loading: the "balances changed" claim is not made from half-refreshed data. */
+  inputsSettled?: boolean
   /** Settle-up STATE card affordance (plan §4 #4) — only meaningful when there's actually something to settle. */
   onSettleUp: () => void
   /** The "recorded twice" hint: open Settle up scrolled to the duplicate-payments notice. */
@@ -70,6 +72,7 @@ export function MoneyPositionHeader({
   currentUserId,
   baseCurrency,
   frozen = false,
+  inputsSettled = true,
   onSettleUp,
   onSeeDuplicates,
   onSeeMyBreakdown,
@@ -101,10 +104,11 @@ export function MoneyPositionHeader({
         baseCurrency,
         carryovers,
         frozen,
+        inputsSettled,
         names,
       })
     )
-  }, [expenses, settlements, carryovers, participants, allParticipants, currentUserId, baseCurrency, frozen])
+  }, [expenses, settlements, carryovers, participants, allParticipants, currentUserId, baseCurrency, frozen, inputsSettled])
 
   // Same merged real-settlements + usable-carryovers list computeMoneyPosition
   // fed computePairwiseBreakdown -- the per-pair ledger must read the same

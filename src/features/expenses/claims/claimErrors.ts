@@ -10,6 +10,7 @@ const BY_HINT: Record<string, string> = {
   bad_line: "That item isn't on this receipt any more. Refresh and try again.",
   not_found: "This receipt can't be found any more.",
   auth: 'Please sign in again.',
+  claims_closed: "This receipt's claims are closed, so they can't be changed. The person who paid can reopen it.",
 }
 
 export function describeClaimError(err: unknown, fallback = 'Something went wrong. Try again.'): string {

@@ -45,3 +45,32 @@ rehearsal receipt.
 
 It embeds the migration verbatim into `rehearsal.template.sql` and computes the expected `freeze_settlements` body md5 from the migration
 text, so the copy can never drift. Edit `rehearsal.template.sql`, never the generated `.sql`.
+
+---
+
+# Receipt deadline + links (phase 2): migration rehearsal
+
+`20261126090000_receipt_deadline_rehearsal.sql` applies `supabase/migrations/20261126090000_receipt_deadline_tokens.sql` (phase 1, `20261124090000`, is
+already live and is NOT embedded) and exercises it on the same private test trip, then **ends in an error so that everything rolls back**. Run it exactly like the
+first one: paste the whole file into the SQL editor as ONE batch; the result pane shows `REHEARSAL PASS (65 steps, 0 failed) [...]` or `REHEARSAL FAIL ...`.
+It sends no email and writes nothing outside the transaction (it also checks that `notifications` did not change).
+
+What it checks, in order: before the migration, the live `_receipt_tagged` / `_receipt_leftover_confirmed` are exactly the phase-1 bodies (the migration replaces both) and the
+phase-2 names are free; after it, the columns, the three tables with RLS (four policies on the responses, none on the token tables), the triggers, `freeze_settlements`
+untouched, the EXECUTE matrix for the 16 new functions, and that `auth.uid()` / `auth.role()` follow `request.jwt.*` (what the link functions rely on). Then on the test
+trip, as A (creator, payer) and B (another participant): an itemised receipt; A `send_receipt_to_table` twice (18:00 UTC default deadline, notify = [B], idempotent); B
+cannot extend; B's direct UPDATE of the deadline columns is ignored; B's own answer through RLS (fresh `responded_at`), not for A, the payer cannot be "not there", B
+with claims cannot be "not there", A reads B's answer; the token functions are closed to signed-in clients; as the service role: issue, peek, `toggle` off and on AS B
+(rows exact, `created_by` B, settings restored), undo / done, the payer's link refuses "not there", an expired link, the rate-limit helper; the leftover rule (B confirmed,
+A did not, so A takes the 6.00 dessert) through the PUBLIC preview; `extend_receipt_deadline`; `apply_receipt_deadline` as the service role (not due, then after the
+deadline: applied once, receipt exact, a link refused with `deadline_passed` / `closed`, a second call a no-op); client answers refused once shared; and on a frozen trip
+`send`, `apply` and a client answer are all refused with hint `frozen`. If the test trip is frozen it is unfrozen inside the transaction first.
+
+Rebuild after ANY edit of the migration or `rehearsal_phase2.template.sql`:
+
+    node scripts/build-rehearsal.mjs        # builds both rehearsal files
+
+Phase 2 review additions: the rehearsal never uses `SET ROLE service_role` (only the claims-based impersonation the phase-1 rehearsal proved on live); it also
+exercises a successful "I wasn't there" on a receipt with a table item (and undo), `apply_receipt_deadline` preview, a link toggle after leftovers were shared, re-itemise
+with leftovers and a removed line, a plain expense with a real split row converted, and reopen + Share now. `pre.begin_live` / `pre.unfreeze_live` fail if the live bodies
+of the replaced `_receipt_begin` / `unfreeze_settlements` differ from the repo text.

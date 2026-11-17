@@ -239,7 +239,7 @@ export function TripDetail() {
       actionIds: new Set(snapshot.actions.map((a) => a.id)),
       checklistIds: new Set(snapshot.checklists.map((c) => c.id)),
       settlements: snapshot.settlements,
-      expenses: (expensesData?.expenses ?? []).map((e) => ({ id: e.id, claimCode: e.allocation_link?.code ?? null })),
+      expenses: (expensesData?.expenses ?? []).map((e) => ({ id: e.id, claimCode: e.allocation_link?.code ?? null, paidBy: e.paid_by })),
       itemIds,
       options,
       ownChoiceSectionIds,
@@ -287,7 +287,7 @@ export function TripDetail() {
         setMarkPaidSettlementId(sheet.settlementId)
         break
       case 'claim':
-        navigate(`/claim/${encodeURIComponent(sheet.code)}`)
+        navigate(`/claim/${encodeURIComponent(sheet.code)}${sheet.assign ? '?assign=1' : ''}`)
         break
       case 'add-participant':
         setAddParticipantModalOpen(true)

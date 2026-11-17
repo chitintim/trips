@@ -1,19 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Modal, Button, Stepper, Skeleton, ConfirmDiscardSheet, useToast } from '../../../components/ui'
+import { Modal, Button, Skeleton, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import {
   useCreateExpense,
   useUpdateExpense,
   useCreateItemizedExpense,
-  useConvertToItemizedExpense,
   useConvertFromItemizedExpense,
   useDeleteExpense,
-  type SplitRow,
 } from '../../../lib/queries/useExpenses'
 import { useTimeline } from '../../../lib/queries/useTimeline'
-import { uploadReceipt, getReceiptUrl } from '../../../lib/receiptUpload'
-import { resolveExpenseFxFields, splitBaseCurrencyAmount } from '../../../lib/fx/resolveExpenseFxFields'
+import { uploadReceipt, getReceiptUrl, isPdfFile, RECEIPT_ACCEPT } from '../../../lib/receiptUpload'
+import { todayLocal } from '../../../lib/localDate'
+import { resolveExpenseFxFields } from '../../../lib/fx/resolveExpenseFxFields'
 import { generateLinkCode } from '../../../lib/receiptParsing'
 import { useTripActivityLog } from '../../organizer/lib/activity'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
@@ -21,18 +20,28 @@ import { findDuplicateCandidates } from '../lib/duplicateDetection'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { defaultTaggedParticipantIds } from '../lib/participantDefaults'
 import { ReceiptLightbox } from '../components/ReceiptLightbox'
-import { DetailsStep } from './DetailsStep'
-import { PayerStep } from './PayerStep'
-import { SplitStep } from './SplitStep'
-import { ReviewStep } from './ReviewStep'
-import { computeSplits, validateSplitSum } from './computeSplits'
-import { WIZARD_STEPS, emptyWizardDraft, type ExpenseWizardDraft } from './wizardState'
-import { emptyItemizedDraft, fromReceiptParseResult, fromExpenseLineItems } from '../itemized/itemizedState'
-import { ItemizedEditorScreen } from '../itemized/ItemizedEditorScreen'
+import { OneScreenForm } from './OneScreenForm'
+import { buildSplitRows, buildExpensePayload, buildItemizedExpensePayload, buildItemizedHeaderEditPayload } from './expenseSavePayload'
+import { useReitemizeExpense, previewReitemizeExpense } from './useReitemizeExpense'
+import { useSendToTable } from '../../../lib/queries/useReceiptTable'
+import { clearedPeopleLine, receiptColumnsOf, type SendOutcome } from '../claims/receiptTable'
+import { itemiseChoice, isFrozen, pickEditorScreen, startsDirty } from './expenseFormLogic'
+import { FROZEN_EXPENSES_MESSAGE } from '../quick-capture/addExpenseEntry'
+import { emptyWizardDraft, draftFromExpense, draftFromParsedReceipt, parsedLineCount, seedParticipantIds, participantSelectionChanged, type ExpenseWizardDraft } from './wizardState'
+import { emptyItemizedDraft, fromReceiptParseResult, fromExpenseLineItems, itemizedWriteProblem, headerTextProblems } from '../itemized/itemizedState'
+import { ItemizedEditorScreen, type ClearClaimsPreview, type ItemizedSaveParams } from '../itemized/ItemizedEditorScreen'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { ReceiptParseResult } from '../../../shared/contracts/receiptParseResult'
+import type { ParsedReceiptData } from '../../../lib/receiptParsing'
 import type { Trip } from '../../../types'
+
+/** A readable message from whatever was thrown (supabase errors are plain objects, not Errors). */
+function errorText(err: unknown): string | undefined {
+  if (err instanceof Error) return err.message || undefined
+  const m = (err as { message?: unknown } | null)?.message
+  return typeof m === 'string' && m ? m : undefined
+}
 
 export interface ExpenseEditorWizardProps {
   isOpen: boolean
@@ -46,11 +55,13 @@ export interface ExpenseEditorWizardProps {
   initialReceiptPath?: string | null
   /** The v2 parse result from quick capture's receipt scan (if any) -- seeds the itemized editor with real line items instead of a blank draft. */
   initialParsedReceipt?: ReceiptParseResult | null
+  /** The whole scan result: vendor, total, currency, date and category pre-fill the form, and the itemise choice counts its lines. */
+  initialParsedData?: ParsedReceiptData | null
 }
 
 /**
- * Expense editor: decomposed wizard (details -> payer -> split -> review),
- * each step its own component file (plan §10 #2). Fresh-state guarantee:
+ * Expense editor: ONE screen (amount, what for, then Paid by / Split / Date
+ * lines that open in place). Fresh-state guarantee:
  * remounted via `key` by the caller on every open so no previous
  * submission's values leak in (Form & Flow Standard point 2); this
  * component itself never has to reset internal state on open/close.
@@ -64,6 +75,7 @@ export function ExpenseEditorWizard({
   editingExpense = null,
   initialReceiptPath = null,
   initialParsedReceipt = null,
+  initialParsedData = null,
 }: ExpenseEditorWizardProps) {
   const { user } = useAuth()
   const { showToast } = useToast()
@@ -72,7 +84,8 @@ export function ExpenseEditorWizard({
   const createExpense = useCreateExpense(trip.id)
   const updateExpense = useUpdateExpense(trip.id)
   const createItemizedExpense = useCreateItemizedExpense(trip.id)
-  const convertToItemizedExpense = useConvertToItemizedExpense(trip.id)
+  const reitemizeExpense = useReitemizeExpense(trip.id)
+  const sendToTable = useSendToTable(trip.id)
   const convertFromItemizedExpense = useConvertFromItemizedExpense(trip.id)
   const deleteExpense = useDeleteExpense(trip.id)
   const logActivity = useTripActivityLog(trip.id)
@@ -88,48 +101,28 @@ export function ExpenseEditorWizard({
   const existingClaimCount = editingExpense?.claims.length ?? 0
   const wasItemized = isEditMode && existingLineItemCount > 0
 
-  const seedFromExpense = (expense: ExpenseWithDetails): ExpenseWizardDraft => ({
-    description: expense.description,
-    vendorName: expense.vendor_name ?? '',
-    amount: String(expense.amount),
-    currency: expense.currency,
-    paymentDate: expense.payment_date,
-    category: expense.category,
-    participantIds: expense.participant_ids ?? participants.map((p) => p.user_id),
-    receiptPath: expense.receipt_url,
-    paidBy: expense.paid_by,
-    // Itemized expenses have no expense_splits rows (their split lives in
-    // line items + claims instead), so split_type can't tell us that --
-    // line_items presence is the real signal.
-    splitMode: expense.line_items.length > 0 ? 'itemized' : expense.splits[0]?.split_type ?? 'equal',
-    splitEntries: expense.splits.map((s) => ({
-      userId: s.user_id,
-      value:
-        s.split_type === 'percentage'
-          ? String(s.percentage ?? '')
-          : s.split_type === 'shares'
-            ? String(s.shares ?? '1')
-            : s.split_type === 'custom'
-              ? String(s.amount)
-              : '', // equal: unused by computeSplits, never shown raw in another mode's input
-    })),
-    nightsWeightingApplied: false,
-    fxRateOverride: expense.rate_source === 'manual' && expense.fx_rate ? String(expense.fx_rate) : null,
-  })
+  const withScanPrefill = (blank: ExpenseWizardDraft): ExpenseWizardDraft => {
+    const hour = new Date().getHours()
+    const atMealtime = (hour >= 7 && hour < 10) || (hour >= 12 && hour < 15) || (hour >= 18 && hour < 22)
+    const withCategory = atMealtime ? { ...blank, category: 'food' } : blank
+    return initialParsedData ? draftFromParsedReceipt(withCategory, initialParsedData, initialReceiptPath) : withCategory
+  }
+
+  // Confirmed people (everyone if nobody has confirmed yet): declined or
+  // pending people are not pre-tagged into an expense or auto-chased. A saved
+  // expense with no stored list is seeded from the same default.
+  const defaultTaggedIds = defaultTaggedParticipantIds(participants, isConfirmationEnabled(trip))
 
   const initialValue = useMemo(
     () =>
       isEditMode && editingExpense
-        ? seedFromExpense(editingExpense)
-        : emptyWizardDraft({
-            today: new Date().toISOString().slice(0, 10),
+        ? draftFromExpense(editingExpense, defaultTaggedIds)
+        : withScanPrefill(emptyWizardDraft({
+            today: todayLocal(),
             baseCurrency: trip.base_currency,
             currentUserId: user?.id ?? '',
-            // Defaults to CONFIRMED participants (falling back to everyone
-            // if nobody's confirmed yet) -- declined/pending people
-            // shouldn't be pre-tagged into a new expense or auto-chased.
-            allParticipantIds: defaultTaggedParticipantIds(participants, isConfirmationEnabled(trip)),
-          }),
+            allParticipantIds: defaultTaggedIds,
+          })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   )
@@ -147,7 +140,7 @@ export function ExpenseEditorWizard({
     clearDraft,
   } = useFormDraft<ExpenseWizardDraft>(draftKey, seededInitialValue, { enabled: !isEditMode })
 
-  const [stepIndex, setStepIndex] = useState(0)
+  const [itemiseChoiceDismissed, setItemiseChoiceDismissed] = useState(false)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
   const [receiptPreviewUrl, setReceiptPreviewUrl] = useState<string | null>(null)
   const [showReceiptLightbox, setShowReceiptLightbox] = useState(false)
@@ -156,7 +149,8 @@ export function ExpenseEditorWizard({
   // segmented control but land the user on the regular stepper (which has
   // no per-participant inputs for that mode).
   const [showItemized, setShowItemized] = useState(() => initialValue.splitMode === 'itemized')
-  const [isDirty, setIsDirty] = useState(false)
+  // A scan pre-fills the form, so closing it is already a discard (and costs the scan).
+  const [isDirty, setIsDirty] = useState(() => startsDirty({ parsedData: initialParsedData, parsedReceipt: initialParsedReceipt, receiptPath: initialReceiptPath }))
   const [isSaving, setIsSaving] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
 
@@ -180,7 +174,6 @@ export function ExpenseEditorWizard({
   const handleClosed = () => {
     clearDraft()
     setIsDirty(false)
-    setStepIndex(0)
     setShowItemized(false)
     onClose()
   }
@@ -188,13 +181,16 @@ export function ExpenseEditorWizard({
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty && !isSaving)
   const requestClose = () => confirmClose(handleClosed)
 
-  const participantNames = useMemo(
-    () => Object.fromEntries(participants.map((p) => [p.user_id, p.user.full_name || p.user.email])),
-    [participants]
-  )
-
-  const activeParticipants = participants.filter((p) => draft.participantIds.includes(p.user_id))
   const amountMajor = parseFloat(draft.amount) || 0
+
+  // Whether the person changed who was there. If not, an edit leaves the
+  // stored list (usually NULL = "the default people") alone.
+  const seededParticipantIds = useMemo(
+    () => (editingExpense ? seedParticipantIds(editingExpense, defaultTaggedIds) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editingExpense?.id]
+  )
+  const participantsChanged = isEditMode && participantSelectionChanged(draft.participantIds, seededParticipantIds)
 
   const duplicates = useMemo(
     () =>
@@ -207,27 +203,6 @@ export function ExpenseEditorWizard({
         : [],
     [draft.vendorName, amountMajor, draft.currency, draft.paymentDate, allExpenses, editingExpense?.id]
   )
-
-  const canAdvance = (): boolean => {
-    if (stepIndex === 0) return draft.description.trim().length > 0 && amountMajor > 0 && draft.participantIds.length > 0
-    if (stepIndex === 1) return !!draft.paidBy
-    if (stepIndex === 2) {
-      if (draft.splitMode === 'custom' || draft.splitMode === 'percentage') {
-        return validateSplitSum(draft.splitMode, draft.splitEntries, draft.participantIds, amountMajor, draft.currency).isValid
-      }
-      return true
-    }
-    return true
-  }
-
-  const handleNext = () => {
-    if (stepIndex < WIZARD_STEPS.length - 1) setStepIndex(stepIndex + 1)
-    else void handleSubmit()
-  }
-
-  const handleBack = () => {
-    if (stepIndex > 0) setStepIndex(stepIndex - 1)
-  }
 
   const handleSubmit = async () => {
     if (!user) return
@@ -245,6 +220,24 @@ export function ExpenseEditorWizard({
       // excluded them entirely). fetchRate's memory cache makes this an
       // instant re-read of the rate the preview just fetched; on fetch
       // failure the fields stay null (previous behavior, warning stays).
+      if (isEditMode && editingExpense && wasItemized && draft.splitMode === 'itemized') {
+        // The record IS (and still will be) itemized -- the user backed
+        // out of the itemized screen without changing the split method, so
+        // this is a header-field edit (description/payer/date/receipt/etc).
+        // The total belongs to the items: no amount or FX figure is sent.
+        // Line items/claims/allocation link are untouched; expense_splits
+        // don't apply to itemized expenses.
+        await updateExpense.mutateAsync({
+          expenseId: editingExpense.id,
+          expense: buildItemizedHeaderEditPayload(draft, receiptUrl, { includeParticipantIds: participantsChanged }),
+          skipSplits: true,
+        })
+        showToast({ type: 'success', message: 'Expense updated' })
+        clearDraft()
+        handleClosed()
+        return
+      }
+
       const fx = await resolveExpenseFxFields({
         amountMajor,
         currency: draft.currency,
@@ -253,53 +246,11 @@ export function ExpenseEditorWizard({
         manualRate: draft.fxRateOverride ? parseFloat(draft.fxRateOverride) || null : null,
       })
 
-      const splits = computeSplits({
-        mode: draft.splitMode,
-        amountMajor,
-        currency: draft.currency,
-        participantIds: draft.participantIds,
-        entries: draft.splitEntries,
-      })
-
-      const splitRows: SplitRow[] = splits.map((s) => ({
-        user_id: s.userId,
-        amount: s.amountMajor,
-        split_type: draft.splitMode === 'shares' ? 'shares' : draft.splitMode === 'percentage' ? 'percentage' : draft.splitMode === 'custom' ? 'custom' : 'equal',
-        percentage: s.percentage,
-        shares: s.shares,
-        base_currency_amount: splitBaseCurrencyAmount(s.amountMajor, fx),
-      }))
-
-      const expensePayload = {
-        description: draft.description.trim(),
-        amount: amountMajor,
-        currency: draft.currency,
-        category: draft.category as ExpenseWithDetails['category'],
-        vendor_name: draft.vendorName.trim() || null,
-        payment_date: draft.paymentDate,
-        paid_by: draft.paidBy,
-        participant_ids: draft.participantIds,
-        receipt_url: receiptUrl,
-        fx_rate: fx.fx_rate,
-        fx_rate_date: fx.fx_rate_date,
-        base_currency_amount: fx.base_currency_amount,
-        rate_source: fx.rate_source,
-      }
+      const splitRows = buildSplitRows(draft, amountMajor, fx)
+      const expensePayload = buildExpensePayload(draft, amountMajor, receiptUrl, fx, { includeParticipantIds: !isEditMode || participantsChanged })
 
       if (isEditMode && editingExpense) {
-        if (wasItemized && draft.splitMode === 'itemized') {
-          // The record IS (and still will be) itemized -- the user backed
-          // out of the itemized screen (or jumped straight to another step
-          // via the stepper) without changing the split method, so this is
-          // just a header-field edit (description/payer/date/receipt/etc).
-          // Line items/claims/allocation link are untouched; expense_splits
-          // don't apply to itemized expenses (skipSplits mirrors that).
-          await updateExpense.mutateAsync({
-            expenseId: editingExpense.id,
-            expense: expensePayload,
-            skipSplits: true,
-          })
-        } else if (wasItemized && draft.splitMode !== 'itemized') {
+        if (wasItemized && draft.splitMode !== 'itemized') {
           // The record WAS itemized but the user switched the split mode
           // away from itemized in this session -- convert it back (clean
           // up line items/allocation link, write real expense_splits).
@@ -329,7 +280,7 @@ export function ExpenseEditorWizard({
       clearDraft()
       handleClosed()
     } catch (err) {
-      showToast({ type: 'error', message: 'Failed to save expense', description: err instanceof Error ? err.message : undefined })
+      showToast({ type: 'error', message: 'Failed to save expense', description: errorText(err) })
     } finally {
       setIsSaving(false)
     }
@@ -343,15 +294,59 @@ export function ExpenseEditorWizard({
       setConfirmingDelete(false)
       handleClosed()
     } catch (err) {
-      showToast({ type: 'error', message: 'Failed to delete expense', description: err instanceof Error ? err.message : undefined })
+      showToast({ type: 'error', message: 'Failed to delete expense', description: errorText(err) })
     }
   }
 
-  const handleItemizedSave = async (params: {
-    lineItems: Array<{ name_original: string; name_english: string | null; quantity: number; unit_price: number; subtotal: number; tax_amount: number; service_amount: number; line_discount_amount: number | null; total_amount: number }>
-    totalMajor: number
-  }): Promise<boolean> => {
+  /** Header + lines of an itemised save, shared by the Save-time preview and the save itself. */
+  const buildItemizedWrite = async (params: ItemizedSaveParams, receiptUrl: string | null) => {
+    // Same FX persistence as the regular save path -- itemized claims are
+    // converted via the expense's fx_rate at balance time, so a missing
+    // rate excludes the whole expense there too.
+    const fx = await resolveExpenseFxFields({
+      amountMajor: params.totalMajor,
+      currency: draft.currency,
+      baseCurrency: trip.base_currency,
+      paymentDate: draft.paymentDate,
+      manualRate: draft.fxRateOverride ? parseFloat(draft.fxRateOverride) || null : null,
+    })
+    // "Who was at this meal?" decides the participants. On an edit that did
+    // not change it, the stored value (often NULL = the default people) stays.
+    const roster = new Set(participants.map((p) => p.user_id))
+    const changed = !isEditMode || participantSelectionChanged(params.participantIds, seededParticipantIds.filter((id) => roster.size === 0 || roster.has(id)))
+    const participantIds = changed ? params.participantIds : editingExpense?.participant_ids ?? null
+    return buildItemizedExpensePayload(draft, params.totalMajor, fx, participantIds, receiptUrl)
+  }
+
+  /** At Save time on a saved itemised receipt: whose claims would this clear? */
+  const handlePreviewClear = async (params: ItemizedSaveParams): Promise<ClearClaimsPreview | null> => {
+    if (!editingExpense || !wasItemized) return null
+    const expense = await buildItemizedWrite(params, draft.receiptPath)
+    const preview = await previewReitemizeExpense({ expenseId: editingExpense.id, expense, lineItems: params.lineItems })
+    if (preview.supported) {
+      const o = preview.outcome
+      return o.clearedUserIds.length > 0 || o.reconfirmUserIds.length > 0
+        ? { userIds: o.clearedUserIds, reconfirmUserIds: o.reconfirmUserIds, claimCount: o.clearedClaims, leftoversCleared: o.leftoversCleared }
+        : null
+    }
+    // The database function is not there yet: every claim goes.
+    return preview.userIds.length > 0 ? { userIds: preview.userIds, claimCount: preview.claimCount, all: true } : null
+  }
+
+  const handleItemizedSave = async (params: ItemizedSaveParams): Promise<boolean> => {
     if (!user) return false
+    const writeProblem = itemizedWriteProblem(
+      { description: draft.description.trim() || draft.vendorName, vendor_name: draft.vendorName.trim(), amount: params.totalMajor },
+      params.lineItems,
+    )
+    if (writeProblem) {
+      showToast({ type: 'error', message: 'Failed to save itemized expense', description: writeProblem })
+      return false
+    }
+    if (isFrozen(trip)) {
+      showToast({ type: 'error', message: 'Failed to save itemized expense', description: FROZEN_EXPENSES_MESSAGE })
+      return false
+    }
     setIsSaving(true)
     try {
       const lineItems = params.lineItems.map((li, i) => ({
@@ -367,53 +362,42 @@ export function ExpenseEditorWizard({
         total_amount: li.total_amount,
       }))
 
-      // Same FX persistence as the regular save path -- itemized claims are
-      // converted via the expense's fx_rate at balance time, so a missing
-      // rate excludes the whole expense there too.
-      const fx = await resolveExpenseFxFields({
-        amountMajor: params.totalMajor,
-        currency: draft.currency,
-        baseCurrency: trip.base_currency,
-        paymentDate: draft.paymentDate,
-        manualRate: draft.fxRateOverride ? parseFloat(draft.fxRateOverride) || null : null,
-      })
+      // A receipt picked on the form but not uploaded yet goes up now.
+      let receiptUrl = draft.receiptPath
+      if (receiptFile) receiptUrl = (await uploadReceipt(receiptFile, user.id)).path
 
-      const itemizedExpensePayload = {
-        description: draft.description.trim() || draft.vendorName || 'Itemized receipt',
-        amount: params.totalMajor,
-        currency: draft.currency,
-        category: draft.category as ExpenseWithDetails['category'],
-        vendor_name: draft.vendorName.trim() || null,
-        payment_date: draft.paymentDate,
-        paid_by: draft.paidBy,
-        participant_ids: draft.participantIds,
-        receipt_url: draft.receiptPath,
-        ai_parsed: true,
-        status: 'unallocated' as const,
-        fx_rate: fx.fx_rate,
-        fx_rate_date: fx.fx_rate_date,
-        base_currency_amount: fx.base_currency_amount,
-        rate_source: fx.rate_source,
-      }
+      const itemizedExpensePayload = await buildItemizedWrite(params, receiptUrl)
 
       let goToWhoHadWhat: string | null = null
       if (isEditMode && editingExpense) {
-        // UPDATE the record being edited -- never insert a new one (that
-        // was the bug: this always called the create/insert path
-        // regardless of edit mode, so converting an existing expense to
-        // itemized silently created a duplicate expense instead).
-        if (existingClaimCount > 0) {
-          showToast({ type: 'info', message: 'Claims reset', description: `${existingClaimCount} existing claim(s) were cleared because the line items changed.` })
-        }
+        // UPDATE the record being edited -- never insert a new one. Claims on
+        // items that did not change survive (reitemize_expense); the screen
+        // already warned about any that will be cleared.
         const code = editingExpense.allocation_link?.code ?? generateLinkCode()
-        const result = await convertToItemizedExpense.mutateAsync({
+        const result = await reitemizeExpense.mutateAsync({
           expenseId: editingExpense.id,
           expense: itemizedExpensePayload,
-          lineItems,
+          lineItems: params.lineItems,
           allocationCode: code,
           createdBy: user.id,
         })
-        showToast({ type: 'success', message: 'Itemized expense updated' })
+        // A receipt already out at the table: the people whose claims were cleared must look again, so ask for the "what changed" email for
+        // them (the function enforces the caps) and tell the payer what happened.
+        const cols = receiptColumnsOf(editingExpense)
+        let notice: SendOutcome | null = null
+        // Both groups look again: claims cleared, and "That's everything" answers deleted.
+        const lookAgain = [...new Set([...result.clearedUserIds, ...result.reconfirmUserIds])]
+        if (lookAgain.length > 0 && cols?.claimsSentAt && !cols.claimsClosedAt) {
+          notice = await sendToTable.mutateAsync({ expenseId: editingExpense.id, resendUserIds: lookAgain })
+        }
+        showToast({
+          type: notice && (!notice.ok || notice.failed > 0) ? 'warning' : 'success',
+          message: 'Itemized expense updated',
+          description:
+            result.clearedUserIds.length > 0 || result.reconfirmUserIds.length > 0
+              ? clearedPeopleLine(result.clearedUserIds.length, notice, result.reconfirmUserIds.length)
+              : undefined,
+        })
         goToWhoHadWhat = result.code
       } else {
         const code = generateLinkCode()
@@ -435,7 +419,7 @@ export function ExpenseEditorWizard({
       if (goToWhoHadWhat) navigate(`/claim/${encodeURIComponent(goToWhoHadWhat)}?assign=1`)
       return true
     } catch (err) {
-      showToast({ type: 'error', message: 'Failed to save itemized expense', description: err instanceof Error ? err.message : undefined })
+      showToast({ type: 'error', message: 'Failed to save itemized expense', description: errorText(err) })
       return false
     } finally {
       setIsSaving(false)
@@ -447,19 +431,66 @@ export function ExpenseEditorWizard({
   // capture > a blank manual draft. Recomputed only when the inputs that
   // matter change, NOT on every render, so in-progress edits inside
   // ItemizedEditorScreen aren't clobbered by unrelated draft field changes.
+  const parsedReceipt: ReceiptParseResult | null = initialParsedReceipt ?? initialParsedData?.v2?.receipt ?? null
   const itemizedSeed = useMemo(() => {
     if (wasItemized && editingExpense) {
-      return fromExpenseLineItems(editingExpense.line_items, draft.currency)
+      return fromExpenseLineItems(editingExpense.line_items, draft.currency, { printedTotalMajor: editingExpense.amount })
     }
-    if (!isEditMode && initialParsedReceipt && initialParsedReceipt.line_items.length > 0) {
-      return fromReceiptParseResult(initialParsedReceipt)
+    if (!isEditMode && parsedReceipt && parsedReceipt.line_items.length > 0) {
+      return fromReceiptParseResult(parsedReceipt)
     }
     return emptyItemizedDraft(draft.currency)
-  }, [wasItemized, editingExpense, isEditMode, initialParsedReceipt, draft.currency])
+  }, [wasItemized, editingExpense, isEditMode, parsedReceipt, draft.currency])
 
-  const noItemsParsedNotice = !isEditMode && !!initialParsedReceipt && initialParsedReceipt.line_items.length === 0
+  const noItemsParsedNotice = !isEditMode && !!parsedReceipt && parsedReceipt.line_items.length === 0
 
-  if (showItemized) {
+  const closedAt = isEditMode ? receiptColumnsOf(editingExpense)?.claimsClosedAt ?? null : null
+  const screen = pickEditorScreen(isFrozen(trip), showItemized, !!closedAt)
+
+  if (screen === 'frozen') {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} title={isEditMode ? 'Edit expense' : 'Add expense'} size="lg">
+        <div className="space-y-4">
+          <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300" role="status">
+            🔒 {FROZEN_EXPENSES_MESSAGE}
+          </div>
+          <Button variant="secondary" fullWidth onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </Modal>
+    )
+  }
+
+  if (screen === 'closed') {
+    const code = editingExpense?.allocation_link?.code
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} title="Edit expense" size="lg">
+        <div className="space-y-4">
+          <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300" role="status">
+            This receipt is closed, so its amount, items, payer and people can't be changed. The person who paid or an organizer can reopen it from Who had what.
+          </div>
+          {code && (
+            <Button
+              variant="primary"
+              fullWidth
+              onClick={() => {
+                onClose()
+                navigate(`/claim/${encodeURIComponent(code)}`)
+              }}
+            >
+              Open Who had what
+            </Button>
+          )}
+          <Button variant="secondary" fullWidth onClick={onClose}>
+            Close
+          </Button>
+        </div>
+      </Modal>
+    )
+  }
+
+  if (screen === 'itemized') {
     return (
       <Modal isOpen={isOpen} onClose={requestClose} title="Itemize receipt" size="lg">
         <ItemizedEditorScreen
@@ -471,6 +502,7 @@ export function ExpenseEditorWizard({
           // in-progress itemized edits get the same discard confirmation.
           onBack={() => confirmClose(() => setShowItemized(false))}
           onSave={handleItemizedSave}
+          onPreviewClear={handlePreviewClear}
           isSaving={isSaving}
           // Audit #3a: bridges this screen's local draft edits up into the
           // wizard's own isDirty so the guard above actually fires.
@@ -484,94 +516,103 @@ export function ExpenseEditorWizard({
           // against LineItemEditor's "ambiguous field" warnings without
           // leaving this screen.
           receiptPath={draft.receiptPath}
+          participants={participants}
+          initialParticipantIds={draft.participantIds}
+          existingLineItems={wasItemized ? editingExpense?.line_items : undefined}
+          existingCurrency={editingExpense?.currency}
+          headerProblems={Object.values(headerTextProblems(draft.description, draft.vendorName))}
+          existingClaims={wasItemized ? editingExpense?.claims : undefined}
+          // claimDeadlineSlot: Phase 2 supplies the "Claim by ..." line here.
         />
         <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
       </Modal>
     )
   }
 
-  return (
-    <Modal isOpen={isOpen} onClose={requestClose} title={isEditMode ? 'Edit expense' : 'Add expense'} size="lg">
-      <div className="space-y-5">
-        <Stepper steps={[...WIZARD_STEPS]} current={stepIndex} onStepClick={setStepIndex} />
+  const parsedCount = parsedLineCount(initialParsedData) || (parsedReceipt?.line_items.length ?? 0)
+  const choice = itemiseChoice(parsedCount)
+  const showChoice = !isEditMode && !!(initialParsedData || parsedReceipt) && choice.show && !itemiseChoiceDismissed
+  const reconciliation = initialParsedData?.v2?.reconciliation
+  const topSlot = showChoice ? (
+    <div className="rounded-[var(--radius-md)] border border-accent-200 bg-accent-50 dark:bg-accent-950 dark:border-accent-800 p-3 space-y-2" role="group" aria-label="How to split this receipt">
+      <p className="text-sm text-[var(--text-secondary)]">We read this receipt. Everyone can pick what they had, or you can split the total.</p>
+      <div className="flex flex-col sm:flex-row gap-2">
+        <Button type="button" variant="primary" fullWidth onClick={() => setShowItemized(true)}>
+          {choice.label}
+        </Button>
+        <Button type="button" variant="secondary" fullWidth onClick={() => setItemiseChoiceDismissed(true)}>
+          Just split the total
+        </Button>
+      </div>
+      {reconciliation && (
+        <p className="text-xs text-[var(--text-muted)]" role="status">
+          {reconciliation.reconciled ? '✓ Items add up to the printed total' : `⚠ ${reconciliation.explanation}`}
+        </p>
+      )}
+    </div>
+  ) : undefined
 
-        {duplicates.length > 0 && stepIndex === 0 && (
-          <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300">
-            ⚠️ Possible duplicate: "{duplicates[0].expense.description}" on the same day for a similar amount.
-          </div>
-        )}
-
-        {stepIndex === 0 && (
-          <>
-            <DetailsStep draft={draft} onChange={patchDraft} participants={participants} />
-            <div className="pt-2 border-t border-[var(--border-subtle)]">
-              <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Receipt (optional)</label>
-              {receiptFile ? (
-                <div className="flex items-center gap-3">
-                  {receiptPreviewUrl && (
-                    <img src={receiptPreviewUrl} alt="New receipt preview" className="w-12 h-12 rounded-[var(--radius-sm)] object-cover border border-[var(--border-subtle)]" />
-                  )}
-                  <span className="text-sm text-[var(--text-secondary)] truncate flex-1">{receiptFile.name}</span>
-                  <Button variant="ghost" size="sm" onClick={() => setReceiptFile(null)}>
-                    Remove
-                  </Button>
-                </div>
-              ) : draft.receiptPath ? (
-                <ExistingReceiptRow
-                  path={draft.receiptPath}
-                  onView={() => setShowReceiptLightbox(true)}
-                  onReplace={(file) => setReceiptFile(file)}
-                  onRemove={() => patchDraft({ receiptPath: null })}
-                />
-              ) : (
-                <input
-                  type="file"
-                  accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
-                  onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
-                  className="text-sm"
-                />
-              )}
-            </div>
-          </>
-        )}
-        {stepIndex === 1 && <PayerStep draft={draft} onChange={patchDraft} participants={participants} />}
-        {stepIndex === 2 && (
-          <SplitStep
-            draft={draft}
-            onChange={patchDraft}
-            participants={activeParticipants}
-            timelineEvents={timelineEvents}
-            tripStartDate={trip.start_date}
-            tripEndDate={trip.end_date}
-            onGoToItemized={() => setShowItemized(true)}
-            existingItemizedInfo={wasItemized ? { lineItemCount: existingLineItemCount, claimCount: existingClaimCount } : undefined}
-            onItemizedSwitchBlocked={() =>
-              showToast({
-                type: 'error',
-                message: "Can't switch off itemized split",
-                description: `${existingClaimCount} item claim(s) already exist — remove those claims first.`,
-              })
-            }
-          />
-        )}
-        {stepIndex === 3 && <ReviewStep draft={draft} onChange={patchDraft} baseCurrency={trip.base_currency} participantNames={participantNames} />}
-
-        <div className="flex items-center gap-3 pt-2">
-          {isEditMode && stepIndex === 0 && (
-            <Button variant="danger" onClick={() => setConfirmingDelete(true)} disabled={isSaving}>
-              Delete
-            </Button>
+  const receiptSlot = (
+    <div className="pt-2 border-t border-[var(--border-subtle)]">
+      <label className="block text-sm font-medium text-[var(--text-secondary)] mb-1.5">Receipt (optional)</label>
+      {receiptFile ? (
+        <div className="flex items-center gap-3">
+          {receiptPreviewUrl && !isPdfFile(receiptFile) && (
+            <img src={receiptPreviewUrl} alt="New receipt preview" className="w-12 h-12 rounded-[var(--radius-sm)] object-cover border border-[var(--border-subtle)]" />
           )}
-          {stepIndex > 0 && (
-            <Button variant="secondary" onClick={handleBack} disabled={isSaving}>
-              Back
-            </Button>
-          )}
-          <Button variant="primary" fullWidth onClick={handleNext} disabled={!canAdvance()} isLoading={isSaving}>
-            {stepIndex === WIZARD_STEPS.length - 1 ? (isEditMode ? 'Save changes' : 'Add expense') : 'Continue'}
+          <span className="text-sm text-[var(--text-secondary)] truncate flex-1">{receiptFile.name}</span>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setReceiptFile(null)}>
+            Remove
           </Button>
         </div>
-      </div>
+      ) : draft.receiptPath ? (
+        <ExistingReceiptRow
+          path={draft.receiptPath}
+          onView={() => setShowReceiptLightbox(true)}
+          onReplace={(file) => setReceiptFile(file)}
+          onRemove={() => patchDraft({ receiptPath: null })}
+        />
+      ) : (
+        <input
+          type="file"
+          accept={RECEIPT_ACCEPT}
+          onChange={(e) => setReceiptFile(e.target.files?.[0] ?? null)}
+          className="text-sm"
+        />
+      )}
+    </div>
+  )
+
+  return (
+    <Modal isOpen={isOpen} onClose={requestClose} title={isEditMode ? 'Edit expense' : 'Add expense'} size="lg">
+      <OneScreenForm
+        draft={draft}
+        onChange={patchDraft}
+        participants={participants}
+        baseCurrency={trip.base_currency}
+        today={todayLocal()}
+        amountLockedNote={wasItemized && draft.splitMode === 'itemized' ? 'Edit the items to change the total.' : undefined}
+        isEdit={isEditMode}
+        isSaving={isSaving}
+        onSubmit={() => void handleSubmit()}
+        onDelete={isEditMode ? () => setConfirmingDelete(true) : undefined}
+        timelineEvents={timelineEvents}
+        tripStartDate={trip.start_date}
+        tripEndDate={trip.end_date}
+        onGoToItemized={() => setShowItemized(true)}
+        existingItemizedInfo={wasItemized ? { lineItemCount: existingLineItemCount, claimCount: existingClaimCount } : undefined}
+        onItemizedSwitchBlocked={() =>
+          showToast({
+            type: 'error',
+            message: "Can't switch off itemized split",
+            description: `${existingClaimCount} item claim(s) already exist — remove those claims first.`,
+          })
+        }
+        receiptSlot={receiptSlot}
+        topSlot={topSlot}
+        duplicateNote={duplicates.length > 0 ? `Possible duplicate: "${duplicates[0].expense.description}" on the same day for a similar amount.` : null}
+        currentUserId={user?.id ?? ''}
+      />
 
       <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
 
@@ -647,7 +688,7 @@ function ExistingReceiptRow({
       <input
         ref={replaceInputRef}
         type="file"
-        accept="image/jpeg,image/jpg,image/png,image/heic,image/heif,application/pdf"
+        accept={RECEIPT_ACCEPT}
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0]

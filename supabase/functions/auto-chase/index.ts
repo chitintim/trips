@@ -81,6 +81,11 @@
 //     It can only remove recipients, never add them: no new email kinds, no
 //     email for questions without a deadline. Dedupe keys are unchanged.
 //
+// Phase 2D -- receipts: the digest kind `unclaimed_items` is retired for receipts SENT to the table
+// (expenses.claims_sent_at set; they have their own notices); unchanged for never-sent receipts. Two passes that are
+// NOT gated by chase_settings.enabled (see ./receiptPasses.ts, ./receiptPassesRun.ts): "receipt reminders" (deadline within
+// 24h, trips.receipt_notices_enabled) and "apply deadlines" (apply_receipt_deadline, then result notices).
+//
 // Phase 4D -- what moves by itself (all fail-soft, all before the sweeps):
 //   - stage sync: stored trips.status moves FORWARD to trip_ongoing /
 //     trip_completed when the trip's dates say so (./autoDecide.ts stageSyncTarget);
@@ -168,6 +173,9 @@ import {
 import { PAID_NOTICE_KIND, REASK_NOTICE_KIND, paidNoticeSentToday, type PaidNoticeRow } from './paymentNoticeToday.ts'
 import { settlementChase } from './settlementChase.ts'
 import type { ChaseKind } from './chaseKinds.ts'
+import { isMissingColumnOrTable, isUnclaimedChaseRetired } from './receiptPasses.ts'
+import { runReceiptPasses } from './receiptPassesRun.ts'
+import { createReceiptSenders } from './receiptSenders.ts'
 
 const APP_BASE_URL = Deno.env.get('APP_BASE_URL') ?? 'https://trips.fontem.ai'
 
@@ -564,14 +572,21 @@ Deno.serve(async (req) => {
       // ---- a. Unclaimed items on itemized expenses past threshold ----
       // Not once balances are frozen: claims are locked, so the link would be a dead end.
       if (moneyOpen && claimChaseOpen(trip.settlement_snapshot)) {
-        const { data: expenses } = await admin
+        const baseCols = 'id, description, amount, currency, paid_by, participant_ids, created_at, expense_item_claims(user_id, line_item_id, quantity_claimed), expense_line_items(id, quantity, total_amount), expense_allocation_links(code)'
+        const buildClaimQuery = (cols: string) => admin
           .from('expenses')
-          .select('id, description, amount, currency, paid_by, participant_ids, created_at, expense_item_claims(user_id, line_item_id, quantity_claimed), expense_line_items(id, quantity, total_amount), expense_allocation_links(code)')
+          .select(cols)
           .eq('trip_id', trip.id)
           .eq('ai_parsed', true)
           .in('status', ['unallocated', 'pending_allocation'])
           .lt('created_at', hoursAgoIso(trip.settings.delay_hours, now))
-        for (const e of expenses ?? []) {
+        // claims_sent_at (receipts phase 2): receipts SENT to the table have their own notices, so this digest kind is
+        // retired for them. Fail-soft: before the migration the column is missing; retry without it (behaviour as before).
+        let expensesRes = await buildClaimQuery(baseCols + ', claims_sent_at')
+        if (expensesRes.error && isMissingColumnOrTable(expensesRes.error)) expensesRes = await buildClaimQuery(baseCols)
+        // deno-lint-ignore no-explicit-any
+        for (const e of ((expensesRes.data ?? []) as any[])) {
+          if (isUnclaimedChaseRetired(e)) continue
           // expenses.status is set by a database trigger that compares quantities exactly; a legacy receipt split in thirds (0.33 x 3) can read
           // 'pending_allocation' while every item is in fact claimed. Judge it with the shared dust tolerance, never chase for that.
           if (receiptFullyClaimedWithinDust(e.expense_line_items, e.expense_item_claims ?? [])) continue
@@ -1353,8 +1368,19 @@ Deno.serve(async (req) => {
       }
     }
 
+    // ---- 5. Receipt passes (phase 2D): reminders 24h before a deadline + applying passed deadlines. NOT gated by
+    // chase_settings.enabled (off everywhere); governed by the receipt's claims_sent_at and trips.receipt_notices_enabled.
+    // Fail-soft and isolated: never affects the digest above.
+    let receiptPasses: Awaited<ReturnType<typeof runReceiptPasses>> | null = null
+    try {
+      receiptPasses = await runReceiptPasses(admin, now, createReceiptSenders(emailSender, APP_BASE_URL))
+    } catch (e) {
+      console.warn('[auto-chase] receipt passes failed, continuing:', e instanceof Error ? e.message : e)
+    }
+
     const result = {
       success: true,
+      receipt_passes: receiptPasses,
       scanned_trips: chaseTrips.length,
       open_loops_found: items.length,
       emails_sent: emailsSent,

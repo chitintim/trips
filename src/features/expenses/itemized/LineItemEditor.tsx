@@ -1,7 +1,7 @@
 import { Input, Button, Badge } from '../../../components/ui'
 import { toMinorUnits } from '../../../lib/money'
 import { formatMoneyMinor } from '../lib/formatMoney'
-import { addLineItem, removeLineItem, type ItemizedDraft } from './itemizedState'
+import { addLineItem, removeLineItem, validateDraftLines, type ItemizedDraft } from './itemizedState'
 
 export interface LineItemEditorProps {
   draft: ItemizedDraft
@@ -23,8 +23,12 @@ export function LineItemEditor({ draft, onChange }: LineItemEditorProps) {
     })
   }
 
+  const problems = validateDraftLines(draft)
+  const problemFor = (lineNumber: number, field: 'name' | 'quantity' | 'unitPrice' | 'lineTotal') =>
+    problems.find((p) => p.lineNumber === lineNumber && p.field === field)?.message
+
   const itemsTotalMinor = draft.lineItems.reduce((sum, l) => {
-    const parsed = parseFloat(l.lineTotal) || 0
+    const parsed = Math.max(0, parseFloat(l.lineTotal) || 0)
     return sum + toMinorUnits(parsed, draft.currency)
   }, 0)
 
@@ -37,6 +41,7 @@ export function LineItemEditor({ draft, onChange }: LineItemEditorProps) {
               value={line.nameOriginal}
               onChange={(e) => updateLine(line.lineNumber, { nameOriginal: e.target.value })}
               placeholder="Item name"
+              error={problemFor(line.lineNumber, 'name')}
               size="sm"
               className="flex-1"
             />
@@ -68,6 +73,7 @@ export function LineItemEditor({ draft, onChange }: LineItemEditorProps) {
               inputMode="decimal"
               value={line.quantity}
               onChange={(e) => updateLine(line.lineNumber, { quantity: e.target.value })}
+              error={problemFor(line.lineNumber, 'quantity')}
             />
             <Input
               label="Unit price"
@@ -75,6 +81,7 @@ export function LineItemEditor({ draft, onChange }: LineItemEditorProps) {
               inputMode="decimal"
               value={line.unitPrice}
               onChange={(e) => updateLine(line.lineNumber, { unitPrice: e.target.value })}
+              error={problemFor(line.lineNumber, 'unitPrice')}
               success={line.printedField === 'unit_price' || line.printedField === 'both'}
             />
             <Input
@@ -83,6 +90,7 @@ export function LineItemEditor({ draft, onChange }: LineItemEditorProps) {
               inputMode="decimal"
               value={line.lineTotal}
               onChange={(e) => updateLine(line.lineNumber, { lineTotal: e.target.value })}
+              error={problemFor(line.lineNumber, 'lineTotal')}
               success={line.printedField === 'line_total' || line.printedField === 'both'}
             />
           </div>

@@ -103,7 +103,7 @@ async function loadContext(admin: SupabaseClient, settlementId: string) {
 }
 
 /** Insert the dedupe row; false when it already exists (someone else sent, or is sending). */
-async function claimDedupe(admin: SupabaseClient, row: Record<string, unknown>): Promise<boolean> {
+export async function claimDedupe(admin: SupabaseClient, row: Record<string, unknown>): Promise<boolean> {
   const { error } = await admin.from('notifications').insert(row)
   if (!error) return true
   if (error.code === '23505' || /duplicate/i.test(error.message ?? '')) return false
@@ -115,7 +115,7 @@ async function claimDedupe(admin: SupabaseClient, row: Record<string, unknown>):
  * still be owed or owe, so an inactive row counts.) Stops anyone mailing a user who is not on the trip
  * the payment claims to be about, which the settlements INSERT policy alone does not prevent.
  */
-async function bothOnTrip(admin: SupabaseClient, tripId: string, a: string, b: string): Promise<boolean> {
+export async function bothOnTrip(admin: SupabaseClient, tripId: string, a: string, b: string): Promise<boolean> {
   const { data } = await admin.from('trip_participants').select('user_id').eq('trip_id', tripId).in('user_id', [a, b])
   const ids = new Set(((data ?? []) as Array<{ user_id: string }>).map((r) => r.user_id))
   return ids.has(a) && ids.has(b)

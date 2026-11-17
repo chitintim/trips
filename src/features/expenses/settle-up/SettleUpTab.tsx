@@ -31,7 +31,8 @@ import {
   unresolvedDuplicateGroups,
 } from './settleUpLogic'
 import { DuplicatePaymentsNotice } from './DuplicatePaymentsNotice'
-import { buildFreezeSuggestions, knownPaidIds, FREEZE_BLOCKED_BY_DUPLICATES, UNFREEZE_BLOCKED_BY_DUPLICATES } from './settlementFreeze'
+import { buildFreezeSuggestions, knownPaidIds, partitionStaleSuggested, PREVIOUS_FREEZE_LABEL, FREEZE_BLOCKED_BY_DUPLICATES, UNFREEZE_BLOCKED_BY_DUPLICATES } from './settlementFreeze'
+import { displayNames } from '../claims/claimNames'
 import { computeBalances, findFreezeBlockingReceipts, partitionCarryovers } from '../lib/balances'
 import { buildSettleUpPeople, LEFT_TRIP_SUFFIX } from './settleUpPeople'
 import { useCarryoverCandidates } from './useCarryoverCandidates'
@@ -210,6 +211,14 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   )
 
   const nameById = Object.fromEntries(people.map((p) => [p.userId, p.left ? `${p.name}${LEFT_TRIP_SUFFIX}` : p.name]))
+  // Short names for the freeze dialog (first name; a bit more only when two people share one, same rule as the claim screens).
+  const shortNames = useMemo(() => displayNames(people.map((p) => ({ id: p.userId, fullName: p.name }))), [people])
+  const shortNameOf = (id: string) => {
+    const label = shortNames.get(id)?.label
+    return label ? (people.find((p) => p.userId === id)?.left ? `${label}${LEFT_TRIP_SUFFIX}` : label) : (nameById[id] ?? 'Someone')
+  }
+  // Unfreezing leaves the old `suggested` rows in place until the next freeze replaces them: while unfrozen they are not current.
+  const { current: currentSettlements, fromLastFreeze } = useMemo(() => partitionStaleSuggested(settlements, isFrozen), [settlements, isFrozen])
 
   const settleAllList = useMemo(
     () => buildSettleAllList(settlements, (id) => nameById[id] ?? 'Someone', trip.base_currency),
@@ -224,7 +233,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   )
   const noticeInfo = useMemo(() => paymentNoticeBySettlement(activityEntries, settlements, managerIds), [activityEntries, settlements, managerIds])
   const disputeOn = disputeSupported(settlements)
-  const everythingSettled = isEverythingSettled(settlements) && (isFrozen || suggested.length === 0)
+  const everythingSettled = isEverythingSettled(currentSettlements) && (isFrozen || suggested.length === 0)
 
   const recordOnBehalf = async (s: Settlement, to: 'marked_paid' | 'confirmed', batch = false) => {
     if (!user) throw new Error('Not signed in')
@@ -367,6 +376,14 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
         knownPaidIds: knownPaidIds(freshSettlements),
         baseCurrency: trip.base_currency,
       })
+      // Settle everything before anything is shown as done: the trip's freeze state, the new payment rows and the expenses (the Money
+      // header reads its payments from the expenses query) must all be of the same generation, or the header briefly claims the
+      // balances changed since they were frozen.
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: queryKeys.settlements(trip.id), exact: true }),
+        queryClient.refetchQueries({ queryKey: queryKeys.expenses(trip.id), exact: true }),
+        queryClient.refetchQueries({ queryKey: queryKeys.tripDetail(trip.id), exact: true }),
+      ])
       showToast({ type: 'success', message: 'Balances frozen — suggested payments created' })
     } catch (err) {
       const overclaimed = isOverclaimedReceiptsError(err)
@@ -595,7 +612,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
           icon={<AllSettled className="w-32 h-24 text-success-500" />}
           title="All settled up"
           description={
-            settlements.some((s) => s.status === 'marked_paid')
+            currentSettlements.some((s) => s.status === 'marked_paid')
               ? 'Everything owed has been paid. Some payments are waiting to be confirmed.'
               : 'Nobody owes anybody anything right now.'
           }
@@ -619,6 +636,12 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
         </Card>
       )}
 
+      {fromLastFreeze.length > 0 && (
+        <p className="text-xs text-[var(--text-muted)]" role="status">
+          {PREVIOUS_FREEZE_LABEL}: {fromLastFreeze.length === 1 ? '1 earlier suggested payment is' : `${fromLastFreeze.length} earlier suggested payments are`} not shown until balances are frozen again.
+        </p>
+      )}
+
       <DuplicatePaymentsNotice
         groups={duplicatePayments}
         canRemove={canManageTrip}
@@ -628,7 +651,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
       />
 
       <div className="space-y-2">
-        {settlements.map((s) => {
+        {currentSettlements.map((s) => {
           const isMePaying = s.from_user_id === user?.id
           const isMeReceiving = s.to_user_id === user?.id
           const recipient = participants.find((p) => p.user_id === s.to_user_id)
@@ -883,7 +906,7 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
         onClose={() => setUnclaimedDialogOpen(false)}
         receipts={blockingReceipts}
         viewerId={user?.id}
-        nameOf={(id) => nameById[id] ?? 'Someone'}
+        nameOf={shortNameOf}
         candidatesFor={candidatesFor}
         onAllShared={handleLeftoversShared}
         serverRefused={serverRefusedUnclaimed}

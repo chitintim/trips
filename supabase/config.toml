@@ -397,6 +397,19 @@ verify_jwt = false
 import_map = "./functions/payment-confirm/deno.json"
 entrypoint = "./functions/payment-confirm/index.ts"
 
+[functions.receipt-notice]
+enabled = true
+verify_jwt = true
+import_map = "./functions/receipt-notice/deno.json"
+entrypoint = "./functions/receipt-notice/index.ts"
+
+# PUBLIC on purpose: the emailed personal token is the credential (see the file header).
+[functions.receipt-claim]
+enabled = true
+verify_jwt = false
+import_map = "./functions/receipt-claim/deno.json"
+entrypoint = "./functions/receipt-claim/index.ts"
+
 [functions.parse-receipt]
 enabled = true
 verify_jwt = true

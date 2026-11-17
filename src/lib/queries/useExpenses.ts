@@ -434,18 +434,19 @@ export function useConvertFromItemizedExpense(tripId: string) {
 // every caller probes once (useReceiptRpcSupport) and fails soft.
 // ---------------------------------------------------------------------------
 
-interface RpcError {
+export interface RpcError {
   code?: string
   message: string
+  hint?: string
 }
-async function callRpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: RpcError | null }> {
+export async function callRpc(fn: string, args: Record<string, unknown>): Promise<{ data: unknown; error: RpcError | null }> {
   const client = supabase as unknown as {
     rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: RpcError | null }>
   }
   return client.rpc(fn, args)
 }
 
-function isMissingRpc(error: RpcError | null): boolean {
+export function isMissingRpc(error: RpcError | null): boolean {
   if (!error) return false
   const msg = error.message || ''
   return error.code === 'PGRST202' || error.code === '42883' || error.code === '404' || /could not find the function|does not exist/i.test(msg)
@@ -544,9 +545,11 @@ export interface LeftoversResult {
   totalMinor: number | null
   /** An even share of the bill, minor units, when the server says. */
   evenShareMinor: number | null
+  /** The one person who gets all of it (`person` / `payer` mode), when the server says (the apply preview does). */
+  leftoverUserId?: string | null
 }
 
-function normalizeLeftovers(raw: unknown, currency: string): LeftoversResult {
+export function normalizeLeftovers(raw: unknown, currency: string): LeftoversResult {
   const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
   const minor = (v: unknown): number | null => (typeof v === 'number' ? toMinorUnits(v, currency) : null)
   const shares: LeftoverShare[] = []
@@ -562,7 +565,8 @@ function normalizeLeftovers(raw: unknown, currency: string): LeftoversResult {
       })
     }
   }
-  return { shares, totalMinor: minor(obj.unclaimed_total), evenShareMinor: minor(obj.even_share) }
+  const leftoverUserId = typeof obj.leftover_user_id === 'string' && obj.leftover_user_id ? obj.leftover_user_id : null
+  return { shares, totalMinor: minor(obj.unclaimed_total), evenShareMinor: minor(obj.even_share), leftoverUserId }
 }
 
 export interface ShareLeftoversArgs {

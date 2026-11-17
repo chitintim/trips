@@ -1,57 +1,63 @@
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
-import { hasOwnClaim } from '../lib/balances'
+import { receiptPeopleIds } from '../../../lib/todos/computeTodos'
 import type { Expense } from '../../../types'
+import { displayNames } from './claimNames'
 
 export interface ReceiptPerson {
   id: string
-  /** Short label for chips; first name, with an initial added when two people share a first name. */
+  /** Short label for chips and totals: first name, plus the least extra needed when two people share one (see claimNames). */
   label: string
+  /** Whole name, for aria-labels and titles. */
+  fullName: string
   participant: ParticipantWithUser
 }
 
 /**
- * Everyone tagged on the receipt -- the same rule as the server's _receipt_tagged: `participant_ids` when set, otherwise the whole
- * (in-scope) trip people list given; PLUS anyone who holds a claim of their OWN on the receipt (a claim with own, non-leftover quantity above 0:
- * a row that only carries a share of the leftovers does not count; a "No reply yet" or departed person must
- * never be locked out of their own claim), and, when there is no explicit list, the payer. Only people present in `participants`
- * can be shown, and the participants' order is kept.
+ * Everyone on the receipt: the ONE shared rule (`receiptPeopleIds`, the same one the to-dos use and the database's `_receipt_tagged` follows).
+ * Only people present in `participants` can be shown, and the participants' order is kept.
+ *
+ * `opts.confirmationEnabled` (the trip's RSVP tracking switch) and `opts.responses` ("I wasn't there" removes someone) default to off/none:
+ * callers that know them must pass them, or the list can differ from the one the server emails.
  */
 /** A claim row as far as tagging is concerned (the quantity columns are absent on callers that only know the source). */
-type TaggingClaim = { user_id: string; source?: string | null; quantity_claimed?: number; leftover_quantity?: number | null }
+type TaggingClaim = { user_id: string; source?: string | null; line_item_id?: string; quantity_claimed?: number; leftover_quantity?: number | null }
 
-function holdsOwnClaim(c: TaggingClaim): boolean {
-  if (c.quantity_claimed == null) return c.source !== 'leftover'
-  return hasOwnClaim({ quantity_claimed: c.quantity_claimed, leftover_quantity: c.leftover_quantity })
+export interface TaggingOptions {
+  confirmationEnabled?: boolean
+  /** Replies for THIS receipt. */
+  responses?: ReadonlyArray<{ user_id: string; response: string }>
+  /** The receipt's lines: shares of table items (`shared_by_all`) are derived by the database and never make someone "on the receipt". */
+  lineItems?: ReadonlyArray<{ id: string; shared_by_all?: boolean | null }>
 }
 
 export function taggedUserIds(
   expense: Pick<Expense, 'participant_ids' | 'paid_by'>,
-  participants: Pick<ParticipantWithUser, 'user_id'>[],
+  participants: Pick<ParticipantWithUser, 'user_id' | 'active' | 'confirmation_status'>[],
   claims: TaggingClaim[] = [],
+  opts: TaggingOptions = {},
 ): Set<string> {
-  const explicit = expense.participant_ids && expense.participant_ids.length > 0
-  const ids = new Set<string>()
-  for (const p of participants) if (!explicit || expense.participant_ids!.includes(p.user_id)) ids.add(p.user_id)
-  for (const c of claims) if (holdsOwnClaim(c)) ids.add(c.user_id)
-  if (!explicit && expense.paid_by) ids.add(expense.paid_by)
-  return ids
+  return receiptPeopleIds(
+    { paid_by: expense.paid_by, participant_ids: expense.participant_ids, claims, line_items: opts.lineItems, responses: opts.responses },
+    participants,
+    opts.confirmationEnabled === true,
+  )
 }
 
 export function peopleOnReceipt(
   expense: Pick<Expense, 'participant_ids' | 'paid_by'>,
   participants: ParticipantWithUser[],
   claims: TaggingClaim[] = [],
+  opts: TaggingOptions = {},
 ): ReceiptPerson[] {
-  const ids = taggedUserIds(expense, participants, claims)
+  const ids = taggedUserIds(expense, participants, claims, opts)
   const tagged = participants.filter((p) => ids.has(p.user_id))
-  const firstNames = tagged.map((p) => firstNameOf(p))
-  return tagged.map((p, i) => {
-    const first = firstNames[i]
-    const clash = firstNames.filter((n) => n === first).length > 1
-    const full = (p.user.full_name ?? '').trim()
-    const initial = full.includes(' ') ? ` ${full.split(/\s+/).slice(-1)[0][0]}.` : ''
-    return { id: p.user_id, label: clash ? `${first}${initial}` : first, participant: p }
-  })
+  const names = displayNames(tagged.map((p) => ({ id: p.user_id, fullName: p.user.full_name, email: p.user.email })))
+  return tagged.map((p) => ({ id: p.user_id, label: names.get(p.user_id)!.label, fullName: names.get(p.user_id)!.full, participant: p }))
+}
+
+/** Label for a user id: their label on the receipt when they are on it, else their first name ("Someone" if unknown). */
+export function labelOfUser(userId: string | null | undefined, people: ReceiptPerson[], participants: ParticipantWithUser[]): string {
+  return people.find((p) => p.id === userId)?.label ?? nameOfUser(userId, participants)
 }
 
 export function firstNameOf(p: ParticipantWithUser): string {

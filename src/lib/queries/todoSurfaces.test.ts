@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { computeWaitingOn } from '../todos/computeTodos'
 import { todoCountLabel } from '../todos/copy'
-import type { SnapshotParticipant, SnapshotSection, SnapshotTrip, TripSnapshot } from '../todos/types'
+import type { SnapshotExpense, SnapshotParticipant, SnapshotSection, SnapshotTrip, TripSnapshot } from '../todos/types'
 import { buildOrganiserSummary } from '../../features/today/lib/organiserSummaryModel'
 import { todayListModel, todoSurfaceCore, tripCardBadgeCount } from './todoSurfaces'
 import { buildAnsweredSectionVoters } from '../answers/answers'
@@ -78,6 +78,25 @@ function snap(over: Partial<TripSnapshot>): TripSnapshot {
   return { trip: baseTrip, participants: crew, sections: [], votes: [], actions: [], checklists: [], expenses: [], settlements: [], travelEvents: [], ...over }
 }
 
+const RECEIPT_SENT: SnapshotExpense = {
+  id: 'r1',
+  description: 'Dinner',
+  amount: 50,
+  currency: 'GBP',
+  paid_by: 'tim',
+  ai_parsed: true,
+  status: 'pending_allocation',
+  participant_ids: null,
+  created_at: new Date(2026, 10, 13, 12).toISOString(),
+  claims: [{ user_id: 'chai', source: 'self', created_by: 'chai', line_item_id: 'l1', quantity_claimed: 1, amount_owed: 30 }],
+  line_items: [{ id: 'l1', quantity: 1, total_amount: 30 }, { id: 'l2', quantity: 1, total_amount: 20 }],
+  allocation_link: { code: 'abc' },
+  claim_deadline: new Date(2026, 10, 20, 12).toISOString(),
+  claims_sent_at: new Date(2026, 10, 14, 12).toISOString(),
+  claims_closed_at: null,
+  responses: [],
+}
+
 const FIXTURES: Record<string, TripSnapshot> = {
   // Upcoming, RSVPs pending, many open questions (more than Today shows collapsed), tasks, packing and a payment.
   japow: snap({
@@ -130,6 +149,26 @@ const FIXTURES: Record<string, TripSnapshot> = {
       { id: 'st1', from_user_id: 'chai', to_user_id: 'tim', amount: 301.39, currency: 'GBP', status: 'suggested' },
       { id: 'st2', from_user_id: 'ana', to_user_id: 'tim', amount: 10, currency: 'GBP', status: 'marked_paid' },
     ],
+  }),
+  // Receipts phase 2: sent / not sent, replied (done, not there), put down, deadline passed, closed. The count must agree on every surface.
+  receiptsSent: snap({
+    trip: { ...baseTrip, id: 'rcpt', confirmation_enabled: false },
+    expenses: [
+      RECEIPT_SENT,
+      { ...RECEIPT_SENT, id: 'r2', description: 'Lunch', claim_deadline: PAST, responses: [{ user_id: 'sam', response: 'done' }, { user_id: 'chai', response: 'not_there' }] },
+      { ...RECEIPT_SENT, id: 'r3', description: 'Taxi', claims_sent_at: null, claim_deadline: null, responses: [] },
+      { ...RECEIPT_SENT, id: 'r4', description: 'Closed one', claims_closed_at: PAST },
+      { ...RECEIPT_SENT, id: 'r5', description: 'Bar', claims: [{ user_id: 'sam', source: 'on_behalf', created_by: 'tim', line_item_id: 'l1', quantity_claimed: 1, amount_owed: 30 }] },
+    ],
+  }),
+  receiptsFrozen: snap({
+    trip: { ...baseTrip, id: 'rcptf', confirmation_enabled: false, settlement_snapshot: { frozen: true } },
+    expenses: [RECEIPT_SENT, { ...RECEIPT_SENT, id: 'r2', claims_sent_at: null, claim_deadline: null }],
+  }),
+  // Migration not applied: no claim columns, no responses table. Must equal the old behaviour.
+  receiptsPreMigration: snap({
+    trip: { ...baseTrip, id: 'rcptp', confirmation_enabled: false },
+    expenses: [{ ...RECEIPT_SENT, id: 'p1', claim_deadline: undefined, claims_sent_at: undefined, claims_closed_at: undefined, responses: undefined }],
   }),
   // A payment the receiver says has not arrived: the payer responds, the receiver owes nothing.
   // (A stale flag on a suggested row must change nothing.)
@@ -184,6 +223,21 @@ describe('one count on every surface', () => {
     expect(todoSurfaceCore(s, 'chai', NOW).todos.map((t) => t.kind)).not.toContain('respond_payment')
     const wo = computeWaitingOn(s, NOW)
     expect(wo.byPerson.find((r) => r.userId === 'sam')?.todos[0]).toMatchObject({ kind: 'respond_payment', title: "Tim says your £4,698.61 hasn't arrived" })
+  })
+
+  it('receipts: the sent receipt stays a to-do for the unreplied, clears when replied or closed, and pre-migration equals the old rules', () => {
+    const claimCount = (s: TripSnapshot, uid: string) => todoSurfaceCore(s, uid, NOW).todos.filter((t) => t.kind === 'claim').length
+    const s = FIXTURES.receiptsSent
+    // sam: r1 (not replied), r3 (never sent, no claim), r5 (put down); done on r2; r4 closed
+    expect(claimCount(s, 'sam')).toBe(3)
+    // chai: r1 claimed but not confirmed (still a to-do), r2 not there, r3 never sent and chai claimed (old rule: clear), r5 sent, not replied
+    expect(claimCount(s, 'chai')).toBe(2)
+    // tim (payer of all): r1 sent, deadline ahead -> nothing; r2 past deadline with 3 people... ; r3 unsent with unassigned; r5 sent
+    expect(todoSurfaceCore(s, 'tim', NOW).todos.filter((t) => t.id.endsWith(':payer')).map((t) => t.id)).toEqual(['claim:r2:payer', 'claim:r3:payer'])
+    expect(FIXTURES.receiptsFrozen.participants.map((p) => claimCount(FIXTURES.receiptsFrozen, p.user_id))).toEqual([0, 0, 0, 0, 0])
+    // before the migration: the old rules (chai has claimed -> nothing; everyone else is asked once, the payer never)
+    const pre = FIXTURES.receiptsPreMigration
+    expect(pre.participants.map((p) => claimCount(pre, p.user_id))).toEqual([0, 1, 0, 1, 1]) // tim (payer) 0, sam 1, chai (claimed) 0, ana 1, out 1: the old rules list everyone, declined included
   })
 
   it('loading (no snapshot) or nobody signed in shows no count at all, never 0', () => {

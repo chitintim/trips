@@ -15,6 +15,7 @@
  *     missing a rate, the UI keeps warning). NEVER throws.
  */
 import { fetchRate } from './fetchRate'
+import { todayLocal } from '../localDate'
 
 export interface ExpenseFxFields {
   fx_rate: number | null
@@ -49,7 +50,7 @@ export async function resolveExpenseFxFields(params: {
   }
 
   try {
-    const today = params.today ?? new Date().toISOString().slice(0, 10)
+    const today = params.today ?? todayLocal()
     const result = await fetchRate(paymentDate, currency, baseCurrency, today)
     if (!result) return { ...NULL_FX }
     return {

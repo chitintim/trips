@@ -1,22 +1,22 @@
 import { useEffect, useState } from 'react'
 import { Card, Input, Badge, Skeleton } from '../../../components/ui'
 import { fetchRate } from '../../../lib/fx'
+import { todayLocal } from '../../../lib/localDate'
 import { formatMoney } from '../lib/formatMoney'
-import { computeSplits } from './computeSplits'
 import type { ExpenseWizardDraft } from './wizardState'
 
-export interface ReviewStepProps {
+export interface FxCardProps {
   draft: ExpenseWizardDraft
   onChange: (patch: Partial<ExpenseWizardDraft>) => void
   baseCurrency: string
-  participantNames: Record<string, string>
 }
 
 /**
- * Review step (plan §10 #2): FX preview (rate at payment_date via
- * src/lib/fx), rate override input writing rate_source='manual'.
+ * Inline FX estimate, shown only when the expense currency differs from the
+ * trip's: rate at the payment date, plus an optional manual override that
+ * writes rate_source='manual'. (Was the FX half of the old Review step.)
  */
-export function ReviewStep({ draft, onChange, baseCurrency, participantNames }: ReviewStepProps) {
+export function FxCard({ draft, onChange, baseCurrency }: FxCardProps) {
   const amountMajor = parseFloat(draft.amount) || 0
   const sameCurrency = draft.currency === baseCurrency
   const [autoRate, setAutoRate] = useState<number | null>(sameCurrency ? 1 : null)
@@ -30,7 +30,7 @@ export function ReviewStep({ draft, onChange, baseCurrency, participantNames }: 
     }
     let cancelled = false
     setLoadingRate(true)
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayLocal()
     fetchRate(draft.paymentDate, draft.currency, baseCurrency, today)
       .then((result) => {
         if (!cancelled) {
@@ -52,35 +52,9 @@ export function ReviewStep({ draft, onChange, baseCurrency, participantNames }: 
   const effectiveRate = draft.fxRateOverride ? parseFloat(draft.fxRateOverride) || null : autoRate
   const baseCurrencyAmount = effectiveRate != null ? amountMajor * effectiveRate : null
 
-  const splits =
-    draft.splitMode !== 'itemized'
-      ? computeSplits({
-          mode: draft.splitMode,
-          amountMajor,
-          currency: draft.currency,
-          participantIds: draft.participantIds,
-          entries: draft.splitEntries,
-        })
-      : []
+  if (sameCurrency) return null
 
   return (
-    <div className="space-y-4">
-      <Card variant="sunken" noPadding className="p-4 space-y-2">
-        <div className="flex justify-between text-sm">
-          <span className="text-[var(--text-secondary)]">Amount</span>
-          <span className="font-semibold tabular-nums">{formatMoney(amountMajor, draft.currency)}</span>
-        </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-[var(--text-secondary)]">Date</span>
-          <span>{draft.paymentDate}</span>
-        </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-[var(--text-secondary)]">Paid by</span>
-          <span>{participantNames[draft.paidBy] ?? '—'}</span>
-        </div>
-      </Card>
-
-      {!sameCurrency && (
         <Card noPadding className="p-4 space-y-3">
           <div className="flex items-center justify-between">
             <span className="text-sm font-medium text-[var(--text-primary)]">FX conversion</span>
@@ -114,19 +88,5 @@ export function ReviewStep({ draft, onChange, baseCurrency, participantNames }: 
             helperText="Use this if your card statement shows a different rate than we found."
           />
         </Card>
-      )}
-
-      {splits.length > 0 && (
-        <Card noPadding className="p-4 space-y-1.5">
-          <span className="text-sm font-medium text-[var(--text-primary)] block mb-1">Split</span>
-          {splits.map((s) => (
-            <div key={s.userId} className="flex justify-between text-sm">
-              <span className="text-[var(--text-secondary)]">{participantNames[s.userId] ?? s.userId}</span>
-              <span className="tabular-nums">{formatMoney(s.amountMajor, draft.currency)}</span>
-            </div>
-          ))}
-        </Card>
-      )}
-    </div>
-  )
+      )
 }

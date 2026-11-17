@@ -173,6 +173,37 @@ export const confirmPaymentTitle = (fromName: string, amount: string) => `Confir
 /** Tells two otherwise identical payment lines apart ("Confirm Tim paid you £619.18 (12 Jun)"). */
 export const distinguishedTitle = (title: string, label: string) => `${title} (${label})`
 export const claimTitle = (description: string, amount: string) => `Claim your items on ${description} (${amount})`
+/** Claim to-do, receipts sent to the table. The payer (or a manager) put this person down for items: they still have to reply. */
+export const claimPutDownTitle = (payerName: string, amount: string | null, description: string) =>
+  amount ? `Check what ${payerName} put you down for — ${amount}` : `Check what ${payerName} put you down for on ${description}`
+/** Claim to-do: the person claimed something themselves but has not said "That's everything" yet. */
+export const claimFinishTitle = (description: string) => `Finish ${description}: tap "That's everything"`
+export const CLAIM_CHECK_LABEL = 'Check'
+export const CLAIM_FINISH_LABEL = 'Finish'
+/**
+ * "Fri 20 Nov": the claim deadline as people read it, on the READER'S clock (the same rule as the signed-in screens and the public page, which
+ * show the local time first and the UTC time in brackets). Only emails and the public page's brackets spell the day in UTC.
+ */
+export function formatWeekdayDayMonth(value: string): string {
+  const d = parseDate(value)
+  return `${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`
+}
+/** Second line of a claim to-do on a receipt sent to the table: "Dinner at Kumo · Reply by Fri 20 Nov". */
+export const claimSubtitle = (description: string, deadline: string | null) =>
+  deadline ? `${description} · Reply by ${formatWeekdayDayMonth(deadline)}` : description
+/** The payer, before sending: someone is put down or items are unassigned. */
+export const sendToTableTitle = (description: string) => `Send ${description} to the table`
+export const sendToTableSubtitle = (people: number, unassigned: string | null) =>
+  [people > 0 ? `${people} ${people === 1 ? 'person' : 'people'} put down` : '', unassigned ? `${unassigned} unassigned` : ''].filter(Boolean).join(' · ')
+export const SEND_TO_TABLE_LABEL = 'Send'
+/** The payer, after the deadline, while the receipt is still open (the job has not applied it, or applying failed). */
+export const sortOutRestTitle = (description: string, unassigned: string | null, notReplied: number) =>
+  unassigned
+    ? `Sort out the rest of ${description} — ${unassigned} unassigned`
+    : `Sort out the rest of ${description} — ${notReplied} ${notReplied === 1 ? 'person has' : 'people have'} not replied`
+export const SORT_OUT_LABEL = 'Sort out'
+/** Waiting on, under a receipt: "3 of 8 have replied". */
+export const repliedLabel = (done: number, total: number) => `${done} of ${total} have replied`
 export const TRAVEL_TITLE = 'Add your flights or travel times'
 export const waitlistOfferTitle = (tripName: string) => `A spot opened up on ${tripName}`
 

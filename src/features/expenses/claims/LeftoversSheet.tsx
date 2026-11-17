@@ -6,7 +6,8 @@ import type { LeftoverMode } from '../../../lib/queries/useExpenses'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Expense } from '../../../types'
 import { formatMoneyMinor } from '../lib/formatMoney'
-import { nameOfUser, peopleOnReceipt } from './claimPeople'
+import { labelOfUser, type peopleOnReceipt } from './claimPeople'
+import { useReceiptPeople } from './useReceiptPeople'
 
 export interface LeftoversSheetProps {
   isOpen: boolean
@@ -34,8 +35,8 @@ export function LeftoversSheet({ isOpen, onClose, expense, participants, unclaim
   const [choice, setChoice] = useState<LeftoverMode | null>(null)
   const [personId, setPersonId] = useState<string | null>(null)
   const currency = expense.currency
-  const people = peopleOnReceipt(expense, participants)
-  const payerName = expense.paid_by === user?.id ? 'You' : nameOfUser(expense.paid_by, participants)
+  const people = useReceiptPeople(expense, participants)
+  const payerName = expense.paid_by === user?.id ? 'You' : labelOfUser(expense.paid_by, people, participants)
   const amount = formatMoneyMinor(unclaimedMinor, currency)
 
   const previewArgs = isOpen && (choice === 'everyone' || (choice === 'person' && personId)) ? { expenseId: expense.id, mode: choice, userId: personId, currency } : null
@@ -47,7 +48,7 @@ export function LeftoversSheet({ isOpen, onClose, expense, participants, unclaim
       await share.mutateAsync({ expenseId: expense.id, mode: choice, userId: choice === 'person' ? personId : null, currency })
       showToast({
         type: 'success',
-        message: choice === 'everyone' ? `${amount} shared between everyone on the receipt` : choice === 'payer' ? `${payerName === 'You' ? "You're" : `${payerName} is`} covering ${amount}` : `${amount} given to ${nameOfUser(personId, participants)}`,
+        message: choice === 'everyone' ? `${amount} shared between everyone on the receipt` : choice === 'payer' ? `${payerName === 'You' ? "You're" : `${payerName} is`} covering ${amount}` : `${amount} given to ${labelOfUser(personId, people, participants)}`,
       })
       onShared?.()
       onClose()
@@ -58,7 +59,7 @@ export function LeftoversSheet({ isOpen, onClose, expense, participants, unclaim
 
   const canConfirm = choice === 'everyone' || choice === 'payer' || (choice === 'person' && !!personId)
   const confirmLabel =
-    choice === 'everyone' ? 'Share between everyone' : choice === 'payer' ? (payerName === 'You' ? "I'll cover it" : `${payerName} covers it`) : choice === 'person' && personId ? `Give to ${nameOfUser(personId, participants)}` : 'Choose one'
+    choice === 'everyone' ? 'Share between everyone' : choice === 'payer' ? (payerName === 'You' ? "I'll cover it" : `${payerName} covers it`) : choice === 'person' && personId ? `Give to ${labelOfUser(personId, people, participants)}` : 'Choose one'
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`${amount} isn't claimed`}>
@@ -68,7 +69,7 @@ export function LeftoversSheet({ isOpen, onClose, expense, participants, unclaim
         </p>
 
         <div role="radiogroup" aria-label="Who pays the rest" className="space-y-2">
-          <ChoiceButton selected={choice === 'everyone'} onClick={() => setChoice('everyone')} title="Share between everyone on the receipt" detail={`${people.length} ${people.length === 1 ? 'person' : 'people'}`} />
+          <ChoiceButton selected={choice === 'everyone'} onClick={() => setChoice('everyone')} title="Share between everyone on the receipt (recommended)" detail={`${people.length} ${people.length === 1 ? 'person' : 'people'}`} />
           <ChoiceButton selected={choice === 'person'} onClick={() => setChoice('person')} title="Assign to someone…" detail="All of it goes to one person" />
           <ChoiceButton selected={choice === 'payer'} onClick={() => setChoice('payer')} title="I'll cover it" detail={payerName === 'You' ? 'You pay it. Nobody else is charged.' : `${payerName} pays it. Nobody else is charged.`} />
         </div>
@@ -80,8 +81,10 @@ export function LeftoversSheet({ isOpen, onClose, expense, participants, unclaim
                 key={p.id}
                 type="button"
                 aria-pressed={personId === p.id}
+                aria-label={p.fullName}
+                title={p.fullName}
                 onClick={() => setPersonId(p.id)}
-                className={`min-h-11 px-4 rounded-[var(--radius-full)] border text-sm font-medium ${
+                className={`min-h-11 max-w-full px-4 py-1.5 text-left break-words rounded-[var(--radius-full)] border text-sm font-medium ${
                   personId === p.id ? 'bg-accent-600 border-accent-600 text-white' : 'bg-[var(--surface-raised)] border-[var(--border-default)] text-[var(--text-secondary)]'
                 }`}
               >
@@ -91,34 +94,7 @@ export function LeftoversSheet({ isOpen, onClose, expense, participants, unclaim
           </div>
         )}
 
-        {previewArgs && (
-          <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] p-3 space-y-2" aria-live="polite">
-            {preview.isLoading ? (
-              <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
-                <Spinner size="sm" /> Working out who gets what…
-              </div>
-            ) : preview.error ? (
-              <p className="text-sm text-[var(--text-secondary)]">Couldn't work that out. {(preview.error as Error).message}</p>
-            ) : (
-              <>
-                <ul className="space-y-1">
-                  {(preview.data?.shares ?? [])
-                    .filter((s) => s.amountMinor > 0)
-                    .map((s) => (
-                      <li key={s.userId} className="flex items-baseline justify-between gap-2 text-sm">
-                        <span className="text-[var(--text-primary)]">{nameOfUser(s.userId, participants)}</span>
-                        <span className="tabular-nums text-[var(--text-primary)]">
-                          +{formatMoneyMinor(s.amountMinor, currency)}
-                          {s.totalAfterMinor != null && <span className="text-xs text-[var(--text-muted)]"> · {formatMoneyMinor(s.totalAfterMinor, currency)} in all</span>}
-                        </span>
-                      </li>
-                    ))}
-                </ul>
-                {choice === 'everyone' && <p className="text-xs text-[var(--text-muted)]">{RULE_EVERYONE}</p>}
-              </>
-            )}
-          </div>
-        )}
+        {previewArgs && <LeftoverPreviewBox preview={preview} people={people} participants={participants} currency={currency} showRule={choice === 'everyone'} />}
 
         <div className="flex gap-2 justify-end">
           <Button variant="ghost" onClick={onClose}>
@@ -130,6 +106,56 @@ export function LeftoversSheet({ isOpen, onClose, expense, participants, unclaim
         </div>
       </div>
     </Modal>
+  )
+}
+
+
+type LeftoversPreviewQuery = Pick<ReturnType<typeof useLeftoversPreview>, 'isLoading' | 'error' | 'data'>
+
+/** The server's own preview of who would be charged what. Shared by this sheet and "Share the rest now". */
+export function LeftoverPreviewBox({
+  preview,
+  people,
+  participants,
+  currency,
+  showRule,
+}: {
+  preview: LeftoversPreviewQuery
+  people: ReturnType<typeof peopleOnReceipt>
+  participants: ParticipantWithUser[]
+  currency: string
+  showRule: boolean
+}) {
+  return (
+    <div className="rounded-[var(--radius-md)] border border-[var(--border-subtle)] p-3 space-y-2" aria-live="polite">
+      {preview.isLoading ? (
+        <div className="flex items-center gap-2 text-sm text-[var(--text-secondary)]">
+          <Spinner size="sm" /> Working out who gets what…
+        </div>
+      ) : preview.error ? (
+        <p className="text-sm text-[var(--text-secondary)]">Couldn't work that out. {(preview.error as Error).message}</p>
+      ) : (
+        <>
+          <ul className="space-y-1">
+            {(preview.data?.shares ?? [])
+              .filter((s) => s.amountMinor > 0)
+              .map((s) => (
+                <li key={s.userId} className="flex items-baseline justify-between gap-2 text-sm">
+                  <span className="min-w-0 break-words text-[var(--text-primary)]">{labelOfUser(s.userId, people, participants)}</span>
+                  <span className="tabular-nums text-[var(--text-primary)]">
+                    +{formatMoneyMinor(s.amountMinor, currency)}
+                    {s.totalAfterMinor != null && <span className="text-xs text-[var(--text-muted)]"> · {formatMoneyMinor(s.totalAfterMinor, currency)} in all</span>}
+                  </span>
+                </li>
+              ))}
+          </ul>
+          {preview.data?.leftoverUserId && (
+            <p className="text-xs text-[var(--text-muted)]">All the leftovers go to {labelOfUser(preview.data.leftoverUserId, people, participants)}.</p>
+          )}
+          {showRule && <p className="text-xs text-[var(--text-muted)]">{RULE_EVERYONE}</p>}
+        </>
+      )}
+    </div>
   )
 }
 

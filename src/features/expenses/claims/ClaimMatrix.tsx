@@ -2,10 +2,11 @@ import { EmptyState, UserAvatar } from '../../../components/ui'
 import { fromMinorUnits, toMinorUnits } from '../../../lib/money'
 import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
 import { formatClaimQuantity } from './claimFractions'
-import { nameOfUser } from './claimPeople'
+import { labelOfUser, peopleOnReceipt } from './claimPeople'
 import { claimLeftoverAmount, claimLeftoverQuantity, hasOwnClaim } from '../lib/balances'
 import { unclaimedMinor } from './claimMath'
 import type { ClaimRow, LineRow } from './claimMath'
+import type { ReceiptPerson } from './claimPeople'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Expense } from '../../../types'
 
@@ -17,10 +18,10 @@ export interface ClaimMatrixProps {
 }
 
 /** Marker + words for where the OWN part of a claim row came from (the leftover share inside a row gets its own marker, below). */
-function sourceInfo(row: ClaimRow, participants: ParticipantWithUser[]): { mark: string; words: string } {
+function sourceInfo(row: ClaimRow, people: ReceiptPerson[], participants: ParticipantWithUser[]): { mark: string; words: string } {
   switch (row.source) {
     case 'on_behalf':
-      return { mark: '✎', words: row.created_by && row.created_by !== row.user_id ? `put down by ${nameOfUser(row.created_by, participants)}` : 'claimed by themselves' }
+      return { mark: '✎', words: row.created_by && row.created_by !== row.user_id ? `put down by ${labelOfUser(row.created_by, people, participants)}` : 'claimed by themselves' }
     case 'shared':
       return { mark: '÷', words: 'shared' }
     default:
@@ -40,6 +41,9 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
   // Someone can have claimed without being tagged: still show them.
   const extraIds = [...new Set(claims.map((c) => c.user_id))].filter((id) => !tagged.some((p) => p.user_id === id))
   const columns = [...tagged, ...participants.filter((p) => extraIds.includes(p.user_id))]
+  // The column headers use the same names as everywhere else on the receipt (first name; more only when two people share one).
+  const receiptPeople = peopleOnReceipt(expense, participants, claims, { lineItems })
+  const headerLabels = new Map(receiptPeople.map((p) => [p.id, p]))
 
   if (columns.length === 0) {
     return (
@@ -70,7 +74,9 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
                 <th key={p.user_id} className="px-2 py-2 font-medium text-[var(--text-secondary)]">
                   <div className="flex flex-col items-center gap-1">
                     <UserAvatar avatarData={p.user} size="xs" alt={p.user.full_name ?? p.user.email} />
-                    <span className="text-[10px] max-w-14 truncate">{p.user.full_name?.split(' ')[0] || p.user.email}</span>
+                    <span className="text-[10px] max-w-16 break-words text-center leading-tight" title={headerLabels.get(p.user_id)?.fullName ?? p.user.full_name ?? p.user.email}>
+                      {headerLabels.get(p.user_id)?.label ?? p.user.full_name?.split(' ')[0] ?? p.user.email}
+                    </span>
                   </div>
                 </th>
               ))}
@@ -100,7 +106,7 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
                   const qty = rows.reduce((s, r) => s + r.quantity_claimed, 0)
                   // ONE row per person and line: its own part and/or a share of the leftovers inside it.
                   const infos = rows.flatMap((r) => [
-                    ...(hasOwnClaim(r) ? [sourceInfo(r, participants)] : []),
+                    ...(hasOwnClaim(r) ? [sourceInfo(r, receiptPeople, participants)] : []),
                     ...(claimLeftoverAmount(r) > 0 || claimLeftoverQuantity(r) > 0 ? [{ mark: '↺', words: 'share of the leftovers' }] : []),
                   ])
                   const words = infos.map((i) => i.words).join(', ')

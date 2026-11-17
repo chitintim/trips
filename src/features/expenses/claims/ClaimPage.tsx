@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Card, Button, Badge, Spinner, EmptyState, Modal, SegmentedControl, useToast } from '../../../components/ui'
+import { Card, Button, Badge, Spinner, EmptyState, Modal, SegmentedControl, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { useReceiptRpcSupport, useSaveItemClaims, useSetReceiptClaims, useShareLeftovers } from '../../../lib/queries/useExpenses'
+import { useClaimResponses } from '../../../lib/queries/useClaimResponses'
+import { useReceiptTableRpcSupport } from '../../../lib/queries/useReceiptTable'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { toMinorUnits } from '../../../lib/money'
@@ -14,12 +16,15 @@ import { summarizeLineClaims, summarizeOverallProgress, maxClaimableQuantity, cl
 import { describeClaimError } from './claimErrors'
 import { leftoverFollowUp, everythingSharedOut } from './leftoverReshare'
 import type { ClaimRow, LineRow } from './claimMath'
-import { formatClaimQuantity } from './claimFractions'
-import { nameOfUser, peopleOnReceipt } from './claimPeople'
+import { describeMyShare, formatClaimQuantity } from './claimFractions'
+import { labelOfUser, peopleOnReceipt } from './claimPeople'
+import { moneySpaceUrl } from './claimDone'
 import { ClaimMatrix } from './ClaimMatrix'
 import { WhoHadWhat } from './WhoHadWhat'
 import { LeftoversSheet } from './LeftoversSheet'
 import { ShareClaimLink } from './ShareClaimLink'
+import { ClaimReplyBar } from './ClaimReplyBar'
+import { receiptTableSupport } from './receiptTable'
 import { ReceiptLightbox } from '../components/ReceiptLightbox'
 
 type View = 'mine' | 'who' | 'overview'
@@ -47,6 +52,8 @@ export function ClaimPage() {
   const { canManageTrip } = useTripPermissions(trip)
   const isFrozen = !!trip?.settlement_snapshot
   const rpc = useReceiptRpcSupport()
+  const tableRpc = useReceiptTableRpcSupport()
+  const responses = useClaimResponses(resolution?.tripId)
   const saveClaims = useSaveItemClaims()
   const setClaims = useSetReceiptClaims()
   const shareLeftovers = useShareLeftovers()
@@ -104,7 +111,7 @@ export function ClaimPage() {
   }, [localSelections, savedSelections])
   const isDirty = changedLineIds.length > 0
 
-  useUnsavedChangesGuard(isDirty)
+  const { confirmClose, guardProps } = useUnsavedChangesGuard(isDirty)
 
   if (isLoading) {
     return (
@@ -148,7 +155,12 @@ export function ClaimPage() {
   const canRecord = isPayer || canManageTrip
   const canWho = canRecord && rpc.setClaims
   const canLeftovers = canRecord && rpc.leftovers
-  const people = peopleOnReceipt(expense, participants, claims)
+  // The one shared "who is on this receipt" rule (RSVP switch and "I wasn't there" replies included).
+  const people = peopleOnReceipt(expense, participants, claims, {
+    confirmationEnabled: trip?.confirmation_enabled === true,
+    responses: responses.rows.filter((r) => r.expense_id === expense.id),
+    lineItems,
+  })
   const isTagged = !!user && people.some((p) => p.id === user.id)
   // Payer and managers have full power (they pick anyone). A tagged person can only toggle THEMSELVES on an item
   // ("I had some of this too" / "Not mine"), within the server's rules (sharePickProblem).
@@ -156,10 +168,15 @@ export function ClaimPage() {
   const activeView: View = view === 'who' && !canWho ? 'mine' : view === 'overview' && !canRecord ? 'mine' : view
   const overallProgress = summarizeOverallProgress(lineItems, claims)
   const unclaimed = unclaimedMinor(lineItems, claims, currency)
-  const payerName = isPayer ? 'You' : nameOfUser(expense.paid_by, participants)
-  // Only frozen balances lock the page. A fully claimed receipt stays open so
-  // a person can still fix their own claim (which re-opens the leftovers).
-  const isReadOnly = isFrozen
+  const payerName = isPayer ? 'You' : labelOfUser(expense.paid_by, people, participants)
+  // Receipts phase 2: reply buttons and the deadline line. Absent (all false) until the migration is applied; then this page is what it was.
+  const tableSupport = receiptTableSupport({ expense, responsesAvailable: responses.available, rpc: tableRpc })
+  // Frozen balances lock the page. So does a CLOSED receipt (leftovers shared): its claims are final for everyone, the payer included, until
+  // the payer reopens it. A fully claimed receipt otherwise stays open so a person can still fix their own claim.
+  const isClosed = tableSupport.phase === 'closed'
+  const isReadOnly = isFrozen || isClosed
+  const myResponse = (responses.rows.find((r) => r.expense_id === expense.id && r.user_id === user?.id)?.response ?? null) as 'done' | 'not_there' | null
+  const showReplyBar = !!tableSupport.columns && (tableSupport.phase === 'open' || tableSupport.phase === 'closed') && (isTagged || isPayer)
 
   const otherRowsOnLine = (lineId: string) => (claimsByLine.get(lineId) ?? []).filter((c) => !(c.user_id === user?.id && isStepperClaim(c)))
   const myAmount = (li: LineRow, qty: number) => claimAmount(li, qty, otherRowsOnLine(li.id), currency)
@@ -208,7 +225,7 @@ export function ClaimPage() {
       showToast({ type: 'success', message: 'Your claims are saved' })
       void afterOwnChange()
     } catch (err) {
-      showToast({ type: 'error', message: 'Failed to save your claims', description: err instanceof Error ? err.message : undefined })
+      showToast({ type: 'error', message: 'Failed to save your claims', description: describeClaimError(err, '')||undefined })
     }
   }
 
@@ -219,7 +236,7 @@ export function ClaimPage() {
       showToast({ type: 'success', message: 'Taken off your items' })
       void afterOwnChange()
     } catch (err) {
-      showToast({ type: 'error', message: "Couldn't take that off", description: err instanceof Error ? err.message : undefined })
+      showToast({ type: 'error', message: "Couldn't take that off", description: describeClaimError(err, '')||undefined })
     }
   }
 
@@ -289,7 +306,9 @@ export function ClaimPage() {
 
   // Rows someone else recorded for me (whole-unit, so the steppers can change them).
   const putDownByOthers = claims.filter((c) => c.user_id === user?.id && c.source === 'on_behalf' && c.created_by && c.created_by !== user.id)
-  const putDownByNames = [...new Set(putDownByOthers.map((c) => nameOfUser(c.created_by, participants)))]
+  const putDownByNames = [...new Set(putDownByOthers.map((c) => labelOfUser(c.created_by, people, participants)))]
+  const putDownMinor = putDownByOthers.reduce((sum, c) => sum + toMinorUnits(Math.max(0, c.amount_owed - claimLeftoverAmount(c)), currency), 0)
+  const putDownLine = putDownByOthers.length > 0 ? `${putDownByNames.join(' and ')} put you down for ${formatMoneyMinor(putDownMinor, currency)}` : null
   const shareLine = shareLineId ? lineItems.find((l) => l.id === shareLineId) : null
   const shareExisting = shareLine ? [...new Set((claimsByLine.get(shareLine.id) ?? []).filter(hasOwnClaim).map((c) => c.user_id))] : []
   const shareProblem = shareLine && user ? sharePickProblem({ fullPower: canRecord, me: user.id, pick: sharePick, existing: shareExisting, lineSharedByAll: !!shareLine.shared_by_all }) : null
@@ -298,10 +317,13 @@ export function ClaimPage() {
   const shareEach = shareLine && sharePick.length > 0 ? shareLineMinor(toMinorUnits(shareLine.total_amount, currency), sharePick) : null
 
   // Once the leftovers are shared every line is full: an own claim would be refused, so say so plainly instead of offering steppers.
-  const payerFirstName = isPayer ? 'the person who paid' : (nameOfUser(expense.paid_by, participants).split(' ')[0] || 'the person who paid')
+  const payerFirstName = isPayer ? 'the person who paid' : labelOfUser(expense.paid_by, people, participants)
   const sharedOutNotice = !isReadOnly && !canRecord && everythingSharedOut(lineItems, claims, currency)
 
   const goBack = () => (window.history.length > 1 ? navigate(-1) : navigate(`/${resolution.tripId}`))
+  // "Done" on Who had what: everything pending is already saved by the time this runs. Leave for the trip's Money (the trip page does
+  // not remember a space, so going "back" would land on Today); unsaved taps on My items are guarded like any other leave.
+  const leaveToMoney = () => confirmClose(() => navigate(moneySpaceUrl(resolution.tripId), { replace: true }))
 
   const viewOptions: Array<{ value: View; label: string }> = [
     { value: 'mine', label: 'My items' },
@@ -332,8 +354,16 @@ export function ClaimPage() {
         {overallProgress.isFullyAllocated && unclaimed === 0 && <Badge variant="success">✓ Fully claimed</Badge>}
 
         {isFrozen && <Badge variant="neutral">🔒 Claiming is locked while balances are frozen</Badge>}
+        {!isFrozen && isClosed && (
+          <Card noPadding className="p-3">
+            <p className="text-sm text-[var(--text-primary)]" role="status">
+              This receipt's claims are closed, so nothing can be changed.{' '}
+              {canRecord ? 'Open Who had what and tap Reopen to change it.' : `Ask ${isPayer ? 'an organizer' : payerName} to reopen it if something is wrong.`}
+            </p>
+          </Card>
+        )}
 
-        {canRecord && !isFrozen && unclaimed > 0 && (
+        {canRecord && !isReadOnly && unclaimed > 0 && (
           <Card noPadding className="p-3 flex items-center justify-between gap-3">
             <div>
               <p className="font-medium text-[var(--text-primary)]">{formatMoneyMinor(unclaimed, currency)} isn't claimed</p>
@@ -366,7 +396,7 @@ export function ClaimPage() {
               participants={participants}
               disabled={isFrozen}
               onOpenLeftovers={canLeftovers ? () => setShowLeftovers(true) : undefined}
-              onDone={() => setView('mine')}
+              onDone={leaveToMoney}
             />
           </>
         )}
@@ -383,10 +413,27 @@ export function ClaimPage() {
               )}
             </p>
 
+            {showReplyBar && user && tableSupport.columns && (
+              <ClaimReplyBar
+                tripId={resolution.tripId}
+                expenseId={expense.id}
+                userId={user.id}
+                columns={tableSupport.columns}
+                response={myResponse}
+                isPayer={isPayer}
+                hasOwnItems={claims.some((c) => c.user_id === user.id && hasOwnClaim(c) && !lineItems.find((l) => l.id === c.line_item_id)?.shared_by_all)}
+                putDownLine={null}
+                canReply={tableSupport.canReply}
+                deadlinePassed={tableSupport.replyClosedReason === 'deadline_passed'}
+                frozen={isFrozen}
+                payerName={isPayer ? undefined : payerName}
+              />
+            )}
+
             {putDownByOthers.length > 0 && (
               <Card noPadding className="p-3 space-y-2 border-accent-300">
                 <p className="text-sm font-medium text-[var(--text-primary)]">
-                  {putDownByNames.join(' and ')} put you down for these. Change anything that's wrong.
+                  {tableSupport.canReply ? `${putDownLine}. Change anything that's wrong.` : `${putDownByNames.join(' and ')} put you down for these. Change anything that's wrong.`}
                 </p>
                 <ul className="space-y-1">
                   {putDownByOthers.map((c) => {
@@ -431,10 +478,10 @@ export function ClaimPage() {
                 // ONE row per person and line: the leftover share is a part of it (any of my rows on this line may carry one).
                 const myLeftoverAmount = claimsForLine.filter((c) => c.user_id === user?.id).reduce((s, c) => s + claimLeftoverAmount(c), 0)
                 const sharers = claimsForLine.filter(hasOwnClaim)
-                const sharerCount = new Set(sharers.map((c) => c.user_id)).size
+                const sharerQuantities = [...new Set(sharers.map((c) => c.user_id))].map((id) => sharers.filter((c) => c.user_id === id).reduce((s, c) => s + claimOwnQuantity(c), 0))
                 const othersText = claimsForLine
                   .filter((c) => c.user_id !== user?.id && hasOwnClaim(c))
-                  .map((c) => `${nameOfUser(c.user_id, participants)} ${formatClaimQuantity(claimOwnQuantity(c))}`)
+                  .map((c) => `${labelOfUser(c.user_id, people, participants)} ${formatClaimQuantity(claimOwnQuantity(c))}`)
                   .join(' · ')
 
                 return (
@@ -489,9 +536,9 @@ export function ClaimPage() {
                     {myShared.length > 0 && (
                       <div className="mt-1.5 flex items-center justify-between gap-2">
                         <p className="text-xs text-accent-700 dark:text-accent-400 font-medium">
-                          You: {myShared.length > 0 && sharerCount > 1 ? `÷${sharerCount} share` : formatClaimQuantity(myShared.reduce((s, c) => s + claimOwnQuantity(c), 0))} —{' '}
+                          You: {describeMyShare({ myQuantity: myShared.reduce((s, c) => s + claimOwnQuantity(c), 0), lineQuantity: li.quantity, allQuantities: sharerQuantities })} —{' '}
                           {formatMoney(myShared.reduce((s, c) => s + claimOwnAmount(c), 0), currency)}
-                          {myShared[0].created_by && myShared[0].created_by !== user?.id && ` · put down by ${nameOfUser(myShared[0].created_by, participants)}`}
+                          {myShared[0].created_by && myShared[0].created_by !== user?.id && ` · put down by ${labelOfUser(myShared[0].created_by, people, participants)}`}
                         </p>
                         {!isReadOnly && (
                           <div className="flex shrink-0">
@@ -558,6 +605,8 @@ export function ClaimPage() {
         <LeftoversSheet isOpen={showLeftovers} onClose={() => setShowLeftovers(false)} expense={expense} participants={participants} unclaimedMinor={unclaimed} />
       )}
 
+      <ConfirmDiscardSheet isOpen={guardProps.showConfirm} onKeep={guardProps.onKeep} onDiscard={guardProps.onDiscard} />
+
       <Modal isOpen={!!shareLine} onClose={() => setShareLineId(null)} title="Who shared this?">
         {shareLine && (
           <div className="space-y-3">
@@ -574,10 +623,11 @@ export function ClaimPage() {
                     key={p.id}
                     type="button"
                     aria-pressed={on}
-                    aria-label={`${p.id === user?.id ? 'Me' : p.label}${locked ? ', has to stay on this item' : ''}`}
+                    title={p.fullName}
+                    aria-label={`${p.id === user?.id ? 'Me' : p.fullName}${locked ? ', has to stay on this item' : ''}`}
                     disabled={locked || !!shareLine.shared_by_all && !canRecord}
                     onClick={() => setSharePick((prev) => (on ? prev.filter((x) => x !== p.id) : [...prev, p.id]))}
-                    className={`min-h-11 px-4 rounded-[var(--radius-full)] border text-sm font-medium disabled:opacity-100 disabled:cursor-not-allowed ${
+                    className={`min-h-11 max-w-full px-4 py-1.5 text-left break-words rounded-[var(--radius-full)] border text-sm font-medium disabled:opacity-100 disabled:cursor-not-allowed ${
                       on ? 'bg-accent-600 border-accent-600 text-white' : 'bg-[var(--surface-raised)] border-[var(--border-default)] text-[var(--text-secondary)]'
                     }`}
                   >

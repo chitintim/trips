@@ -177,6 +177,8 @@ export function useCreateSettlementCarryover(tripId: string) {
 function invalidateSettlementState(queryClient: ReturnType<typeof useQueryClient>, tripId: string) {
   queryClient.invalidateQueries({ queryKey: queryKeys.settlements(tripId) })
   queryClient.invalidateQueries({ queryKey: queryKeys.tripDetail(tripId) })
+  // The Money header reads its settlements from the expenses query, so a freeze/unfreeze must refresh that too or the two disagree.
+  queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) })
   queryClient.invalidateQueries({ queryKey: queryKeys.activityFeed(tripId) })
   // To-dos ("Confirm X paid you", pay reminders) derive from settlements and actions.
   queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) })

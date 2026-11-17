@@ -81,9 +81,9 @@ supabase/.temp
 .supabase/
 
 # Development Uploads (for testing file uploads locally)
-uploads/
-receipts/
-temp-uploads/
+/uploads/
+/receipts/
+/temp-uploads/
 
 # Demo/Test Pages
 public/test-*.html

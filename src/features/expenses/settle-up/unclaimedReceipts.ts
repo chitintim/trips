@@ -18,21 +18,22 @@ export const UNCLAIMED_HINT = 'unclaimed_receipts'
 export const OVERCLAIMED_HINT = 'overclaimed_receipts'
 
 export const FREEZE_DIALOG_TITLE = "Some receipts aren't fully claimed"
-export const FREEZE_DIALOG_INTRO = 'Balances can only be frozen once everything on every receipt has an owner. Decide what happens to the rest of each one:'
+export const FREEZE_DIALOG_INTRO = "Whatever isn't claimed has to belong to someone before balances are frozen."
 export const NOTICE_TITLE = 'Receipts with items nobody has claimed'
 export const NOTICE_MANAGER_LIVE = "Until they're shared, the payer is counted as owing that money. Ask people to claim, or share what's left before freezing."
 export const NOTICE_PAYER_LIVE = "Until it's shared, it's counted as yours."
 export const NOTICE_NOT_LIVE = 'Ask people to claim, or claim for them, before freezing.'
 export const CHOICE_EVERYONE = 'Share between everyone on the receipt'
+export const CHOICE_EVERYONE_RECOMMENDED = `${CHOICE_EVERYONE} (recommended)`
 export const CHOICE_PERSON = 'Assign to someone…'
 export const CHOICE_PAYER_SELF = "I'll cover it"
 export const APPLY_TO_ALL = 'Apply to all receipts'
 export const APPLY_AND_FREEZE = 'Share leftovers and freeze'
-export const SERVER_REPORT_UNCLAIMED_TITLE = 'The server found receipts that still have unclaimed items'
+export const SERVER_REPORT_UNCLAIMED_TITLE = 'Some receipts still have unclaimed items'
 export const SERVER_REPORT_OVERCLAIMED_TITLE = 'Some receipts have more claimed than they are worth'
-export const SERVER_REPORT_UNCLAIMED_INTRO = "Your screen didn't show these, so it may be out of date. Refresh to load the latest claims, then try again."
+export const SERVER_REPORT_UNCLAIMED_INTRO = "This screen may be out of date. Refresh to load the latest claims, then try again."
 export const SERVER_REPORT_OVERCLAIMED_INTRO = 'On these receipts an item has more claimed than it costs, so people would be charged too much. Open each receipt, fix who had what (or share the leftovers again), then refresh and try again.'
-export const SERVER_REFUSED_NOTE = 'The server stopped the freeze because some receipts still have unclaimed items.'
+export const SERVER_REFUSED_NOTE = "Balances weren't frozen, because some receipts still have unclaimed items."
 
 /** "Dinner at X — €48.00 not claimed". */
 export function notClaimedLine(r: Pick<ReceiptClaimStatus, 'description' | 'unclaimedOwnMinor' | 'currency'>): string {

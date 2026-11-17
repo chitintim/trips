@@ -112,7 +112,7 @@ export interface DeepLinkContext {
   actionIds: ReadonlySet<string>
   checklistIds: ReadonlySet<string>
   settlements: ReadonlyArray<{ id: string; from_user_id: string; to_user_id: string; status: string | null }>
-  expenses: ReadonlyArray<{ id: string; claimCode: string | null }>
+  expenses: ReadonlyArray<{ id: string; claimCode: string | null; /** Who paid: the payer's claim link opens on "Who had what". */ paidBy?: string | null }>
   /** Timeline event ids and option ids (what `item:` can point at). */
   itemIds: ReadonlySet<string>
   /** Every option with its question and whether it is already booked (legacy status or a live booking). `book:` needs it. */
@@ -133,7 +133,7 @@ export type DeepLinkSheet =
   /** Organiser: open the question's Manage sheet straight into Decide (`decide`) or Mark booked (`book`). */
   | { sheet: 'manage-question'; id: string; mode: 'decide' | 'book'; optionId?: string }
   | { sheet: 'settle-up' }
-  | { sheet: 'claim'; code: string }
+  | { sheet: 'claim'; code: string; /** The payer lands on "Who had what" (to send to the table or sort out the rest). */ assign?: boolean }
   | { sheet: 'add-participant' }
   | { sheet: 'add-to-plan'; asQuestion?: boolean }
   | { sheet: 'scroll-todos' }
@@ -233,7 +233,7 @@ export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLink
       const expense = ctx.expenses.find((e) => e.id === target.id)
       if (!expense) return soft(DEEP_LINK_TOASTS.claim)
       if (!expense.claimCode) return { space: 'money', toast: DEEP_LINK_TOASTS.claimClosed }
-      return { space: 'money', open: { sheet: 'claim', code: expense.claimCode } }
+      return { space: 'money', open: { sheet: 'claim', code: expense.claimCode, ...(expense.paidBy && expense.paidBy === ctx.userId ? { assign: true } : {}) } }
     }
 
     case 'travel-details':

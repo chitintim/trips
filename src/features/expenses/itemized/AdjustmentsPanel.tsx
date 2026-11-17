@@ -1,8 +1,9 @@
+import { useEffect, useState } from 'react'
 import { SegmentedControl, Input } from '../../../components/ui'
 import { toMinorUnits, fromMinorUnits } from '../../../lib/money'
-import { computeReconciliationBar, SERVICE_TAX_PERCENT_QUICK_SELECTS } from '../lib/adjustmentDistribution'
+import { SERVICE_TAX_PERCENT_QUICK_SELECTS } from '../lib/adjustmentDistribution'
 import { formatMoneyMinor } from '../lib/formatMoney'
-import type { ItemizedDraft } from './itemizedState'
+import { computeDraftReconciliation, type ItemizedDraft } from './itemizedState'
 import type { AdjustmentMode } from '../lib/adjustmentDistribution'
 
 export interface AdjustmentsPanelProps {
@@ -23,19 +24,13 @@ const MODE_OPTIONS: Array<{ value: AdjustmentMode; label: string }> = [
  * vs printed total (green when exact, amber with delta otherwise).
  */
 export function AdjustmentsPanel({ draft, onChange }: AdjustmentsPanelProps) {
-  const itemSubtotalsMinor = draft.lineItems.map((l) => toMinorUnits(parseFloat(l.lineTotal) || 0, draft.currency))
-  const printedTotalMinor = toMinorUnits(parseFloat(draft.printedTotal) || 0, draft.currency)
-
-  const reconciliation = computeReconciliationBar(itemSubtotalsMinor, draft.adjustments, printedTotalMinor)
+  const reconciliation = computeDraftReconciliation(draft)
 
   const updateTax = (patch: Partial<ItemizedDraft['adjustments']['tax']>) =>
     onChange({ ...draft, adjustments: { ...draft.adjustments, tax: { ...draft.adjustments.tax, ...patch } } })
 
   const updateService = (patch: Partial<ItemizedDraft['adjustments']['service']>) =>
     onChange({ ...draft, adjustments: { ...draft.adjustments, service: { ...draft.adjustments.service, ...patch } } })
-
-  const tipMajor = fromMinorUnits(draft.adjustments.tipMinor, draft.currency)
-  const discountMajor = fromMinorUnits(draft.adjustments.discountMinor, draft.currency)
 
   return (
     <div className="space-y-5">
@@ -65,21 +60,31 @@ export function AdjustmentsPanel({ draft, onChange }: AdjustmentsPanelProps) {
 
       {/* Tip + discount */}
       <div className="grid grid-cols-2 gap-3">
-        <Input
+        <FlatMinorInput
           label="Tip"
-          size="sm"
-          inputMode="decimal"
-          value={tipMajor === 0 ? '' : String(tipMajor)}
-          onChange={(e) => onChange({ ...draft, adjustments: { ...draft.adjustments, tipMinor: toMinorUnits(parseFloat(e.target.value) || 0, draft.currency) } })}
-          placeholder="0.00"
+          currency={draft.currency}
+          minor={draft.adjustments.tipMinor}
+          onCommit={(tipMinor) => onChange({ ...draft, adjustments: { ...draft.adjustments, tipMinor } })}
         />
-        <Input
+        <FlatMinorInput
           label="Discount"
-          size="sm"
-          inputMode="decimal"
-          value={discountMajor === 0 ? '' : String(discountMajor)}
-          onChange={(e) => onChange({ ...draft, adjustments: { ...draft.adjustments, discountMinor: toMinorUnits(parseFloat(e.target.value) || 0, draft.currency) } })}
-          placeholder="0.00"
+          currency={draft.currency}
+          minor={draft.adjustments.discountMinor}
+          onCommit={(discountMinor) => onChange({ ...draft, adjustments: { ...draft.adjustments, discountMinor } })}
+        />
+      </div>
+
+      {/* Flat amounts printed on the receipt (no percent): added on top of the items. */}
+      <div className="grid grid-cols-3 gap-3">
+        <FlatMinorInput label="Service (amount)" currency={draft.currency} minor={draft.flatServiceMinor ?? 0} onCommit={(m) => onChange({ ...draft, flatServiceMinor: m })} />
+        <FlatMinorInput label="Tax (amount)" currency={draft.currency} minor={draft.flatTaxMinor ?? 0} onCommit={(m) => onChange({ ...draft, flatTaxMinor: m })} />
+        <FlatMinorInput
+          label="Rounding"
+          currency={draft.currency}
+          minor={draft.roundingMinor ?? 0}
+          onCommit={(m) => onChange({ ...draft, roundingMinor: m })}
+          allowNegative
+          helperText="Can be negative"
         />
       </div>
 
@@ -141,5 +146,52 @@ function PercentQuickSelects({ value, onChange }: { value: number; onChange: (pe
         className="w-20 h-7 px-2 rounded-[var(--radius-full)] border border-[var(--border-default)] bg-[var(--surface-raised)] text-xs focus:outline-none focus:ring-2 focus:ring-accent-500"
       />
     </div>
+  )
+}
+
+/**
+ * Money field in minor units with its own text state, so half-typed values
+ * ("1.", "-") are not rewritten under the user's fingers. Resets from the
+ * outside only when the committed amount changes (e.g. a one-tap fix).
+ */
+function FlatMinorInput({
+  label,
+  currency,
+  minor,
+  onCommit,
+  allowNegative,
+  helperText,
+}: {
+  label: string
+  currency: string
+  minor: number
+  onCommit: (minor: number) => void
+  allowNegative?: boolean
+  helperText?: string
+}) {
+  const format = (m: number) => (m === 0 ? '' : String(fromMinorUnits(m, currency)))
+  const parse = (t: string) => {
+    const n = parseFloat(t)
+    if (!Number.isFinite(n)) return 0
+    return toMinorUnits(allowNegative ? n : Math.abs(n), currency)
+  }
+  const [text, setText] = useState(() => format(minor))
+  useEffect(() => {
+    setText((current) => (parse(current) === minor ? current : format(minor)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [minor, currency])
+  return (
+    <Input
+      label={label}
+      size="sm"
+      inputMode={allowNegative ? 'text' : 'decimal'}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value)
+        onCommit(parse(e.target.value))
+      }}
+      placeholder="0.00"
+      helperText={helperText}
+    />
   )
 }

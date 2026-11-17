@@ -4,6 +4,7 @@ import { useParticipants } from '../../../lib/queries/useTrip'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useSettlements, useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import { explainMoneyPosition } from '../../../lib/cost/moneyEquation'
+import { useMoneyInputsSettled } from '../../expenses/money-space/useMoneyInputsSettled'
 import { buildMoneyPositionView } from '../../expenses/money-space/moneyPositionView'
 import type { Trip } from '../../../types'
 
@@ -27,6 +28,7 @@ export function SettleStatusCard({ trip, onNavigate }: SettleStatusCardProps) {
   // a carryover-inclusive settlement is paid, disagreeing with Money/Settle
   // Up. Same balance math, same inputs, everywhere.
   const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
+  const inputsSettled = useMoneyInputsSettled(trip.id)
 
   // The SAME headline the Money header prints (explainMoneyPosition + buildMoneyPositionView), so money
   // already marked paid is never called "You owe", and a frozen trip with stale suggested rows is
@@ -44,10 +46,11 @@ export function SettleStatusCard({ trip, onNavigate }: SettleStatusCardProps) {
         baseCurrency: trip.base_currency,
         carryovers,
         frozen: trip.settlement_snapshot != null,
+        inputsSettled,
         names,
       })
     )
-  }, [user, participants, expensesData, settlements, trip.base_currency, trip.settlement_snapshot, carryovers])
+  }, [user, participants, expensesData, settlements, trip.base_currency, trip.settlement_snapshot, carryovers, inputsSettled])
 
   if (!view) return null
   if (view.square && (expensesData?.expenses ?? []).length === 0) return null

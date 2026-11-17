@@ -7,6 +7,7 @@ import {
   canRemoveAsDuplicate,
   knownPaidIds,
   paymentsChangedSince,
+  partitionStaleSuggested,
 } from './settlementFreeze'
 import type { Settlement } from '../../../lib/queries/useSettlements'
 
@@ -118,5 +119,19 @@ describe('knownPaidIds / paymentsChangedSince', () => {
     expect(paymentsChangedSince(rows, ['m1'])).toBe(false)
     expect(paymentsChangedSince([...rows, row({ id: 'm2' })], ['m1'])).toBe(true)
     expect(paymentsChangedSince([...rows, row({ id: 'c2', status: 'confirmed' })], ['m1'])).toBe(false)
+  })
+})
+
+describe('partitionStaleSuggested', () => {
+  const rows = [row({ id: 's', status: 'suggested' }), row({ id: 'm', status: 'marked_paid' }), row({ id: 'c', status: 'confirmed' })]
+  it('while frozen every row is current', () => {
+    const r = partitionStaleSuggested(rows, true)
+    expect(r.current.map((x) => x.id)).toEqual(['s', 'm', 'c'])
+    expect(r.fromLastFreeze).toEqual([])
+  })
+  it('while unfrozen suggested rows from the last freeze are set apart; real payments stay current', () => {
+    const r = partitionStaleSuggested(rows, false)
+    expect(r.current.map((x) => x.id)).toEqual(['m', 'c'])
+    expect(r.fromLastFreeze.map((x) => x.id)).toEqual(['s'])
   })
 })

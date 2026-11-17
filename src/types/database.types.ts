@@ -451,6 +451,42 @@ export type Database = {
           },
         ]
       }
+      expense_claim_responses: {
+        Row: {
+          expense_id: string
+          responded_at: string
+          response: "done" | "not_there"
+          user_id: string
+        }
+        Insert: {
+          expense_id: string
+          responded_at?: string
+          response: "done" | "not_there"
+          user_id: string
+        }
+        Update: {
+          expense_id?: string
+          responded_at?: string
+          response?: "done" | "not_there"
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "expense_claim_responses_expense_id_fkey"
+            columns: ["expense_id"]
+            isOneToOne: false
+            referencedRelation: "expenses"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "expense_claim_responses_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       expense_item_claims: {
         Row: {
           amount_owed: number
@@ -663,6 +699,9 @@ export type Database = {
           rate_source: string | null
           receipt_date: string | null
           receipt_url: string | null
+          claim_deadline?: string | null
+          claims_closed_at?: string | null
+          claims_sent_at?: string | null
           rounding_adjustment: number | null
           service_charge_amount: number | null
           service_charge_percent: number | null
@@ -701,6 +740,9 @@ export type Database = {
           rate_source?: string | null
           receipt_date?: string | null
           receipt_url?: string | null
+          claim_deadline?: string | null
+          claims_closed_at?: string | null
+          claims_sent_at?: string | null
           rounding_adjustment?: number | null
           service_charge_amount?: number | null
           service_charge_percent?: number | null
@@ -739,6 +781,9 @@ export type Database = {
           rate_source?: string | null
           receipt_date?: string | null
           receipt_url?: string | null
+          claim_deadline?: string | null
+          claims_closed_at?: string | null
+          claims_sent_at?: string | null
           rounding_adjustment?: number | null
           service_charge_amount?: number | null
           service_charge_percent?: number | null
@@ -2040,6 +2085,7 @@ export type Database = {
           base_currency: string
           capacity_limit: number | null
           chase_settings: Json | null
+          receipt_notices_enabled?: boolean
           confirmation_deadline: string | null
           confirmation_enabled: boolean | null
           confirmation_message: string | null
@@ -2064,6 +2110,7 @@ export type Database = {
           base_currency?: string
           capacity_limit?: number | null
           chase_settings?: Json | null
+          receipt_notices_enabled?: boolean
           confirmation_deadline?: string | null
           confirmation_enabled?: boolean | null
           confirmation_message?: string | null
@@ -2088,6 +2135,7 @@ export type Database = {
           base_currency?: string
           capacity_limit?: number | null
           chase_settings?: Json | null
+          receipt_notices_enabled?: boolean
           confirmation_deadline?: string | null
           confirmation_enabled?: boolean | null
           confirmation_message?: string | null
@@ -2273,6 +2321,46 @@ export type Database = {
       freeze_settlements: {
         Args: { p_known_paid_ids: string[]; p_snapshot: Json; p_suggestions: Json; p_trip_id: string }
         Returns: Json
+      }
+      apply_receipt_deadline: {
+        Args: { p_expense_id: string; p_preview?: boolean }
+        Returns: Json
+      }
+      extend_receipt_deadline: {
+        Args: { p_deadline: string; p_expense_id: string }
+        Returns: Json
+      }
+      respond_to_receipt: {
+        Args: { p_expense_id: string; p_response: string }
+        Returns: Json
+      }
+      reopen_receipt_claims: {
+        Args: { p_deadline?: string; p_expense_id: string }
+        Returns: Json
+      }
+      reitemize_expense: {
+        Args: { p_expense_id: string; p_header: Json; p_lines: Json; p_preview?: boolean }
+        Returns: Json
+      }
+      send_receipt_to_table: {
+        Args: { p_deadline?: string; p_expense_id: string }
+        Returns: Json
+      }
+      issue_receipt_claim_token: {
+        Args: { p_expense_id: string; p_token_hash: string; p_user_id: string }
+        Returns: Json
+      }
+      receipt_claim_act: {
+        Args: { p_action: string; p_payload?: Json; p_token_hash: string }
+        Returns: Json
+      }
+      receipt_claim_peek: {
+        Args: { p_token_hash: string }
+        Returns: Json
+      }
+      receipt_claim_rate_hit: {
+        Args: { p_key: string; p_limit: number; p_window_seconds: number }
+        Returns: boolean
       }
       set_receipt_claims: {
         Args: { p_claims: Json; p_expense_id: string }

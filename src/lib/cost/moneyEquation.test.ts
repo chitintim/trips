@@ -202,6 +202,17 @@ describe('D2: a frozen trip cannot be square while suggested payments from you e
     expect(eq.headline.kind).toBe('stale')
     expect(eq.headline.text).toBe('Balances changed since they were frozen — ask the organizer to refresh')
   })
+  it('inputs still loading or refetching: no stale claim, and the headline falls back to the plain ledger', () => {
+    const loading = explainMoneyPosition({ ...input, frozen: true, inputsSettled: false })
+    expect(loading.stale).toBe(false)
+    expect(loading.headline.kind).toBe('settled')
+    expect(loading.headline.text).not.toContain('changed since they were frozen')
+    const partial = explainMoneyPosition({ ...input, settlements: [pay('part', ME, ALEX, 40, 'confirmed'), pay('sug', ME, ALEX, 100, 'suggested')], frozen: true, inputsSettled: false })
+    expect(partial.headline.note).toBeNull()
+  })
+  it('the same inputs once everything has loaded do show it', () => {
+    expect(explainMoneyPosition({ ...input, frozen: true, inputsSettled: true }).stale).toBe(true)
+  })
   it('not frozen: the suggested rows mean nothing and nothing is stale', () => {
     const eq = explainMoneyPosition({ ...input, frozen: false })
     expect(eq.stale).toBe(false)

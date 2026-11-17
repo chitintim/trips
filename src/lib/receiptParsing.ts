@@ -95,6 +95,20 @@ const RECEIPT_ERROR_COPY: Record<ReceiptParseErrorCode, { message: string; retry
 }
 
 /**
+ * Client-side ceiling for one scan. The server's own budget is 100 s, so the
+ * client waits a little longer than that before giving up (the server then
+ * always gets to answer first when it can).
+ */
+export const RECEIPT_SCAN_TIMEOUT_MS = 115_000
+
+/** Client-only failure codes (never sent by the server). */
+export type ReceiptScanClientCode = 'timeout' | 'network'
+export type ReceiptScanFailureCode = ReceiptParseErrorCode | ReceiptScanClientCode
+
+export const RECEIPT_TIMEOUT_MESSAGE = 'That took too long. Try again, or enter it yourself: your photo is kept.'
+export const RECEIPT_NETWORK_MESSAGE = "We couldn't reach the scanner. Check your connection and try again."
+
+/**
  * Error thrown by parseReceipt for server-reported failures. Extends Error so
  * existing `instanceof Error` / `.message` callers keep working; `code` is
  * undefined when the (old) server response carried no code.
@@ -141,7 +155,8 @@ export function buildReceiptParseError(
  */
 export async function parseReceipt(
   receiptPath: string,
-  tripId: string
+  tripId: string,
+  opts: { signal?: AbortSignal } = {}
 ): Promise<ParsedReceiptData> {
   const { data: { session } } = await supabase.auth.getSession()
   if (!session) {
@@ -157,6 +172,7 @@ export async function parseReceipt(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ receiptPath, tripId }),
+      signal: opts.signal,
     }
   )
 
@@ -171,6 +187,37 @@ export async function parseReceipt(
   }
 
   return result.data
+}
+
+/** True when a thrown value is a fetch abort (the user cancelled, or our own timeout fired). */
+export function isReceiptScanCancelled(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError'
+}
+
+export interface ScanFailure {
+  message: string
+  retryable: boolean
+  code: ReceiptScanFailureCode
+}
+
+/**
+ * Turns anything parseReceipt (or the fetch under it) can throw into plain,
+ * safe copy. Raw server or browser text is never passed through except the
+ * server's coded, user-safe too_large sentence (already chosen in
+ * buildReceiptParseError).
+ */
+export function describeScanFailure(err: unknown): ScanFailure {
+  if (err instanceof ReceiptParseError && err.code) {
+    return { message: err.message, retryable: err.retryable, code: err.code }
+  }
+  if (isReceiptScanCancelled(err)) {
+    return { message: RECEIPT_TIMEOUT_MESSAGE, retryable: true, code: 'timeout' }
+  }
+  // fetch() rejects with a TypeError when the network is down or unreachable.
+  if (err instanceof TypeError) {
+    return { message: RECEIPT_NETWORK_MESSAGE, retryable: true, code: 'network' }
+  }
+  return { message: RECEIPT_ERROR_COPY.unknown.message, retryable: RECEIPT_ERROR_COPY.unknown.retryable, code: 'unknown' }
 }
 
 /**

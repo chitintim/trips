@@ -64,7 +64,7 @@ node scripts/check-zindex.mjs           # z-index layering check
 Edge function tests (Deno, no install needed):
 
 ```bash
-npx -y deno test supabase/functions/payment-notice/ supabase/functions/payment-confirm/ supabase/functions/auto-chase/ supabase/functions/_shared/payment*.test.ts
+npx -y deno test supabase/functions/payment-notice/ supabase/functions/payment-confirm/ supabase/functions/receipt-notice/ supabase/functions/receipt-claim/ supabase/functions/auto-chase/ supabase/functions/_shared/payment*.test.ts supabase/functions/_shared/receiptNotice*.test.ts
 ```
 
 `deno test` leaves nothing behind except possibly a root `deno.lock`; delete it afterwards.
@@ -76,7 +76,7 @@ Environment variable names (values are never committed):
 | Where | Names |
 |---|---|
 | Frontend (`.env`, GitHub secrets) | `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`; optional `VITE_BASE` (build base path, default `/trips/`) |
-| Edge functions (Supabase secrets) | `ANTHROPIC_API_KEY`, `APP_BASE_URL`, `RESEND_API_KEY`, `RESEND_FROM`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`; optional `PAYMENT_CONFIRM_ALLOWED_ORIGINS` (comma-separated extra origins `payment-confirm` accepts besides `APP_BASE_URL`); `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` are provided by Supabase |
+| Edge functions (Supabase secrets) | `ANTHROPIC_API_KEY`, `APP_BASE_URL`, `RESEND_API_KEY`, `RESEND_FROM`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`; optional `PAYMENT_CONFIRM_ALLOWED_ORIGINS` and `RECEIPT_CLAIM_ALLOWED_ORIGINS` (comma-separated extra origins `payment-confirm` / `receipt-claim` accept besides `APP_BASE_URL`); `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` are provided by Supabase |
 
 CI (`.github/workflows/ci.yml`, on pull requests and non-master pushes) runs typecheck, `npm run lint:ci`, z-index check, unit tests, drift check, build and the Playwright smoke suite.
 
@@ -130,6 +130,15 @@ Rules for who may do what, the 0.011 dust tolerance, the leftover modes and the 
   npx -y supabase@latest functions deploy auto-chase      --remote=vrmhwfrpdaiovulornli --use-api   # changed: skips the daily reminder for a payment whose paid notice went out today
   ```
   `config.toml` carries the settings (`payment-notice` verify_jwt true, `payment-confirm` false). They need the same secrets as `auto-chase` (`RESEND_API_KEY` or `BREVO_API_KEY` with their sender settings, and `APP_BASE_URL`); `SUPABASE_*` are provided. **Order:** migrations, then `payment-notice`, `payment-confirm` and `auto-chase`, then the front end (a front end that calls `payment-notice` before it exists just logs a warning; it never blocks marking a payment paid; the page for the button is the public route `/confirm-payment`, which needs `payment-confirm` deployed first).
+  **Receipts, phase 2 ("Send to the table"; two more functions; DEPLOY ORDER: migration `20261126090000_receipt_deadline_tokens.sql`, then the functions, then the front end):**
+  ```bash
+  npx -y supabase@latest functions deploy receipt-notice --remote=vrmhwfrpdaiovulornli --use-api   # verify_jwt = true (signed-in payer / organiser; calls send_receipt_to_table as the caller)
+  npx -y supabase@latest functions deploy receipt-claim  --remote=vrmhwfrpdaiovulornli --use-api --no-verify-jwt   # verify_jwt = false: public, the emailed personal token is the credential; POST only, origin-checked, rate-limited
+  npx -y supabase@latest functions deploy auto-chase     --remote=vrmhwfrpdaiovulornli --use-api   # changed: applies receipt deadlines, sends reminder and result emails (without it no deadline is ever applied)
+  npx -y supabase@latest functions deploy payment-notice --remote=vrmhwfrpdaiovulornli --use-api   # changed shared file (_shared/paymentNoticeSend.ts); redeploy keeps it in sync
+  ```
+  Full order: (1) apply the migration by hand, (2) deploy the four functions above (add `--yes` in a non-interactive shell), (3) push to master for the front end.
+  `config.toml` carries the settings (`receipt-notice` verify_jwt true, `receipt-claim` false). Env (names only): `APP_BASE_URL`, `RESEND_API_KEY` or `BREVO_API_KEY` with their sender settings (same as the payment notices), optional `RECEIPT_CLAIM_ALLOWED_ORIGINS`; `SUPABASE_*` are provided. Before the migration is applied `receipt-notice` answers 409 `not_available` and `receipt-claim` 503 `{state:'unavailable'}`; nothing is sent. The result and reminder emails are NOT HTTP endpoints: the daily job (`auto-chase`) calls `sendReceiptResultNotice` / `sendReceiptReminderNotice` from `_shared/receiptNoticeSend.ts`. The job applies receipt deadlines even with no email provider or in quiet hours, then (re)sends result emails for receipts closed in the last 7 days to anyone charged a leftover who has no `result` notice for that amount yet (see PRODUCT_MODEL section 8 for the reopen rules). The same click-tracking rule applies to the personal links (`/receipt#t=<token>`; the token is in the URL fragment so it never reaches a server, log or referrer): keep it OFF. Contract of both functions: docs/PRODUCT_MODEL.md section 8.
   **Email provider setting:** keep click tracking OFF for these emails (Resend: Domains, your sending domain, Click tracking; Brevo: transactional tracking). The confirm link contains a secret token; a tracked link would route it through the provider and store it in their logs.
   **Not-received flow (second step, additive; DEPLOY ORDER: migration, then functions, then front end):** (1) run PRE_APPLY_CHECKS group 20 (pre-apply part), (2) apply `20261121090000_payment_receipt_dispute.sql` (starts with `SET LOCAL lock_timeout = '5s'`, adds `settlements.receipt_disputed_at` and `settlements.last_retracted_at`, a CHECK, extends the update guard, replaces `dispute_payment_by_token`, adds `clear_receipt_dispute(uuid, text)` and `restore_receipt_dispute(uuid)`, ends with `NOTIFY pgrst, 'reload schema'`; then run the group 20 POST-APPLY checks 20p-20u and record the new guard md5), (3) deploy `payment-notice`, `payment-confirm` and `auto-chase` again, (4) then the front end. Any order is safe: the front end hides the new actions until the column exists, and the functions treat a missing column as "nothing disputed" (a transient database error is a 502, never mistaken for "missing"). The email carries two buttons (`/confirm-payment?t=<token>&a=yes|no`); `a` is only a UI hint. Who may do what to a payment, the notices with their caps and the `payment-notice` status codes (200 / 403 / 409 reasons / 429 / 502) are in docs/PRODUCT_MODEL.md section 5 and 8.
   `auto-chase` is invoked by a pg_cron job (`auto-chase-daily`) that authenticates with an `x-cron-secret` header read from the service-role-only `app_secrets` table.
@@ -149,7 +158,7 @@ src/
   shared/contracts/  zod contracts mirrored to the edge functions
 supabase/
   migrations/     SQL, applied manually
-  functions/      auto-chase, payment-notice, payment-confirm, ingest, trip-chat, parse-receipt, nudge-draft,
+  functions/      auto-chase, payment-notice, payment-confirm, receipt-notice, receipt-claim, ingest, trip-chat, parse-receipt, nudge-draft,
                   reorganize-plan, refresh-fx-rates, admin-invitation-account, _shared
   templates/      mirror of the dashboard auth email templates
 e2e/              Playwright smoke tests (no sign-in, no live writes)

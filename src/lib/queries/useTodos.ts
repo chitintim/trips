@@ -5,6 +5,7 @@ import { useSections, useVotes, useQuestionPasses } from './usePlanning'
 import { useActions } from './useActions'
 import { useChecklists } from './useChecklists'
 import { useExpenses } from './useExpenses'
+import { useClaimResponses, withClaimResponses } from './useClaimResponses'
 import { useSettlements, useSettlementCarryovers } from './useSettlements'
 import { useTimeline } from './useTimeline'
 import { useBookings } from './useBookings'
@@ -59,6 +60,8 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
   const actions = useActions(tripId)
   const checklists = useChecklists(tripId)
   const expenses = useExpenses(tripId)
+  // Replies to receipts sent to the table. Fails soft like the passes: table missing = no `responses`, the old claim rules.
+  const claimResponses = useClaimResponses(tripId)
   const settlements = useSettlements(tripId)
   const carryovers = useSettlementCarryovers(tripId)
   const timeline = useTimeline(tripId)
@@ -75,7 +78,13 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
   const voteData = votes.data
   const actionData = actions.data
   const checklistData = checklists.data
-  const expenseList = expenses.data?.expenses
+  const rawExpenseList = expenses.data?.expenses
+  const claimRows = claimResponses.rows
+  const claimResponsesAvailable = claimResponses.available
+  const expenseList = useMemo(
+    () => (rawExpenseList ? withClaimResponses(rawExpenseList, claimRows, claimResponsesAvailable) : undefined),
+    [rawExpenseList, claimRows, claimResponsesAvailable]
+  )
   const settlementList = settlements.data
   const carryoverData = carryovers.data
   const timelineData = timeline.data
@@ -84,21 +93,21 @@ export function useTripSnapshot(tripId: string | undefined): TripSnapshotResult 
   // Net balances (base-currency major units, negative = owes) are only read on
   // Finished trips, so only pay for the maths there.
   const balances = useMemo(() => {
-    if (!tripData || !participantData || !expenseList || !settlementList || !carryoverData) return undefined
+    if (!tripData || !participantData || !rawExpenseList || !settlementList || !carryoverData) return undefined
     if (!isTripFinished(tripData)) return undefined
     const base = tripData.base_currency
     const ids = withMoneyParticipants(
       participantData.map((p) => p.user_id),
-      expenseList,
+      rawExpenseList,
       settlementList,
       base,
       carryoverData
     )
-    const { balances: result } = computeBalances(expenseList, settlementList, ids, base, carryoverData)
+    const { balances: result } = computeBalances(rawExpenseList, settlementList, ids, base, carryoverData)
     return Object.fromEntries(result.map((b) => [b.userId, fromMinorUnits(b.netBalanceMinor, base)]))
-  }, [tripData, participantData, expenseList, settlementList, carryoverData])
+  }, [tripData, participantData, rawExpenseList, settlementList, carryoverData])
 
-  const passesPending = questionPasses.isPending
+  const passesPending = questionPasses.isPending || claimResponses.isPending
   const passList = questionPasses.passes
   const passesAvailable = questionPasses.available
   const snapshot = useMemo<TripSnapshot | null>(

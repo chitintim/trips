@@ -8,6 +8,7 @@ import { useSettlementCarryovers } from '../../../lib/queries/useSettlements'
 import { useParticipants, useAllParticipants } from '../../../lib/queries/useTrip'
 import { effectiveTripStage } from '../../../lib/tripStage'
 import { MoneyPositionHeader } from './MoneyPositionHeader'
+import { useMoneyInputsSettled } from './useMoneyInputsSettled'
 import { MoneyFilterChips } from './MoneyFilterChips'
 import { ExpenseFeed } from '../expenses-tab/ExpenseFeed'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
@@ -52,6 +53,7 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
   const { data: participants = [] } = useParticipants(trip.id)
   const { data: allParticipants = [] } = useAllParticipants(trip.id)
   const { data: carryovers = [] } = useSettlementCarryovers(trip.id)
+  const inputsSettled = useMoneyInputsSettled(trip.id)
 
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -118,6 +120,7 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
         currentUserId={user?.id}
         baseCurrency={trip.base_currency}
         frozen={trip.settlement_snapshot != null}
+        inputsSettled={inputsSettled}
         onSettleUp={() => {
           setFocusDuplicates(false)
           setSettleUpOpen(true)

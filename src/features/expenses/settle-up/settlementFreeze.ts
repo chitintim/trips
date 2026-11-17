@@ -100,3 +100,19 @@ export const PAYMENTS_CHANGED_MESSAGE = 'Payments changed while you were freezin
 export function canRemoveAsDuplicate(target: Settlement, all: Settlement[], baseCurrency: string): boolean {
   return findProvingDuplicate(target, all, baseCurrency) !== null
 }
+
+export const PREVIOUS_FREEZE_LABEL = 'From the last freeze — will be recalculated'
+
+/**
+ * Settlement rows to present as CURRENT. Unfreezing clears the snapshot but leaves the `suggested` rows (the next freeze replaces
+ * them), so while balances are NOT frozen those rows describe an old calculation: they are set apart under a quiet label, never
+ * offered "Mark paid" (the server would accept it -- the lifecycle guard does not look at the freeze -- but the amount may no longer be
+ * what is owed) and never counted as "still to settle". Marked-paid and confirmed rows are real payments and always stay current.
+ */
+export function partitionStaleSuggested<T extends Pick<Settlement, 'status'>>(settlements: T[], isFrozen: boolean): { current: T[]; fromLastFreeze: T[] } {
+  if (isFrozen) return { current: settlements, fromLastFreeze: [] }
+  return {
+    current: settlements.filter((s) => s.status !== 'suggested'),
+    fromLastFreeze: settlements.filter((s) => s.status === 'suggested'),
+  }
+}

@@ -1,18 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Card, useToast } from '../../../components/ui'
+import { Button, Card, Modal, useToast } from '../../../components/ui'
+import { useAuth } from '../../../hooks/useAuth'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { toMinorUnits } from '../../../lib/money'
 import { useSetReceiptClaims, useShareLeftovers } from '../../../lib/queries/useExpenses'
+import { useClaimResponses } from '../../../lib/queries/useClaimResponses'
+import { useReceiptTableRpcSupport } from '../../../lib/queries/useReceiptTable'
+import { useTrip } from '../../../lib/queries/useTrip'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import type { ReceiptClaimEntry } from '../../../lib/queries/useExpenses'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Expense } from '../../../types'
 import { formatMoneyMinor } from '../lib/formatMoney'
 import { claimLeftoverAmount, claimLeftoverQuantity, claimOwnAmount, claimOwnQuantity, hasOwnClaim } from '../lib/balances'
 import { formatClaimQuantity } from './claimFractions'
-import { peopleOnReceipt } from './claimPeople'
+import { labelOfUser } from './claimPeople'
+import { useReceiptPeople } from './useReceiptPeople'
 import { shareLineMinor, hasDirectUnitClaims, REPLACES_OWN_ENTRIES_WARNING } from './claimMath'
 import { describeClaimError } from './claimErrors'
 import { leftoverFollowUp } from './leftoverReshare'
+import { LEAVE_IT_FOR_NOW, SORT_OUT_THE_REST, unassignedPrompt } from './claimDone'
+import { SendToTableSheet } from './SendToTableSheet'
+import { ReceiptTableStatus } from './ReceiptTableStatus'
+import { countToTell, receiptTableSupport, summarizeReplies } from './receiptTable'
 import type { ClaimRow, LineRow } from './claimMath'
 
 /** Who a line belongs to: a list of people (shared equally) or the whole table. */
@@ -33,7 +43,7 @@ export interface WhoHadWhatProps {
   participants: ParticipantWithUser[]
   /** Balances are frozen: show, don't change. */
   disabled?: boolean
-  /** Called after everything has been saved and the person taps "Done". */
+  /** Called after everything has been saved and the person taps "Done" (and, if items are unassigned, chose "Leave it for now"). */
   onDone?: () => void
   /** Open the leftovers sheet (hidden when not available). */
   onOpenLeftovers?: () => void
@@ -51,14 +61,42 @@ export interface WhoHadWhatProps {
  * it also retries by itself when the phone comes back online. "Done" saves
  * anything still pending before it leaves.
  */
-export function WhoHadWhat({ expense, lineItems, claims, participants, disabled = false, onDone, onOpenLeftovers }: WhoHadWhatProps) {
+export function WhoHadWhat({ expense, lineItems, claims, participants, disabled: frozen = false, onDone, onOpenLeftovers }: WhoHadWhatProps) {
   const { showToast } = useToast()
+  const { user } = useAuth()
   const setClaims = useSetReceiptClaims()
   const shareLeftovers = useShareLeftovers()
   const currency = expense.currency
-  const people = useMemo(() => peopleOnReceipt(expense, participants, claims), [expense, participants, claims])
+  const people = useReceiptPeople(expense, participants, claims, lineItems)
   const peopleIds = useMemo(() => people.map((p) => p.id), [people])
+
   const labelOf = useCallback((id: string) => people.find((p) => p.id === id)?.label ?? 'Someone', [people])
+
+  // Receipts phase 2 (send to the table, deadline, replies). Every piece is absent until the migration is applied; then `support` is all-false
+  // and this screen is exactly what it was.
+  const rpcSupport = useReceiptTableRpcSupport()
+  const responses = useClaimResponses(expense.trip_id)
+  const { data: trip } = useTrip(expense.trip_id)
+  const { canManageTrip } = useTripPermissions(trip)
+  const support = receiptTableSupport({ expense, responsesAvailable: responses.available, rpc: rpcSupport })
+  // A CLOSED receipt (leftovers shared) is final for claim edits, the payer's too, until it is reopened from the status card below.
+  const closed = support.phase === 'closed'
+  const disabled = frozen || closed
+  const [sendOpen, setSendOpen] = useState(false)
+  const noticesEnabled = trip && 'receipt_notices_enabled' in trip ? (trip as { receipt_notices_enabled?: boolean }).receipt_notices_enabled !== false : null
+  const replies = useMemo(
+    () => summarizeReplies({ peopleIds, payerId: expense.paid_by, responses: responses.rows, expenseId: expense.id, participants }),
+    [peopleIds, expense.paid_by, expense.id, responses.rows, participants]
+  )
+  const leftoversText = useMemo(() => {
+    const byUser = new Map<string, number>()
+    for (const c of claims) {
+      const m = toMinorUnits(claimLeftoverAmount(c), currency)
+      if (m > 0) byUser.set(c.user_id, (byUser.get(c.user_id) ?? 0) + m)
+    }
+    return [...byUser].map(([id, m]) => `${labelOf(id)} ${formatMoneyMinor(m, currency)}`).join(' · ')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claims, currency, people])
 
   // What the server has: per line, who is on it (the leftover share inside a row is derived and ignored here: only each row's own part counts).
   const serverLines = useMemo(() => {
@@ -94,6 +132,7 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
   const [confirmReset, setConfirmReset] = useState<string | null>(null)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [leavePrompt, setLeavePrompt] = useState(false)
 
   const localRef = useRef(local)
   const savedRef = useRef(saved)
@@ -283,8 +322,26 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
         return
       }
     }
-    onDone?.()
+    if (!disabled && unassignedCount > 0) {
+      setLeavePrompt(true)
+      return
+    }
+    finish()
   }
+
+  /** Leaving "Who had what": a receipt that is ready to send goes to the table first (the sheet then leaves); otherwise straight out. */
+  const finish = () => {
+    if (support.canSend && !disabled) setSendOpen(true)
+    else onDone?.()
+  }
+
+  const prompt = unassignedPrompt({
+    count: unassignedCount,
+    minor: unassignedMinor,
+    currency,
+    payerName: labelOfUser(expense.paid_by, people, participants),
+    viewerIsPayer: !!user && user.id === expense.paid_by,
+  })
 
   const assigneeLabel = assignee ? labelOf(assignee) : null
 
@@ -312,7 +369,21 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
         <SaveStatus status={status} pending={dirtyLineIds.length} errorMsg={errorMsg} onRetry={() => void flush()} />
       </div>
 
-      {disabled && <p className="text-sm text-[var(--text-secondary)]">🔒 Balances are frozen, so this can't be changed. An organizer can unfreeze them.</p>}
+      {support.columns && support.hasStatus && (
+        <ReceiptTableStatus
+          expense={expense}
+          tripId={expense.trip_id}
+          columns={support.columns}
+          replies={replies}
+          rpc={rpcSupport}
+          participants={participants}
+          leftoversText={leftoversText}
+          frozen={frozen}
+        />
+      )}
+
+      {frozen && <p className="text-sm text-[var(--text-secondary)]">🔒 Balances are frozen, so this can't be changed. An organizer can unfreeze them.</p>}
+      {closed && !frozen && <p className="text-sm text-[var(--text-secondary)]">This receipt's claims are closed, so nothing here can be changed. Tap Reopen above to change it.</p>}
 
       <p className="text-sm text-[var(--text-secondary)]">
         Tap a name under each item. Tap several for a shared item, or Everyone for the table. Pass the phone round — friends can tap their own name.
@@ -323,7 +394,7 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
         <p className="text-sm font-medium text-[var(--text-primary)]">Assign to…</p>
         <div className="flex flex-wrap gap-2" role="group" aria-label="Assign to">
           {people.map((p) => (
-            <ChipButton key={p.id} pressed={assignee === p.id} onClick={() => setAssignee(assignee === p.id ? null : p.id)} label={`Assign to ${p.label}`} disabled={disabled}>
+            <ChipButton key={p.id} pressed={assignee === p.id} onClick={() => setAssignee(assignee === p.id ? null : p.id)} label={`Assign to ${p.fullName}`} title={p.fullName} disabled={disabled}>
               {p.label}
             </ChipButton>
           ))}
@@ -360,7 +431,7 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
                 </span>
                 <span className="shrink-0 text-right">
                   <span className="block font-medium tabular-nums text-[var(--text-primary)]">{formatMoneyMinor(toMinorUnits(li.total_amount, currency), currency)}</span>
-                  {sharedCount > 1 && <span className="block text-xs text-accent-700 dark:text-accent-400 font-medium">÷{sharedCount}</span>}
+                  {sharedCount > 1 && !custom && <span className="block text-xs text-accent-700 dark:text-accent-400 font-medium">÷{sharedCount}</span>}
                 </span>
               </button>
 
@@ -404,7 +475,8 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
                       key={p.id}
                       pressed={cur !== 'all' && cur.includes(p.id)}
                       onClick={() => togglePerson(li.id, p.id)}
-                      label={`${p.label}, ${name}`}
+                      label={`${p.fullName}, ${name}`}
+                      title={p.fullName}
                       disabled={disabled}
                     >
                       {p.label}
@@ -425,7 +497,9 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
         <ul className="grid grid-cols-2 gap-x-4 gap-y-1">
           {people.map((p) => (
             <li key={p.id} className="flex items-baseline justify-between gap-2 text-sm">
-              <span className="truncate text-[var(--text-secondary)]">{p.label}</span>
+              <span className="min-w-0 break-words text-[var(--text-secondary)]" title={p.fullName}>
+                {p.label}
+              </span>
               <span className="tabular-nums text-[var(--text-primary)]">{formatMoneyMinor(totals.get(p.id) ?? 0, currency)}</span>
             </li>
           ))}
@@ -436,16 +510,63 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
         <div className="max-w-lg mx-auto flex items-center gap-3">
           {unassignedCount > 0 && onOpenLeftovers ? (
             <Button variant="secondary" onClick={onOpenLeftovers} className="min-h-11">
-              Sort out the rest
+              {SORT_OUT_THE_REST}
             </Button>
           ) : (
             <span className="flex-1" />
           )}
           <Button variant="primary" className="ml-auto min-h-11" onClick={handleDone} isLoading={status === 'saving'}>
-            Done
+            {support.canSend && !disabled ? 'Done — send to the table' : 'Done'}
           </Button>
         </div>
       </div>
+
+      {support.canSend && (
+        <SendToTableSheet
+          isOpen={sendOpen}
+          onClose={(sent) => {
+            setSendOpen(false)
+            if (sent) onDone?.()
+          }}
+          expense={expense}
+          tripId={expense.trip_id}
+          toTell={countToTell({ peopleIds, senderId: user?.id ?? '', payerId: expense.paid_by, responses: responses.rows, expenseId: expense.id })}
+          noticesEnabled={noticesEnabled}
+          canManageTrip={canManageTrip}
+        />
+      )}
+
+      <Modal isOpen={leavePrompt && !!prompt} onClose={() => setLeavePrompt(false)} title={prompt?.title ?? ''}>
+        <div className="space-y-4">
+          <p className="text-sm text-[var(--text-secondary)]">{prompt?.body}</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setLeavePrompt(false)
+                finish()
+              }}
+            >
+              {LEAVE_IT_FOR_NOW}
+            </Button>
+            {onOpenLeftovers ? (
+              <Button
+                variant="primary"
+                onClick={() => {
+                  setLeavePrompt(false)
+                  onOpenLeftovers()
+                }}
+              >
+                {SORT_OUT_THE_REST}
+              </Button>
+            ) : (
+              <Button variant="primary" onClick={() => setLeavePrompt(false)}>
+                Keep assigning
+              </Button>
+            )}
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }
@@ -475,11 +596,13 @@ function ChipButton({
   label,
   disabled,
   wide,
+  title,
   children,
 }: {
   pressed: boolean
   onClick: () => void
   label: string
+  title?: string
   disabled?: boolean
   wide?: boolean
   children: React.ReactNode
@@ -489,9 +612,10 @@ function ChipButton({
       type="button"
       aria-pressed={pressed}
       aria-label={label}
+      title={title}
       disabled={disabled}
       onClick={onClick}
-      className={`min-h-11 px-4 rounded-[var(--radius-full)] border text-sm font-medium transition-colors disabled:opacity-40 ${wide ? 'border-dashed' : ''} ${
+      className={`min-h-11 max-w-full px-4 py-1.5 text-left break-words rounded-[var(--radius-full)] border text-sm font-medium transition-colors disabled:opacity-40 ${wide ? 'border-dashed' : ''} ${
         pressed
           ? 'bg-accent-600 border-accent-600 text-white'
           : 'bg-[var(--surface-raised)] border-[var(--border-default)] text-[var(--text-secondary)] hover:bg-[var(--surface-sunken)]'

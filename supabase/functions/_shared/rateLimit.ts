@@ -53,4 +53,6 @@ export const RATE_LIMITS = {
   reorganize: { feature: 'reorganize', capacity: 5, refillPerDay: 5 },
   /** payment-notice: 60/day/user -- one call per payment marked paid or confirmed, so this only stops abuse. */
   paymentNotice: { feature: 'payment_notice', capacity: 60, refillPerDay: 60 },
+  /** receipt-notice: 60/day/user -- one call per "Send to the table"; only stops abuse. */
+  receiptNotice: { feature: 'receipt_notice', capacity: 60, refillPerDay: 60 },
 } as const satisfies Record<string, RateLimitConfig>

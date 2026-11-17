@@ -8,6 +8,7 @@ import { authRoutes } from './features/auth/routes'
 import { AnnouncementGate } from './features/announcements'
 import { ClaimPage } from './features/expenses'
 import { ConfirmPaymentPage } from './features/payments'
+import { ReceiptClaimPage } from './features/receipts'
 import { Dashboard } from './pages/Dashboard'
 import { TripDetail } from './pages/TripDetail'
 import { SharePage } from './pages/SharePage'
@@ -29,6 +30,9 @@ function App() {
 
             {/* Public: the button in the "X paid you" email (token is the credential) */}
             <Route path="/confirm-payment" element={<ConfirmPaymentPage />} />
+
+            {/* Public: the personal link in the "tell us what you had" receipt email (token is the credential) */}
+            <Route path="/receipt" element={<ReceiptClaimPage />} />
 
             {/* Protected Routes */}
             <Route

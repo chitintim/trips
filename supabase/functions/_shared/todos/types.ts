@@ -109,6 +109,8 @@ export interface SnapshotExpense {
   ai_parsed: boolean | null
   status: string | null
   participant_ids: ReadonlyArray<string> | null
+  /** When the receipt was added: "Send to the table" is only offered for recent receipts. Absent = unknown (not offered). */
+  created_at?: string | null
   claims: ReadonlyArray<{
     user_id: string
     source?: string | null
@@ -117,11 +119,29 @@ export interface SnapshotExpense {
     line_item_id?: string
     quantity_claimed?: number
     leftover_quantity?: number | null
+    /** What the row costs the person, and the part of it that is their share of the leftovers: lets "Check what Tim put you down for" show an amount. */
+    amount_owed?: number | null
+    leftover_amount?: number | null
   }>
   /** The receipt's lines, when the snapshot has them: lets the claim to-do judge "everything is claimed" with the dust tolerance instead of the exact expenses.status. */
-  line_items?: ReadonlyArray<{ id: string; quantity: number; total_amount?: number | null }>
+  line_items?: ReadonlyArray<{ id: string; quantity: number; total_amount?: number | null; shared_by_all?: boolean | null }>
   /** The claim link (`expense_allocation_links` row). No link = nobody can claim, so there is no claim to-do. */
   allocation_link?: { code: string; expires_at?: string | null } | null
+  /**
+   * Receipts phase 2 (`expenses.claim_deadline` / `claims_sent_at` / `claims_closed_at`). ALL THREE ABSENT (undefined) = the migration is not
+   * applied: the engine then behaves exactly as before it existed. `null` = the column exists and the receipt was never sent / has no deadline /
+   * is still open.
+   */
+  claim_deadline?: string | null
+  /** Set once the payer sent the receipt to the table. Null/absent = never sent: the claim to-do keeps its old rules. */
+  claims_sent_at?: string | null
+  /** Set when the leftovers were applied: the receipt is closed and its claim to-dos clear. */
+  claims_closed_at?: string | null
+  /**
+   * `expense_claim_responses` rows for this receipt ("That's everything" = done, "I wasn't there" = not_there). Absent (undefined) = the table
+   * is not there yet (or could not be read): the engine then does not use the new rules for this receipt.
+   */
+  responses?: ReadonlyArray<{ user_id: string; response: string }>
 }
 
 export interface SnapshotSettlement {

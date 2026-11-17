@@ -7,6 +7,7 @@ import {
   APPLY_AND_FREEZE,
   APPLY_TO_ALL,
   CHOICE_EVERYONE,
+  CHOICE_EVERYONE_RECOMMENDED,
   CHOICE_PERSON,
   FREEZE_DIALOG_INTRO,
   FREEZE_DIALOG_TITLE,
@@ -51,7 +52,7 @@ interface Props {
   currencyOf?: (expenseId: string) => string
 }
 
-/** Previews what "Share between everyone" would do for one receipt (nothing is written). */
+/** Previews what "Share between everyone" would do for one receipt (nothing is written). Not shown while the dialog is closed. */
 function EveryonePreview({ receipt, nameOf }: { receipt: ReceiptClaimStatus; nameOf: (id: string) => string }) {
   const { data, isLoading, isError } = useLeftoversPreview({ expenseId: receipt.expenseId, mode: 'everyone', currency: receipt.currency })
   if (isLoading) return <p className="pl-6 text-xs text-[var(--text-muted)]">Working out the split…</p>
@@ -215,9 +216,10 @@ export function FreezeUnclaimedDialog({ isOpen, onClose, receipts, viewerId, nam
                   <legend className="sr-only">What happens to the rest of {r.description}</legend>
                   <label className="flex items-start gap-2 text-sm text-[var(--text-primary)]">
                     <input type="radio" name={name} className="mt-1" checked={choice?.mode === 'everyone'} onChange={() => setChoice(r.expenseId, everyoneChoice)} />
-                    <span>{CHOICE_EVERYONE}</span>
+                    <span>{CHOICE_EVERYONE_RECOMMENDED}</span>
                   </label>
-                  {choice?.mode === 'everyone' && <EveryonePreview receipt={r} nameOf={nameOf} />}
+                  {/* Shown straight away, so the default path can be read before anything is picked. */}
+                  <EveryonePreview receipt={r} nameOf={nameOf} />
                   <label className="flex items-start gap-2 text-sm text-[var(--text-primary)]">
                     <input
                       type="radio"

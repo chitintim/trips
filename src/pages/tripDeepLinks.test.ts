@@ -38,6 +38,8 @@ function ctx(over: Partial<DeepLinkContext> = {}): DeepLinkContext {
     expenses: [
       { id: 'exp-code', claimCode: 'ABC123' },
       { id: 'exp-nocode', claimCode: null },
+      { id: 'exp-mine', claimCode: 'MINE12', paidBy: ME },
+      { id: 'exp-theirs', claimCode: 'THEIRS', paidBy: OTHER },
     ],
     itemIds: new Set(['evt-1', 'opt-1']),
     options: [
@@ -301,6 +303,11 @@ describe('planDeepLink', () => {
       })
       expect(planDeepLink({ kind: 'claim', id: 'exp-nocode' }, ctx())).toEqual({ space: 'money', toast: DEEP_LINK_TOASTS.claimClosed })
       expect(planDeepLink({ kind: 'claim', id: 'gone' }, ctx())).toEqual({ space: 'today', toast: DEEP_LINK_TOASTS.claim })
+    })
+
+    it('claim for a receipt YOU paid lands on Who had what; someone else’s lands on the normal claim page', () => {
+      expect(planDeepLink({ kind: 'claim', id: 'exp-mine' }, ctx())).toEqual({ space: 'money', open: { sheet: 'claim', code: 'MINE12', assign: true } })
+      expect(planDeepLink({ kind: 'claim', id: 'exp-theirs' }, ctx())).toEqual({ space: 'money', open: { sheet: 'claim', code: 'THEIRS' } })
     })
   })
 

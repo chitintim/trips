@@ -1367,3 +1367,195 @@ WHERE c.quantity_claimed - c.leftover_quantity > 0 AND NOT (c.user_id = ANY (pub
 GROUP BY 1, 2;
 -- 21m. PostgREST sees the new columns and functions (the migration ends with NOTIFY pgrst, 'reload schema').
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================================
+-- 22. Migration 20261126090000_receipt_deadline_tokens.sql (claim deadline, "That's everything" / "I wasn't there", personal links, the deadline job).
+--     Run AFTER 20261124090000_receipt_claims_v2.sql is applied (it is, since 2026-11-17). All read-only except the closing NOTIFY.
+--     Items marked POST-APPLY are for after the migration ran.
+-- =====================================================================================
+
+-- 22a. Names are free. Safe: zero rows from every statement (a column that already exists would make ADD COLUMN IF NOT EXISTS a no-op: check its type).
+SELECT table_name, column_name, data_type, column_default, is_nullable FROM information_schema.columns
+WHERE table_schema = 'public' AND (
+  (table_name = 'expenses' AND column_name IN ('claim_deadline', 'claims_sent_at', 'claims_closed_at'))
+  OR (table_name = 'trips' AND column_name = 'receipt_notices_enabled'));
+SELECT c.relname FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('expense_claim_responses', 'receipt_claim_tokens', 'receipt_claim_rate_limits');
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN (
+  'send_receipt_to_table', 'extend_receipt_deadline', 'apply_receipt_deadline', 'issue_receipt_claim_token', 'receipt_claim_peek', 'receipt_claim_act',
+  'receipt_claim_rate_hit', 'reitemize_expense', '_reitemize_num', 'reopen_receipt_claims', '_receipt_reshare_mode', '_receipt_sync_token_expiry',
+  '_receipt_resplit_table_items', '_receipt_after_tagged_change', 'after_claim_response', 'clear_done_on_claim_change', 'guard_claim_closed', 'guard_line_items_closed', 'respond_to_receipt', 'guard_claim_response', 'guard_expense_claim_state', '_expense_trip_member', '_receipt_response_state', '_receipt_can_toggle',
+  '_receipt_claim_view', '_receipt_token_lookup', '_receipt_token_name', '_receipt_default_deadline');
+SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('trg_guard_claim_response', 'trg_guard_expense_claim_state', 'trg_after_claim_response', 'trg_clear_done_on_claim_change', 'trg_guard_claim_closed', 'trg_guard_line_items_closed');
+-- apply_receipt_deadline changes signature to (uuid, boolean): the migration DROPs the one-argument form if it exists (it never existed live). Safe: zero rows.
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'apply_receipt_deadline';
+SELECT policyname FROM pg_policies WHERE policyname IN ('Trip members can view claim responses', 'Users can add their own claim response',
+  'Users can change their own claim response', 'Users can delete their own claim response');
+
+-- 22b. Columns the migration relies on. Safe: expenses.id/trip_id/paid_by uuid, description text, currency text, ai_parsed boolean, status expense_status,
+--      leftover_mode text (phase 1); users.first_name and full_name text; trips.name text and settlement_snapshot jsonb;
+--      notifications(trip_id, user_id, dedupe_key text UNIQUE); activity_feed(trip_id, actor, verb, entity, metadata); expense_line_items.name_original / name_english text.
+SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND (
+  (table_name = 'expenses' AND column_name IN ('id', 'trip_id', 'paid_by', 'description', 'currency', 'ai_parsed', 'status', 'leftover_mode', 'participant_ids', 'amount'))
+  OR (table_name = 'users' AND column_name IN ('id', 'first_name', 'full_name', 'email_notifications_enabled'))
+  OR (table_name = 'trips' AND column_name IN ('id', 'name', 'settlement_snapshot', 'chase_settings'))
+  OR (table_name = 'notifications' AND column_name IN ('trip_id', 'user_id', 'kind', 'dedupe_key', 'entity_type', 'entity_id'))
+  OR (table_name = 'activity_feed' AND column_name IN ('trip_id', 'actor', 'verb', 'entity', 'metadata'))
+  OR (table_name = 'expense_line_items' AND column_name IN ('name_original', 'name_english', 'shared_by_all', 'quantity', 'total_amount')))
+ORDER BY 1, 2;
+SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.notifications'::regclass AND contype = 'u';   -- Safe: UNIQUE (dedupe_key)
+
+-- 22c. The THREE functions the migration REPLACES (_receipt_tagged, _receipt_leftover_confirmed and _receipt_begin, which only gains a closed-receipt refusal) are exactly the bodies shipped in 20261124090000 (so nothing unknown is overwritten), and the phase-1
+--      functions it calls (but does not change) are unchanged. Safe: every matches_shipped is true. (Computed from the file text; pglite agrees.)
+SELECT p.proname, md5(p.prosrc) AS md5, length(p.prosrc) AS len,
+       md5(p.prosrc) = CASE p.proname
+         WHEN '_receipt_tagged' THEN '3fb9669b56045306d97fae8ad1394f5b'
+         WHEN '_receipt_leftover_confirmed' THEN 'a09c7c73162dbe9a106fd8485b29bd28'
+         WHEN '_receipt_leftover_plan' THEN '78d56ee682298fc639463112cd4bdf3e'
+         WHEN '_receipt_begin' THEN '71b9ad95120b15ad653bc59c2c15f587'
+         WHEN '_receipt_lines' THEN '38cec07fd2f82d6c9a4e31e8c41b8c14'
+         WHEN '_receipt_even_split' THEN 'bafa1641b301fce2022de718d2d68d68'
+         WHEN 'set_receipt_claims' THEN '6e7e9da9f8581b4929a2558475330282'
+         WHEN 'share_receipt_leftovers' THEN '52a35443baae3f7f5df46a9a0ae171bf' END AS matches_shipped
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+  AND p.proname IN ('_receipt_tagged', '_receipt_leftover_confirmed', '_receipt_leftover_plan', '_receipt_begin', '_receipt_lines', '_receipt_even_split',
+                    'set_receipt_claims', 'share_receipt_leftovers')
+ORDER BY 1;
+-- Expected lengths: _receipt_tagged 2027, _receipt_leftover_confirmed 47, _receipt_leftover_plan 3438, _receipt_begin 2941, _receipt_lines 958,
+--   _receipt_even_split 400, set_receipt_claims 11048, share_receipt_leftovers 9408. POST-APPLY only _receipt_tagged, _receipt_leftover_confirmed and _receipt_begin differ.
+
+-- 22d. Triggers next to the new ones (POST-APPLY: expense_item_claims also gains trg_clear_done_on_claim_change and trg_guard_claim_closed; expense_line_items gains trg_guard_line_items_closed; expense_claim_responses has
+--      trg_guard_claim_response and trg_after_claim_response). Safe BEFORE: expenses = set_updated_at, trigger_guard_immutable_keys, trg_guard_expense_leftover_mode;
+--      expense_item_claims = trg_guard_claim_overclaim, trg_guard_claim_provenance, trigger_auto_update_expense_status.
+--      POST-APPLY: expenses gains trg_guard_expense_claim_state (4 in all); expense_item_claims unchanged; expense_claim_responses = trg_guard_claim_response.
+SELECT tgrelid::regclass AS tbl, tgname, tgenabled FROM pg_trigger
+WHERE NOT tgisinternal AND tgrelid IN ('public.expenses'::regclass, 'public.expense_item_claims'::regclass) ORDER BY 1, 2;
+
+-- 22e. Helpers and policies the migration relies on. Safe: _settlement_can_manage, currency_exponent, _receipt_* helpers exist; auth.role() and auth.uid()
+--      exist; expenses has the participant UPDATE policies (which is why the new guard trigger stops clients writing the deadline columns).
+SELECT p.oid::regprocedure FROM pg_proc p WHERE (p.pronamespace = 'public'::regnamespace AND p.proname IN ('_settlement_can_manage', 'currency_exponent', '_receipt_begin', 'set_receipt_claims', 'share_receipt_leftovers'))
+   OR (p.pronamespace = 'auth'::regnamespace AND p.proname IN ('uid', 'role')) ORDER BY 1;
+SELECT policyname, cmd, qual FROM pg_policies WHERE schemaname = 'public' AND tablename = 'expenses' AND cmd IN ('UPDATE', 'INSERT') ORDER BY 1;
+-- auth.uid() / auth.role() must read request.jwt.claim.sub / request.jwt.claims (the link functions impersonate the person with set_config). Safe: all four true.
+SELECT position('request.jwt.claim.sub' IN pg_get_functiondef('auth.uid()'::regprocedure)) > 0 AS uid_reads_claim_sub,
+       position('request.jwt.claims' IN pg_get_functiondef('auth.uid()'::regprocedure)) > 0 AS uid_reads_claims,
+       position('request.jwt.claims' IN pg_get_functiondef('auth.role()'::regprocedure)) > 0 AS role_reads_claims,
+       position('claim.role' IN pg_get_functiondef('auth.role()'::regprocedure)) > 0 AS role_reads_claim_role;
+
+-- 22f. Phase-1 shares that already exist. Informational. Every receipt listed here was shared with the PHASE-1 rule (a plain equal split). Re-running 'same'
+--      (or the deadline job) uses the new rule, so its amounts can change. Safe: only test trips, or none.
+SELECT t.name, e.description, e.leftover_mode, count(*) FILTER (WHERE c.leftover_amount > 0) AS rows_with_leftover_part
+FROM public.expenses e JOIN public.trips t ON t.id = e.trip_id LEFT JOIN public.expense_item_claims c ON c.expense_id = e.id
+WHERE e.leftover_mode IS NOT NULL GROUP BY t.name, e.id, e.description, e.leftover_mode ORDER BY 1, 2;
+
+-- 22g. No long-running transaction touching expenses / trips (the migration sets lock_timeout = 5s and fails rather than queueing). Safe: no rows.
+SELECT pid, state, now() - xact_start AS open_for, left(query, 100) AS query FROM pg_stat_activity
+WHERE state <> 'idle' AND xact_start < now() - interval '30 seconds' AND pid <> pg_backend_pid() AND query ILIKE ANY (ARRAY['%expenses%', '%trips%']);
+
+-- 22h. Notification precedent for the dedupe keys the edge functions will use ('notice:receipt:<expense>:<user>:<kind>'). Informational: the existing keys, and
+--      zero receipt keys before the first send. Safe: second query zero rows.
+SELECT split_part(dedupe_key, ':', 1) || ':' || split_part(dedupe_key, ':', 2) AS key_family, kind, count(*) FROM public.notifications GROUP BY 1, 2 ORDER BY 3 DESC LIMIT 20;
+SELECT count(*) AS receipt_notice_rows FROM public.notifications WHERE dedupe_key LIKE 'notice:receipt:%';
+
+-- 22i. POST-APPLY structure. Safe: expenses gains the three nullable timestamptz columns (NULL on every row); trips.receipt_notices_enabled boolean NOT NULL
+--      default true (true on every trip); RLS on for all three new tables; exactly four policies, all on expense_claim_responses.
+SELECT table_name, column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND (
+  (table_name = 'expenses' AND column_name IN ('claim_deadline', 'claims_sent_at', 'claims_closed_at')) OR (table_name = 'trips' AND column_name = 'receipt_notices_enabled'))
+ORDER BY 1, 2;
+SELECT (SELECT count(*) FROM public.expenses WHERE claim_deadline IS NOT NULL OR claims_sent_at IS NOT NULL OR claims_closed_at IS NOT NULL) AS expenses_with_claim_state,
+       (SELECT count(*) FROM public.trips WHERE receipt_notices_enabled IS NOT TRUE) AS trips_with_notices_off;
+SELECT c.relname, c.relrowsecurity AS rls, (SELECT count(*) FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename = c.relname) AS policies
+FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('expense_claim_responses', 'receipt_claim_tokens', 'receipt_claim_rate_limits') ORDER BY 1;
+
+-- 22j. POST-APPLY privileges. Safe (anon / authenticated / service_role EXECUTE):
+--        send_receipt_to_table, extend_receipt_deadline:        f / t / (t by default ACL)
+--        apply_receipt_deadline:                                 f / t / t
+--        issue_receipt_claim_token, receipt_claim_peek, receipt_claim_act, receipt_claim_rate_hit:  f / f / t
+--        _receipt_response_state:                                f / t / t   (the response guard runs as the client; booleans only)
+--        _expense_trip_member and every other helper:            f / f / (t)  (internal only: NOT executable by clients; the policies use is_trip_participant)
+--        reopen_receipt_claims, respond_to_receipt:              f / t / (t by default ACL)
+--        every other _receipt_* helper and the two guard_* trigger functions: f / f / (t for helpers, f for guard_*)
+SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec,
+       has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_role_exec, p.prosecdef AS secdef, p.proconfig
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND (p.proname IN (
+  'send_receipt_to_table', 'extend_receipt_deadline', 'apply_receipt_deadline', 'issue_receipt_claim_token', 'receipt_claim_peek', 'receipt_claim_act',
+  'receipt_claim_rate_hit', 'reopen_receipt_claims', 'respond_to_receipt', 'guard_claim_response', 'guard_expense_claim_state', 'after_claim_response', 'clear_done_on_claim_change',
+  'guard_claim_closed', 'guard_line_items_closed', '_expense_trip_member') OR p.proname LIKE '\_receipt\_%') ORDER BY 1;
+SELECT c.relname, has_table_privilege('anon', c.oid, 'SELECT') AS anon_select, has_table_privilege('authenticated', c.oid, 'SELECT') AS authenticated_select,
+       has_table_privilege('authenticated', c.oid, 'INSERT') AS authenticated_insert, has_table_privilege('service_role', c.oid, 'INSERT') AS service_insert
+FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('expense_claim_responses', 'receipt_claim_tokens', 'receipt_claim_rate_limits') ORDER BY 1;
+-- Safe: expense_claim_responses: anon false, authenticated true / true; the two token tables: anon false, authenticated FALSE / FALSE; service role true.
+
+-- 22k. POST-APPLY: the two replaced functions now differ from the shipped text (expected) and record the new md5s for the deploy log.
+SELECT proname, md5(prosrc) AS new_md5, length(prosrc) AS len FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('_receipt_tagged', '_receipt_leftover_confirmed') ORDER BY 1;
+
+-- 22l. POST-APPLY data guards. Safe: zero rows from each.
+--      (1) the payer answered 'not_there'; (2) a not_there person who holds a claim of their own; (3) a response row for a person who is not on the trip.
+SELECT r.expense_id, r.user_id FROM public.expense_claim_responses r JOIN public.expenses e ON e.id = r.expense_id WHERE r.response = 'not_there' AND e.paid_by = r.user_id;
+SELECT r.expense_id, r.user_id FROM public.expense_claim_responses r WHERE r.response = 'not_there'
+  AND EXISTS (SELECT 1 FROM public.expense_item_claims c WHERE c.expense_id = r.expense_id AND c.user_id = r.user_id AND c.quantity_claimed - c.leftover_quantity > 0);
+SELECT r.expense_id, r.user_id FROM public.expense_claim_responses r JOIN public.expenses e ON e.id = r.expense_id
+WHERE NOT EXISTS (SELECT 1 FROM public.trip_participants tp WHERE tp.trip_id = e.trip_id AND tp.user_id = r.user_id);
+
+-- 22m. Default privileges (informational: why the migration revokes explicitly). Expect the default ACL of the owner role in schema public to grant the API roles
+--      EXECUTE on functions and ALL on tables.
+SELECT pg_get_userbyid(d.defaclrole) AS owner, d.defaclobjtype, d.defaclacl FROM pg_default_acl d WHERE d.defaclnamespace = 'public'::regnamespace OR d.defaclnamespace = 0;
+
+-- 22n. Edge-function secrets are not in the database; the functions need RESEND_API_KEY, RESEND_FROM and APP_BASE_URL (names only, already set per live-checks-paid-email).
+
+-- 22p. reitemize_expense (re-itemise keeping claims; also plain -> itemised). Columns and tables it writes. Safe: every row present.
+--      expenses: description, vendor_name, category (enum expense_category), payment_date, paid_by, participant_ids, receipt_url, currency, fx_rate, fx_rate_date,
+--      rate_source, amount, base_currency_amount, ai_parsed, status, leftover_mode, leftover_user_id; expense_line_items: name_original, name_english, quantity,
+--      unit_price, subtotal, tax_amount, service_amount, line_discount_amount, total_amount, line_number, shared_by_all; expense_splits(expense_id).
+SELECT table_name, column_name, udt_name FROM information_schema.columns WHERE table_schema = 'public' AND (
+  (table_name = 'expenses' AND column_name IN ('description', 'vendor_name', 'category', 'payment_date', 'paid_by', 'participant_ids', 'receipt_url', 'currency', 'fx_rate',
+     'fx_rate_date', 'rate_source', 'amount', 'base_currency_amount', 'ai_parsed', 'status', 'leftover_mode', 'leftover_user_id'))
+  OR (table_name = 'expense_line_items' AND column_name IN ('name_original', 'name_english', 'quantity', 'unit_price', 'subtotal', 'tax_amount', 'service_amount',
+     'line_discount_amount', 'total_amount', 'line_number', 'shared_by_all'))
+  OR (table_name = 'expense_splits' AND column_name = 'expense_id')) ORDER BY 1, 2;
+-- The line_number uniqueness the +100000 shuffle works around must be a NON-deferrable UNIQUE (expense_id, line_number); no other CHECK may bound line_number. Safe: one row, condeferrable f.
+SELECT conname, condeferrable, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.expense_line_items'::regclass AND contype IN ('u', 'c') ORDER BY 1;
+-- Nothing may hang off expense_splits or expense_line_items that a DELETE/UPDATE here could trip (triggers). Safe: only guard_immutable_keys on expense_splits (BEFORE UPDATE).
+SELECT tgrelid::regclass AS tbl, tgname, pg_get_triggerdef(oid) AS def FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('public.expense_splits'::regclass, 'public.expense_line_items'::regclass) ORDER BY 1, 2;
+
+-- 22q. unfreeze_settlements is REPLACED (a strict superset: also deletes the trip's stale 'suggested' payments except rows with receipt_disputed_at or an unused, unexpired
+--      payment_confirm_tokens row). RECORD the live md5 at pre-flight time; do not assume one. repo_text_md5 is the body shipped in 20261118100000; if live differs, STOP and
+--      read the live body (pg_get_functiondef) before applying. Also confirms the two columns the new body reads exist and no later function rewrote it.
+SELECT md5(prosrc) AS live_md5, length(prosrc) AS len, md5(prosrc) = '1ec90283bba01dfbbb4b4a7bd26df64b' AS equals_repo_text,
+       pg_get_function_identity_arguments(oid) AS args, prosecdef, proconfig,
+       has_function_privilege('anon', oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', oid, 'EXECUTE') AS authenticated_exec
+FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'unfreeze_settlements';   -- one row; secdef true; search_path public, pg_temp; anon false; authenticated true
+SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'settlements' AND column_name = 'receipt_disputed_at';   -- one row
+SELECT to_regclass('public.payment_confirm_tokens') IS NOT NULL AS tokens_table_exists, to_regprocedure('public.settlement_assert_can_manage(uuid,uuid)') IS NOT NULL AS assert_can_manage_exists;
+--      Informational: what the new unfreeze would delete right now on each currently-FROZEN trip (suggested rows without a dispute or live link). POST-APPLY this is 0 after an unfreeze.
+SELECT t.name, count(*) FILTER (WHERE s.status = 'suggested') AS suggested, count(*) FILTER (WHERE s.status = 'suggested' AND s.receipt_disputed_at IS NULL
+         AND NOT EXISTS (SELECT 1 FROM public.payment_confirm_tokens k WHERE k.settlement_id = s.id AND k.used_at IS NULL AND k.expires_at > now())) AS would_delete,
+       count(*) FILTER (WHERE s.status IN ('marked_paid', 'confirmed')) AS real_payments_untouched
+FROM public.trips t LEFT JOIN public.settlements s ON s.trip_id = t.id WHERE t.settlement_snapshot IS NOT NULL GROUP BY t.name ORDER BY 1;
+-- POST-APPLY: record the new md5 for the deploy log.
+SELECT md5(prosrc) AS new_unfreeze_md5, length(prosrc) AS len FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'unfreeze_settlements';
+-- 22r. freeze_settlements must still be the phase-1 body (this migration does not touch it). Safe: matches_phase1 = true (md5 7b507c2ec453c532fd598e533d2625c5).
+SELECT md5(prosrc) = '7b507c2ec453c532fd598e533d2625c5' AS matches_phase1 FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'freeze_settlements';
+
+-- 22s. READ-ONLY LIVE CHECKS still required before applying (from the independent review; the pglite harness could not answer these). Record each result.
+SELECT pg_has_role('postgres', 'service_role', 'member') AS postgres_can_set_role_service_role, version();   -- the rehearsal no longer relies on SET ROLE service_role
+SELECT conrelid::regclass AS tbl, conname, confdeltype FROM pg_constraint WHERE contype = 'f'
+  AND confrelid IN ('public.settlements'::regclass, 'public.expense_line_items'::regclass, 'public.expense_splits'::regclass, 'public.expenses'::regclass) ORDER BY 1, 2;
+    -- expect: only payment_confirm_tokens -> settlements (c); expense_item_claims / expense_claim_responses(after apply) -> line items / expenses (c); no other NO ACTION / RESTRICT FK into those tables
+SELECT conrelid::regclass AS tbl, conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid IN ('public.expenses'::regclass, 'public.expense_line_items'::regclass) AND contype = 'c' ORDER BY 1, 2;
+    -- amount > 0? char_length limits on name_original / name_english? (reitemize maps check_violation to bad_line; validate lengths client side to the real limits)
+SELECT tgrelid::regclass AS tbl, tgname, pg_get_triggerdef(oid) FROM pg_trigger WHERE NOT tgisinternal AND tgrelid IN ('public.settlements'::regclass, 'public.trips'::regclass, 'public.trip_participants'::regclass) ORDER BY 1, 2;   -- no DELETE trigger on settlements
+SELECT enum_range(NULL::public.expense_category) AS category_labels;
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'expenses' AND column_name IN ('payment_date', 'vendor_name', 'receipt_url', 'rate_source', 'fx_rate_date', 'category');
+SELECT column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'expense_allocation_links' ORDER BY ordinal_position;   -- code, expense_id, trip_id, created_by (the client creates the row)
+SELECT p.oid::regprocedure, p.prosecdef FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('is_trip_participant', 'is_trip_organizer');   -- (uuid, uuid); the response policies now use is_trip_participant
+SELECT policyname, cmd, roles FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('trips', 'trip_participants', 'users', 'expense_splits', 'expense_allocation_links') ORDER BY tablename, policyname;   -- the harness leaves these tables open: record the real ones
+SELECT count(*) AS person_mode_receipts FROM public.expenses WHERE leftover_mode = 'person';       -- B1 exposure today
+SELECT count(*) AS table_item_lines FROM public.expense_line_items WHERE shared_by_all;           -- B3 exposure today
+SELECT pubname, tablename FROM pg_publication_tables WHERE tablename IN ('expense_item_claims', 'expenses', 'expense_claim_responses');   -- realtime: add expense_claim_responses if "Waiting on" should update live (not done by the migration)
+-- POST-APPLY: person-mode receipts whose chosen person is no longer on the receipt (the reshare mode falls back to everyone; the next apply fixes them). Safe: zero rows.
+SELECT e.id, e.description FROM public.expenses e WHERE e.leftover_mode = 'person' AND NOT (e.leftover_user_id = ANY (public._receipt_tagged(e.id)));
+-- POST-APPLY: closed receipts that still have unclaimed value (the closed-receipt guards stop new ones). Safe: zero rows.
+SELECT e.id, e.description FROM public.expenses e WHERE e.claims_closed_at IS NOT NULL AND EXISTS (SELECT 1 FROM public._receipt_lines(e.id, true) l WHERE l.remaining_minor > 0);
+
+-- 22o. PostgREST sees the new columns, table and functions (the migration ends with NOTIFY pgrst, 'reload schema').
+NOTIFY pgrst, 'reload schema';

@@ -16,6 +16,13 @@ describe('describeNotificationKind', () => {
     expect(renderActivity(e('confirmations_reset', '3'), 'Sam').text).toBe('Sam reset replies to Are you coming? (3 cleared)')
   })
 
+  it('words a changed receipt-table share and never shows raw verbs for unknown types', () => {
+    const row = { verb: 'receipt_table_share_changed', entity: { type: 'expense', id: 'x', label: 'Pizza night' }, actor: null, metadata: { line: 'Bread', user_id: 'u1', from: 1, to: 2, currency: 'GBP' } } as never
+    expect(renderActivity(row, 'Someone', () => 'Tim').text).toBe("Tim's share of Bread on Pizza night went up from £1.00 to £2.00 because someone wasn't there")
+    expect(renderActivity({ verb: 'receipt_table_share_changed', entity: null, actor: null, metadata: null } as never, 'Someone').text).toBe('A share of an item changed')
+    expect(renderActivity({ verb: 'brand_new_thing', entity: null, actor: null } as never, 'Sam').text).toBe('Something changed on the trip')
+  })
+
   it('falls back to a humanized label for unknown kinds instead of disappearing', () => {
     expect(describeNotificationKind('some_future_kind')).toEqual({ icon: '✉️', label: 'some future kind' })
   })

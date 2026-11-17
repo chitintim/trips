@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import {
-  NO_RPC_SUPPORT,
   clearedPeopleLine,
   peopleToTellAfterReitemise,
   reitemiseNoticeLine,
@@ -18,36 +17,29 @@ import {
 } from './receiptTable'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 
-const ALL = { send: true, extend: true, apply: true, reopen: true, respond: true }
-const today = { id: 'e1', paid_by: 'p' } // an expense row from before the migration: no claim columns
+const today = { id: 'e1', paid_by: 'p' } // a partial row with no claim columns
 const draft = { ...today, claim_deadline: null, claims_sent_at: null, claims_closed_at: null }
 const open = { ...draft, claims_sent_at: '2026-11-17T10:00:00Z', claim_deadline: '2026-11-20T18:00:00Z' }
 const closed = { ...open, claims_closed_at: '2026-11-21T00:00:00Z' }
 
-describe('fail-soft: nothing new appears before the migration', () => {
-  it('no claim columns => every control is off, whatever else exists', () => {
+describe('partial rows and unread replies', () => {
+  it('no claim columns => every control is off', () => {
     expect(receiptColumnsOf(today)).toBeNull()
-    expect(receiptTableSupport({ expense: today, responsesAvailable: true, rpc: ALL })).toEqual({ canSend: false, canReply: false, hasStatus: false, phase: 'unavailable', columns: null, replyClosedReason: null })
-    expect(receiptTableSupport({ expense: null, responsesAvailable: true, rpc: ALL }).phase).toBe('unavailable')
+    expect(receiptTableSupport({ expense: today, responsesAvailable: true })).toEqual({ canSend: false, canReply: false, hasStatus: false, phase: 'unavailable', columns: null, replyClosedReason: null })
+    expect(receiptTableSupport({ expense: null, responsesAvailable: true }).phase).toBe('unavailable')
+    expect(receiptTableSupport({ expense: { ...today, claim_deadline: null } as object, responsesAvailable: true }).phase).toBe('unavailable')
   })
-  it('a partly applied migration shows only what is there', () => {
-    expect(receiptTableSupport({ expense: { ...today, claim_deadline: null } as object, responsesAvailable: true, rpc: ALL }).phase).toBe('unavailable')
-    // columns but no send function: cannot send; no responses table: cannot reply
-    expect(receiptTableSupport({ expense: draft, responsesAvailable: true, rpc: NO_RPC_SUPPORT }).canSend).toBe(false)
-    expect(receiptTableSupport({ expense: open, responsesAvailable: false, rpc: ALL }).canReply).toBe(false)
-    // no respond_to_receipt: the reply controls stay hidden (there is no direct-write path)
-    expect(receiptTableSupport({ expense: open, responsesAvailable: true, rpc: { ...ALL, respond: false } }).canReply).toBe(false)
-  })
-  it('unknown support (loading / offline) reads as none', () => {
-    expect(receiptTableSupport({ expense: draft, responsesAvailable: false, rpc: NO_RPC_SUPPORT })).toMatchObject({ canSend: false, canReply: false, hasStatus: false, phase: 'draft' })
+  it('replies not read yet (loading / failed): the reply buttons stay hidden but sending is still possible', () => {
+    expect(receiptTableSupport({ expense: open, responsesAvailable: false }).canReply).toBe(false)
+    expect(receiptTableSupport({ expense: draft, responsesAvailable: false })).toMatchObject({ canSend: true, canReply: false, hasStatus: false, phase: 'draft' })
   })
 })
 
 describe('phases', () => {
   it('draft can send; open can reply and shows the status; closed only shows the status', () => {
-    expect(receiptTableSupport({ expense: draft, responsesAvailable: true, rpc: ALL })).toMatchObject({ canSend: true, canReply: false, hasStatus: false, phase: 'draft' })
-    expect(receiptTableSupport({ expense: open, responsesAvailable: true, rpc: ALL })).toMatchObject({ canSend: false, canReply: true, hasStatus: true, phase: 'open' })
-    expect(receiptTableSupport({ expense: closed, responsesAvailable: true, rpc: ALL })).toMatchObject({ canSend: false, canReply: false, hasStatus: true, phase: 'closed' })
+    expect(receiptTableSupport({ expense: draft, responsesAvailable: true })).toMatchObject({ canSend: true, canReply: false, hasStatus: false, phase: 'draft' })
+    expect(receiptTableSupport({ expense: open, responsesAvailable: true })).toMatchObject({ canSend: false, canReply: true, hasStatus: true, phase: 'open' })
+    expect(receiptTableSupport({ expense: closed, responsesAvailable: true })).toMatchObject({ canSend: false, canReply: false, hasStatus: true, phase: 'closed' })
   })
 })
 
@@ -92,8 +84,8 @@ describe('replies', () => {
 describe('the reply window', () => {
   const open = { claim_deadline: '2026-11-20T18:00:00Z', claims_sent_at: '2026-11-17T09:00:00Z', claims_closed_at: null }
   it('replies are refused after the deadline, like the public page (and open before it)', () => {
-    const before = receiptTableSupport({ expense: open, responsesAvailable: true, rpc: ALL, now: new Date('2026-11-20T17:59:00Z') })
-    const after = receiptTableSupport({ expense: open, responsesAvailable: true, rpc: ALL, now: new Date('2026-11-20T18:00:01Z') })
+    const before = receiptTableSupport({ expense: open, responsesAvailable: true, now: new Date('2026-11-20T17:59:00Z') })
+    const after = receiptTableSupport({ expense: open, responsesAvailable: true, now: new Date('2026-11-20T18:00:01Z') })
     expect(before).toMatchObject({ canReply: true, replyClosedReason: null })
     expect(after).toMatchObject({ canReply: false, replyClosedReason: 'deadline_passed', phase: 'open' })
     expect(deadlinePassed(null, new Date())).toBe(false)

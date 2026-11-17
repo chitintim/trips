@@ -52,6 +52,8 @@ const ALLOWLIST = [
   'components/ui/SelectionAvatars',
   'features/decisions/components/MatrixView.tsx',
   'components/InstallPrompt.tsx',
+  // "A new version is available" banner: fixed, viewport-anchored, toast-class overlay.
+  'components/NewVersionBanner.tsx',
   // Smart-landing redirect countdown banner: fixed, viewport-anchored,
   // toast-class overlay (same pattern as InstallPrompt) — must sit above
   // content and chrome while it counts down.

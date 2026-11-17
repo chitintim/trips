@@ -13,7 +13,7 @@ export interface SendToTableSheetProps {
   tripId: string
   /** The most people the send can email (`countToTell`): on the receipt, not you or the payer, not already replied. */
   toTell: number
-  /** `trips.receipt_notices_enabled`; null = the column does not exist (hide the switch). */
+  /** `trips.receipt_notices_enabled`; null = the trip has not loaded yet (hide the switch). */
   noticesEnabled: boolean | null
   canManageTrip: boolean
 }

@@ -1,50 +1,12 @@
 /**
  * Receipts phase 2, signed-in side: send a receipt to the table, extend / apply its deadline, reply "That's everything" /
- * "I wasn't there", and the trip's email switch. Every probe fails soft: until the migration and functions exist, the
- * support hooks say no and nothing here is called.
+ * "I wasn't there", and the trip's email switch. The functions are live (20261126090000): no probes.
  */
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { queryKeys } from './queryKeys'
-import { callRpc, isMissingRpc, normalizeLeftovers, type LeftoversResult, type RpcError } from './useExpenses'
-import {
-  NO_RPC_SUPPORT,
-  deadlinePassed,
-  sendOutcomeFrom,
-  type ReceiptTableRpcSupport,
-  type SendOutcome,
-} from '../../features/expenses/claims/receiptTable'
-
-const NIL_UUID = '00000000-0000-0000-0000-000000000000'
-
-function isNetworkError(error: RpcError | null): boolean {
-  return !!error && !error.code && /failed to fetch|network|load failed/i.test(error.message || '')
-}
-
-/**
- * Probes ONCE per session which phase-2 database functions exist (a nil expense id is refused normally when the function is
- * there and with "could not find the function" when it is not). Unknown (loading, offline) reads as "none".
- */
-export function useReceiptTableRpcSupport(): ReceiptTableRpcSupport {
-  const { data } = useQuery({
-    queryKey: ['receiptTableRpcSupport'] as const,
-    staleTime: Infinity,
-    gcTime: Infinity,
-    retry: 1,
-    queryFn: async (): Promise<ReceiptTableRpcSupport> => {
-      const [send, extend, apply, reopen, respond] = await Promise.all([
-        callRpc('send_receipt_to_table', { p_expense_id: NIL_UUID, p_deadline: null }),
-        callRpc('extend_receipt_deadline', { p_expense_id: NIL_UUID, p_deadline: new Date().toISOString() }),
-        callRpc('apply_receipt_deadline', { p_expense_id: NIL_UUID, p_preview: true }),
-        callRpc('reopen_receipt_claims', { p_expense_id: NIL_UUID, p_deadline: null }),
-        callRpc('respond_to_receipt', { p_expense_id: NIL_UUID, p_response: 'undo' }),
-      ])
-      if ([send, extend, apply, reopen, respond].some((r) => isNetworkError(r.error))) throw new Error('Could not check receipt deadline support')
-      return { send: !isMissingRpc(send.error), extend: !isMissingRpc(extend.error), apply: !isMissingRpc(apply.error), reopen: !isMissingRpc(reopen.error), respond: !isMissingRpc(respond.error) }
-    },
-  })
-  return data ?? NO_RPC_SUPPORT
-}
+import { callRpc, normalizeLeftovers, type LeftoversResult, type RpcError } from './useExpenses'
+import { deadlinePassed, sendOutcomeFrom, type SendOutcome } from '../../features/expenses/claims/receiptTable'
 
 /** Everything a receipt's deadline, replies and to-dos are built from: refresh it all. */
 export function invalidateReceiptTable(queryClient: QueryClient, tripId: string, expenseId: string) {

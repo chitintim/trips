@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   buildFreezeSuggestions,
-  isSettlementRpcMissing,
-  pathAfterRpcError,
   findProvingDuplicate,
   canRemoveAsDuplicate,
   knownPaidIds,
@@ -39,26 +37,6 @@ describe('buildFreezeSuggestions', () => {
       'EUR'
     )
     expect(out).toEqual([{ from: 'a', to: 'b', amount: 12.5, currency: 'EUR' }])
-  })
-})
-
-describe('isSettlementRpcMissing / pathAfterRpcError', () => {
-  it('detects a function that is not deployed', () => {
-    expect(isSettlementRpcMissing({ code: 'PGRST202', message: 'x' }, 'freeze_settlements')).toBe(true)
-    expect(isSettlementRpcMissing({ code: '42883', message: 'x' }, 'freeze_settlements')).toBe(true)
-    expect(
-      isSettlementRpcMissing({ message: 'Could not find the function public.remove_duplicate_settlement(p_settlement_id) in the schema cache' }, 'remove_duplicate_settlement')
-    ).toBe(true)
-  })
-  it('does not treat real errors as missing', () => {
-    expect(isSettlementRpcMissing({ code: '42501', message: 'Only trip organizers, the trip creator and admins can manage settlements' }, 'freeze_settlements')).toBe(false)
-    expect(isSettlementRpcMissing({ message: 'This payment has no duplicate' }, 'remove_duplicate_settlement')).toBe(false)
-    expect(isSettlementRpcMissing(null, 'freeze_settlements')).toBe(false)
-    expect(isSettlementRpcMissing(new Error('Network down'), 'unfreeze_settlements')).toBe(false)
-  })
-  it('falls back only on missing', () => {
-    expect(pathAfterRpcError({ code: 'PGRST202' }, 'freeze_settlements')).toBe('client')
-    expect(pathAfterRpcError({ code: '42501', message: 'no' }, 'freeze_settlements')).toBe('fail')
   })
 })
 

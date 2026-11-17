@@ -8,3 +8,6 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+
+/** The build id injected by vite.config.ts (commit SHA, or 'dev'). Read it through src/lib/appVersion.ts. */
+declare const __APP_BUILD__: string

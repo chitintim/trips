@@ -1,24 +1,20 @@
 /**
- * In-app receipt answers go through `respond_to_receipt` (never direct table writes), fail soft when the function is missing, and surface
+ * In-app receipt answers go through `respond_to_receipt` (never direct table writes), and surface
  * the database's reason as `hint`. react-query is mocked to hand back its config so the functions can be called directly.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-let useQueryCfg: unknown
 const rpc = vi.fn()
 const from = vi.fn()
 
 vi.mock('@tanstack/react-query', () => ({
   useMutation: (opts: unknown) => opts,
-  useQuery: (opts: unknown) => {
-    useQueryCfg = opts
-    return {}
-  },
+  useQuery: () => ({}),
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }))
 vi.mock('../supabase', () => ({ supabase: { rpc: (...a: unknown[]) => rpc(...a), from: (...a: unknown[]) => from(...a), functions: { invoke: vi.fn() } } }))
 
-import { useReplyToReceipt, useReceiptTableRpcSupport } from './useReceiptTable'
+import { useReplyToReceipt } from './useReceiptTable'
 import { normalizeLeftovers } from './useExpenses'
 import { describeTableError } from '../../features/expenses/claims/receiptTable'
 
@@ -58,19 +54,6 @@ describe('useReplyToReceipt', () => {
     const err = await opts().mutationFn({ expenseId: 'e1', response: 'done', deadline: '2000-01-01T00:00:00Z' }).catch((e) => e)
     expect((err as { hint?: string }).hint).toBe('deadline_passed')
     expect(rpc).not.toHaveBeenCalled()
-  })
-})
-
-describe('support probe', () => {
-  it('reports respond: false when the function is missing, true when it answers normally', async () => {
-    const probe = () => (useReceiptTableRpcSupport as unknown as () => unknown, (useQueryCfg as { queryFn: () => Promise<Record<string, boolean>> }).queryFn())
-    rpc.mockImplementation(async (fn: string) =>
-      fn === 'respond_to_receipt' ? { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } } : { data: null, error: { code: 'P0001', message: 'refused' } }
-    )
-    ;(useReceiptTableRpcSupport as unknown as () => unknown)()
-    expect(await probe()).toMatchObject({ send: true, reopen: true, respond: false })
-    rpc.mockResolvedValue({ data: null, error: { code: 'P0001', message: 'refused' } })
-    expect(await probe()).toMatchObject({ respond: true })
   })
 })
 

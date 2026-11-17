@@ -56,3 +56,19 @@ const r2 = build({
   }),
 })
 console.log(JSON.stringify({ out: r2.out, bytes: r2.bytes, taggedMd5: r2['@@TAGGED_MD5@@'], confirmedMd5: r2['@@CONFIRMED_MD5@@'] }))
+
+// 3. phase 4: M1 + M2 together (applied in order); the expected md5s are the shipped bodies of the two functions the earlier migrations defined and these rely on / replace
+const phase2src = fs.readFileSync(rel('supabase/migrations/20261126090000_receipt_deadline_tokens.sql'), 'utf8')
+{
+  const m1 = fs.readFileSync(rel('supabase/migrations/20261128090000_freeze_enforcement.sql'), 'utf8')
+  const m2 = fs.readFileSync(rel('supabase/migrations/20261128100000_own_claims_rpc.sql'), 'utf8')
+  const all = m1 + '\n' + m2
+  guardMigration(m1); guardMigration(m2)
+  let tpl = fs.readFileSync(rel('supabase/rehearsal/rehearsal_phase4.template.sql'), 'utf8')
+  const tags = { '@@OVERCLAIM_MD5@@': md5(body(phase1, 'guard_claim_overclaim')), '@@RESPLIT_MD5@@': md5(body(phase2src, '_receipt_resplit_table_items')) }
+  for (const tag of ['@@MIGRATION1@@', '@@MIGRATION2@@', ...Object.keys(tags)]) if (!tpl.includes(tag)) throw new Error('rehearsal_phase4.template.sql lacks ' + tag)
+  for (const [tag, value] of Object.entries(tags)) tpl = tpl.split(tag).join(value)
+  const text = tpl.replace('@@MIGRATION1@@', () => m1.trimEnd()).replace('@@MIGRATION2@@', () => m2.trimEnd())
+  fs.writeFileSync(rel('supabase/rehearsal/20261128090000_freeze_and_claims_rehearsal.sql'), text)
+  console.log(JSON.stringify({ out: 'supabase/rehearsal/20261128090000_freeze_and_claims_rehearsal.sql', bytes: text.length, overclaimMd5: tags['@@OVERCLAIM_MD5@@'], resplitMd5: tags['@@RESPLIT_MD5@@'], embedded: all.length }))
+}

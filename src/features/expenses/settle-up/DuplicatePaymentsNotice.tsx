@@ -36,7 +36,7 @@ function formatDate(iso: string | null | undefined): string {
  */
 export function DuplicatePaymentsNotice({ groups, canRemove, tripId, baseCurrency, nameOf }: DuplicatePaymentsNoticeProps) {
   const { showToast } = useToast()
-  const deleteSettlement = useRemoveDuplicateSettlement(tripId, baseCurrency)
+  const deleteSettlement = useRemoveDuplicateSettlement(tripId)
   // Chosen row per group key; default is the earlier one (rows are oldest first).
   const [chosen, setChosen] = useState<Record<string, string>>({})
   const [confirming, setConfirming] = useState<{ group: DuplicatePaymentGroup; rowId: string } | null>(null)

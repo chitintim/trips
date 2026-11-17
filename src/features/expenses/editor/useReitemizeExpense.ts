@@ -3,7 +3,7 @@ import { supabase } from '../../../lib/supabase'
 import { callRpc } from '../../../lib/queries/useExpenses'
 import { invalidateReceiptTable } from '../../../lib/queries/useReceiptTable'
 import type { ItemizedSaveLine } from '../itemized/itemizedState'
-import { previewReitemize, runReitemize, ReitemizeError, type Db, type ReitemizePreview, type ReitemizeSaveResult } from './reitemizeRun'
+import { previewReitemize, runReitemize, ReitemizeError, type ReitemizeOutcome, type ReitemizeSaveResult } from './reitemizeRun'
 
 export interface ReitemizeParams {
   expenseId: string
@@ -19,27 +19,24 @@ export interface ReitemizeResult extends ReitemizeSaveResult {
   code: string
 }
 
-const db = supabase as unknown as Db
-
 /** What a save would clear, asked at Save time (writes nothing). */
-export function previewReitemizeExpense(params: Pick<ReitemizeParams, 'expenseId' | 'expense' | 'lineItems'>): Promise<ReitemizePreview> {
-  return previewReitemize(db, callRpc, params)
+export function previewReitemizeExpense(params: Pick<ReitemizeParams, 'expenseId' | 'expense' | 'lineItems'>): Promise<ReitemizeOutcome> {
+  return previewReitemize(callRpc, params)
 }
 
 /**
  * Re-itemise an existing expense, or turn a plain one into an itemised receipt.
  * Uses the `reitemize_expense` database function (claims on unchanged items
- * survive); until that function exists, falls back to replacing every line and
- * clearing every claim. See reitemizeRun.ts.
+ * survive). See reitemizeRun.ts.
  */
 export function useReitemizeExpense(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ expenseId, expense, lineItems, allocationCode, createdBy }: ReitemizeParams): Promise<ReitemizeResult> => {
-      const saved = await runReitemize(db, callRpc, { expenseId, expense, lineItems })
+      const saved = await runReitemize(callRpc, { expenseId, expense, lineItems })
 
       // Reuse the existing share code if there is one. The database says when there is none (`needs_link`) and then the code made here is
-      // used, as the create path does; on the fallback path (no `needs_link` answer) the link is looked up.
+      // used, as the create path does.
       let existingLink: { code: string } | null = null
       if (!saved.needsLink) {
         const { data: found, error: linkFetchError } = await supabase.from('expense_allocation_links').select('*').eq('expense_id', expenseId).maybeSingle()

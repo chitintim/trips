@@ -6,7 +6,11 @@ import {
   modelMayHaveBilled,
   createMessageStream,
   buildMessageBody,
-  CLAUDE_MODEL,
+  consumeAnthropicStream,
+  DEFAULT_MODEL_TRIP_CHAT,
+  envModel,
+  supportsMidConversationSystem,
+  StreamEventError,
   createMessage,
   createMessageStreamed,
   extractText,
@@ -94,9 +98,100 @@ Deno.test('defaults: receipts and ingest on Sonnet 5.5, nudges on Haiku 5.5, pla
   assertEquals(MODEL_REORGANIZE_PLAN, 'claude-sonnet-5-5')
 })
 
-Deno.test('trip-chat model is pinned and unchanged (claude-sonnet-5)', () => {
-  assertEquals(MODEL_TRIP_CHAT, 'claude-sonnet-5')
-  assertEquals(CLAUDE_MODEL, 'claude-sonnet-5')
+Deno.test('trip-chat defaults to Sonnet 5.5 (TRIP_CHAT_MODEL overrides it; not readable under default test permissions)', () => {
+  assertEquals(DEFAULT_MODEL_TRIP_CHAT, 'claude-sonnet-5-5')
+  assertEquals(MODEL_TRIP_CHAT, 'claude-sonnet-5-5')
+  // The rollback value is accepted, a typo or injection is not.
+  assertEquals(resolveModel('claude-sonnet-5', DEFAULT_MODEL_TRIP_CHAT), 'claude-sonnet-5')
+  assertEquals(resolveModel('sonnet', DEFAULT_MODEL_TRIP_CHAT), DEFAULT_MODEL_TRIP_CHAT)
+})
+
+Deno.test('TRIP_CHAT_MODEL env override is honoured, a bad value falls back (no subprocess or env permission needed)', () => {
+  const read = (v: string | undefined) => (n: string) => (n === 'TRIP_CHAT_MODEL' ? v : undefined)
+  assertEquals(envModel('TRIP_CHAT_MODEL', DEFAULT_MODEL_TRIP_CHAT, read('claude-sonnet-5')), 'claude-sonnet-5')
+  assertEquals(envModel('TRIP_CHAT_MODEL', DEFAULT_MODEL_TRIP_CHAT, read('nonsense')), DEFAULT_MODEL_TRIP_CHAT)
+  assertEquals(envModel('TRIP_CHAT_MODEL', DEFAULT_MODEL_TRIP_CHAT, read(undefined)), DEFAULT_MODEL_TRIP_CHAT)
+  assertEquals(envModel('TRIP_CHAT_MODEL', DEFAULT_MODEL_TRIP_CHAT, () => { throw new Error('no permission') }), DEFAULT_MODEL_TRIP_CHAT)
+})
+
+Deno.test('mid-conversation system messages: Sonnet 5.5 yes, Sonnet 5 (the rollback model) no', () => {
+  assertEquals(supportsMidConversationSystem('claude-sonnet-5-5'), true)
+  assertEquals(supportsMidConversationSystem('claude-sonnet-5'), false)
+  assertEquals(supportsMidConversationSystem('claude-sonnet-4-6'), false)
+})
+
+// Golden request bodies, captured from the code at 43c4b33 (before the trip-chat work).
+// parse-receipt, ingest, nudge-draft and reorganize-plan build their requests through
+// buildMessageBody; these byte-for-byte strings prove their payloads did not change.
+Deno.test('request bodies for the other functions are byte-identical to 43c4b33', () => {
+  const sonnet = 'claude-sonnet-5-5'
+  const golden = {
+    receipt: '{"model":"claude-sonnet-5-5","max_tokens":4096,"system":[{"type":"text","text":"S","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"AAAA"}},{"type":"text","text":"Scan"}]}],"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"a":{"type":"string"}}}},"effort":"low"}}',
+    ingest: '{"model":"claude-sonnet-5-5","max_tokens":8192,"system":"sys","messages":[{"role":"user","content":"hello"}],"tools":[{"name":"t","description":"d","input_schema":{"type":"object"}}],"output_config":{"effort":"low"}}',
+    nudge: '{"model":"claude-haiku-5-5","max_tokens":2048,"system":[{"type":"text","text":"N"}],"messages":[{"role":"user","content":"draft"}],"output_config":{"effort":"low"}}',
+    reorganize: '{"model":"claude-sonnet-5-5","max_tokens":16000,"stream":true,"system":[{"type":"text","text":"P"}],"messages":[{"role":"user","content":"plan"}],"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}},"effort":"medium"}}',
+  }
+  const schema = { type: 'object', properties: { a: { type: 'string' } } }
+  assertEquals(JSON.stringify(buildMessageBody({
+    max_tokens: 4096, system: [{ type: 'text', text: 'S', cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'AAAA' } }, { type: 'text', text: 'Scan' }] }],
+    output_config: { format: { type: 'json_schema', schema }, effort: 'low' },
+  }, sonnet)), golden.receipt)
+  assertEquals(JSON.stringify(buildMessageBody({
+    max_tokens: 8192, system: 'sys', messages: [{ role: 'user', content: 'hello' }],
+    tools: [{ name: 't', description: 'd', input_schema: { type: 'object' } }], output_config: { effort: 'low' },
+  }, sonnet)), golden.ingest)
+  assertEquals(JSON.stringify(buildMessageBody({
+    max_tokens: 2048, system: [{ type: 'text', text: 'N' }], messages: [{ role: 'user', content: 'draft' }], output_config: { effort: 'low' },
+  }, MODEL_NUDGE_DRAFT)), golden.nudge)
+  assertEquals(JSON.stringify(buildMessageBody({
+    max_tokens: 16000, system: [{ type: 'text', text: 'P' }], messages: [{ role: 'user', content: 'plan' }],
+    output_config: { format: { type: 'json_schema', schema: { type: 'object' } }, effort: 'medium' },
+  }, MODEL_REORGANIZE_PLAN, true)), golden.reorganize)
+})
+
+function sseOf(events: unknown[]): Response {
+  return new Response(events.map((e) => `event: x\ndata: ${JSON.stringify(e)}\n\n`).join(''))
+}
+
+Deno.test('consumeAnthropicStream keeps every block in order, thinking signature included', async () => {
+  const acc = await consumeAnthropicStream(sseOf([
+    { type: 'message_start', message: { model: 'claude-sonnet-5-5', usage: { input_tokens: 10 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm ' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'ok' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'SIG' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'content_block_start', index: 1, content_block: { type: 'redacted_thinking', data: 'ENC' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'Hi' } },
+    { type: 'content_block_stop', index: 2 },
+    { type: 'content_block_start', index: 3, content_block: { type: 'tool_use', id: 'tu1', name: 'get_x', input: {} } },
+    { type: 'content_block_delta', index: 3, delta: { type: 'input_json_delta', partial_json: '{"a":' } },
+    { type: 'content_block_delta', index: 3, delta: { type: 'input_json_delta', partial_json: '1}' } },
+    { type: 'content_block_stop', index: 3 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 7 } },
+  ]))
+  assertEquals(acc.content, [
+    { type: 'thinking', thinking: 'hmm ok', signature: 'SIG' },
+    { type: 'redacted_thinking', data: 'ENC' },
+    { type: 'text', text: 'Hi' },
+    { type: 'tool_use', id: 'tu1', name: 'get_x', input: { a: 1 } },
+  ])
+  assertEquals(acc.text, 'Hi')
+  assertEquals(acc.toolUses, [{ id: 'tu1', name: 'get_x', input: { a: 1 } }])
+  assertEquals(acc.stop_reason, 'tool_use')
+})
+
+Deno.test('consumeAnthropicStream: throwOnStreamError throws on a mid-stream error event, default ignores it', async () => {
+  const events = [
+    { type: 'message_start', message: { model: 'm', usage: { input_tokens: 3 } } },
+    { type: 'error', error: { type: 'overloaded_error' } },
+  ]
+  const err = await assertRejects(() => consumeAnthropicStream(sseOf(events), undefined, { throwOnStreamError: true }), StreamEventError)
+  assertEquals(err.eventType, 'overloaded_error')
+  assertEquals((await consumeAnthropicStream(sseOf(events))).stop_reason, null)
 })
 
 Deno.test('resolveModel only accepts plain claude ids from the environment', () => {

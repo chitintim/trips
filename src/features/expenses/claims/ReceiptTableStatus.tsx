@@ -5,14 +5,13 @@ import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Expense } from '../../../types'
 import { DEADLINE_CHOICES, formatDeadline, formatDeadlineDay, pickDeadline, type DeadlineChoice } from '../../receipts/receiptFormat'
 import { ShareRestNowSheet } from './ShareRestNowSheet'
-import { describeSendReason, describeTableError, failedLine, REPLY_LABEL, sentLine, STATUS_COPY, type ReceiptColumns, type ReceiptTableRpcSupport, type ReplySummary } from './receiptTable'
+import { describeSendReason, describeTableError, failedLine, REPLY_LABEL, sentLine, STATUS_COPY, type ReceiptColumns, type ReplySummary } from './receiptTable'
 
 export interface ReceiptTableStatusProps {
   expense: Expense
   tripId: string
   columns: ReceiptColumns
   replies: ReplySummary
-  rpc: ReceiptTableRpcSupport
   participants: ParticipantWithUser[]
   /** Who got leftovers, for the closed line: "Sam £4.00 · Alex £2.50". Empty = none. */
   leftoversText: string
@@ -24,7 +23,7 @@ export interface ReceiptTableStatusProps {
  * The payer's status line once a receipt is sent to the table: "Sent · reply by Fri 20 Nov · 3 of 8 have replied", who has
  * replied, and Extend / Share the rest now / Tell people what changed. Once closed, claims are final until the payer or an organizer taps Reopen.
  */
-export function ReceiptTableStatus({ expense, tripId, columns, replies, rpc, participants, leftoversText, frozen = false }: ReceiptTableStatusProps) {
+export function ReceiptTableStatus({ expense, tripId, columns, replies, participants, leftoversText, frozen = false }: ReceiptTableStatusProps) {
   const { showToast } = useToast()
   const extend = useExtendDeadline(tripId)
   const resend = useSendToTable(tripId)
@@ -94,7 +93,7 @@ export function ReceiptTableStatus({ expense, tripId, columns, replies, rpc, par
           {leftoversText ? STATUS_COPY.closedLeftovers(closedDay, leftoversText) : STATUS_COPY.closed(closedDay)}
         </p>
         <p className="text-xs text-[var(--text-muted)]">Claims are final. Reopen it to change anything.</p>
-        {!frozen && rpc.reopen && (
+        {!frozen && (
           <>
             <Button variant="secondary" size="sm" className="min-h-11" onClick={() => setReopenOpen(true)}>
               {STATUS_COPY.reopen}
@@ -173,21 +172,15 @@ export function ReceiptTableStatus({ expense, tripId, columns, replies, rpc, par
 
       {canAct && (
         <div className="flex flex-wrap gap-2">
-          {rpc.extend && (
-            <Button variant="secondary" size="sm" className="min-h-11" onClick={() => setExtendOpen(true)}>
-              {STATUS_COPY.extend}
-            </Button>
-          )}
-          {rpc.apply && (
-            <Button variant="secondary" size="sm" className="min-h-11" onClick={() => setShareOpen(true)}>
-              {STATUS_COPY.shareNow}
-            </Button>
-          )}
-          {rpc.send && (
-            <Button variant="ghost" size="sm" className="min-h-11" onClick={doResend} isLoading={resend.isPending}>
-              {STATUS_COPY.resend}
-            </Button>
-          )}
+          <Button variant="secondary" size="sm" className="min-h-11" onClick={() => setExtendOpen(true)}>
+            {STATUS_COPY.extend}
+          </Button>
+          <Button variant="secondary" size="sm" className="min-h-11" onClick={() => setShareOpen(true)}>
+            {STATUS_COPY.shareNow}
+          </Button>
+          <Button variant="ghost" size="sm" className="min-h-11" onClick={doResend} isLoading={resend.isPending}>
+            {STATUS_COPY.resend}
+          </Button>
         </div>
       )}
 

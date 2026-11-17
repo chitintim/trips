@@ -1,0 +1,325 @@
+
+// ---- 5. send_receipt_to_table / extend_receipt_deadline --------------------------------------------------------------------------------
+const SEND = (u, eid, dl = null) => call(u, `select send_receipt_to_table($1,$2) j`, [eid, dl])
+const EXTEND = (u, eid, dl) => call(u, `select extend_receipt_deadline($1,$2) j`, [eid, dl])
+const APPLY = (u, eid, prev = false) => call(u, `select apply_receipt_deadline($1,$2) j`, [eid, prev])
+const sortU = a => a.map(U).sort()
+{
+  const SD = await mkExpense({ payer: 2, amount: 60, desc: 'Send me', tagged: [2, 3, 4, 21], lines: [['a', 1, 10], ['b', 1, 20], ['c', 1, 30]] })
+  await assign(SD, { 0: 3 })
+  await SET(4, SD.id, [{ line_item_id: SD.lines[1], user_ids: [U(4)] }])   // Carol's own claim
+  await fails('a tagged non-payer cannot send', 3, `select send_receipt_to_table($1)`, [SD.id], { hint: 'forbidden' })
+  await fails('a non-member cannot send', 9, `select send_receipt_to_table($1)`, [SD.id], { hint: 'forbidden' })
+  await fails('no user cannot send', null, `select send_receipt_to_table($1)`, [SD.id], { hint: 'auth' })
+  await fails('not itemised', 2, `select send_receipt_to_table($1)`, [(await mkExpense({ amount: 5, desc: 'Plain', itemised: false, status: 'confirmed' })).id], { hint: 'not_itemised' })
+  await fails('deadline in the past', 2, `select send_receipt_to_table($1,$2)`, [SD.id, new Date(Date.now() - 3600e3).toISOString()], { hint: 'bad_deadline' })
+  await fails('deadline beyond 90 days', 2, `select send_receipt_to_table($1,$2)`, [SD.id, new Date(Date.now() + 95 * 86400e3).toISOString()], { hint: 'bad_deadline' })
+  eq('nothing written by the refusals', (await q1(`select claims_sent_at s, claim_deadline d from expenses where id=$1`, [SD.id])), { s: null, d: null })
+  // as the real client role: EXECUTE is granted to authenticated
+  const r = await asC(async () => SEND(2, SD.id))
+  ok('payer sends (as the authenticated role)', !r.e, r.e?.message)
+  const j = r.r.j
+  eq('first send flags', [j.first_send, j.changed, j.notices_enabled], [true, true, true])
+  const dl = new Date(j.claim_deadline)
+  const now = Date.now()
+  ok('default deadline is 18:00 UTC', dl.getUTCHours() === 18 && dl.getUTCMinutes() === 0 && dl.getUTCSeconds() === 0, j.claim_deadline)
+  ok('default deadline is 3 days out (between 2d18h and 3d18h from now)', dl - now > (2 * 24 + 17.9) * 3600e3 && dl - now < (3 * 24 + 18.1) * 3600e3, (dl - now) / 3600e3)
+  eq('notify = everyone on the receipt except the caller', j.notify_user_ids, sortU([3, 4, 21]))
+  eq('people detail: Bob was put down by the payer, Carol did her own, Dave nothing', j.people.map(p => [p.user_id, p.claimed, p.assigned_by_other]), [[U(3), 10, true], [U(4), 20, false], [U(21), 0, false]])
+  eq('already notified: none yet', j.already_notified_user_ids, [])
+  const row = await q1(`select claims_sent_at, claim_deadline from expenses where id=$1`, [SD.id])
+  ok('stamped', row.claims_sent_at && row.claim_deadline)
+  eq('one activity row', (await q1(`select count(*)::int n from activity_feed where verb='receipt_sent_to_table' and entity->>'id'=$1`, [SD.id])).n, 1)
+  // idempotent
+  const r2 = await SEND(2, SD.id)
+  eq('repeat: not first, not changed, same stamps', [r2.r.j.first_send, r2.r.j.changed, r2.r.j.claims_sent_at, r2.r.j.claim_deadline], [false, false, j.claims_sent_at, j.claim_deadline])
+  eq('repeat writes no new activity and does not move the deadline', [(await q1(`select count(*)::int n from activity_feed where entity->>'id'=$1 and verb in ('receipt_sent_to_table','receipt_deadline_set')`, [SD.id])).n, (await q1(`select claim_deadline d from expenses where id=$1`, [SD.id])).d.toISOString()], [1, new Date(j.claim_deadline).toISOString()])
+  eq('repeat returns the same notify list', r2.r.j.notify_user_ids, j.notify_user_ids)
+  // repeat with an explicit deadline moves only the deadline
+  const nd = new Date(Date.now() + 5 * 86400e3).toISOString()
+  const r3 = await SEND(2, SD.id, nd)
+  eq('repeat with a deadline: changed, not first, sent_at kept', [r3.r.j.first_send, r3.r.j.changed, r3.r.j.claims_sent_at, new Date(r3.r.j.claim_deadline).toISOString()], [false, true, j.claims_sent_at, nd])
+  eq('... and logs receipt_deadline_set once', (await q1(`select count(*)::int n from activity_feed where verb='receipt_deadline_set' and entity->>'id'=$1`, [SD.id])).n, 1)
+  // dedupe knowledge from notifications
+  await db.query(`insert into notifications(trip_id,user_id,kind,entity_type,entity_id,dedupe_key) values ($1,$2,'receipt_table','expense',$3,$4)`, [T, U(3), SD.id, `notice:receipt:${SD.id}:${U(3)}:table`])
+  const r4 = await SEND(2, SD.id)
+  eq('already_notified comes from the notifications table', r4.r.j.already_notified_user_ids, [U(3)])
+  eq('... notify list itself is not reduced (the function dedupes)', r4.r.j.notify_user_ids, sortU([3, 4, 21]))
+  // people who answered
+  await respond(SD.id, 4, 'done'); await respond(SD.id, 21, 'not_there')
+  const r5 = await SEND(2, SD.id)
+  eq('done and not_there people are not notified again', r5.r.j.notify_user_ids, sortU([3]))
+  await db.query(`delete from expense_claim_responses where expense_id=$1`, [SD.id])
+  // per-trip opt-out
+  await db.query(`update trips set receipt_notices_enabled=false where id=$1`, [T])
+  const r6 = await SEND(2, SD.id)
+  eq('notices off for the trip: nobody to notify, flag reported, deadline still set', [r6.r.j.notify_user_ids, r6.r.j.notices_enabled], [[], false])
+  await db.query(`update trips set receipt_notices_enabled=true where id=$1`, [T])
+  // a manager can send; the payer is then notified
+  const SM = await mkExpense({ payer: 2, amount: 20, desc: 'Manager sends', tagged: [2, 3], lines: [['a', 1, 20]] })
+  const rm = await SEND(1, SM.id)
+  ok('organiser can send', !rm.e, rm.e?.message)
+  eq('... the payer is notified (they are not the caller)', rm.r.j.notify_user_ids, sortU([2, 3]))
+  // the deadline passed without being applied: a plain re-send is refused, a new deadline reopens it
+  await setLive(SD.id, `claim_deadline = now() - interval '1 hour'`)
+  await fails('re-send after the deadline needs a new deadline', 2, `select send_receipt_to_table($1)`, [SD.id], { hint: 'deadline_passed' })
+  const rr = await SEND(2, SD.id, new Date(Date.now() + 86400e3).toISOString())
+  ok('a new deadline works', !rr.e, rr.e?.message)
+  // extend
+  const EX = await mkExpense({ payer: 2, amount: 20, desc: 'Extend me', tagged: [2, 3, 4], lines: [['a', 1, 20]] })
+  await fails('extend before sending', 2, `select extend_receipt_deadline($1,$2)`, [EX.id, new Date(Date.now() + 86400e3).toISOString()], { hint: 'not_sent' })
+  await SEND(2, EX.id)
+  await fails('extend by a non-manager', 3, `select extend_receipt_deadline($1,$2)`, [EX.id, new Date(Date.now() + 86400e3).toISOString()], { hint: 'forbidden' })
+  await fails('extend to the past', 2, `select extend_receipt_deadline($1,$2)`, [EX.id, new Date(Date.now() - 1000).toISOString()], { hint: 'bad_deadline' })
+  await respond(EX.id, 3, 'done')
+  const e1 = await asC(async () => EXTEND(2, EX.id, new Date(Date.now() + 9 * 86400e3).toISOString()))
+  ok('payer extends (as authenticated)', !e1.e, e1.e?.message)
+  eq('extend: changed, waiting = the people who have not answered, minus the caller', [e1.r.j.changed, e1.r.j.waiting_user_ids], [true, sortU([4])])
+  eq('extend logged as extended', (await q1(`select count(*)::int n from activity_feed where verb='receipt_deadline_extended' and entity->>'id'=$1`, [EX.id])).n, 1)
+  const e2 = await EXTEND(2, EX.id, e1.r.j.claim_deadline)
+  eq('same deadline again: nothing changes, no new activity', [e2.r.j.changed, (await q1(`select count(*)::int n from activity_feed where verb like 'receipt_deadline_%' and entity->>'id'=$1`, [EX.id])).n], [false, 1])
+  const e3 = await EXTEND(2, EX.id, new Date(Date.now() + 2 * 86400e3).toISOString())
+  eq('shortening is allowed and logged as such', [e3.r.j.changed, (await q1(`select count(*)::int n from activity_feed where verb='receipt_deadline_shortened' and entity->>'id'=$1`, [EX.id])).n], [true, 1])
+  // frozen / closed refusals
+  await db.query(`update trips set settlement_snapshot='{"transactions":[]}' where id=$1`, [T])
+  await fails('send while frozen', 2, `select send_receipt_to_table($1)`, [SD.id], { hint: 'frozen' })
+  await fails('extend while frozen', 2, `select extend_receipt_deadline($1,$2)`, [EX.id, new Date(Date.now() + 86400e3).toISOString()], { hint: 'frozen' })
+  await db.query(`update trips set settlement_snapshot=null where id=$1`, [T])
+  await setLive(EX.id, `claims_closed_at = now()`)
+  await fails('send after closing', 2, `select send_receipt_to_table($1)`, [EX.id], { hint: 'claims_closed' })
+  await fails('extend after closing', 2, `select extend_receipt_deadline($1,$2)`, [EX.id, new Date(Date.now() + 86400e3).toISOString()], { hint: 'claims_closed' })
+}
+
+// ---- 6. links: issue / peek / act -----------------------------------------------------------------------------------------------------
+{
+  const TK = await mkExpense({ payer: 2, amount: 60, desc: 'Le Link', tagged: [2, 3, 4, 21], lines: [['pizza', 1, 12], ['beer', 3, 30], ['salad', 1, 18]] })
+  await assign(TK, { 0: 3, 1: [3, 4] })           // Bob: pizza + half of the beers (shared by 2); salad unclaimed
+  const NS = await mkExpense({ payer: 2, amount: 10, desc: 'Not sent', tagged: [2, 3], lines: [['x', 1, 10]] })
+  eq('issue before sending the receipt', (await issue(NS.id, 3)).r.r.j.result, 'not_sent')
+  await SEND(2, TK.id)
+  // who may call: service role only
+  await fails('issue as a signed-in client', 3, `select issue_receipt_claim_token($1,$2,$3)`, [TK.id, U(3), sha()], { msg: 'permission denied' })
+  await fails('issue with no JWT', null, `select issue_receipt_claim_token($1,$2,$3)`, [TK.id, U(3), sha()], { msg: 'service role only' })
+  await fails('peek as a signed-in client', 3, `select receipt_claim_peek($1)`, [sha()], { msg: 'permission denied' })
+  await fails('act as a signed-in client', 3, `select receipt_claim_act($1,'done',null)`, [sha()], { msg: 'permission denied' })
+  await fails('rate hit as a signed-in client', 3, `select receipt_claim_rate_hit('k',1,60)`, [], { msg: 'permission denied' })
+  const denied = await asC(async () => call(3, `select issue_receipt_claim_token($1,$2,$3)`, [TK.id, U(3), sha()]))
+  ok('authenticated has no EXECUTE on the token functions at all', !!denied.e && /permission denied/i.test(denied.e.message), denied.e?.message)
+  eq('bad hash', (await call('svc', `select issue_receipt_claim_token($1,$2,'abc') j`, [TK.id, U(3)])).r.j.result, 'bad_hash')
+  eq('unknown expense', (await call('svc', `select issue_receipt_claim_token($1,$2,$3) j`, ['99999999-0000-0000-0000-000000000000', U(3), sha()])).r.j.result, 'not_found')
+  const t3 = await issue(TK.id, 3)
+  eq('issued', t3.r.r.j.result, 'issued')
+  const tokRow = await q1(`select token_hash h, expires_at, used_at, (select claim_deadline from expenses where id=$1) d from receipt_claim_tokens where token_hash=$2`, [TK.id, t3.hash])
+  eq('only the hash is stored (64 hex)', tokRow.h, t3.hash)
+  const exp = new Date(tokRow.expires_at), dl = new Date(tokRow.d)
+  ok('expires exactly deadline + 7 days', Math.abs(exp - dl - 7 * 86400e3) < 1000, [exp, dl])
+  // peek
+  const nf = await peek(sha())
+  eq('unknown token', nf.r.j, { result: 'not_found' })
+  const pk = (await peek(t3.hash)).r.j
+  eq('peek ok', pk.result, 'ok')
+  eq('peek: receipt facts', [pk.expense.title, pk.expense.currency, pk.expense.payer_first_name, pk.me.first_name, pk.me.is_payer], ['Le Link', 'EUR', 'Alice', 'Bob', false])
+  eq('peek: my items with amounts', pk.my_items.map(i => [i.name, i.my_amount, i.others]), [['pizza', 12, []], ['beer', 15, ['Carol']]])
+  eq('peek: items I could add myself to', pk.available_items.map(i => i.name), ['salad'])
+  eq('peek: editable with a deadline', [pk.editable, pk.closed_reason, pk.deadline !== null, pk.response, pk.on_receipt], [true, null, true, null, true])
+  eq('peek: my total and the unclaimed total', [pk.my_total, pk.unclaimed_total], [27, 18])
+  ok('peek never shows other people\'s amounts or ids', !JSON.stringify(pk).includes(U(4)))
+  // peek is read-only
+  const snapA = JSON.stringify([(await q1(`select count(*)::int a from activity_feed`)), (await q1(`select count(*)::int a from expense_item_claims`)), (await q1(`select count(*)::int a from expense_claim_responses`))])
+  await peek(t3.hash)
+  eq('peek wrote nothing', JSON.stringify([(await q1(`select count(*)::int a from activity_feed`)), (await q1(`select count(*)::int a from expense_item_claims`)), (await q1(`select count(*)::int a from expense_claim_responses`))]), snapA)
+  // expired / revoked
+  const tx = await issue(TK.id, 3)
+  await db.query(`update receipt_claim_tokens set expires_at = now() - interval '1 second' where token_hash=$1`, [tx.hash])
+  eq('expired token: peek + act', [(await peek(tx.hash)).r.j.result, (await act(tx.hash, 'done')).r.j.result], ['expired', 'expired'])
+  const ty = await issue(TK.id, 3)
+  await db.query(`update receipt_claim_tokens set used_at = now() where token_hash=$1`, [ty.hash])
+  eq('revoked token', [(await peek(ty.hash)).r.j.result, (await act(ty.hash, 'done')).r.j.result], ['revoked', 'revoked'])
+  // five newest links stay live
+  const many = []
+  for (let i = 0; i < 6; i++) { many.push((await issue(TK.id, 21)).hash); await new Promise(r => setTimeout(r, 8)) }
+  eq('at most 5 live links per person and receipt: the oldest is retired', [(await peek(many[0])).r.j.result, (await peek(many[1])).r.j.result, (await peek(many[5])).r.j.result], ['revoked', 'ok', 'ok'])
+  eq('a person who is not on the receipt cannot get a link', (await issue(TK.id, 9)).r.r.j.result, 'not_on_receipt')
+
+  // ---- actions
+  const aDone = await act(t3.hash, 'done')
+  eq('done: ok + changed + state', [aDone.r.j.result, aDone.r.j.changed, aDone.r.j.state.response], ['ok', true, 'done'])
+  eq('done is stored', (await q1(`select response from expense_claim_responses where expense_id=$1 and user_id=$2`, [TK.id, U(3)])).response, 'done')
+  eq('done twice: unchanged', (await act(t3.hash, 'done')).r.j.changed, false)
+  eq('activity names the person, via email_link, once', (await qa(`select actor::text a, metadata->>'via' v from activity_feed where verb='receipt_claims_done' and entity->>'id'=$1`, [TK.id])).map(r => [r.a, r.v]), [[U(3), 'email_link']])
+  eq('undo_done clears it', [(await act(t3.hash, 'undo_done')).r.j.state.response, (await q1(`select count(*)::int n from expense_claim_responses where expense_id=$1 and user_id=$2`, [TK.id, U(3)])).n], [null, 0])
+  eq('bad action', (await act(t3.hash, 'explode')).r.j.reason, 'bad_action')
+  // not_there: payer / own claims refused, a bystander accepted, then changes mind with done
+  const t2 = await issue(TK.id, 2), t4 = await issue(TK.id, 4), t21 = await issue(TK.id, 21)
+  eq('payer cannot be not_there', (await act(t2.hash, 'not_there')).r.j.reason, 'payer')
+  eq('Bob has claims: not_there refused and claims untouched', [(await act(t3.hash, 'not_there')).r.j.reason, (await claimRows(TK.id)).filter(r => r.u === U(3)).length], ['has_claims', 2])
+  const nt = await act(t21.hash, 'not_there')
+  eq('Dave was not there', [nt.r.j.result, nt.r.j.state.response, nt.r.j.state.on_receipt], ['ok', 'not_there', false])
+  eq('Dave is off the receipt', (await q1(`select _receipt_tagged($1) t`, [TK.id])).t.includes(U(21)), false)
+  const dn = await act(t21.hash, 'done')
+  eq('Dave changes his mind with done', [dn.r.j.state.response, dn.r.j.state.on_receipt], ['done', true])
+  await act(t21.hash, 'undo_done')
+
+  // ---- toggle: impersonated self-service through set_receipt_claims
+  await db.exec('BEGIN')
+  const tg = await act(t4.hash, 'toggle', { line_item_id: TK.lines[2], on: true })
+  const afterCtx = await q1(`select auth.uid() u, auth.role() r, current_setting('request.jwt.claim.sub', true) sub`)
+  await db.exec('COMMIT')
+  eq('toggle on: ok, changed', [tg.r.j.result, tg.r.j.changed], ['ok', true])
+  eq('the impersonation is restored inside the same transaction (service role again, no user)', [afterCtx.u, afterCtx.r], [null, 'service_role'])
+  let rows = (await claimRows(TK.id)).filter(r => r.l === TK.lines[2])
+  eq('Carol is on the salad as herself (source self, created_by Carol)', rows.map(r => [r.u, r.a, r.s, r.cb]), [[U(4), 18, 'self', U(4)]])
+  eq('state shows it', (await peek(t4.hash)).r.j.my_items.map(i => i.name).sort(), ['beer', 'salad'])
+  eq('the salad now has someone on it: still a candidate for others', (await peek(t21.hash)).r.j.available_items.map(i => i.name).includes('salad'), true)
+  // Dave joins the salad: equal halves, Carol keeps created_by Carol
+  await act(t21.hash, 'toggle', { line_item_id: TK.lines[2] })
+  rows = (await claimRows(TK.id)).filter(r => r.l === TK.lines[2])
+  eq('shared with Dave: 9.00 each, exact quantities', [rows.map(r => r.a).sort(), cents(rows.reduce((s, r) => s + r.q, 0))], [[9, 9], 100])
+  eq('Carol\'s row is still hers', rows.find(r => r.u === U(4)).cb, U(4))
+  // Dave takes himself off again (default = flip)
+  const off = await act(t21.hash, 'toggle', { line_item_id: TK.lines[2], on: false })
+  eq('toggle off', [off.r.j.changed, (await claimRows(TK.id)).filter(r => r.l === TK.lines[2]).map(r => [r.u, r.a])], [true, [[U(4), 18]]])
+  eq('toggle to the state it is already in: no-op', (await act(t4.hash, 'toggle', { line_item_id: TK.lines[2], on: true })).r.j.changed, false)
+  // someone else is never touched: the payload has no user field at all, and a line with a non-equal part is refused even for the payer's own link
+  await db.query(`insert into expense_line_items(expense_id,name_original,quantity,unit_price,subtotal,total_amount,line_number) values ($1,'wine x3',3,10,30,30,4)`, [TK.id])
+  const wine = (await q1(`select id from expense_line_items where expense_id=$1 and line_number=4`, [TK.id])).id
+  await db.query(`insert into expense_item_claims(line_item_id,user_id,expense_id,quantity_claimed,amount_owed) values ($1,$2,$3,2,20)`, [wine, U(3), TK.id])
+  const f1 = await act(t4.hash, 'toggle', { line_item_id: wine })
+  eq('a line where somebody holds 2 of 3 on their own: refused', [f1.r.j.result, f1.r.j.reason], ['refused', 'forbidden'])
+  const f2 = await act(t2.hash, 'toggle', { line_item_id: wine })
+  eq('... even for the payer\'s link (a manager would rewrite Bob\'s amount)', [f2.r.j.result, f2.r.j.reason], ['refused', 'forbidden'])
+  eq('Bob\'s direct row untouched', (await claimRows(TK.id)).filter(r => r.l === wine).map(r => [r.u, r.q, r.a]), [[U(3), 2, 20]])
+  await SET(2, TK.id, [{ line_item_id: TK.lines[0], shared_by_all: true }])
+  const f3 = await act(t4.hash, 'toggle', { line_item_id: TK.lines[0] })
+  eq('a table item cannot be toggled from a link', [f3.r.j.result, f3.r.j.reason], ['refused', 'forbidden'])
+  await SET(2, TK.id, [{ line_item_id: TK.lines[0], user_ids: [U(3)] }])
+  eq('toggle: payload checks', [(await act(t4.hash, 'toggle', null)).r.j.reason, (await act(t4.hash, 'toggle', { line_item_id: 'nope' })).r.j.reason, (await act(t4.hash, 'toggle', { line_item_id: TK.lines[0], on: 'yes' })).r.j.reason, (await act(t4.hash, 'toggle', { line_item_id: NS.lines[0] })).r.j.reason], ['bad_payload', 'bad_payload', 'bad_payload', 'bad_line'])
+  // a failure inside set_receipt_claims leaves nothing behind (sub-transaction) and restores the settings
+  await db.query(`insert into expense_line_items(expense_id,name_original,quantity,unit_price,subtotal,total_amount,line_number) values ($1,'sliver',0.01,1,1,1,5)`, [TK.id])
+  const sl = (await q1(`select id from expense_line_items where expense_id=$1 and line_number=5`, [TK.id])).id
+  await db.query(`insert into expense_item_claims(line_item_id,user_id,expense_id,quantity_claimed,amount_owed) values ($1,$2,$3,0.01,1)`, [sl, U(3), TK.id])
+  await db.exec('BEGIN')
+  const ts = await act(t4.hash, 'toggle', { line_item_id: sl })
+  const ctx2 = await q1(`select auth.uid() u, auth.role() r`)
+  await db.exec('COMMIT')
+  eq('too many sharers: refused with the reason', [ts.r.j.result, ts.r.j.reason], ['refused', 'too_many_sharers'])
+  eq('... Bob\'s claim on the sliver survived (rolled back) and the settings are restored', [(await claimRows(TK.id)).filter(r => r.l === sl).length, ctx2.u, ctx2.r], [1, null, 'service_role'])
+  // not_there person toggling on clears the response (one step)
+  await act(t21.hash, 'not_there')
+  const nb = await act(t21.hash, 'toggle', { line_item_id: TK.lines[2], on: true })
+  eq('a not_there person toggling on is back on the receipt with the line', [nb.r.j.result, nb.r.j.state.response, nb.r.j.state.on_receipt, (await claimRows(TK.id)).filter(r => r.l === TK.lines[2]).map(r => r.u).sort()], ['ok', null, true, [U(4), U(21)].sort()])
+  // manual leftover share before the deadline, then a toggle: leftovers are re-shared 'same' so every line stays exact
+  await SHARE(2, TK.id, 'everyone')
+  eq('after a manual share every line is exact', (await lineOk(TK.id)).length, 0)
+  const rs = await act(t3.hash, 'toggle', { line_item_id: TK.lines[2], on: true })
+  ok('toggle after a manual share works', rs.r.j.result === 'ok', rs.r.j)
+  eq('... and the leftovers were re-shared the same way (lines exact, mode kept)', [(await lineOk(TK.id)).length, (await q1(`select leftover_mode m from expenses where id=$1`, [TK.id])).m], [0, 'everyone'])
+
+  // ---- states: deadline / closed / frozen / deleted
+  const ST = await mkExpense({ payer: 2, amount: 20, desc: 'States', tagged: [2, 3, 4], lines: [['a', 1, 20]] })
+  await SEND(2, ST.id)
+  const ts3 = await issue(ST.id, 3)
+  await setLive(ST.id, `claim_deadline = now() - interval '1 minute'`)
+  const dp = await act(ts3.hash, 'done')
+  eq('deadline passed: refused', [dp.r.j.result, dp.r.j.reason], ['refused', 'deadline_passed'])
+  const pdp = (await peek(ts3.hash)).r.j
+  eq('... the link still shows the receipt, read-only', [pdp.result, pdp.editable, pdp.closed_reason], ['ok', false, 'deadline_passed'])
+  eq('... and nothing was written', (await q1(`select count(*)::int n from expense_claim_responses where expense_id=$1`, [ST.id])).n, 0)
+  await setLive(ST.id, `claim_deadline = now() + interval '1 day'`)
+  eq('deadline extended: the same link works again', (await act(ts3.hash, 'done')).r.j.result, 'ok')
+  await db.query(`update trips set settlement_snapshot='{"transactions":[]}' where id=$1`, [T])
+  const fr = await act(ts3.hash, 'undo_done')
+  eq('frozen: refused', [fr.r.j.result, fr.r.j.reason, (await peek(ts3.hash)).r.j.frozen], ['refused', 'frozen', true])
+  const ti = await issue(ST.id, 4)
+  eq('frozen: no new links', ti.r.r.j.result, 'frozen')
+  await db.query(`update trips set settlement_snapshot=null where id=$1`, [T])
+  await setLive(ST.id, `claims_closed_at = now()`)
+  const cx = await act(ts3.hash, 'undo_done')
+  eq('closed: refused', [cx.r.j.result, cx.r.j.reason], ['refused', 'claims_closed'])
+  eq('closed: no new links', (await issue(ST.id, 4)).r.r.j.result, 'claims_closed')
+  await db.query(`delete from expenses where id=$1`, [ST.id])
+  eq('expense deleted: its links are gone (cascade)', [(await peek(ts3.hash)).r.j.result, (await act(ts3.hash, 'done')).r.j.result, (await q1(`select count(*)::int n from receipt_claim_tokens where token_hash=$1`, [ts3.hash])).n], ['not_found', 'not_found', 0])
+  // rate limit helper
+  const hits = []
+  for (let i = 0; i < 5; i++) hits.push((await call('svc', `select receipt_claim_rate_hit('ip:1.2.3.4', 3, 60) b`)).r.b)
+  eq('rate limit: 3 allowed, then refused', hits, [true, true, true, false, false])
+  await db.query(`update receipt_claim_rate_limits set window_start = now() - interval '2 minutes' where key='ip:1.2.3.4'`)
+  eq('rate limit: the window resets', (await call('svc', `select receipt_claim_rate_hit('ip:1.2.3.4', 3, 60) b`)).r.b, true)
+}
+
+// ---- 7. apply_receipt_deadline ------------------------------------------------------------------------------------------------------------
+{
+  const mk = async (desc, tagged = [2, 3, 4]) => { const E = await mkExpense({ payer: 2, amount: 30, desc, tagged, lines: [['a', 1, 10], ['b', 1, 4], ['rest', 1, 16]] }); await assign(E, { 0: 2, 1: 3 }); return E }
+  const AP = await mk('Apply me')
+  await fails('a tagged non-manager cannot apply', 3, `select apply_receipt_deadline($1,false)`, [AP.id], { hint: 'forbidden' })
+  await fails('no JWT at all', null, `select apply_receipt_deadline($1,false)`, [AP.id], { hint: 'auth' })
+  const ns = await call('svc', `select apply_receipt_deadline($1,false) j`, [AP.id])
+  eq('service role on a receipt that was never sent: soft refusal', [ns.r.j.applied, ns.r.j.reason], [false, 'not_sent'])
+  await SEND(2, AP.id)
+  const nd = await call('svc', `select apply_receipt_deadline($1,false) j`, [AP.id])
+  eq('service role before the deadline: not due', [nd.r.j.applied, nd.r.j.reason], [false, 'not_due'])
+  eq('... nothing closed or written', [(await q1(`select claims_closed_at c from expenses where id=$1`, [AP.id])).c, (await claimRows(AP.id)).filter(r => r.la > 0).length], [null, 0])
+  await respond(AP.id, 4, 'done')    // Carol said "that's everything"; Alice (payer) and Bob did not
+  await setLive(AP.id, `claim_deadline = now() - interval '1 minute'`)
+  // as the real service role
+  await db.exec('SET ROLE service_role')
+  let s1
+  try { s1 = await call('svc', `select apply_receipt_deadline($1,false) j`, [AP.id]) } finally { await db.exec('RESET ROLE') }
+  ok('service role applies after the deadline (as role service_role)', !s1.e && s1.r.j.applied === true, s1.e?.message)
+  const j = s1.r.j
+  eq('mode everyone, not early, closed_at set', [j.mode, j.early, j.closed_at !== null], ['everyone', false, true])
+  // U = payer + Bob (Carol confirmed); F = 10; rooms payer 0, Bob 6 -> Bob +6, the remaining 10 spills to step 2 (3.34/3.33/3.33)
+  eq('per-person amounts (the rule)', j.people.map(p => [p.user_id, p.amount]), [[U(2), 3.34], [U(3), 9.33], [U(4), 3.33]])
+  eq('notify = people charged (the service role has no caller to exclude)', j.notify_user_ids, [U(2), U(3), U(4)])
+  eq('receipt adds up, lines exact', [Object.values(await totals(AP.id)).reduce((s, x) => s + x, 0), (await lineOk(AP.id)).length], [30, 0])
+  eq('closed and a single activity row with the amounts', [(await q1(`select claims_closed_at c from expenses where id=$1`, [AP.id])).c !== null, (await qa(`select actor, metadata->'people' p from activity_feed where verb='receipt_deadline_applied' and entity->>'id'=$1`, [AP.id])).map(r => [r.actor, r.p.length])], [true, [[null, 3]]])
+  // idempotent: never twice
+  const rows1 = JSON.stringify(await claimRows(AP.id))
+  const s2 = await call('svc', `select apply_receipt_deadline($1,false) j`, [AP.id])
+  eq('second call: already applied, nothing notified', [s2.r.j.applied, s2.r.j.already_applied, s2.r.j.notify_user_ids], [false, true, []])
+  eq('... per-person leftover amounts are read back from the claims', s2.r.j.people.map(p => [p.user_id, p.amount]), [[U(2), 3.34], [U(3), 9.33], [U(4), 3.33]])
+  const s3 = await APPLY(2, AP.id)
+  eq('the payer calling after the service role: also a no-op', [s3.r.j.applied, s3.r.j.already_applied], [false, true])
+  eq('no rows changed, still one activity row', [JSON.stringify(await claimRows(AP.id)) === rows1, (await q1(`select count(*)::int n from activity_feed where verb='receipt_deadline_applied' and entity->>'id'=$1`, [AP.id])).n], [true, 1])
+
+  // "Share now" by the payer, before the deadline
+  const SN = await mk('Share now')
+  await SEND(2, SN.id)
+  const sn = await asC(async () => APPLY(2, SN.id))
+  eq('the payer shares early (as authenticated): early flag, caller excluded from notify', [sn.r.j.applied, sn.r.j.early, sn.r.j.notify_user_ids.includes(U(2))], [true, true, false])
+  eq('... Carol and Bob are notified', sn.r.j.notify_user_ids.slice().sort(), [U(3), U(4)].sort())
+  // notices off: nobody to notify, but it still applies
+  const NN = await mk('No notices')
+  await db.query(`update trips set receipt_notices_enabled=false where id=$1`, [T])
+  const nn = await APPLY(2, NN.id)
+  await db.query(`update trips set receipt_notices_enabled=true where id=$1`, [T])
+  eq('notices off: applies, notifies nobody', [nn.r.j.applied, nn.r.j.notify_user_ids], [true, []])
+  // an organiser may apply, even if the receipt was never sent
+  const OR = await mk('Organiser share')
+  ok('organiser can share now', (await APPLY(1, OR.id)).r.j.applied === true)
+  // a manual person-share by the payer is kept (mode same)
+  const PM = await mk('Manual person')
+  await SHARE(2, PM.id, 'person', U(4))
+  const pm = await APPLY(2, PM.id)
+  eq('applying after a manual "person" share keeps that share', [pm.r.j.mode, pm.r.j.people.map(p => [p.user_id, p.amount])], ['person', [[U(4), 16]]])
+  eq('... still exact', (await lineOk(PM.id)).length, 0)
+  // nothing unclaimed
+  const FU = await mkExpense({ payer: 2, amount: 20, desc: 'All claimed', tagged: [2, 3], lines: [['a', 1, 10], ['b', 1, 10]] })
+  await assign(FU, { 0: 2, 1: 3 })
+  const fu = await APPLY(2, FU.id)
+  eq('fully claimed: applies with nobody charged', [fu.r.j.applied, fu.r.j.people, fu.r.j.notify_user_ids], [true, [], []])
+  // frozen: refused (RAISE) for both the payer and the service role
+  const FZ = await mk('Frozen apply')
+  await SEND(2, FZ.id)
+  await setLive(FZ.id, `claim_deadline = now() - interval '1 minute'`)
+  await db.query(`update trips set settlement_snapshot='{"transactions":[]}' where id=$1`, [T])
+  await fails('apply while frozen (payer)', 2, `select apply_receipt_deadline($1,false)`, [FZ.id], { hint: 'frozen' })
+  await fails('apply while frozen (service role)', 'svc', `select apply_receipt_deadline($1,false)`, [FZ.id], { hint: 'frozen' })
+  await db.query(`update trips set settlement_snapshot=null where id=$1`, [T])
+  eq('frozen apply changed nothing', (await q1(`select claims_closed_at c from expenses where id=$1`, [FZ.id])).c, null)
+  // a deleted expense
+  await fails('unknown expense', 'svc', `select apply_receipt_deadline($1,false)`, ['99999999-0000-0000-0000-000000000000'], { hint: 'not_found' })
+  // the service role cannot do the other write paths
+  await fails('service role cannot send', 'svc', `select send_receipt_to_table($1)`, [FZ.id], { hint: 'auth' })
+  await fails('service role cannot extend', 'svc', `select extend_receipt_deadline($1,$2)`, [FZ.id, new Date(Date.now() + 86400e3).toISOString()], { hint: 'auth' })
+}

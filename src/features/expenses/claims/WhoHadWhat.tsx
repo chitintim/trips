@@ -6,7 +6,6 @@ import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { toMinorUnits } from '../../../lib/money'
 import { useSetReceiptClaims, useShareLeftovers } from '../../../lib/queries/useExpenses'
 import { useClaimResponses } from '../../../lib/queries/useClaimResponses'
-import { useReceiptTableRpcSupport } from '../../../lib/queries/useReceiptTable'
 import { useTrip } from '../../../lib/queries/useTrip'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import type { ReceiptClaimEntry } from '../../../lib/queries/useExpenses'
@@ -74,18 +73,16 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
 
   const labelOf = useCallback((id: string) => people.find((p) => p.id === id)?.label ?? 'Someone', [people])
 
-  // Receipts phase 2 (send to the table, deadline, replies). Every piece is absent until the migration is applied; then `support` is all-false
-  // and this screen is exactly what it was.
-  const rpcSupport = useReceiptTableRpcSupport()
+  // Receipts phase 2 (send to the table, deadline, replies).
   const responses = useClaimResponses(expense.trip_id)
   const { data: trip } = useTrip(expense.trip_id)
   const { canManageTrip } = useTripPermissions(trip)
-  const support = receiptTableSupport({ expense, responsesAvailable: responses.available, rpc: rpcSupport })
+  const support = receiptTableSupport({ expense, responsesAvailable: responses.available })
   // A CLOSED receipt (leftovers shared) is final for claim edits, the payer's too, until it is reopened from the status card below.
   const closed = support.phase === 'closed'
   const disabled = frozen || closed
   const [sendOpen, setSendOpen] = useState(false)
-  const noticesEnabled = trip && 'receipt_notices_enabled' in trip ? (trip as { receipt_notices_enabled?: boolean }).receipt_notices_enabled !== false : null
+  const noticesEnabled = trip ? trip.receipt_notices_enabled !== false : null
   const replies = useMemo(
     () => summarizeReplies({ peopleIds, payerId: expense.paid_by, responses: responses.rows, expenseId: expense.id, participants }),
     [peopleIds, expense.paid_by, expense.id, responses.rows, participants]
@@ -405,7 +402,6 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
           tripId={expense.trip_id}
           columns={support.columns}
           replies={replies}
-          rpc={rpcSupport}
           participants={participants}
           leftoversText={leftoversText}
           frozen={frozen}

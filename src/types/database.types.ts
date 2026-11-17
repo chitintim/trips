@@ -451,6 +451,30 @@ export type Database = {
           },
         ]
       }
+      client_direct_writes: {
+        Row: {
+          at: string
+          build: string | null
+          op: string
+          tbl: string
+          user_id: string | null
+        }
+        Insert: {
+          at?: string
+          build?: string | null
+          op: string
+          tbl: string
+          user_id?: string | null
+        }
+        Update: {
+          at?: string
+          build?: string | null
+          op?: string
+          tbl?: string
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       expense_claim_responses: {
         Row: {
           expense_id: string
@@ -2340,6 +2364,10 @@ export type Database = {
       }
       reitemize_expense: {
         Args: { p_expense_id: string; p_header: Json; p_lines: Json; p_preview?: boolean }
+        Returns: Json
+      }
+      set_my_receipt_claims: {
+        Args: { p_expense_id: string; p_lines: Json }
         Returns: Json
       }
       send_receipt_to_table: {

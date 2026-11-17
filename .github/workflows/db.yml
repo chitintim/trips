@@ -1,0 +1,67 @@
+name: Database tests
+
+# Receipt / settlement database tests. A NEW workflow: it does not touch ci.yml or deploy.yml and never deploys anything.
+#   pglite      : the in-memory Postgres suites (npm run test:db): phase 1, phase 2 + phase 4 behaviour, and a dry run of the rollback-only rehearsal files.
+#   concurrency : REAL two-connection lock-order tests against a postgres:17 service container (supabase/tests/concurrency/locks.mjs): send / claim / respond / apply /
+#                 reitemize / reopen / freeze / unfreeze racing each other; asserts no deadlock (one documented exception) and the final money.
+# What is stubbed on a bare Postgres (no Supabase): roles anon / authenticated / service_role, schema auth (uid() / role() from request.jwt.claims), the base tables and RLS shaped
+# like the live schema, a few trigger re-implementations; the receipt migrations themselves are applied from the repo. See supabase/tests/lib/base.mjs and supabase/tests/README.md.
+
+# Runs on every push to ANY branch (master included), on pull requests and by hand. It deploys nothing and needs no secrets (the Postgres is a throwaway service container).
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pglite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Database suites (pglite)
+        run: npm run test:db
+
+  concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Two-connection lock-order tests
+        run: node supabase/tests/concurrency/locks.mjs
+        env:
+          TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
+          LOCKS_ITER: '50'
+      - name: The pglite suites against REAL Postgres (informational, does not fail the job)
+        continue-on-error: true
+        run: |
+          for s in phase1 phase2; do
+            psql -h localhost -U postgres -c "create database suite_$s"
+            TEST_PG_URL="postgres://postgres:postgres@localhost:5432/suite_$s" node supabase/tests/pglite/run.mjs $s
+          done

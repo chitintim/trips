@@ -1,14 +1,12 @@
 /**
- * Receipts phase 2 on the signed-in screens: what exists yet (fail-soft probes), who has replied, and wording.
+ * Receipts phase 2 on the signed-in screens: which controls show, who has replied, and wording.
  * Pure so it is unit-tested; the hooks that fetch and write are in src/lib/queries/useReceiptTable.ts.
- *
- * FAIL-SOFT RULE: every control here appears only when the migration is there. Until then `receiptTableSupport`
- * says no for everything and the screens behave exactly as before.
+ * The phase-2 functions and columns are live, so nothing here is probed.
  */
 import { firstNameOf } from './claimPeople'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 
-/** The three expense columns, or null when the row has none of them (migration not applied). */
+/** The three expense columns, or null when the row does not carry them (a partial row, e.g. a hand-built one). */
 export interface ReceiptColumns {
   claimDeadline: string | null
   claimsSentAt: string | null
@@ -22,18 +20,6 @@ export function receiptColumnsOf(expense: object | null | undefined): ReceiptCol
   const s = (v: unknown) => (typeof v === 'string' && v ? v : null)
   return { claimDeadline: s(e.claim_deadline), claimsSentAt: s(e.claims_sent_at), claimsClosedAt: s(e.claims_closed_at) }
 }
-
-export interface ReceiptTableRpcSupport {
-  send: boolean
-  extend: boolean
-  apply: boolean
-  /** `reopen_receipt_claims` exists: a closed receipt can be reopened. */
-  reopen: boolean
-  /** `respond_to_receipt` exists: "That's everything" / "I wasn't there" / Undo go through it (no direct table writes). */
-  respond: boolean
-}
-
-export const NO_RPC_SUPPORT: ReceiptTableRpcSupport = { send: false, extend: false, apply: false, reopen: false, respond: false }
 
 export type ReceiptPhase = 'unavailable' | 'draft' | 'open' | 'closed'
 
@@ -58,17 +44,17 @@ export function deadlinePassed(deadline: string | null | undefined, now: Date): 
 }
 
 /**
- * What the screens may show. `responsesAvailable` = the expense_claim_responses table could be read.
- * Anything missing hides its controls; with the columns missing the phase is 'unavailable' and nothing new shows at all.
+ * What the screens may show. `responsesAvailable` = the replies were read (false while loading or after a failed read, so the reply
+ * buttons never show without knowing who has answered). With the columns missing the phase is 'unavailable' and nothing shows.
  */
-export function receiptTableSupport(args: { expense: object | null | undefined; responsesAvailable: boolean; rpc: ReceiptTableRpcSupport; now?: Date }): ReceiptTableSupport {
+export function receiptTableSupport(args: { expense: object | null | undefined; responsesAvailable: boolean; now?: Date }): ReceiptTableSupport {
   const columns = receiptColumnsOf(args.expense)
   if (!columns) return { canSend: false, canReply: false, hasStatus: false, phase: 'unavailable', columns: null, replyClosedReason: null }
   const phase: ReceiptPhase = columns.claimsClosedAt ? 'closed' : columns.claimsSentAt ? 'open' : 'draft'
   const late = phase === 'open' && deadlinePassed(columns.claimDeadline, args.now ?? new Date())
   return {
-    canSend: args.rpc.send && phase === 'draft',
-    canReply: args.rpc.respond && args.responsesAvailable && phase === 'open' && !late,
+    canSend: phase === 'draft',
+    canReply: args.responsesAvailable && phase === 'open' && !late,
     hasStatus: phase === 'open' || phase === 'closed',
     phase,
     columns,
@@ -231,6 +217,7 @@ const TABLE_ERROR_BY_HINT: Record<string, string> = {
   not_closed: 'This receipt is not closed.',
   has_leftovers: 'You were chosen to cover the leftovers on this receipt. Ask the person who paid to change that first.',
   frozen: 'Balances are frozen, so this can no longer be changed.',
+  reload: 'This copy of the app is out of date. Reload the page, then try again.',
   payer_not_there: "You paid for this, so you can't say you weren't there.",
   has_claims: "You've got items on this receipt, so take them off first.",
   deadline_passed: 'The time to reply has passed.',

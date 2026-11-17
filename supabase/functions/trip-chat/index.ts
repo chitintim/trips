@@ -26,13 +26,11 @@ import { callerClient, serviceClient, requireUser, requireTripParticipant, isTri
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
 import {
   createMessageStream,
-  consumeAnthropicStream,
-  padForCaching,
-  CLAUDE_MODEL,
+  MODEL_TRIP_CHAT,
   type AnthropicMessage,
   type AnthropicUsage,
-  type AnthropicContentBlock,
 } from '../_shared/anthropic.ts'
+import { runChatTurn, type ToolUse, type ToolOutcome } from './loop.ts'
 import { logAiUsage } from '../_shared/usage.ts'
 import { chatStreamErrorLog, chatStreamErrorPayload } from './streamError.ts'
 import { buildAnthropicToolDefs, executeReadTool } from './tools.ts'
@@ -206,140 +204,91 @@ Deno.serve(async (req) => {
     // SSE response stream to the client.
     const encoder = new TextEncoder()
     const totalUsage: AnthropicUsage = { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 }
-    let modelUsed = CLAUDE_MODEL
+    const state = { model: MODEL_TRIP_CHAT }
 
     const stream = new ReadableStream({
       async start(controller) {
         const send = (obj: unknown) => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`))
 
         try {
-          let finalText = ''
           let proposalId: string | null = null
           const proposalSummaries: Array<{ type: string; summary: string }> = []
 
-          // Agentic tool loop: stream each model turn; execute read tools /
-          // stage proposals between turns; stop on end_turn.
-          for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
-            const isLastAllowedIteration = iteration === MAX_TOOL_ITERATIONS - 1
-            const claudeResponse = await createMessageStream({
-              model: CLAUDE_MODEL,
-              max_tokens: 4096,
-              system: [
-                {
-                  type: 'text',
-                  text: padForCaching(systemPrompt),
-                  cache_control: { type: 'ephemeral' },
-                },
-              ],
-              messages: conversation,
-              // On the final permitted iteration, force a text answer.
-              tools: isLastAllowedIteration ? undefined : tools,
-            })
-
-            const turn = await consumeAnthropicStream(claudeResponse, (delta) => {
-              finalText += delta
-              send({ type: 'text', text: delta })
-            })
-
-            totalUsage.input_tokens += turn.usage.input_tokens
-            totalUsage.output_tokens += turn.usage.output_tokens
-            totalUsage.cache_creation_input_tokens = (totalUsage.cache_creation_input_tokens ?? 0) + (turn.usage.cache_creation_input_tokens ?? 0)
-            totalUsage.cache_read_input_tokens = (totalUsage.cache_read_input_tokens ?? 0) + (turn.usage.cache_read_input_tokens ?? 0)
-            if (turn.model) modelUsed = turn.model
-
-            if (turn.stop_reason !== 'tool_use' || turn.toolUses.length === 0) {
-              break // done -- end_turn (or max_tokens etc.)
-            }
-
-            // Append the assistant turn (text + tool_use blocks) to the conversation.
-            const assistantContent: AnthropicContentBlock[] = []
-            if (turn.text) assistantContent.push({ type: 'text', text: turn.text })
-            for (const tu of turn.toolUses) {
-              assistantContent.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input })
-            }
-            conversation.push({ role: 'assistant', content: assistantContent })
-
-            // Execute all requested tools; all results go back in ONE user message.
-            const toolResults: AnthropicContentBlock[] = []
-            for (const tu of turn.toolUses) {
-              try {
-                if (tu.name === 'propose_actions') {
-                  if (!organizer) {
-                    throw new Error('Only organizers can stage changes')
-                  }
-                  // Validate the changeset against the Proposal contract.
-                  const rawInput = tu.input as { source_text?: string; actions?: unknown[] }
-                  const actions = (rawInput.actions ?? []).map((a) => ProposedActionSchema.parse(a))
-                  const proposal = ProposalSchema.parse({
-                    trip_id: tripId,
-                    source_text: rawInput.source_text ?? message,
-                    actions,
-                  })
-                  // Insert under the CALLER's JWT -- the ai_proposals insert
-                  // policy requires created_by = auth.uid() and trip
-                  // membership, so RLS enforces this is legit.
-                  const { data: inserted, error: insertError } = await supabaseClient
-                    .from('ai_proposals')
-                    .insert({
-                      trip_id: proposal.trip_id,
-                      created_by: user.id,
-                      source_text: proposal.source_text ?? null,
-                      actions: proposal.actions,
-                      status: 'pending',
-                    })
-                    .select('id')
-                    .single()
-                  if (insertError || !inserted) {
-                    throw new Error(`Failed to store proposal: ${insertError?.message ?? 'no data'}`)
-                  }
-                  proposalId = inserted.id
-                  send({ type: 'proposal', proposal_id: proposalId })
-                  for (const a of proposal.actions) {
-                    // deno-lint-ignore no-explicit-any
-                    proposalSummaries.push({ type: a.type, summary: 'title' in a ? ((a as any).title ?? a.type) : a.type })
-                  }
-                  toolResults.push({
-                    type: 'tool_result',
-                    tool_use_id: tu.id,
-                    content: JSON.stringify({ ok: true, proposal_id: proposalId, staged_actions: proposal.actions.length }),
-                  })
-                } else if ((READ_TOOL_NAMES as readonly string[]).includes(tu.name)) {
-                  const result = await executeReadTool(tu.name as ChatToolName, tu.input, {
-                    client: supabaseClient,
-                    tripId,
-                    isOrganizer: organizer,
-                  })
-                  toolResults.push({
-                    type: 'tool_result',
-                    tool_use_id: tu.id,
-                    content: JSON.stringify(result),
-                  })
-                } else {
-                  throw new Error(`Unknown tool: ${tu.name}`)
-                }
-              } catch (toolError) {
-                toolResults.push({
-                  type: 'tool_result',
-                  tool_use_id: tu.id,
-                  content: toolError instanceof Error ? toolError.message : 'Tool execution failed',
-                  is_error: true,
-                })
+          // One tool call. Read tools run under the caller's JWT; propose_actions stages a proposal.
+          const executeTool = async (tu: ToolUse): Promise<ToolOutcome> => {
+            if (tu.name === 'propose_actions') {
+              if (!organizer) {
+                throw new Error('Only organizers can stage changes')
               }
+              // Validate the changeset against the Proposal contract.
+              const rawInput = tu.input as { source_text?: string; actions?: unknown[] }
+              const actions = (rawInput.actions ?? []).map((a) => ProposedActionSchema.parse(a))
+              const proposal = ProposalSchema.parse({
+                trip_id: tripId,
+                source_text: rawInput.source_text ?? message,
+                actions,
+              })
+              // Insert under the CALLER's JWT -- the ai_proposals insert
+              // policy requires created_by = auth.uid() and trip
+              // membership, so RLS enforces this is legit.
+              const { data: inserted, error: insertError } = await supabaseClient
+                .from('ai_proposals')
+                .insert({
+                  trip_id: proposal.trip_id,
+                  created_by: user.id,
+                  source_text: proposal.source_text ?? null,
+                  actions: proposal.actions,
+                  status: 'pending',
+                })
+                .select('id')
+                .single()
+              if (insertError || !inserted) {
+                throw new Error(`Failed to store proposal: ${insertError?.message ?? 'no data'}`)
+              }
+              proposalId = inserted.id
+              send({ type: 'proposal', proposal_id: proposalId })
+              for (const a of proposal.actions) {
+                // deno-lint-ignore no-explicit-any
+                proposalSummaries.push({ type: a.type, summary: 'title' in a ? ((a as any).title ?? a.type) : a.type })
+              }
+              return { content: JSON.stringify({ ok: true, proposal_id: proposalId, staged_actions: proposal.actions.length }) }
             }
-            conversation.push({ role: 'user', content: toolResults })
+            if ((READ_TOOL_NAMES as readonly string[]).includes(tu.name)) {
+              const result = await executeReadTool(tu.name as ChatToolName, tu.input, {
+                client: supabaseClient,
+                tripId,
+                isOrganizer: organizer,
+              })
+              return { content: JSON.stringify(result) }
+            }
+            throw new Error(`Unknown tool: ${tu.name}`)
           }
+
+          // Agentic tool loop (see loop.ts): stream each model turn, run tools between turns.
+          const { finalText } = await runChatTurn({
+            callModel: createMessageStream,
+            model: MODEL_TRIP_CHAT,
+            system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }],
+            tools,
+            conversation,
+            executeTool,
+            send,
+            usage: totalUsage,
+            state,
+            maxIterations: MAX_TOOL_ITERATIONS,
+          })
 
           // Persist the assistant reply (service role; metadata carries proposal linkage).
           await admin.from('trip_chat_messages').insert({
             trip_id: tripId,
             user_id: null,
             role: 'assistant',
-            content: finalText || '(no response)',
+            content: finalText,
             had_write_actions: proposalId != null,
             metadata: proposalId ? { proposal_id: proposalId } : null,
           })
 
-          await logAiUsage({ userId: user.id, tripId, functionName: 'trip-chat', model: modelUsed, usage: totalUsage })
+          await logAiUsage({ userId: user.id, tripId, functionName: 'trip-chat', model: state.model, usage: totalUsage })
 
           // Final done event -- actions_summary keeps its v1 field name for
           // ChatDrawer compatibility; entries now describe STAGED proposals,
@@ -354,6 +303,12 @@ Deno.serve(async (req) => {
         } catch (streamError) {
           // Status/code only: no upstream body or message ever reaches the log or the client.
           console.error('[trip-chat] stream error:', chatStreamErrorLog(streamError))
+          // Whatever the API already charged for this request is still recorded.
+          if (totalUsage.input_tokens + totalUsage.output_tokens + (totalUsage.cache_read_input_tokens ?? 0) + (totalUsage.cache_creation_input_tokens ?? 0) > 0) {
+            try {
+              await logAiUsage({ userId: user.id, tripId, functionName: 'trip-chat', model: state.model, usage: totalUsage })
+            } catch { /* usage logging must never mask the stream error */ }
+          }
           send(chatStreamErrorPayload(streamError))
           controller.close()
         }

@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useAuth } from '../../../hooks/useAuth'
 import { useLogActivity, type ActivityFeedEntry } from '../../../lib/queries/useActivityFeed'
 import type { Json } from '../../../types/database.types'
+import { formatMoneyExact } from '../../../lib/money/format'
 
 /**
  * Typed activity verbs (plan §14: activity_feed written by mutations).
@@ -52,6 +53,7 @@ export type ActivityVerb =
   | 'participant_joined'
   | 'milestone_materialized'
   | 'proposal_auto_applied'
+  | 'receipt_table_share_changed'
 
 export interface ActivityEntity {
   type: string
@@ -134,6 +136,8 @@ const VERB_TEMPLATES: Record<ActivityVerb, VerbTemplate> = {
   status_changed: { icon: '🚦', phrase: (e) => `moved the trip${e ? ` to "${e}"` : ' forward'}` },
   participant_joined: { icon: '🎉', phrase: (e) => `joined the trip${e ? ` as ${e}` : ''}` },
   milestone_materialized: { icon: '📌', phrase: (e) => `put${e ? ` "${e}"` : ' a date-based milestone'} on the plan` },
+  // Rendered by renderActivity (needs the row's metadata); this is only the fallback when the metadata is missing.
+  receipt_table_share_changed: { icon: '🧾', phrase: (e) => `share of a receipt item${e ? ` on ${e}` : ''} changed` },
   proposal_auto_applied: { icon: '⚡', phrase: (e) => `auto-applied${e ? ` "${e}"` : ' an AI suggestion'} from their own upload` },
 }
 
@@ -164,9 +168,26 @@ export function renderActivity(entry: ActivityFeedEntry, actorName: string, name
     const added = nameOf?.(entity.id)
     return { icon: '🎉', text: `${actorName} added ${added || 'someone'} to the trip`, actorName }
   }
+  // "Tim's share of Bread on Pizza night went up from £1.00 to £2.00 because someone wasn't there". The actor is whoever caused the
+  // change (or nobody for the daily job), so the sentence is about the person whose share moved, not the actor.
+  if (entry.verb === 'receipt_table_share_changed') {
+    const who = typeof meta?.user_id === 'string' ? nameOf?.(meta.user_id) : null
+    const line = typeof meta?.line === 'string' && meta.line ? meta.line : 'an item'
+    const from = typeof meta?.from === 'number' ? meta.from : null
+    const to = typeof meta?.to === 'number' ? meta.to : null
+    const cur = typeof meta?.currency === 'string' && meta.currency ? meta.currency : null
+    const owner = who ? `${who}'s share` : 'A share'
+    let change = 'changed'
+    if (from != null && to != null && cur) {
+      change = `${to > from ? 'went up' : 'went down'} from ${formatMoneyExact(from, cur)} to ${formatMoneyExact(to, cur)}`
+    }
+    const reason = to != null && from != null && to > from ? " because someone wasn't there" : ''
+    return { icon: '🧾', text: `${owner} of ${line}${label ? ` on ${label}` : ''} ${change}${reason}`, actorName }
+  }
   const template = VERB_TEMPLATES[entry.verb as ActivityVerb]
   if (!template) {
-    return { icon: '•', text: `${actorName} ${entry.verb.replace(/_/g, ' ')}`, actorName }
+    // A verb this version does not know (written by newer code): never show the raw name.
+    return { icon: '•', text: 'Something changed on the trip', actorName }
   }
   return { icon: template.icon, text: `${actorName} ${template.phrase(label)}`, actorName }
 }

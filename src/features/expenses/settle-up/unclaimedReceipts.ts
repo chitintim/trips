@@ -5,10 +5,7 @@
  * The server refuses to freeze while an itemised receipt has value left on a
  * line (hint `unclaimed_receipts`); the UI runs the check first (minus legacy
  * rounding dust, see isLineReallyUnclaimed) so it can open a dialog instead of
- * showing an error. Until the receipts migration is
- * applied the leftovers function does not exist: then nothing here blocks
- * (never block freezing on a feature that is not live yet) and the notice says
- * what to do by hand.
+ * showing an error.
  */
 import { formatMoneyMinor } from '../lib/formatMoney'
 import type { ReceiptClaimStatus } from '../lib/balances'
@@ -22,7 +19,6 @@ export const FREEZE_DIALOG_INTRO = "Whatever isn't claimed has to belong to some
 export const NOTICE_TITLE = 'Receipts with items nobody has claimed'
 export const NOTICE_MANAGER_LIVE = "Until they're shared, the payer is counted as owing that money. Ask people to claim, or share what's left before freezing."
 export const NOTICE_PAYER_LIVE = "Until it's shared, it's counted as yours."
-export const NOTICE_NOT_LIVE = 'Ask people to claim, or claim for them, before freezing.'
 export const CHOICE_EVERYONE = 'Share between everyone on the receipt'
 export const CHOICE_EVERYONE_RECOMMENDED = `${CHOICE_EVERYONE} (recommended)`
 export const CHOICE_PERSON = 'Assign to someone…'
@@ -52,8 +48,8 @@ export function receiptsForNotice<T extends Pick<ReceiptClaimStatus, 'paidBy'>>(
 export type FreezeGate = { kind: 'proceed' } | { kind: 'dialog'; receipts: ReceiptClaimStatus[] }
 
 /** Freeze proceeds only when nothing is left to place, or when the leftovers function is not live yet (fail soft). */
-export function freezeGate(receipts: ReceiptClaimStatus[], leftoversSupported: boolean): FreezeGate {
-  if (!leftoversSupported || receipts.length === 0) return { kind: 'proceed' }
+export function freezeGate(receipts: ReceiptClaimStatus[]): FreezeGate {
+  if (receipts.length === 0) return { kind: 'proceed' }
   return { kind: 'dialog', receipts }
 }
 

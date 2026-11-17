@@ -1,3 +1,4 @@
+import { execSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import process from 'node:process'
@@ -30,10 +31,39 @@ function rewriteBaseInStaticFiles() {
   }
 }
 
+// The build id the running app reports (X-Client-Info: trips-web/<id>, see src/lib/appVersion.ts) and
+// that dist/version.json carries so an open tab can tell a newer deploy exists. deploy.yml passes the
+// commit SHA as VITE_APP_BUILD; locally it falls back to the checked-out commit, then to 'dev'.
+function resolveBuildId(): string {
+  const fromEnv = (process.env.VITE_APP_BUILD || process.env.GITHUB_SHA || '').trim()
+  if (fromEnv) return fromEnv.slice(0, 12)
+  try {
+    return execSync('git rev-parse --short=12 HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || 'dev'
+  } catch {
+    return 'dev'
+  }
+}
+const buildId = resolveBuildId()
+const builtAt = new Date().toISOString()
+
+// Emits dist/version.json ({build, builtAt}). It is a plain static file: public/sw.js caches nothing and
+// ignores GET, so nothing stands between the app's no-store fetch and the host.
+function emitVersionJson() {
+  return {
+    name: 'emit-version-json',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'version.json', source: JSON.stringify({ build: buildId, builtAt }) + '\n' })
+    },
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), rewriteBaseInStaticFiles()],
+  plugins: [react(), rewriteBaseInStaticFiles(), emitVersionJson()],
   base,
+  define: {
+    __APP_BUILD__: JSON.stringify(buildId),
+  },
   build: {
     rollupOptions: {
       output: {

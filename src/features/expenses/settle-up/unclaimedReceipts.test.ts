@@ -35,14 +35,11 @@ describe('notice', () => {
 })
 
 describe('freezeGate', () => {
-  it('opens the dialog while receipts have unclaimed value and the leftovers function is live', () => {
-    expect(freezeGate([r('1', 'a', 100)], true)).toEqual({ kind: 'dialog', receipts: [r('1', 'a', 100)] })
+  it('opens the dialog while receipts have unclaimed value', () => {
+    expect(freezeGate([r('1', 'a', 100)])).toEqual({ kind: 'dialog', receipts: [r('1', 'a', 100)] })
   })
   it('proceeds when nothing is unclaimed', () => {
-    expect(freezeGate([], true)).toEqual({ kind: 'proceed' })
-  })
-  it('fails soft: proceeds when the leftovers function is not live yet', () => {
-    expect(freezeGate([r('1', 'a', 100)], false)).toEqual({ kind: 'proceed' })
+    expect(freezeGate([])).toEqual({ kind: 'proceed' })
   })
 })
 

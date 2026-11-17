@@ -73,6 +73,8 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_BASE: ${{ vars.VITE_BASE || '/trips/' }}
+          # The build id: sent as X-Client-Info (trips-web/<id>) and written to dist/version.json for the "new version" banner.
+          VITE_APP_BUILD: ${{ github.sha }}
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

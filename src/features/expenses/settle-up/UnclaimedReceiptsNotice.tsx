@@ -1,21 +1,19 @@
 import { Link } from 'react-router-dom'
 import { Card } from '../../../components/ui'
 import type { ReceiptClaimStatus } from '../lib/balances'
-import { NOTICE_MANAGER_LIVE, NOTICE_NOT_LIVE, NOTICE_PAYER_LIVE, NOTICE_TITLE, notClaimedLine } from './unclaimedReceipts'
+import { NOTICE_MANAGER_LIVE, NOTICE_PAYER_LIVE, NOTICE_TITLE, notClaimedLine } from './unclaimedReceipts'
 
 interface Props {
   receipts: ReceiptClaimStatus[]
   /** People who can manage the trip see the manager wording; a payer sees the payer's. */
   canManageTrip: boolean
-  /** The share/assign function exists on the server. Before the receipts migration it does not: only advice is shown. */
-  leftoversLive: boolean
   className?: string
 }
 
 /** Settle up: receipts with items nobody has claimed (managers see all, payers their own). Links to each claim page. */
-export function UnclaimedReceiptsNotice({ receipts, canManageTrip, leftoversLive, className }: Props) {
+export function UnclaimedReceiptsNotice({ receipts, canManageTrip, className }: Props) {
   if (receipts.length === 0) return null
-  const advice = !leftoversLive ? NOTICE_NOT_LIVE : canManageTrip ? NOTICE_MANAGER_LIVE : NOTICE_PAYER_LIVE
+  const advice = canManageTrip ? NOTICE_MANAGER_LIVE : NOTICE_PAYER_LIVE
   return (
     <Card variant="sunken" noPadding className={`p-3.5 space-y-1.5 ${className ?? ''}`} id="unclaimed-receipts">
       <p className="text-sm font-semibold text-[var(--text-primary)]">{NOTICE_TITLE}</p>

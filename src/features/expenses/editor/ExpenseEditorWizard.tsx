@@ -27,6 +27,7 @@ import { useSendToTable } from '../../../lib/queries/useReceiptTable'
 import { peopleToTellAfterReitemise, reitemiseNoticeLine, receiptColumnsOf, type SendOutcome } from '../claims/receiptTable'
 import { itemiseChoice, isFrozen, pickEditorScreen, startsDirty } from './expenseFormLogic'
 import { FROZEN_EXPENSES_MESSAGE } from '../quick-capture/addExpenseEntry'
+import { describeWriteError } from '../../../lib/writeRefusals'
 import { emptyWizardDraft, draftFromExpense, draftFromParsedReceipt, parsedLineCount, seedParticipantIds, participantSelectionChanged, withDefaultPayer, type ExpenseWizardDraft } from './wizardState'
 import { emptyItemizedDraft, fromReceiptParseResult, fromExpenseLineItems, itemizedWriteProblem, headerTextProblems, itemizedMissingHeader } from '../itemized/itemizedState'
 import { ItemizedEditorScreen, type ClearClaimsPreview, type ItemizedSaveParams } from '../itemized/ItemizedEditorScreen'
@@ -36,12 +37,8 @@ import type { ReceiptParseResult } from '../../../shared/contracts/receiptParseR
 import type { ParsedReceiptData } from '../../../lib/receiptParsing'
 import type { Trip } from '../../../types'
 
-/** A readable message from whatever was thrown (supabase errors are plain objects, not Errors). */
-function errorText(err: unknown): string | undefined {
-  if (err instanceof Error) return err.message || undefined
-  const m = (err as { message?: unknown } | null)?.message
-  return typeof m === 'string' && m ? m : undefined
-}
+/** A readable message from whatever was thrown (supabase errors are plain objects, not Errors); a frozen-trip refusal gets its plain wording. */
+const errorText = describeWriteError
 
 export interface ExpenseEditorWizardProps {
   isOpen: boolean
@@ -329,14 +326,9 @@ export function ExpenseEditorWizard({
     if (!editingExpense || !wasItemized) return null
     const expense = await buildItemizedWrite(params, draft.receiptPath)
     const preview = await previewReitemizeExpense({ expenseId: editingExpense.id, expense, lineItems: params.lineItems })
-    if (preview.supported) {
-      const o = preview.outcome
-      return o.clearedUserIds.length > 0 || o.reconfirmUserIds.length > 0
-        ? { userIds: o.clearedUserIds, reconfirmUserIds: o.reconfirmUserIds, claimCount: o.clearedClaims, leftoversCleared: o.leftoversCleared }
-        : null
-    }
-    // The database function is not there yet: every claim goes.
-    return preview.userIds.length > 0 ? { userIds: preview.userIds, claimCount: preview.claimCount, all: true } : null
+    return preview.clearedUserIds.length > 0 || preview.reconfirmUserIds.length > 0
+      ? { userIds: preview.clearedUserIds, reconfirmUserIds: preview.reconfirmUserIds, claimCount: preview.clearedClaims, leftoversCleared: preview.leftoversCleared }
+      : null
   }
 
   const handleItemizedSave = async (params: ItemizedSaveParams): Promise<boolean> => {

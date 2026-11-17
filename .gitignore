@@ -94,3 +94,6 @@ public/test-*.html
 # notes/
 backups/
 supabase/functions/**/deno.lock
+
+# Generated database test module
+supabase/tests/pglite/.generated/

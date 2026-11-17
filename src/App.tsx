@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthCallback } from './components/AuthCallback'
 import { InstallPrompt } from './components/InstallPrompt'
+import { NewVersionBanner } from './components/NewVersionBanner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { ToastProvider } from './components/ui'
 import { authRoutes } from './features/auth/routes'
@@ -19,6 +20,7 @@ function App() {
       <Router basename={import.meta.env.BASE_URL.replace(/\/$/, '') || '/'}>
         <AuthCallback />
         <InstallPrompt />
+        <NewVersionBanner />
         {/* Site-wide one-time announcement popup — app-shell level so it
             shows on the dashboard and trip pages alike (renders nothing
             when signed out or nothing is due). */}

@@ -7,6 +7,8 @@ import { useCreateBooking, useUpdateBooking, useCancelBookingFollowUps, useUnmar
 import { queryKeys } from '../../../lib/queries/queryKeys'
 import { useCreateExpense, type SplitRow } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
+import { describeWriteError, refreshAfterRefusal } from '../../../lib/writeRefusals'
+import { BOOKING_FROZEN_NOTE, BOOKING_FROZEN_NO_EXPENSE_NOTE, bookingExpenseBlockedMessage, cancelStepNeeded, newBookingWantsExpense } from '../lib/bookingFrozen'
 import { useSections } from '../../../lib/queries/usePlanning'
 import { inScopePeople } from '../../people/lib/inScopePeople'
 import { useAuth } from '../../../hooks/useAuth'
@@ -76,6 +78,12 @@ function fromBooking(booking: Booking | null, baseCurrency: string): BookingForm
   }
 }
 
+/** One fresh read of the trip's frozen flag (the sheet's own copy can be older than a freeze that just happened). A failed read counts as not frozen: the database refuses the write anyway. */
+async function tripFrozenNow(tripId: string): Promise<boolean> {
+  const { data } = await supabase.from('trips').select('settlement_snapshot').eq('id', tripId).maybeSingle()
+  return !!data?.settlement_snapshot
+}
+
 export interface BookingEditorSheetProps {
   isOpen: boolean
   onClose: () => void
@@ -99,6 +107,8 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
   const { showToast } = useToast()
   const tripId = trip.id
   const baseCurrency = trip.base_currency || 'GBP'
+  // Frozen balances: the database refuses every expense write, so "log expense" and "remove the linked expense" are not offered.
+  const isFrozen = !!trip.settlement_snapshot
 
   const queryClient = useQueryClient()
   const createBooking = useCreateBooking(tripId)
@@ -162,7 +172,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
   const amountNumber = values.amount ? parseFloat(values.amount) : null
   const canCreateExpense = amountNumber != null && !Number.isNaN(amountNumber) && amountNumber > 0
   const canCreateEvent = !!values.bookingDate
-  const canLogExpenseOnEdit = isEditing && !booking!.expense_id && canCreateExpense && values.status !== 'cancelled'
+  const canLogExpenseOnEdit = isEditing && !booking!.expense_id && canCreateExpense && !isFrozen && values.status !== 'cancelled'
   const cancelling = isEditing && values.status === 'cancelled' && booking!.status !== 'cancelled'
 
   /** Creates the expense for a booking: paid by you, split equally among everyone who is in. Returns its id. */
@@ -221,13 +231,28 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
       option_id: values.optionId || null,
     }
 
+    // Frozen balances: a save that needs an expense write stops before anything is written (a booking with no expense, or a cancelled
+    // booking whose expense is still counted, would be a half-finished save). The sheet already hides those options; this also catches a
+    // freeze that happened after the sheet opened, by asking the database once more.
+    const wantsExpense = isEditing ? logExpense && canLogExpenseOnEdit : newBookingWantsExpense({ createExpense: values.createExpense, canCreateExpense, frozen: isFrozen })
+    const removesExpense = !!followUps?.removeExpense
+    if (wantsExpense || removesExpense) {
+      const frozenNow = isFrozen || (await tripFrozenNow(tripId))
+      const blocked = bookingExpenseBlockedMessage({ frozen: frozenNow, wantsExpense, removesExpense })
+      if (blocked) {
+        showToast({ type: 'error', message: 'Nothing was saved', description: blocked })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.tripDetail(tripId) })
+        return
+      }
+    }
+
     // Cancelling a booking with linked records: ask first, never silently.
     if (
       isEditing &&
       !followUps &&
       values.status === 'cancelled' &&
       booking!.status !== 'cancelled' &&
-      (booking!.expense_id || booking!.timeline_event_id)
+      cancelStepNeeded(booking!, isFrozen)
     ) {
       setRemoveExpense(false)
       setRemoveEvent(false)
@@ -304,7 +329,7 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
 
         // ---- Linked creation: expense draft ----------------------------
         let expenseId: string | null = null
-        if (values.createExpense && canCreateExpense && amountNumber != null) {
+        if (newBookingWantsExpense({ createExpense: values.createExpense, canCreateExpense, frozen: isFrozen }) && amountNumber != null) {
           expenseId = await createLinkedExpense({
             description: bookingFields.title,
             amount: amountNumber,
@@ -343,7 +368,8 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
       clearDraft()
       onClose()
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not save booking', description: (err as Error).message })
+      refreshAfterRefusal(queryClient, tripId, err)
+      showToast({ type: 'error', message: 'Could not save booking', description: describeWriteError(err) })
     }
   }
 
@@ -460,6 +486,11 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
 
         <TextArea label="Notes" value={values.notes} onChange={(e) => updateField('notes', e.target.value)} rows={2} />
 
+        {isEditing && isFrozen && !booking!.expense_id && canCreateExpense && values.status !== 'cancelled' && (
+          <p className="rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3 text-xs text-[var(--text-muted)]" role="status">
+            {BOOKING_FROZEN_NOTE}
+          </p>
+        )}
         {canLogExpenseOnEdit && (
           <label className="flex cursor-pointer items-start gap-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3">
             <input type="checkbox" checked={logExpense} onChange={(e) => setLogExpense(e.target.checked)} className="mt-0.5 h-5 w-5 accent-accent-600" />
@@ -486,19 +517,25 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
                 {!canCreateEvent && <span className="block text-xs text-[var(--text-muted)]">Set a booking date to enable</span>}
               </span>
             </label>
-            <label className={`flex items-start gap-3 ${canCreateExpense ? 'cursor-pointer' : 'opacity-50'}`}>
-              <input
-                type="checkbox"
-                checked={values.createExpense && canCreateExpense}
-                disabled={!canCreateExpense}
-                onChange={(e) => updateField('createExpense', e.target.checked)}
-                className="mt-0.5 w-5 h-5 accent-accent-600"
-              />
-              <span className="text-sm text-[var(--text-primary)]">
-                Expense, paid by you, split equally among everyone who's in (editable later)
-                {!canCreateExpense && <span className="block text-xs text-[var(--text-muted)]">Enter an amount to enable</span>}
-              </span>
-            </label>
+            {isFrozen ? (
+              <p className="text-xs text-[var(--text-muted)]" role="status">
+                {BOOKING_FROZEN_NO_EXPENSE_NOTE}
+              </p>
+            ) : (
+              <label className={`flex items-start gap-3 ${canCreateExpense ? 'cursor-pointer' : 'opacity-50'}`}>
+                <input
+                  type="checkbox"
+                  checked={values.createExpense && canCreateExpense}
+                  disabled={!canCreateExpense}
+                  onChange={(e) => updateField('createExpense', e.target.checked)}
+                  className="mt-0.5 w-5 h-5 accent-accent-600"
+                />
+                <span className="text-sm text-[var(--text-primary)]">
+                  Expense, paid by you, split equally among everyone who's in (editable later)
+                  {!canCreateExpense && <span className="block text-xs text-[var(--text-muted)]">Enter an amount to enable</span>}
+                </span>
+              </label>
+            )}
           </div>
         )}
 
@@ -529,7 +566,12 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
           <p className="text-sm text-[var(--text-secondary)]">
             This booking has linked records. Nothing is removed unless you tick it.
           </p>
-          {booking?.expense_id && (
+          {booking?.expense_id && isFrozen && (
+            <p className="text-xs text-[var(--text-muted)]" role="status">
+              The linked expense stays: {BOOKING_FROZEN_NOTE}
+            </p>
+          )}
+          {booking?.expense_id && !isFrozen && (
             <label className="flex items-start gap-3 cursor-pointer">
               <input type="checkbox" checked={removeExpense} onChange={(e) => setRemoveExpense(e.target.checked)} className="mt-0.5 w-5 h-5 accent-accent-600" />
               <span className="text-sm text-[var(--text-primary)]">

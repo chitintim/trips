@@ -1559,3 +1559,80 @@ SELECT e.id, e.description FROM public.expenses e WHERE e.claims_closed_at IS NO
 
 -- 22o. PostgREST sees the new columns, table and functions (the migration ends with NOTIFY pgrst, 'reload schema').
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================================
+-- 23. Migration 20261128090000_freeze_enforcement.sql (a frozen trip is enforced by the database). Run AFTER 20261126090000 (live). All read-only.
+-- =====================================================================================
+
+-- 23a. Names are free. Safe: zero rows from every statement.
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('_trip_frozen_for_write', '_expense_frozen_for_write', 'guard_frozen_expense', 'guard_frozen_expense_child', 'guard_trip_settlement_columns');
+SELECT tgname, tgrelid::regclass FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('trg_guard_frozen_expense', 'trg_guard_frozen_split', 'trg_guard_frozen_line', 'trg_guard_frozen_claim_delete', 'trg_guard_trip_settlement_columns');
+
+-- 23b. The function the new claim-DELETE guard sits beside is exactly the shipped phase-1 text (the migration does not change it). Safe: matches_shipped = true (md5 57312c8bff6c4ee090181819a3889626, length 2413).
+SELECT md5(prosrc) AS md5, length(prosrc) AS len, md5(prosrc) = '57312c8bff6c4ee090181819a3889626' AS matches_shipped FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'guard_claim_overclaim';
+
+-- 23c. The trigger lists the new triggers join. Safe BEFORE: expenses = set_updated_at, trg_guard_expense_claim_state, trg_guard_expense_leftover_mode, trigger_guard_immutable_keys;
+--      expense_splits = trigger_guard_immutable_keys only; expense_line_items = trg_guard_line_items_closed; expense_item_claims = trg_clear_done_on_claim_change, trg_guard_claim_closed,
+--      trg_guard_claim_overclaim, trg_guard_claim_provenance, trigger_auto_update_expense_status; trips = set_updated_at, trg_reset_action_reminders_on_trip_start_change, trigger_guard_immutable_keys.
+--      Trigger names fire alphabetically: the new trg_guard_frozen_expense runs after set_updated_at and the other trg_guard_expense_* triggers (so the claim-state columns are already restored
+--      to OLD when it compares) and before trigger_guard_immutable_keys.
+SELECT tgrelid::regclass AS tbl, tgname, tgenabled FROM pg_trigger WHERE NOT tgisinternal
+  AND tgrelid IN ('public.expenses'::regclass, 'public.expense_splits'::regclass, 'public.expense_line_items'::regclass, 'public.expense_item_claims'::regclass, 'public.trips'::regclass) ORDER BY 1, 2;
+
+-- 23d. Policies the migration relies on. Safe: expense_claim_responses has exactly the four phase-2 policies (the three write ones are dropped); the trips and expense write policies are recorded
+--      so a later change is noticed. Record the list.
+SELECT tablename, policyname, cmd FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('expense_claim_responses', 'expenses', 'expense_splits', 'expense_line_items', 'trips') ORDER BY 1, 3, 2;
+
+-- 23e. Frozen trips today (the migration changes what clients may write there). Informational: Sailing Sicily, the TEST trip.
+SELECT t.id, t.name, t.settlement_snapshot_at FROM public.trips t WHERE t.settlement_snapshot IS NOT NULL ORDER BY 2;
+
+-- 23f. The expenses columns that are NOT cosmetic stay refused; the whitelist columns must exist (a missing name would simply never match). Safe: all 13 present except any that were never added.
+SELECT c.column_name FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'expenses'
+  AND c.column_name IN ('description', 'category', 'vendor_name', 'location', 'receipt_url', 'receipt_date', 'payment_date', 'place_id', 'option_id', 'booking_id', 'ai_parsed_data', 'parsing_error', 'updated_at') ORDER BY 1;
+-- Every OTHER expenses column (these are refused while frozen): record them.
+SELECT c.column_name FROM information_schema.columns c WHERE c.table_schema = 'public' AND c.table_name = 'expenses'
+  AND c.column_name NOT IN ('description', 'category', 'vendor_name', 'location', 'receipt_url', 'receipt_date', 'payment_date', 'place_id', 'option_id', 'booking_id', 'ai_parsed_data', 'parsing_error', 'updated_at') ORDER BY 1;
+
+-- 23g. The client at HEAD never writes expense_claim_responses directly (src has only a SELECT of it); old clients never wrote it. Nothing to query: confirm with
+--      `git grep -n "expense_claim_responses" -- src` (only .select).
+-- 23h. Does any SECURITY INVOKER function WRITE the guarded tables (it would run as the client and meet the new guards)? EXACT expected list (pglite, 2026-11-17): ONE row,
+--      _receipt_strip_leftovers(uuid): it is revoked from every client role and only called from definer RPCs. ANY other row on live: read its body before applying.
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND NOT p.prosecdef
+  AND p.prosrc ~* '(insert[[:space:]]+into|update|delete[[:space:]]+from)[[:space:]]+(public\.)?(expenses|expense_splits|expense_line_items|expense_item_claims)([^a-z_]|$)' ORDER BY 1;
+-- 23i. pg_has_role / long transactions (as 22s / 22g). Safe: no long transaction touching trips / expenses.
+SELECT pid, now() - xact_start AS open_for, left(query, 100) AS query FROM pg_stat_activity
+WHERE state <> 'idle' AND xact_start < now() - interval '30 seconds' AND pid <> pg_backend_pid() AND query ILIKE ANY (ARRAY['%expenses%', '%trips%']);
+-- 23j. POST-APPLY. Safe: the 5 new triggers on the 5 tables; the response policies = 1 (SELECT); anon / authenticated EXECUTE: _trip_frozen_for_write f / t, the guard functions f / f.
+SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec, p.prosecdef
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('_trip_frozen_for_write', '_expense_frozen_for_write', 'guard_frozen_expense', 'guard_frozen_expense_child', 'guard_trip_settlement_columns') ORDER BY 1;
+SELECT count(*) AS response_policies FROM pg_policies WHERE tablename = 'expense_claim_responses';   -- 1
+SELECT has_table_privilege('authenticated', 'public.expense_claim_responses', 'INSERT') AS can_insert;   -- false
+
+-- =====================================================================================
+-- 24. Migration 20261128100000_own_claims_rpc.sql (set_my_receipt_claims, the direct-write counter, table-share activity). Run AFTER 23 / M1. All read-only.
+-- =====================================================================================
+
+-- 24a. Names are free. Safe: zero rows.
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('set_my_receipt_claims', '_log_client_direct_write', 'count_client_direct_write');
+SELECT to_regclass('public.client_direct_writes') AS counter_table;   -- NULL
+SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('trg_count_direct_claims', 'trg_count_direct_lines', 'trg_count_direct_splits');
+
+-- 24b. The ONE existing function M2 replaces is exactly the phase-2 text, and the functions it calls are unchanged. RECORD the md5s for the deploy log; POST-APPLY _receipt_resplit_table_items
+--      becomes md5 5214a384cd672de9ccbab97ac034fbc2 (length 3644). Safe: matches_shipped = true for all.
+SELECT p.proname, md5(p.prosrc) AS md5, length(p.prosrc) AS len,
+       md5(p.prosrc) = CASE p.proname WHEN '_receipt_resplit_table_items' THEN 'ede35228aa5739454e3051eeaa24412e' WHEN '_receipt_begin' THEN '1e73f23e07e7a4e219f026ac0add8565' END AS matches_shipped
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('_receipt_resplit_table_items', '_receipt_begin') ORDER BY 1;
+
+-- 24c. The request header the counter reads. In the SQL editor this is NULL (no API request): expected. The counter fails open, so a missing header only logs build NULL.
+SELECT current_setting('request.headers', true) AS request_headers_in_editor;
+-- 24d. Columns / constraints set_my_receipt_claims writes (as the existing RPCs): quantity_claimed / amount_owed numeric(10,2), UNIQUE (line_item_id, user_id), CHECK quantity_claimed > 0.
+SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.expense_item_claims'::regclass AND contype IN ('u', 'c') ORDER BY 1;
+-- 24e. POST-APPLY. Safe: the counter table exists with RLS on and no client access; set_my_receipt_claims executable by authenticated only; 3 statement triggers.
+SELECT c.relname, c.relrowsecurity AS rls, has_table_privilege('authenticated', c.oid, 'SELECT') AS authenticated_select FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname = 'client_direct_writes';
+SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('set_my_receipt_claims', '_log_client_direct_write', 'count_client_direct_write') ORDER BY 1;
+-- 24f. THE READOUT (after the new front end is out): who still writes claims directly, by build.
+SELECT build, tbl, op, count(*) AS statements, max(at) AS last_seen FROM public.client_direct_writes WHERE at > now() - interval '7 days' GROUP BY 1, 2, 3 ORDER BY 4 DESC;
+-- 24g. Table-share activity so far (POST-APPLY). Informational.
+SELECT created_at, metadata ->> 'line' AS line, metadata ->> 'from' AS from_amount, metadata ->> 'to' AS to_amount FROM public.activity_feed WHERE verb = 'receipt_table_share_changed' ORDER BY created_at DESC LIMIT 20;
+NOTIFY pgrst, 'reload schema';

@@ -12,7 +12,9 @@
  *   ingest          CLAUDE_MODEL_INGEST          default claude-sonnet-5-5, effort low
  *   nudge-draft     CLAUDE_MODEL_NUDGE_DRAFT     default claude-haiku-5-5,  effort low (text only)
  *   reorganize-plan CLAUDE_MODEL_REORGANIZE_PLAN default claude-sonnet-5-5, effort medium (streamed)
- *   trip-chat       (pinned, no override)        claude-sonnet-5, unchanged until its streaming fixes land
+ *   trip-chat       TRIP_CHAT_MODEL              default claude-sonnet-5-5, effort low (streamed). Roll back with
+ *                   `supabase secrets set TRIP_CHAT_MODEL=claude-sonnet-5` (no code deploy; trip-chat then skips the
+ *                   mid-conversation system message, which Sonnet 5 does not support)
  *
  * Request rules (claude-api skill): never send temperature/top_p/top_k, no
  * assistant prefill, no `thinking: {type:'disabled'}` (400 on Sonnet 5.5),
@@ -44,10 +46,10 @@ export function resolveModel(envValue: string | undefined | null, fallback: stri
   return /^claude-[a-z0-9][a-z0-9.-]*$/.test(v) ? v : fallback
 }
 
-function envModel(name: string, fallback: string): string {
+export function envModel(name: string, fallback: string, read: (name: string) => string | undefined = (n) => Deno.env.get(n)): string {
   let raw: string | undefined
   try {
-    raw = Deno.env.get(name)
+    raw = read(name)
   } catch {
     raw = undefined // no env permission (unit tests) -> default
   }
@@ -61,10 +63,17 @@ export const MODEL_PARSE_RECEIPT = envModel('CLAUDE_MODEL_PARSE_RECEIPT', DEFAUL
 export const MODEL_INGEST = envModel('CLAUDE_MODEL_INGEST', DEFAULT_MODEL_EXTRACT)
 export const MODEL_NUDGE_DRAFT = envModel('CLAUDE_MODEL_NUDGE_DRAFT', DEFAULT_MODEL_FAST)
 export const MODEL_REORGANIZE_PLAN = envModel('CLAUDE_MODEL_REORGANIZE_PLAN', DEFAULT_MODEL_EXTRACT)
-/** trip-chat stays on Sonnet 5 on purpose (see header). Pinned, no env override. */
-export const MODEL_TRIP_CHAT = 'claude-sonnet-5'
-/** @deprecated Only trip-chat still imports this; it is MODEL_TRIP_CHAT. New code uses a per-call constant. */
-export const CLAUDE_MODEL = MODEL_TRIP_CHAT
+export const DEFAULT_MODEL_TRIP_CHAT = 'claude-sonnet-5-5'
+export const MODEL_TRIP_CHAT = envModel('TRIP_CHAT_MODEL', DEFAULT_MODEL_TRIP_CHAT)
+
+/**
+ * Mid-conversation `role: "system"` messages: supported on Sonnet 5.5, Haiku 5.5,
+ * Opus 4.8 / 5 / 5.5, Fable and Mythos; NOT on Sonnet 5 (400). trip-chat uses
+ * this to decide whether it may send its last-turn instruction that way.
+ */
+export function supportsMidConversationSystem(model: string): boolean {
+  return /^claude-(sonnet-5-[5-9]|haiku-5-[5-9]|opus-5(-\d+)?|opus-4-8|fable-.+|mythos-.+)$/.test(model)
+}
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const ANTHROPIC_VERSION = '2023-06-01'
@@ -74,10 +83,14 @@ export type AnthropicContentBlock =
   | { type: 'image'; source: { type: 'base64'; media_type: string; data: string }; cache_control?: { type: 'ephemeral' } }
   | { type: 'document'; source: { type: 'base64'; media_type: 'application/pdf'; data: string }; cache_control?: { type: 'ephemeral' } }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
+  // Thinking blocks must be replayed to the API exactly as received (signature included).
+  | { type: 'thinking'; thinking: string; signature?: string }
+  | { type: 'redacted_thinking'; data: string }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
 
 export interface AnthropicMessage {
-  role: 'user' | 'assistant'
+  // 'system' = a mid-conversation operator message (Sonnet 5.5 and later only).
+  role: 'user' | 'assistant' | 'system'
   content: string | AnthropicContentBlock[]
 }
 
@@ -475,6 +488,8 @@ export async function createMessageStream(opts: AnthropicRequestOptions): Promis
  */
 export interface StreamAccumulation {
   text: string
+  /** Every content block in stream order (thinking, redacted_thinking, text, tool_use, ...), ready to replay. */
+  content: AnthropicContentBlock[]
   toolUses: Array<{ id: string; name: string; input: unknown }>
   usage: AnthropicUsage
   stop_reason: string | null
@@ -512,6 +527,8 @@ export async function consumeAnthropicStream(
   // Track in-progress tool_use blocks by content index, accumulating their
   // streamed partial_json until content_block_stop.
   const pendingToolUse = new Map<number, { id: string; name: string; jsonBuf: string }>()
+  // All blocks by stream index, kept in order so a tool-loop turn can be replayed unchanged.
+  const blocks = new Map<number, Record<string, unknown>>()
 
   while (true) {
     const { done, value } = await reader.read()
@@ -544,6 +561,12 @@ export async function consumeAnthropicStream(
           }
           break
         case 'content_block_start':
+          if (event.content_block && typeof event.index === 'number') {
+            const b = { ...event.content_block } as Record<string, unknown>
+            if (b.type === 'text' && typeof b.text !== 'string') b.text = ''
+            if (b.type === 'thinking' && typeof b.thinking !== 'string') b.thinking = ''
+            blocks.set(event.index, b)
+          }
           if (event.content_block?.type === 'tool_use') {
             pendingToolUse.set(event.index, {
               id: event.content_block.id,
@@ -553,6 +576,14 @@ export async function consumeAnthropicStream(
           }
           break
         case 'content_block_delta':
+          {
+            const b = blocks.get(event.index)
+            if (b) {
+              if (event.delta?.type === 'text_delta' && typeof event.delta.text === 'string') b.text = String(b.text ?? '') + event.delta.text
+              else if (event.delta?.type === 'thinking_delta' && typeof event.delta.thinking === 'string') b.thinking = String(b.thinking ?? '') + event.delta.thinking
+              else if (event.delta?.type === 'signature_delta' && typeof event.delta.signature === 'string') b.signature = String(b.signature ?? '') + event.delta.signature
+            }
+          }
           if (event.delta?.type === 'text_delta' && event.delta.text) {
             text += event.delta.text
             onTextDelta?.(event.delta.text)
@@ -571,6 +602,8 @@ export async function consumeAnthropicStream(
               console.error('[anthropic] failed to parse tool_use input JSON (length', pending.jsonBuf.length, ')')
             }
             toolUses.push({ id: pending.id, name: pending.name, input })
+            const tb = blocks.get(event.index)
+            if (tb) tb.input = input
             pendingToolUse.delete(event.index)
           }
           break
@@ -588,28 +621,9 @@ export async function consumeAnthropicStream(
     }
   }
 
-  return { text, toolUses, usage, stop_reason, model }
+  const content = [...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, b]) => b as unknown as AnthropicContentBlock)
+  return { text, content, toolUses, usage, stop_reason, model }
 }
 
 /** Cost estimate in USD for one call's usage on `model` (per-model price table in pricing.ts). */
 export const estimateCostUsd = estimateCostUsdForModel
-
-/**
- * Pads a static prefix with an invisible-to-behavior filler comment so it
- * clears the prompt-cache minimum cacheable prefix. NOT used by the 5.5-generation
- * calls any more (minimum is 512 tokens on Sonnet 5.5 / Haiku 5.5; their real prompts
- * clear it or simply do not cache). Kept only for trip-chat, which stays on
- * Sonnet 5 (1024-token minimum; the 2048 default is generous). Only pad if the real
- * content is likely under the minimum -- check token count if precision
- * matters; this is a cheap heuristic (approx 4 chars/token).
- */
-export function padForCaching(staticPrefix: string, minTokens = 2048): string {
-  const approxTokens = Math.ceil(staticPrefix.length / 4)
-  if (approxTokens >= minTokens) return staticPrefix
-  const paddingTokensNeeded = minTokens - approxTokens + 32 // small safety margin
-  const filler =
-    '\n\n<!-- cache-padding: this section intentionally verbose to satisfy the prompt-cache minimum ' +
-    'prefix length; it is not part of the operative instructions above. -->\n' +
-    '<!-- padding-filler '.repeat(Math.ceil(paddingTokensNeeded / 4)) + '-->'
-  return staticPrefix + filler
-}

@@ -24,6 +24,7 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from 'jsr:@supabase/supabase-js@2'
+import { selectFxCandidates, tripOf } from './candidates.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -174,27 +175,22 @@ Deno.serve(async (req) => {
     // with a rate + past-or-today payment_date and filter in code.
     const { data: withRates, error: fetchError } = await supabaseAdmin
       .from('expenses')
-      .select('id, trip_id, amount, currency, payment_date, fx_rate_date, rate_source, trips!inner(base_currency)')
+      .select('id, trip_id, amount, currency, payment_date, fx_rate_date, rate_source, trips!inner(base_currency, settlement_snapshot)')
       .not('fx_rate', 'is', null)
       .not('fx_rate_date', 'is', null)
       .lte('payment_date', todayStr) // future-dated expenses wait until their date arrives
     if (fetchError) throw fetchError
 
-    const candidates = (withRates ?? []).filter(
-      (e) =>
-        e.rate_source !== 'manual' && // never clobber a user-overridden rate (plan §11)
-        e.fx_rate_date &&
-        e.fx_rate_date < e.payment_date
-    )
+    // Frozen trips (settlement_snapshot set) are skipped so frozen balances never move.
+    const { candidates, skippedFrozen } = selectFxCandidates(withRates ?? [])
 
-    console.log(`[refresh-fx-rates] ${candidates.length} expenses need a payment-date rate refresh`)
+    console.log(`[refresh-fx-rates] ${candidates.length} expenses need a payment-date rate refresh (${skippedFrozen} skipped: frozen trip)`)
 
     let expensesUpdated = 0
     const rateCache = new Map<string, RateResult | null>() // key: `${from}:${to}:${date}`
 
     for (const exp of candidates) {
-      // deno-lint-ignore no-explicit-any
-      const baseCurrency = ((exp as any).trips?.base_currency as string | undefined) ?? 'GBP'
+      const baseCurrency = tripOf(exp)?.base_currency ?? 'GBP'
       if (exp.currency === baseCurrency) continue
 
       const cacheKey = `${exp.currency}:${baseCurrency}:${exp.payment_date}`
@@ -276,6 +272,7 @@ Deno.serve(async (req) => {
       ratesCached,
       expensesUpdated,
       candidatesScanned: candidates.length,
+      skippedFrozen,
     }
 
     console.log('[refresh-fx-rates] Done:', result)

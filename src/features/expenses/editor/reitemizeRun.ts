@@ -1,20 +1,15 @@
 /**
  * Re-itemising an expense (or turning a plain one into an itemised receipt).
  *
- * Primary path: the database function `reitemize_expense(p_expense_id,
- * p_header, p_lines, p_preview)`. It runs in one transaction under the right
- * permissions, keeps claims on items that did not change and tells us whose
- * claims it cleared. With p_preview = true it writes nothing and answers the
- * same question, which drives the Save-time warning.
+ * The database function `reitemize_expense(p_expense_id, p_header, p_lines,
+ * p_preview)` does the work: one transaction under the right permissions, it
+ * keeps claims on items that did not change and tells us whose claims it
+ * cleared. With p_preview = true it writes nothing and answers the same
+ * question, which drives the Save-time warning.
  *
- * Fallback, only when the function does not exist yet ("could not find the
- * function"): the old delete-and-reinsert, in the safer order (new lines first,
- * then the old ones, then the header) and clearing EVERY claim, which the
- * editor warns about with a count and names before it gets here.
- *
- * The functions take `db` / `rpc` so they can be unit-tested without a network.
+ * The functions take `rpc` so they can be unit-tested without a network.
  */
-import { isMissingRpc, type RpcError } from '../../../lib/queries/useExpenses'
+import type { RpcError } from '../../../lib/queries/useExpenses'
 import { itemizedWriteProblem, type ItemizedSaveLine } from '../itemized/itemizedState'
 
 // ---------------------------------------------------------------------------
@@ -31,6 +26,7 @@ const MESSAGES: Record<string, string> = {
   bad_header: 'The currency changed, so enter the exchange rate for it before saving.',
   bad_input: "One of the amounts is too large or isn't a valid number. Check the prices.",
   not_found: "This receipt can't be found any more.",
+  reload: 'This copy of the app is out of date. Reload the page, then try again.',
 }
 const GENERIC = "We couldn't save the changes to this receipt. Try again."
 
@@ -112,10 +108,6 @@ export function parseReitemizeResult(data: unknown): ReitemizeOutcome {
 
 export type RpcFn = (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: RpcError | null }>
 
-// A loose view of the supabase client: only the chains used below.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type Db = { from: (table: string) => any }
-
 export interface ReitemizeArgs {
   expenseId: string
   /** The whole itemised header payload (amount = sum of the lines, status 'unallocated', ...). */
@@ -123,7 +115,7 @@ export interface ReitemizeArgs {
   lineItems: ItemizedSaveLine[]
 }
 
-/** Refuses, with a plain message, a write the database would reject (zero total, over-long text), on the function path and the fallback alike. */
+/** Refuses, with a plain message, a write the database would reject (zero total, over-long text). */
 function assertWritable(args: ReitemizeArgs): void {
   const problem = itemizedWriteProblem(args.expense as { description?: string; vendor_name?: string | null; amount?: number }, args.lineItems)
   if (problem) throw new ReitemizeError(problem)
@@ -133,12 +125,8 @@ function assertWritable(args: ReitemizeArgs): void {
 // Preview (Save time)
 // ---------------------------------------------------------------------------
 
-export type ReitemizePreview =
-  | { supported: true; outcome: ReitemizeOutcome }
-  | { supported: false; claimCount: number; userIds: string[] }
-
-/** Asks what a save would clear, without writing. Before the function exists, reports ALL current claims. */
-export async function previewReitemize(db: Db, rpc: RpcFn, args: ReitemizeArgs): Promise<ReitemizePreview> {
+/** Asks what a save would clear, without writing. */
+export async function previewReitemize(rpc: RpcFn, args: ReitemizeArgs): Promise<ReitemizeOutcome> {
   assertWritable(args)
   const { data, error } = await rpc('reitemize_expense', {
     p_expense_id: args.expenseId,
@@ -146,12 +134,8 @@ export async function previewReitemize(db: Db, rpc: RpcFn, args: ReitemizeArgs):
     p_lines: toRpcLines(args.lineItems),
     p_preview: true,
   })
-  if (!error) return { supported: true, outcome: parseReitemizeResult(data) }
-  if (!isMissingRpc(error)) throw toReitemizeError(error)
-  const { data: claims, error: claimsError } = await db.from('expense_item_claims').select('user_id').eq('expense_id', args.expenseId)
-  if (claimsError) throw new ReitemizeError(GENERIC)
-  const rows = (claims ?? []) as Array<{ user_id: string }>
-  return { supported: false, claimCount: rows.length, userIds: [...new Set(rows.map((r) => r.user_id))] }
+  if (error) throw toReitemizeError(error)
+  return parseReitemizeResult(data)
 }
 
 // ---------------------------------------------------------------------------
@@ -162,13 +146,12 @@ export interface ReitemizeSaveResult {
   clearedClaims: number
   clearedUserIds: string[]
   reconfirmUserIds: string[]
-  /** true = no allocation link exists yet; the caller creates one (false on the fallback path, which looks the link up itself). */
+  /** true = no allocation link exists yet; the caller creates one. */
   needsLink: boolean
   leftoversCleared: boolean
-  usedFallback: boolean
 }
 
-export async function runReitemize(db: Db, rpc: RpcFn, args: ReitemizeArgs): Promise<ReitemizeSaveResult> {
+export async function runReitemize(rpc: RpcFn, args: ReitemizeArgs): Promise<ReitemizeSaveResult> {
   assertWritable(args)
   const { data, error } = await rpc('reitemize_expense', {
     p_expense_id: args.expenseId,
@@ -176,84 +159,7 @@ export async function runReitemize(db: Db, rpc: RpcFn, args: ReitemizeArgs): Pro
     p_lines: toRpcLines(args.lineItems),
     p_preview: false,
   })
-  if (!error) {
-    const o = parseReitemizeResult(data)
-    return { clearedClaims: o.clearedClaims, clearedUserIds: o.clearedUserIds, reconfirmUserIds: o.reconfirmUserIds, needsLink: o.needsLink, leftoversCleared: o.leftoversCleared, usedFallback: false }
-  }
-  if (!isMissingRpc(error)) throw toReitemizeError(error)
-  return { ...(await fallbackReitemize(db, args)), usedFallback: true }
-}
-
-/** Line numbers for the new rows: after the highest current one, so they cannot collide with rows that are about to go. */
-export function fallbackLineNumbers(currentNumbers: number[], count: number): number[] {
-  const start = currentNumbers.length > 0 ? Math.max(...currentNumbers) : 0
-  return Array.from({ length: count }, (_, i) => start + i + 1)
-}
-
-async function fallbackReitemize(db: Db, args: ReitemizeArgs): Promise<Omit<ReitemizeSaveResult, 'usedFallback'>> {
-  const { expenseId, expense, lineItems } = args
-
-  const { data: current, error: currentError } = await db.from('expense_line_items').select('id, line_number').eq('expense_id', expenseId)
-  if (currentError) throw new ReitemizeError(GENERIC)
-  const oldLines = (current ?? []) as Array<{ id: string; line_number: number }>
-  const numbers = fallbackLineNumbers(oldLines.map((l) => l.line_number), lineItems.length)
-
-  // 1. New lines first: if this fails, nothing has been lost.
-  const rows = lineItems.map((l, i) => ({
-    expense_id: expenseId,
-    line_number: numbers[i],
-    name_original: l.name_original,
-    name_english: l.name_english,
-    quantity: l.quantity,
-    unit_price: l.unit_price,
-    subtotal: l.subtotal,
-    tax_amount: l.tax_amount,
-    service_amount: l.service_amount,
-    line_discount_amount: l.line_discount_amount,
-    total_amount: l.total_amount,
-  }))
-  const { data: inserted, error: insertError } = await db.from('expense_line_items').insert(rows).select('id')
-  if (insertError) throw new ReitemizeError(GENERIC)
-  const newIds = ((inserted ?? []) as Array<{ id: string }>).map((r) => r.id)
-  const undoInsert = async () => {
-    if (newIds.length > 0) await db.from('expense_line_items').delete().in('id', newIds)
-  }
-
-  try {
-    // 2. Every claim goes (they all sit on the old lines), then the old lines.
-    let clearedUserIds: string[] = []
-    let clearedClaims = 0
-    if (oldLines.length > 0) {
-      const { data: gone, error: claimsError } = await db.from('expense_item_claims').delete().eq('expense_id', expenseId).select('user_id')
-      if (claimsError) throw new ReitemizeError(GENERIC)
-      const goneRows = (gone ?? []) as Array<{ user_id: string }>
-      clearedClaims = goneRows.length
-      clearedUserIds = [...new Set(goneRows.map((r) => r.user_id))]
-
-      const oldIds = oldLines.map((l) => l.id)
-      const { data: removed, error: removeError } = await db.from('expense_line_items').delete().in('id', oldIds).select('id')
-      if (removeError) throw new ReitemizeError(GENERIC)
-      if (((removed ?? []) as unknown[]).length < oldIds.length) {
-        // Not allowed to remove them (not the payer or an admin): put things back as they were.
-        await undoInsert()
-        throw new ReitemizeError(MESSAGES.forbidden, 'forbidden')
-      }
-    }
-
-    // 3. Header last, so the total only changes once the lines are right.
-    const { data: updated, error: updateError } = await db.from('expenses').update(expense).eq('id', expenseId).select('id')
-    if (updateError || !updated || (updated as unknown[]).length === 0) {
-      if (oldLines.length === 0) await undoInsert() // plain expense: leave it plain
-      throw new ReitemizeError(updateError ? GENERIC : MESSAGES.forbidden, updateError ? null : 'forbidden')
-    }
-
-    // Itemised expenses own their split through lines and claims, not expense_splits.
-    const { error: splitsError } = await db.from('expense_splits').delete().eq('expense_id', expenseId)
-    if (splitsError) throw new ReitemizeError(GENERIC)
-
-    return { clearedClaims, clearedUserIds, reconfirmUserIds: [], needsLink: false, leftoversCleared: false }
-  } catch (err) {
-    if (err instanceof ReitemizeError) throw err
-    throw new ReitemizeError(GENERIC)
-  }
+  if (error) throw toReitemizeError(error)
+  const o = parseReitemizeResult(data)
+  return { clearedClaims: o.clearedClaims, clearedUserIds: o.clearedUserIds, reconfirmUserIds: o.reconfirmUserIds, needsLink: o.needsLink, leftoversCleared: o.leftoversCleared }
 }

@@ -3,9 +3,8 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Card, Button, Badge, Spinner, EmptyState, Modal, SegmentedControl, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
-import { useReceiptRpcSupport, useSaveItemClaims, useSetReceiptClaims, useShareLeftovers } from '../../../lib/queries/useExpenses'
+import { useSaveItemClaims, useSetReceiptClaims, useShareLeftovers } from '../../../lib/queries/useExpenses'
 import { useClaimResponses } from '../../../lib/queries/useClaimResponses'
-import { useReceiptTableRpcSupport } from '../../../lib/queries/useReceiptTable'
 import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { toMinorUnits } from '../../../lib/money'
@@ -13,7 +12,7 @@ import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
 import { claimLeftoverAmount, claimOwnAmount, claimOwnQuantity, hasOwnClaim } from '../lib/balances'
 import { useClaimLink, useClaimRealtime } from './useClaimData'
 import { summarizeLineClaims, summarizeOverallProgress, maxClaimableQuantity, claimAmount, isStepperClaim, shareLineMinor, unclaimedMinor, hasDirectUnitClaims, sharePickProblem, lockedSharePeople, lineIsEqualSplit, selfTogglePick, REPLACES_OWN_ENTRIES_WARNING } from './claimMath'
-import { describeClaimError } from './claimErrors'
+import { describeClaimError, describeOwnClaimError } from './claimErrors'
 import { leftoverFollowUp, everythingSharedOut } from './leftoverReshare'
 import type { ClaimRow, LineRow } from './claimMath'
 import { describeMyShare, formatClaimQuantity } from './claimFractions'
@@ -52,8 +51,6 @@ export function ClaimPage() {
   const { data: trip } = useTrip(resolution?.tripId)
   const { canManageTrip } = useTripPermissions(trip)
   const isFrozen = !!trip?.settlement_snapshot
-  const rpc = useReceiptRpcSupport()
-  const tableRpc = useReceiptTableRpcSupport()
   const responses = useClaimResponses(resolution?.tripId)
   const saveClaims = useSaveItemClaims()
   const setClaims = useSetReceiptClaims()
@@ -115,6 +112,12 @@ export function ClaimPage() {
     setLocalSelections((cur) => resyncSelections(cur, prev, savedSelections))
   }, [savedSelections])
 
+  // Balances froze (here, or found out after a refused save): nothing can be saved any more, so the taps go back to what the server holds.
+  // Otherwise the page would look unsaved forever and keep asking before it lets you leave.
+  useEffect(() => {
+    if (isFrozen) setLocalSelections(savedSelections)
+  }, [isFrozen, savedSelections])
+
   const changedLineIds = useMemo(() => {
     const keys = new Set([...Object.keys(localSelections), ...Object.keys(savedSelections)])
     return [...keys].filter((key) => (localSelections[key] ?? 0) !== (savedSelections[key] ?? 0))
@@ -163,8 +166,8 @@ export function ClaimPage() {
   const currency = expense.currency
   const isPayer = user?.id === expense.paid_by
   const canRecord = isPayer || canManageTrip
-  const canWho = canRecord && rpc.setClaims
-  const canLeftovers = canRecord && rpc.leftovers
+  const canWho = canRecord
+  const canLeftovers = canRecord
   // The one shared "who is on this receipt" rule (RSVP switch and "I wasn't there" replies included).
   const people = peopleOnReceipt(expense, participants, claims, {
     confirmationEnabled: trip?.confirmation_enabled === true,
@@ -174,13 +177,13 @@ export function ClaimPage() {
   const isTagged = !!user && people.some((p) => p.id === user.id)
   // Payer and managers have full power (they pick anyone). A tagged person can only toggle THEMSELVES on an item
   // ("I had some of this too" / "Not mine"), within the server's rules (sharePickProblem).
-  const canSharePick = (canRecord || isTagged) && rpc.setClaims
+  const canSharePick = canRecord || isTagged
   const activeView: View = view === 'who' && !canWho ? 'mine' : view === 'overview' && !canRecord ? 'mine' : view
   const overallProgress = summarizeOverallProgress(lineItems, claims)
   const unclaimed = unclaimedMinor(lineItems, claims, currency)
   const payerName = isPayer ? 'You' : labelOfUser(expense.paid_by, people, participants)
-  // Receipts phase 2: reply buttons and the deadline line. Absent (all false) until the migration is applied; then this page is what it was.
-  const tableSupport = receiptTableSupport({ expense, responsesAvailable: responses.available, rpc: tableRpc })
+  // Receipts phase 2: reply buttons and the deadline line.
+  const tableSupport = receiptTableSupport({ expense, responsesAvailable: responses.available })
   // Frozen balances lock the page. So does a CLOSED receipt (leftovers shared): its claims are final for everyone, the payer included, until
   // the payer reopens it. A fully claimed receipt otherwise stays open so a person can still fix their own claim.
   const isClosed = tableSupport.phase === 'closed'
@@ -231,23 +234,28 @@ export function ClaimPage() {
     try {
       // Only the lines that changed are replaced, so shared and leftover rows
       // on other lines are never touched.
-      await saveClaims.mutateAsync({ expenseId: expense.id, userId: user.id, claims: toSave, lineItemIds: changedLineIds })
+      const saved = await saveClaims.mutateAsync({ expenseId: expense.id, userId: user.id, claims: toSave, lineItemIds: changedLineIds })
       showToast({ type: 'success', message: 'Your claims are saved' })
-      void afterOwnChange()
+      // set_my_receipt_claims already rebuilds the leftovers on the server; only the old direct-write fallback needs the follow-up.
+      if (!saved.viaRpc) void afterOwnChange()
     } catch (err) {
-      showToast({ type: 'error', message: 'Failed to save your claims', description: describeClaimError(err, '')||undefined })
+      showToast({ type: 'error', message: 'Failed to save your claims', description: describeOwnClaimError(err) })
     }
   }
 
-  const removeFixedShare = async (lineId: string) => {
-    if (!user) return
-    try {
-      await saveClaims.mutateAsync({ expenseId: expense.id, userId: user.id, claims: [], lineItemIds: [lineId] })
-      showToast({ type: 'success', message: 'Taken off your items' })
-      void afterOwnChange()
-    } catch (err) {
-      showToast({ type: 'error', message: "Couldn't take that off", description: describeClaimError(err, '')||undefined })
+  /**
+   * "Not mine" on a shared item. Everyone, the payer and managers included, goes through the shared-line function (a shared or fractional
+   * share is not a whole-unit claim, so the own-claims function refuses it). Where taking me off would also re-split other people's amounts
+   * (an item shared by everyone, or others holding unequal parts) the payer / manager gets the share picker instead of a silent re-split.
+   */
+  const takeMeOff = (li: LineRow) => {
+    const rows = claimsByLine.get(li.id) ?? []
+    const others = [...new Set(rows.filter(hasOwnClaim).map((c) => c.user_id))].filter((id) => id !== user?.id)
+    if (canRecord && (li.shared_by_all || (others.length > 0 && !lineIsEqualSplit(li, rows, currency)))) {
+      openSharePicker(li)
+      return
     }
+    void toggleSelf(li, false)
   }
 
   /** An ordinary tagged person: put myself on a line someone else holds, or take myself off it. One call, nobody else is touched. */
@@ -256,7 +264,8 @@ export function ClaimPage() {
     const rows = claimsByLine.get(li.id) ?? []
     const existing = [...new Set(rows.filter(hasOwnClaim).map((c) => c.user_id))]
     const pick = selfTogglePick(existing, user.id, on)
-    const problem = sharePickProblem({
+    // The payer and managers may take themselves off anything (takeMeOff sends the cases that would re-split others to the picker).
+    const problem = canRecord ? null : sharePickProblem({
       fullPower: false,
       me: user.id,
       pick,
@@ -559,7 +568,7 @@ export function ClaimPage() {
                             )}
                             <button
                               type="button"
-                              onClick={() => (canRecord || !rpc.setClaims ? removeFixedShare(li.id) : toggleSelf(li, false))}
+                              onClick={() => takeMeOff(li)}
                               className="min-h-11 px-3 text-sm font-medium text-accent-700 dark:text-accent-400"
                             >
                               Not mine

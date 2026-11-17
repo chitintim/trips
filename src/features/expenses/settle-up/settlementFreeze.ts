@@ -10,8 +10,6 @@ import { withinDuplicateWindow } from './settleUpLogic'
  * and mirrors the server's duplicate proof so the UI can predict it.
  */
 
-export type SettlementRpcName = 'freeze_settlements' | 'unfreeze_settlements' | 'remove_duplicate_settlement'
-
 export interface FreezeSuggestionPayload {
   from: string
   to: string
@@ -24,27 +22,6 @@ export function buildFreezeSuggestions(transactions: Transaction[], baseCurrency
   return transactions
     .filter((t) => t.amount > 0 && t.from !== t.to)
     .map((t) => ({ from: t.from, to: t.to, amount: t.amount, currency: baseCurrency }))
-}
-
-/**
- * True when the RPC is not deployed yet (migration not applied): PostgREST
- * PGRST202 (not in schema cache), Postgres 42883 (undefined function), or a
- * message naming the function. Any OTHER error is real and must be shown, not
- * papered over by the client-side fallback.
- */
-export function isSettlementRpcMissing(err: unknown, fn: SettlementRpcName): boolean {
-  if (!err || typeof err !== 'object') return false
-  const { code, message } = err as { code?: unknown; message?: unknown }
-  if (code === 'PGRST202' || code === '42883') return true
-  const text = typeof message === 'string' ? message.toLowerCase() : ''
-  return text.includes(fn) && /(could not find|does not exist|schema cache|not found)/.test(text)
-}
-
-export type FreezePath = 'rpc' | 'client'
-
-/** Which path a freeze/unfreeze/remove takes after an RPC attempt: fall back only when the function is missing. */
-export function pathAfterRpcError(err: unknown, fn: SettlementRpcName): FreezePath | 'fail' {
-  return isSettlementRpcMissing(err, fn) ? 'client' : 'fail'
 }
 
 function sameMoney(a: Settlement, b: Settlement, baseCurrency: string): boolean {

@@ -5,17 +5,7 @@ import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { toRpcError } from './useDecide'
 import { invokePaymentNotice, notifyPaymentEventAndRefresh, shouldNotifyPaymentEvent } from './notifyPaymentEvent'
-import { findFreezeBlockingReceipts } from '../../features/expenses/lib/balances'
-import type { ExpenseWithDetails } from './useExpenses'
-import { unresolvedDuplicateGroups } from '../../features/expenses/settle-up/settleUpLogic'
-import {
-  isSettlementRpcMissing,
-  canRemoveAsDuplicate,
-  paymentsChangedSince,
-  FREEZE_BLOCKED_BY_DUPLICATES,
-  PAYMENTS_CHANGED_MESSAGE,
-  type FreezeSuggestionPayload,
-} from '../../features/expenses/settle-up/settlementFreeze'
+import type { FreezeSuggestionPayload } from '../../features/expenses/settle-up/settlementFreeze'
 
 export type Settlement = Tables<'settlements'>
 export type SettlementCarryover = Tables<'settlement_carryovers'>
@@ -169,9 +159,8 @@ export function useCreateSettlementCarryover(tripId: string) {
 
 // ---------------------------------------------------------------------------
 // Atomic freeze / unfreeze / duplicate removal (RPCs from
-// 20261118100000_settlement_freeze.sql). Each falls back to the previous
-// client-side sequence while the migration is not applied, so the front end
-// can ship in either order.
+// 20261118100000_settlement_freeze.sql). Live since 20261118: no client-side
+// fallback (the database refuses direct writes to the snapshot columns).
 // ---------------------------------------------------------------------------
 
 function invalidateSettlementState(queryClient: ReturnType<typeof useQueryClient>, tripId: string) {
@@ -184,92 +173,17 @@ function invalidateSettlementState(queryClient: ReturnType<typeof useQueryClient
   queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) })
 }
 
-async function logActivityRow(tripId: string, actor: string, verb: string, metadata?: Record<string, Json>) {
-  // Best effort: an audit-row failure must not turn a completed freeze into an error.
-  await supabase.from('activity_feed').insert({ trip_id: tripId, actor, verb, entity: { trip_id: tripId }, metadata: metadata ?? null })
-}
-
 export interface FreezeSettlementsVars {
-  userId: string
   snapshot: unknown
   suggestions: FreezeSuggestionPayload[]
   /** Ids of the non-suggested, non-confirmed rows the suggestions were computed from (see knownPaidIds). */
   knownPaidIds: string[]
-  /** The trip's base currency (used by the fallback's duplicate check). */
-  baseCurrency: string
 }
 
 export interface FreezeSettlementsResult {
-  source: 'rpc' | 'fallback'
   inserted: number
   deletedSuggested: number
   skippedDuplicates: number
-}
-
-/**
- * The server's freeze guard does not exist on this path, so run the same check
- * here against fresh rows: itemised receipts with real unclaimed items (legacy
- * rounding dust excluded, see isLineReallyUnclaimed) stop the freeze. The error
- * carries the server's hint so the Settle up screen treats both alike.
- */
-async function assertNoUnclaimedReceipts(tripId: string, baseCurrency: string): Promise<void> {
-  const { data, error } = await supabase
-    .from('expenses')
-    .select('*, line_items:expense_line_items(*), claims:expense_item_claims(*)')
-    .eq('trip_id', tripId)
-    .eq('ai_parsed', true)
-  if (error) throw toRpcError(error, 'Could not check the receipts before freezing')
-  const blocking = findFreezeBlockingReceipts((data ?? []) as unknown as ExpenseWithDetails[], baseCurrency)
-  if (blocking.length === 0) return
-  const err = new Error(`${blocking.length === 1 ? '1 receipt still has' : `${blocking.length} receipts still have`} unclaimed items. Ask people to claim them, or claim for them, then freeze.`)
-  ;(err as Error & { hint?: string }).hint = 'unclaimed_receipts'
-  throw err
-}
-
-/** The pre-migration sequence: three separate client writes. Not atomic -- only used when the RPC is missing. */
-async function freezeClientSide(tripId: string, { userId, snapshot, suggestions, knownPaidIds, baseCurrency }: FreezeSettlementsVars): Promise<FreezeSettlementsResult> {
-  // The database only lets people who can manage the trip create payment rows, and only with a
-  // finite amount above zero; refuse a bad suggestion before changing anything.
-  if (suggestions.some(t => !Number.isFinite(t.amount) || t.amount <= 0)) throw new Error('A payment must have an amount above zero')
-  // Same guards as the RPC, checked against fresh rows (not atomic, but the best the old path can do).
-  const fresh = await fetchSettlements(tripId)
-  if (unresolvedDuplicateGroups(fresh, baseCurrency).length > 0) throw new Error(FREEZE_BLOCKED_BY_DUPLICATES)
-  if (paymentsChangedSince(fresh, knownPaidIds)) throw new Error(PAYMENTS_CHANGED_MESSAGE)
-  await assertNoUnclaimedReceipts(tripId, baseCurrency)
-  const { data: trip, error: tripError } = await supabase
-    .from('trips')
-    .update({ settlement_snapshot: snapshot as Json, settlement_snapshot_at: new Date().toISOString(), settlement_snapshot_by: userId })
-    .eq('id', tripId)
-    .select('id')
-    .maybeSingle()
-  if (tripError) throw toRpcError(tripError)
-  if (!trip) throw new Error("Couldn't update this trip's settlement state — you may not have permission.")
-
-  const transactionCount = Array.isArray((snapshot as { transactions?: unknown[] } | null)?.transactions)
-    ? ((snapshot as { transactions: unknown[] }).transactions.length)
-    : suggestions.length
-  await logActivityRow(tripId, userId, 'froze_settlement', { transaction_count: transactionCount })
-
-  // Only 'suggested' rows are cleared; marked_paid / confirmed are payment history.
-  const { data: deleted, error: delError } = await supabase.from('settlements').delete().eq('trip_id', tripId).eq('status', 'suggested').select('id')
-  if (delError) throw toRpcError(delError, 'Could not clear the old suggested payments')
-
-  let inserted = 0
-  for (const t of suggestions) {
-    const { error } = await supabase.from('settlements').insert({
-      trip_id: tripId,
-      from_user_id: t.from,
-      to_user_id: t.to,
-      amount: t.amount,
-      currency: t.currency,
-      status: 'suggested',
-      created_by: userId,
-      settled_at: new Date().toISOString(),
-    })
-    if (error) throw toRpcError(error)
-    inserted++
-  }
-  return { source: 'fallback', inserted, deletedSuggested: deleted?.length ?? 0, skippedDuplicates: 0 }
 }
 
 /** Freeze the balances and (re)create the suggested payments in ONE transaction. */
@@ -283,63 +197,33 @@ export function useFreezeSettlements(tripId: string) {
         p_suggestions: vars.suggestions as unknown as Json,
         p_known_paid_ids: vars.knownPaidIds,
       })
-      if (error) {
-        if (isSettlementRpcMissing(error, 'freeze_settlements')) return freezeClientSide(tripId, vars)
-        throw toRpcError(error, 'Could not freeze the balances')
-      }
+      if (error) throw toRpcError(error, 'Could not freeze the balances')
       const r = (data ?? {}) as { inserted?: number; deleted_suggested?: number; skipped_duplicates?: number }
-      return { source: 'rpc', inserted: r.inserted ?? 0, deletedSuggested: r.deleted_suggested ?? 0, skippedDuplicates: r.skipped_duplicates ?? 0 }
+      return { inserted: r.inserted ?? 0, deletedSuggested: r.deleted_suggested ?? 0, skippedDuplicates: r.skipped_duplicates ?? 0 }
     },
     onSettled: () => invalidateSettlementState(queryClient, tripId),
   })
 }
 
-/** Clear the frozen snapshot (atomic with its audit row); falls back to the direct trips update. */
+/** Clear the frozen snapshot (atomic with its audit row). */
 export function useUnfreezeSettlements(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ userId }: { userId: string }): Promise<{ source: 'rpc' | 'fallback' }> => {
+    mutationFn: async (): Promise<void> => {
       const { error } = await supabase.rpc('unfreeze_settlements', { p_trip_id: tripId })
-      if (!error) return { source: 'rpc' }
-      if (!isSettlementRpcMissing(error, 'unfreeze_settlements')) throw toRpcError(error, 'Could not unfreeze the balances')
-      const { data, error: updError } = await supabase
-        .from('trips')
-        .update({ settlement_snapshot: null, settlement_snapshot_at: new Date().toISOString(), settlement_snapshot_by: userId })
-        .eq('id', tripId)
-        .select('id')
-        .maybeSingle()
-      if (updError) throw toRpcError(updError)
-      if (!data) throw new Error("Couldn't update this trip's settlement state — you may not have permission.")
-      await logActivityRow(tripId, userId, 'unfroze_settlement')
-      return { source: 'fallback' }
+      if (error) throw toRpcError(error, 'Could not unfreeze the balances')
     },
     onSettled: () => invalidateSettlementState(queryClient, tripId),
   })
 }
 
-/**
- * Remove ONE payment that is provably a duplicate (see remove_duplicate_settlement).
- * Before the migration is applied it falls back to a direct delete, which RLS
- * limits to admins / the creator within 24h; the duplicate proof is then
- * re-checked here against fresh data.
- */
-export function useRemoveDuplicateSettlement(tripId: string, baseCurrency: string) {
+/** Remove ONE payment that is provably a duplicate (the database re-checks the proof: see remove_duplicate_settlement). */
+export function useRemoveDuplicateSettlement(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (settlementId: string): Promise<{ source: 'rpc' | 'fallback' }> => {
+    mutationFn: async (settlementId: string): Promise<void> => {
       const { error } = await supabase.rpc('remove_duplicate_settlement', { p_settlement_id: settlementId })
-      if (!error) return { source: 'rpc' }
-      if (!isSettlementRpcMissing(error, 'remove_duplicate_settlement')) throw toRpcError(error, 'Could not remove the duplicate')
-
-      const fresh = await fetchSettlements(tripId)
-      const target = fresh.find((s) => s.id === settlementId)
-      if (!target) throw new Error('This payment no longer exists')
-      if (target.status === 'confirmed') throw new Error('A confirmed payment cannot be removed this way')
-      if (!canRemoveAsDuplicate(target, fresh, baseCurrency)) throw new Error('This payment has no duplicate')
-      const { data, error: delError } = await supabase.from('settlements').delete().eq('id', settlementId).select('id')
-      if (delError) throw toRpcError(delError)
-      if (!data || data.length === 0) throw new Error("Could not remove this payment — it may already be gone, or you don't have permission.")
-      return { source: 'fallback' }
+      if (error) throw toRpcError(error, 'Could not remove the duplicate')
     },
     onSettled: () => invalidateSettlementState(queryClient, tripId),
   })

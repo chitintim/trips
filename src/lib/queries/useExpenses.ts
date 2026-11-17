@@ -7,6 +7,7 @@ import { queryKeys } from './queryKeys'
 import { assertRowsAffected } from './assertRowsAffected'
 import { toMinorUnits } from '../money'
 import { allLinesClaimedWithinDust } from '../../features/expenses/lib/balances'
+import { refreshAfterRefusal } from '../writeRefusals'
 
 export type ExpenseLineItem = Tables<'expense_line_items'>
 export type ExpenseItemClaim = Tables<'expense_item_claims'>
@@ -159,6 +160,7 @@ export function useCreateExpense(tripId: string) {
       return expenseData
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+    onError: (err) => refreshAfterRefusal(queryClient, tripId, err),
   })
 }
 
@@ -220,6 +222,7 @@ export function useUpdateExpense(tripId: string) {
       }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+    onError: (err) => refreshAfterRefusal(queryClient, tripId, err),
   })
 }
 
@@ -233,6 +236,7 @@ export function useDeleteExpense(tripId: string) {
       assertRowsAffected(data, "You don't have permission to delete this expense, or it no longer exists.")
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+    onError: (err) => refreshAfterRefusal(queryClient, tripId, err),
   })
 }
 
@@ -289,93 +293,12 @@ export function useCreateItemizedExpense(tripId: string) {
       return expenseData
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+    onError: (err) => refreshAfterRefusal(queryClient, tripId, err),
   })
 }
 
 /**
- * Convert an EXISTING expense to (or re-edit an already-itemized expense's)
- * itemized split: UPDATEs the expense row in place -- never inserts a new
- * one (that was the bug: the itemized save path always called
- * useCreateItemizedExpense's INSERT regardless of edit mode, so editing an
- * expense and switching it to itemized silently created a duplicate
- * expense instead of converting the one being edited). Also used to
- * re-save an already-itemized expense's line items (e.g. editing a
- * previously-parsed receipt again) -- in that case any existing claims are
- * deleted first, since they reference line_item_id rows that are about to
- * be replaced (the caller is expected to have warned the user via the
- * split-step's claims guard before reaching this point; this is the
- * defensive backstop, not the primary UX).
- */
-export function useConvertToItemizedExpense(tripId: string) {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: async ({
-      expenseId,
-      expense,
-      lineItems,
-      allocationCode,
-      createdBy,
-    }: {
-      expenseId: string
-      expense: ExpenseUpdate
-      lineItems: Omit<TablesInsert<'expense_line_items'>, 'expense_id'>[]
-      allocationCode: string
-      createdBy: string
-    }) => {
-      const { data: updateRows, error: updateError } = await supabase
-        .from('expenses')
-        .update(expense)
-        .eq('id', expenseId)
-        .select('id')
-      if (updateError) throw updateError
-      assertRowsAffected(updateRows, "You don't have permission to edit this expense, or it no longer exists.")
-
-      // Itemized expenses own their split via line items + claims, not
-      // expense_splits -- clear any rows left from a prior equal/custom/
-      // percentage/shares split (no-op if there were none).
-      const { error: delSplitsError } = await supabase.from('expense_splits').delete().eq('expense_id', expenseId)
-      if (delSplitsError) throw delSplitsError
-
-      const { error: delClaimsError } = await supabase.from('expense_item_claims').delete().eq('expense_id', expenseId)
-      if (delClaimsError) throw delClaimsError
-
-      const { error: delLineItemsError } = await supabase.from('expense_line_items').delete().eq('expense_id', expenseId)
-      if (delLineItemsError) throw delLineItemsError
-
-      if (lineItems.length > 0) {
-        const rows: TablesInsert<'expense_line_items'>[] = lineItems.map((item) => ({ expense_id: expenseId, ...item }))
-        const { error: lineItemsError } = await supabase.from('expense_line_items').insert(rows)
-        if (lineItemsError) throw lineItemsError
-      }
-
-      // Reuse the existing allocation link/share-code if one's already
-      // out there (re-edit case) rather than minting a second one.
-      const { data: existingLink, error: linkFetchError } = await supabase
-        .from('expense_allocation_links')
-        .select('*')
-        .eq('expense_id', expenseId)
-        .maybeSingle()
-      if (linkFetchError) throw linkFetchError
-
-      if (!existingLink) {
-        const { error: linkError } = await supabase.from('expense_allocation_links').insert({
-          expense_id: expenseId,
-          trip_id: tripId,
-          code: allocationCode,
-          expires_at: null,
-          created_by: createdBy,
-        })
-        if (linkError) throw linkError
-      }
-
-      return { id: expenseId, code: existingLink?.code ?? allocationCode }
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
-  })
-}
-
-/**
- * Reverse of the above: convert an itemized expense BACK to a regular
+ * Convert an itemized expense BACK to a regular
  * equal/custom/percentage/shares split. Refuses (throws, so the caller's
  * toast surfaces it) if any items have already been claimed -- silently
  * discarding people's claims would be a correctness bug. The UI is
@@ -425,13 +348,14 @@ export function useConvertFromItemizedExpense(tripId: string) {
       }
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+    onError: (err) => refreshAfterRefusal(queryClient, tripId, err),
   })
 }
 
 // ---------------------------------------------------------------------------
-// Receipt claims v2: RPC helpers. The functions below are added by the
-// receipt-claims migration; the front end may ship before it is applied, so
-// every caller probes once (useReceiptRpcSupport) and fails soft.
+// Receipt claims v2: RPC helpers. set_receipt_claims and share_receipt_leftovers
+// are live (20261124090000): called directly, no probe. The own-claims function
+// (set_my_receipt_claims) is new and still fails soft until its migration is applied.
 // ---------------------------------------------------------------------------
 
 export interface RpcError {
@@ -452,42 +376,9 @@ export function isMissingRpc(error: RpcError | null): boolean {
   return error.code === 'PGRST202' || error.code === '42883' || error.code === '404' || /could not find the function|does not exist/i.test(msg)
 }
 
-function isNetworkError(error: RpcError | null): boolean {
-  return !!error && !error.code && /failed to fetch|network|load failed/i.test(error.message || '')
-}
-
-const NIL_UUID = '00000000-0000-0000-0000-000000000000'
-
-export interface ReceiptRpcSupport {
-  /** `set_receipt_claims` exists: "Who had what", shared claims. */
-  setClaims: boolean
-  /** `share_receipt_leftovers` exists: the leftovers sheet. */
-  leftovers: boolean
-}
-
-/**
- * Probes ONCE per session whether the receipt-claims functions exist, by
- * calling each with a nil expense id (it is refused with a normal error when
- * the function exists, and with "could not find the function" when it does
- * not). While the answer is unknown (loading, offline) both read as false, so
- * the new actions stay hidden and today's own-claim behaviour keeps working.
- */
-export function useReceiptRpcSupport(): ReceiptRpcSupport {
-  const { data } = useQuery({
-    queryKey: ['receiptRpcSupport'] as const,
-    staleTime: Infinity,
-    gcTime: Infinity,
-    retry: 1,
-    queryFn: async (): Promise<ReceiptRpcSupport> => {
-      const [a, b] = await Promise.all([
-        callRpc('set_receipt_claims', { p_expense_id: NIL_UUID, p_claims: [] }),
-        callRpc('share_receipt_leftovers', { p_expense_id: NIL_UUID, p_mode: 'everyone', p_user_id: null, p_preview: true }),
-      ])
-      if (isNetworkError(a.error) || isNetworkError(b.error)) throw new Error('Could not check receipt claim support')
-      return { setClaims: !isMissingRpc(a.error), leftovers: !isMissingRpc(b.error) }
-    },
-  })
-  return data ?? { setClaims: false, leftovers: false }
+/** A thrown Error that carries the database's `hint` and `code` (the screens map the hint to a plain message). */
+export function rpcError(error: RpcError): Error & { hint?: string; code?: string } {
+  return Object.assign(new Error(error.message), { hint: error.hint, code: error.code })
 }
 
 function invalidateReceiptQueries(queryClient: ReturnType<typeof useQueryClient>, expenseId: string) {
@@ -502,6 +393,14 @@ function invalidateReceiptQueries(queryClient: ReturnType<typeof useQueryClient>
     predicate: (q) =>
       q.queryKey[0] === 'trip' && (q.queryKey[2] === 'expenses' || q.queryKey[2] === 'settlements' || q.queryKey[2] === 'actions'),
   })
+}
+
+/** Runs after a claim write succeeds OR is refused: a refusal (frozen, closed, out of date) must show the true state, not the attempt. */
+function refreshAfterClaimWrite(queryClient: ReturnType<typeof useQueryClient>, expenseId: string, err: unknown) {
+  invalidateReceiptQueries(queryClient, expenseId)
+  if (err) {
+    void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'trip' && q.queryKey[2] === 'detail' })
+  }
 }
 
 /** One line's new owners. user_ids = that line shared equally between those people ([] clears it). */
@@ -520,10 +419,10 @@ export function useSetReceiptClaims() {
   return useMutation({
     mutationFn: async ({ expenseId, claims }: { expenseId: string; claims: ReceiptClaimEntry[] }) => {
       const { data, error } = await callRpc('set_receipt_claims', { p_expense_id: expenseId, p_claims: claims })
-      if (error) throw Object.assign(new Error(error.message), { hint: (error as { hint?: string }).hint, code: (error as { code?: string }).code })
+      if (error) throw rpcError(error)
       return data
     },
-    onSuccess: (_d, vars) => invalidateReceiptQueries(queryClient, vars.expenseId),
+    onSettled: (_d, err, vars) => refreshAfterClaimWrite(queryClient, vars.expenseId, err),
   })
 }
 
@@ -579,14 +478,14 @@ export interface ShareLeftoversArgs {
 }
 
 /** Preview of who would get what (writes nothing). */
-export async function previewLeftovers({ expenseId, mode, userId, currency = 'GBP' }: ShareLeftoversArgs): Promise<LeftoversResult> {
+async function previewLeftovers({ expenseId, mode, userId, currency = 'GBP' }: ShareLeftoversArgs): Promise<LeftoversResult> {
   const { data, error } = await callRpc('share_receipt_leftovers', {
     p_expense_id: expenseId,
     p_mode: mode,
     p_user_id: userId ?? null,
     p_preview: true,
   })
-  if (error) throw new Error(error.message)
+  if (error) throw rpcError(error)
   return normalizeLeftovers(data, currency)
 }
 
@@ -618,79 +517,103 @@ export function useShareLeftovers() {
         p_user_id: userId ?? null,
         p_preview: false,
       })
-      if (error) throw new Error(error.message)
+      if (error) throw rpcError(error)
       return normalizeLeftovers(data, currency)
     },
-    onSuccess: (_d, vars) => invalidateReceiptQueries(queryClient, vars.expenseId),
+    onSettled: (_d, err, vars) => refreshAfterClaimWrite(queryClient, vars.expenseId, err),
   })
 }
 
+/** One line of `set_my_receipt_claims`: the caller's own whole-unit quantity on that line (0 takes them off it). */
+export interface OwnClaimLine {
+  line_item_id: string
+  quantity: number
+}
+
 /**
- * Save a person's OWN item claims (whole-unit steppers) on the claim page.
- * When `lineItemIds` is given only those lines are replaced -- the person's
- * shared / leftover rows on other lines are left alone. Without it, every
- * claim they have on the expense is replaced (the old behaviour). Then
- * recomputes + persists the expense's allocation status.
+ * The lines to send to `set_my_receipt_claims`: every line the person touched (`lineItemIds`) with the quantity they now hold there
+ * (0 = take them off). The server works out what it costs; the client sends quantities only.
+ */
+export function buildOwnClaimLines(
+  claims: ReadonlyArray<{ line_item_id: string; quantity_claimed: number }>,
+  lineItemIds: ReadonlyArray<string>
+): OwnClaimLine[] {
+  const qty = new Map<string, number>()
+  for (const c of claims) qty.set(c.line_item_id, (qty.get(c.line_item_id) ?? 0) + c.quantity_claimed)
+  return [...new Set([...lineItemIds, ...qty.keys()])].map((id) => ({ line_item_id: id, quantity: qty.get(id) ?? 0 }))
+}
+
+/**
+ * `set_my_receipt_claims` is new: until its migration is applied the call answers "could not find the function". That answer is
+ * remembered for the session so later saves go straight to the old direct path (no failed round trip each time).
+ */
+let ownClaimsRpcMissing = false
+/** Test hook. */
+export function resetOwnClaimsRpcCache() {
+  ownClaimsRpcMissing = false
+}
+
+type SaveItemClaimsVars = {
+  expenseId: string
+  userId: string
+  claims: Array<Pick<TablesInsert<'expense_item_claims'>, 'line_item_id' | 'quantity_claimed' | 'amount_owed'>>
+  /** The lines being replaced (shared and leftover rows on other lines are left alone). */
+  lineItemIds: string[]
+}
+
+/** The old path, kept only for the rollout window before `set_my_receipt_claims` is live: client-computed amounts, direct writes. */
+async function saveItemClaimsDirect({ expenseId, userId, claims, lineItemIds }: SaveItemClaimsVars) {
+  if (lineItemIds.length === 0 && claims.length === 0) return { allClaims: [], status: undefined }
+  const { error: delError } = await supabase.from('expense_item_claims').delete().eq('expense_id', expenseId).eq('user_id', userId).in('line_item_id', lineItemIds)
+  if (delError) throw delError
+
+  if (claims.length > 0) {
+    const rows: TablesInsert<'expense_item_claims'>[] = claims.map((c) => ({ expense_id: expenseId, user_id: userId, ...c }))
+    const { error: insError } = await supabase.from('expense_item_claims').insert(rows)
+    if (insError) throw insError
+  }
+
+  const { data: allClaims, error: fetchErr } = await supabase.from('expense_item_claims').select('quantity_claimed, line_item_id').eq('expense_id', expenseId)
+  if (fetchErr) throw fetchErr
+
+  // The stored status uses the SAME dust-tolerant rule as the claims everywhere else (0.33 x 3 of a line is claimed). The database
+  // trigger / check_all_items_claimed compare quantities exactly, so asking them would flip a legacy-thirds receipt back to pending.
+  const { data: lines, error: linesErr } = await supabase.from('expense_line_items').select('id, quantity, total_amount').eq('expense_id', expenseId)
+  if (linesErr) throw linesErr
+  const newStatus = (allClaims ?? []).length === 0 ? 'unallocated' : allLinesClaimedWithinDust(lines ?? [], allClaims ?? []) ? 'allocated' : 'pending_allocation'
+
+  const { data: statusRows, error: statusError } = await supabase.from('expenses').update({ status: newStatus }).eq('id', expenseId).select('id')
+  if (statusError) throw statusError
+  assertRowsAffected(statusRows, "You don't have permission to edit this expense, or it no longer exists.")
+  return { allClaims, status: newStatus }
+}
+
+/**
+ * Save a person's OWN whole-unit claims (the steppers on the claim page). Only the lines in `lineItemIds` are replaced.
  *
- * The receipt-claims RPC is for the payer / managers recording who had what
- * for others, and replaces a whole line with an equal share between people, so
- * it cannot express "2 of the 3 beers". A person's own whole-unit claims keep
- * this direct path (allowed by the claims policy for your own rows).
+ * Primary path: `set_my_receipt_claims(p_expense_id, p_lines)`. The database computes what each unit costs, keeps any leftover part on
+ * the row, takes the locks and applies the frozen / closed / overclaim rules, then refreshes the receipt status. A refusal comes back
+ * as `hint` (frozen, claims_closed, ...) and nothing is changed.
+ *
+ * Fallback, only while that function does not exist yet: the previous direct writes with client-computed amounts. Remove it once the
+ * migration is applied.
+ *
+ * Whether the save works or is refused, the claim page, expenses, balances and to-dos are refetched so the screen shows the true state.
  */
 export function useSaveItemClaims() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({
-      expenseId,
-      userId,
-      claims,
-      lineItemIds,
-    }: {
-      expenseId: string
-      userId: string
-      claims: Array<Pick<TablesInsert<'expense_item_claims'>, 'line_item_id' | 'quantity_claimed' | 'amount_owed'>>
-      lineItemIds?: string[]
-    }) => {
-      let del = supabase.from('expense_item_claims').delete().eq('expense_id', expenseId).eq('user_id', userId)
-      if (lineItemIds) {
-        if (lineItemIds.length === 0 && claims.length === 0) return { allClaims: [], status: undefined }
-        del = del.in('line_item_id', lineItemIds)
+    mutationFn: async (vars: SaveItemClaimsVars) => {
+      if (!ownClaimsRpcMissing) {
+        const lines = buildOwnClaimLines(vars.claims, vars.lineItemIds)
+        if (lines.length === 0) return { allClaims: [], status: undefined, viaRpc: true as const }
+        const { error } = await callRpc('set_my_receipt_claims', { p_expense_id: vars.expenseId, p_lines: lines })
+        if (!error) return { allClaims: undefined, status: undefined, viaRpc: true as const }
+        if (!isMissingRpc(error)) throw rpcError(error)
+        ownClaimsRpcMissing = true
       }
-      const { error: delError } = await del
-      if (delError) throw delError
-
-      if (claims.length > 0) {
-        const rows: TablesInsert<'expense_item_claims'>[] = claims.map((c) => ({
-          expense_id: expenseId,
-          user_id: userId,
-          ...c,
-        }))
-        const { error: insError } = await supabase.from('expense_item_claims').insert(rows)
-        if (insError) throw insError
-      }
-
-      const { data: allClaims, error: fetchErr } = await supabase
-        .from('expense_item_claims')
-        .select('quantity_claimed, line_item_id')
-        .eq('expense_id', expenseId)
-      if (fetchErr) throw fetchErr
-
-      // The stored status uses the SAME dust-tolerant rule as the claims everywhere else (0.33 x 3 of a line is claimed). The database
-      // trigger / check_all_items_claimed compare quantities exactly, so asking them would flip a legacy-thirds receipt back to pending.
-      const { data: lines, error: linesErr } = await supabase.from('expense_line_items').select('id, quantity, total_amount').eq('expense_id', expenseId)
-      if (linesErr) throw linesErr
-      const newStatus = (allClaims ?? []).length === 0 ? 'unallocated' : allLinesClaimedWithinDust(lines ?? [], allClaims ?? []) ? 'allocated' : 'pending_allocation'
-
-      const { data: statusRows, error: statusError } = await supabase
-        .from('expenses')
-        .update({ status: newStatus })
-        .eq('id', expenseId)
-        .select('id')
-      if (statusError) throw statusError
-      assertRowsAffected(statusRows, "You don't have permission to edit this expense, or it no longer exists.")
-
-      return { allClaims, status: newStatus }
+      return { ...(await saveItemClaimsDirect(vars)), viaRpc: false as const }
     },
-    onSuccess: (_data, vars) => invalidateReceiptQueries(queryClient, vars.expenseId),
+    onSettled: (_data, err, vars) => refreshAfterClaimWrite(queryClient, vars.expenseId, err),
   })
 }

@@ -22,7 +22,11 @@ export const read = f => fs.readFileSync(M + f, 'utf8')
 export const oldFreezeSrc = () => read('20261118100000_settlement_freeze.sql')
 export async function bootstrapBase(db) {
   await db.exec(`
-  CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
+  DO $roles$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN CREATE ROLE anon; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN CREATE ROLE authenticated; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role') THEN CREATE ROLE service_role; END IF;
+END $roles$;  -- roles are cluster-global: a real Postgres may already have them from another database
   CREATE SCHEMA auth;
   CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ select coalesce(nullif(current_setting('request.jwt.claim.sub', true), ''), (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub'))::uuid $$;
   CREATE FUNCTION auth.role() RETURNS text LANGUAGE sql STABLE AS $$ select coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'))::text $$;
@@ -92,7 +96,8 @@ export async function bootstrapBase(db) {
 ALTER TABLE expenses ADD COLUMN location text, ADD COLUMN place_id uuid, ADD COLUMN option_id uuid, ADD COLUMN booking_id uuid, ADD COLUMN receipt_date date, ADD COLUMN ai_parsed_data jsonb, ADD COLUMN parsing_error text, ADD COLUMN created_at timestamptz default now();
 ALTER TABLE expenses ADD CONSTRAINT live_amount_positive CHECK (amount > 0), ADD CONSTRAINT live_description_len CHECK (char_length(description) <= 500), ADD CONSTRAINT live_currency_len CHECK (char_length(currency) <= 10),
   ADD CONSTRAINT live_location_len CHECK (char_length(location) <= 200), ADD CONSTRAINT live_vendor_len CHECK (char_length(vendor_name) <= 200), ADD CONSTRAINT live_parsing_error_len CHECK (char_length(parsing_error) <= 1000);  -- LIVE (22s)
-  CREATE TABLE expense_splits (id uuid primary key default gen_random_uuid(), expense_id uuid not null references expenses(id) on delete cascade, user_id uuid not null, amount numeric(10,2) not null);
+  CREATE TYPE split_type AS ENUM ('equal','custom','percentage','shares');
+  CREATE TABLE expense_splits (id uuid primary key default gen_random_uuid(), expense_id uuid not null references expenses(id) on delete cascade, user_id uuid not null, amount numeric not null, created_at timestamptz not null default now(), split_type split_type not null default 'equal', percentage numeric, base_currency_amount numeric, shares numeric);  -- the LIVE columns (live-checks-phase4-receipts.md): NOT NULL DEFAULT columns included
   CREATE TABLE notifications (id uuid primary key default gen_random_uuid(), trip_id uuid not null, user_id uuid not null, kind text not null, entity_type text, entity_id uuid, channel text not null default 'email', dedupe_key text not null, sent_at timestamptz not null default now(), constraint notifications_dedupe_key_unique unique (dedupe_key));
   -- Supabase default ACLs: every new table/function in public is open to the three API roles (the migrations revoke what must not be)
   GRANT USAGE ON SCHEMA public, auth TO anon, authenticated, service_role;

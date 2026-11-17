@@ -1583,7 +1583,7 @@ SELECT tgrelid::regclass AS tbl, tgname, tgenabled FROM pg_trigger WHERE NOT tgi
 --      so a later change is noticed. Record the list.
 SELECT tablename, policyname, cmd FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('expense_claim_responses', 'expenses', 'expense_splits', 'expense_line_items', 'trips') ORDER BY 1, 3, 2;
 
--- 23e. Frozen trips today (the migration changes what clients may write there). Informational: Sailing Sicily, the TEST trip.
+-- 23e. Frozen trips today (the migration changes what clients may write there). Informational: Sailing Sicily only (the TEST trip is NOT frozen; the rehearsal freezes it inside its transaction).
 SELECT t.id, t.name, t.settlement_snapshot_at FROM public.trips t WHERE t.settlement_snapshot IS NOT NULL ORDER BY 2;
 
 -- 23f. The expenses columns that are NOT cosmetic stay refused; the whitelist columns must exist (a missing name would simply never match). Safe: all 13 present except any that were never added.

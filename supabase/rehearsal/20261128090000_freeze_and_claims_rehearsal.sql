@@ -35,10 +35,11 @@ BEGIN
 END
 $f$;
 
--- a real expense_splits row, whatever NOT NULL columns the live table has (filled by data type)
+-- a real expense_splits row, whatever NOT NULL columns the live table has: an EXPLICIT column list (id, expense_id, user_id, amount, plus any NOT NULL column that has no default),
+-- so every column with a default (created_at, split_type ...) gets its default. (Inserting a whole jsonb record would write NULL into the unlisted columns.)
 CREATE FUNCTION pg_temp.rh_make_split(p_e uuid, p_u uuid) RETURNS void LANGUAGE plpgsql AS $f$
 DECLARE
-  c record; j jsonb := jsonb_build_object('id', gen_random_uuid(), 'expense_id', p_e, 'user_id', p_u, 'amount', 1);
+  c record; j jsonb := jsonb_build_object('id', gen_random_uuid(), 'expense_id', p_e, 'user_id', p_u, 'amount', 1); v_cols text;
 BEGIN
   FOR c IN SELECT column_name, data_type, udt_name FROM information_schema.columns
            WHERE table_schema = 'public' AND table_name = 'expense_splits' AND is_nullable = 'NO' AND column_default IS NULL LOOP
@@ -49,7 +50,8 @@ BEGIN
       WHEN 'USER-DEFINED' THEN to_jsonb((SELECT e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = c.udt_name ORDER BY e.enumsortorder LIMIT 1))
       ELSE to_jsonb('x'::text) END);
   END LOOP;
-  INSERT INTO public.expense_splits SELECT (jsonb_populate_record(NULL::public.expense_splits, j)).*;
+  SELECT string_agg(quote_ident(k), ', ') INTO v_cols FROM jsonb_object_keys(j) AS k WHERE EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'expense_splits' AND column_name = k);
+  EXECUTE format('INSERT INTO public.expense_splits (%s) SELECT %s FROM jsonb_populate_record(NULL::public.expense_splits, $1)', v_cols, v_cols) USING j;
 END
 $f$;
 

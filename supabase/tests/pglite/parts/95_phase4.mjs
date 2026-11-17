@@ -236,7 +236,7 @@ const F = '10000000-0000-0000-0000-0000000000f1'
 // ---- PRE_APPLY groups 23 / 24 execute on the stubs --------------------------------------------------------------------------------------------------------------
 {
   const pre = fs.readFileSync(path.join(ROOT, 'supabase/PRE_APPLY_CHECKS.sql'), 'utf8')
-  const g = pre.slice(pre.indexOf('-- 23. Migration 20261128090000'))
+  const g = pre.slice(pre.indexOf('-- 23. Migration 20261128090000'), pre.indexOf('-- 25. Trip chat A1'))
   try { await db.exec(g); pass++ } catch (e) { fail++; console.log('FAIL groups 23/24 do not run:', e.message) }
   const md5s = await qa(`select proname, md5(prosrc) m from pg_proc where pronamespace='public'::regnamespace and proname in ('guard_claim_overclaim','_receipt_resplit_table_items')`)
   eq('24b: the resplit md5 written in PRE_APPLY (phase-4 text) equals the pglite one; the overclaim guard equals the shipped phase-1 text',

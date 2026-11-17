@@ -10,6 +10,7 @@ import { withClosedSections, type SectionVoterIds } from '../../features/actions
 import { buildAnsweredSectionVoters } from '../answers/answers'
 import { assertRowsAffected, throwIfError } from './assertRowsAffected'
 import { callClaimTodo, claimTodoExists } from './claimTodo'
+import type { InvalidatingClient, UndoDescriptor } from './mutationUndo'
 
 export type ActionCompletion = Pick<Tables<'trip_action_completions'>, 'user_id' | 'completed_at'>
 
@@ -84,22 +85,35 @@ export function useTodoWhoSupport(): boolean {
   return query.data === true
 }
 
+/**
+ * Create a to-do (trip_actions row) and return the created row. Plain function: the hook below and the trip
+ * chat's confirmed "add a to-do" both call it.
+ */
+export async function createTodo(tripId: string, input: Omit<TablesInsert<'trip_actions'>, 'trip_id'>): Promise<Tables<'trip_actions'>> {
+  // Returns the created row so callers that link the action elsewhere
+  // (e.g. a closed decision stamping followup_action_id into its
+  // section metadata) have its id.
+  const { data, error } = await supabase
+    .from('trip_actions')
+    .insert({ trip_id: tripId, ...input })
+    .select()
+    .single()
+  throwIfError(error)
+  return data
+}
+
+/** Refresh what a to-do write changes (the to-dos list). Same call the hooks make. */
+export function invalidateAfterTodoChange(queryClient: InvalidatingClient, tripId: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) })
+}
+
+export const invalidateAfterCreateTodo = invalidateAfterTodoChange
+
 export function useCreateAction(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: Omit<TablesInsert<'trip_actions'>, 'trip_id'>): Promise<Tables<'trip_actions'>> => {
-      // Returns the created row so callers that link the action elsewhere
-      // (e.g. a closed decision stamping followup_action_id into its
-      // section metadata) have its id.
-      const { data, error } = await supabase
-        .from('trip_actions')
-        .insert({ trip_id: tripId, ...input })
-        .select()
-        .single()
-      throwIfError(error)
-      return data
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) }),
+    mutationFn: (input: Omit<TablesInsert<'trip_actions'>, 'trip_id'>): Promise<Tables<'trip_actions'>> => createTodo(tripId, input),
+    onSuccess: () => invalidateAfterCreateTodo(queryClient, tripId),
   })
 }
 
@@ -142,47 +156,64 @@ export interface ToggleActionDoneVars {
 }
 
 /**
- * Toggle an action's completion — optimistic. Individual actions flip
- * `completed_at`/`completed_by` on trip_actions directly; group actions
- * insert/delete the caller's row in trip_action_completions.
+ * Toggle a to-do's completion (trip_actions). Individual actions flip `completed_at`/`completed_by` on
+ * trip_actions directly; group actions insert/delete the caller's row in trip_action_completions; an Anyone
+ * to-do goes through the claim_todo RPC when it exists. Plain function shared by the hook and the trip chat.
+ * Resolves with an undo descriptor (the opposite toggle, self-only).
+ */
+export async function toggleTodo(
+  tripId: string,
+  { actionId, isGroupAction, userId, done, anyone }: ToggleActionDoneVars
+): Promise<{ undo: UndoDescriptor<'toggleTodo', [string, ToggleActionDoneVars]> }> {
+  const undo: UndoDescriptor<'toggleTodo', [string, ToggleActionDoneVars]> = {
+    fn: 'toggleTodo',
+    args: [tripId, { actionId, isGroupAction, userId, done: !done, anyone }],
+    label: done ? 'Untick this to-do' : 'Tick this to-do again',
+  }
+  if (!isGroupAction && anyone) {
+    const rpc = await callClaimTodo('action', actionId, done ? 'tick' : 'untick')
+    if (!rpc.missing) return { undo }
+  }
+  if (isGroupAction) {
+    if (done) {
+      const { error } = await supabase
+        .from('trip_action_completions')
+        .upsert(
+          { action_id: actionId, trip_id: tripId, user_id: userId, completed_at: new Date().toISOString() },
+          { ignoreDuplicates: true }
+        )
+      throwIfError(error)
+    } else {
+      const { error } = await supabase
+        .from('trip_action_completions')
+        .delete()
+        .eq('action_id', actionId)
+        .eq('user_id', userId)
+      throwIfError(error)
+    }
+    return { undo }
+  }
+
+  const { data, error } = await supabase
+    .from('trip_actions')
+    .update({
+      completed_at: done ? new Date().toISOString() : null,
+      completed_by: done ? userId : null,
+    })
+    .eq('id', actionId)
+    .select('id')
+  throwIfError(error)
+  assertRowsAffected(data, "You don't have permission to update this action, or it no longer exists.")
+  return { undo }
+}
+
+/**
+ * Toggle an action's completion — optimistic. See `toggleTodo` for what is written.
  */
 export function useToggleActionDone(tripId: string) {
   return useOptimisticMutation<void, ToggleActionDoneVars, ActionWithCompletions[]>({
-    mutationFn: async ({ actionId, isGroupAction, userId, done, anyone }) => {
-      if (!isGroupAction && anyone) {
-        const rpc = await callClaimTodo('action', actionId, done ? 'tick' : 'untick')
-        if (!rpc.missing) return
-      }
-      if (isGroupAction) {
-        if (done) {
-          const { error } = await supabase
-            .from('trip_action_completions')
-            .upsert(
-              { action_id: actionId, trip_id: tripId, user_id: userId, completed_at: new Date().toISOString() },
-              { ignoreDuplicates: true }
-            )
-          throwIfError(error)
-        } else {
-          const { error } = await supabase
-            .from('trip_action_completions')
-            .delete()
-            .eq('action_id', actionId)
-            .eq('user_id', userId)
-          throwIfError(error)
-        }
-        return
-      }
-
-      const { data, error } = await supabase
-        .from('trip_actions')
-        .update({
-          completed_at: done ? new Date().toISOString() : null,
-          completed_by: done ? userId : null,
-        })
-        .eq('id', actionId)
-        .select('id')
-      throwIfError(error)
-      assertRowsAffected(data, "You don't have permission to update this action, or it no longer exists.")
+    mutationFn: async (vars) => {
+      await toggleTodo(tripId, vars)
     },
     queryKey: () => queryKeys.actions(tripId),
     updater: (actions, { actionId, isGroupAction, userId, done }) =>
@@ -219,24 +250,37 @@ export interface ClaimActionVars {
  * Claim / give back an Anyone to-do. The claim only matches while nobody holds it
  * (`assigned_to IS NULL`), so two people tapping at once resolve on the server: the
  * loser gets a clear message instead of silently stealing it.
+ * Plain function shared by the hook and the trip chat; resolves with an undo descriptor (the opposite claim).
  */
+export async function claimTodo(
+  { id, userId, claim }: ClaimActionVars
+): Promise<{ undo: UndoDescriptor<'claimTodo', [ClaimActionVars]> }> {
+  const undo: UndoDescriptor<'claimTodo', [ClaimActionVars]> = {
+    fn: 'claimTodo',
+    args: [{ id, userId, claim: !claim }],
+    label: claim ? 'Give this to-do back' : "Take this to-do again",
+  }
+  const rpc = await callClaimTodo('action', id, claim ? 'claim' : 'give_back')
+  if (!rpc.missing) return { undo }
+  // claim_todo is not deployed yet: the pre-migration direct update (creator / organizer only).
+  const base = supabase.from('trip_actions')
+  const { data, error } = claim
+    ? await base.update({ assigned_to: userId }).eq('id', id).is('assigned_to', null).select('id')
+    : await base.update({ assigned_to: null, completed_at: null, completed_by: null }).eq('id', id).eq('assigned_to', userId).select('id')
+  throwIfError(error)
+  assertRowsAffected(
+    data,
+    claim ? 'Someone else just took this one, or it is no longer up for grabs.' : "You can't give this one back, or it no longer exists."
+  )
+  return { undo }
+}
+
 export function useClaimAction(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, userId, claim }: ClaimActionVars) => {
-      const rpc = await callClaimTodo('action', id, claim ? 'claim' : 'give_back')
-      if (!rpc.missing) return
-      // claim_todo is not deployed yet: the pre-migration direct update (creator / organizer only).
-      const base = supabase.from('trip_actions')
-      const { data, error } = claim
-        ? await base.update({ assigned_to: userId }).eq('id', id).is('assigned_to', null).select('id')
-        : await base.update({ assigned_to: null, completed_at: null, completed_by: null }).eq('id', id).eq('assigned_to', userId).select('id')
-      throwIfError(error)
-      assertRowsAffected(
-        data,
-        claim ? 'Someone else just took this one, or it is no longer up for grabs.' : "You can't give this one back, or it no longer exists."
-      )
+    mutationFn: async (vars: ClaimActionVars) => {
+      await claimTodo(vars)
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) }),
+    onSettled: () => invalidateAfterTodoChange(queryClient, tripId),
   })
 }

@@ -9,6 +9,9 @@ const MIG1 = M + '20261124090000_receipt_claims_v2.sql'
 const MIG2 = M + '20261126090000_receipt_deadline_tokens.sql'
 const MIG3 = M + '20261128090000_freeze_enforcement.sql'
 const MIG4 = M + '20261128100000_own_claims_rpc.sql'
+const MIG5 = M + '20261129090000_chat_actions.sql'
+const MIG6 = M + '20261129100000_chat_private_threads.sql'
+const MIG7 = M + '20261129110000_admin_ai_usage.sql'
 const db = await openDb()
 let pass = 0, fail = 0
 const ok = (label, cond, extra) => { if (cond) { pass++ } else { fail++; console.log('FAIL', label, extra !== undefined ? JSON.stringify(extra) : '') } }

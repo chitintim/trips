@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
+import type { QueryClient } from '@tanstack/react-query'
 import { isRpcMissingError, toRpcError, invalidateDecisionKeys } from './useDecide'
 
 /**
@@ -33,24 +34,35 @@ export interface SuggestResult {
   created_section: boolean
 }
 
+/**
+ * Add one safe option to an open question, or an idea to the trip's Ideas question (`suggest_option` RPC).
+ * Plain function shared by the hook and the trip chat. The RPC writes the activity row itself.
+ */
+export async function suggestOption(tripId: string, input: SuggestInput): Promise<SuggestResult> {
+  const { data, error } = await supabase.rpc('suggest_option', {
+    p_section_id: input.sectionId ?? null,
+    p_title: input.title.trim(),
+    ...(input.link?.trim() ? { p_link: input.link.trim() } : {}),
+    ...(input.note?.trim() ? { p_note: input.note.trim() } : {}),
+    ...(input.sectionId ? {} : { p_idea: input.idea === true, p_trip_id: tripId }),
+  })
+  if (error) {
+    if (isRpcMissingError(error, 'suggest_option')) throw new Error('Suggestions are not switched on for this trip yet.')
+    throw toRpcError(error, 'Could not add your suggestion')
+  }
+  return data as unknown as SuggestResult
+}
+
+/** Refresh what a suggestion changes (the decision keys). Same call the hook makes. */
+export function invalidateAfterSuggestOption(queryClient: QueryClient, tripId: string): void {
+  invalidateDecisionKeys(queryClient, tripId)
+}
+
 export function useSuggestOption(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: SuggestInput): Promise<SuggestResult> => {
-      const { data, error } = await supabase.rpc('suggest_option', {
-        p_section_id: input.sectionId ?? null,
-        p_title: input.title.trim(),
-        ...(input.link?.trim() ? { p_link: input.link.trim() } : {}),
-        ...(input.note?.trim() ? { p_note: input.note.trim() } : {}),
-        ...(input.sectionId ? {} : { p_idea: input.idea === true, p_trip_id: tripId }),
-      })
-      if (error) {
-        if (isRpcMissingError(error, 'suggest_option')) throw new Error('Suggestions are not switched on for this trip yet.')
-        throw toRpcError(error, 'Could not add your suggestion')
-      }
-      return data as unknown as SuggestResult
-    },
-    onSuccess: () => invalidateDecisionKeys(queryClient, tripId),
+    mutationFn: (input: SuggestInput): Promise<SuggestResult> => suggestOption(tripId, input),
+    onSuccess: () => invalidateAfterSuggestOption(queryClient, tripId),
   })
 }
 

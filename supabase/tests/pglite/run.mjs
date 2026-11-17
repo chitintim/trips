@@ -23,6 +23,7 @@ const suites = {
   phase2: () => buildPhase2(),
   phase1: () => path.join(here, 'phase1.mjs'),
   rehearsal: () => path.join(here, 'rehearsal_dry.mjs'),
+  rehearsalchat: () => { process.env.REH_FILE = '20261129090000_trip_chat_rehearsal.sql'; return path.join(here, 'rehearsal_dry.mjs') },
   rehearsal4: () => { process.env.REH_FILE = '20261128090000_freeze_and_claims_rehearsal.sql'; return path.join(here, 'rehearsal_dry.mjs') },
 }
 const want = process.argv[2] ?? 'all'

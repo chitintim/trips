@@ -247,7 +247,8 @@ export function TripDetail() {
   }, [trip, snapshot, timelineData, user?.id, isOrganizer, myParticipant, participants.length, todos, expensesData])
 
   const applyDeepLinkPlan = (plan: DeepLinkPlan) => {
-    setActiveSpace(plan.space)
+    // `?open=ask` opens the assistant over the current space instead of switching to Today.
+    if (plan.open?.sheet !== 'ask') setActiveSpace(plan.space)
     if (plan.toast) showToast({ type: 'info', message: plan.toast })
     const sheet = plan.open
     if (!sheet) return
@@ -300,6 +301,9 @@ export function TripDetail() {
         break
       case 'scroll-todos':
         setTodosScrollNonce((n) => n + 1)
+        break
+      case 'ask':
+        setChatOpen(true)
         break
     }
   }
@@ -687,7 +691,17 @@ export function TripDetail() {
           mount site.) */}
       {chatOpen && (
         <Suspense fallback={<Skeleton variant="card" height={420} />}>
-          <LazyChatSheet trip={trip} isOpen={chatOpen} onClose={() => setChatOpen(false)} context={chatContext} />
+          <LazyChatSheet
+            trip={trip}
+            isOpen={chatOpen}
+            onClose={() => setChatOpen(false)}
+            context={chatContext}
+            onOpenLink={(param) => {
+              // A link card from the assistant: the same routing an emailed ?open= link gets.
+              const target = resolveOpenParam(param)
+              if (target) setPendingOpen(target)
+            }}
+          />
         </Suspense>
       )}
 

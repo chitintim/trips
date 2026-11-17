@@ -99,7 +99,15 @@ ALTER TABLE expenses ADD CONSTRAINT live_amount_positive CHECK (amount > 0), ADD
   CREATE TYPE split_type AS ENUM ('equal','custom','percentage','shares');
   CREATE TABLE expense_splits (id uuid primary key default gen_random_uuid(), expense_id uuid not null references expenses(id) on delete cascade, user_id uuid not null, amount numeric not null, created_at timestamptz not null default now(), split_type split_type not null default 'equal', percentage numeric, base_currency_amount numeric, shares numeric);  -- the LIVE columns (live-checks-phase4-receipts.md): NOT NULL DEFAULT columns included
   CREATE TABLE notifications (id uuid primary key default gen_random_uuid(), trip_id uuid not null, user_id uuid not null, kind text not null, entity_type text, entity_id uuid, channel text not null default 'email', dedupe_key text not null, sent_at timestamptz not null default now(), constraint notifications_dedupe_key_unique unique (dedupe_key));
-  -- Supabase default ACLs: every new table/function in public is open to the three API roles (the migrations revoke what must not be)
+  -- trip chat (live shape from schema.txt; the LIVE policies are not in the repo: ONE permissive participant SELECT policy is assumed, the migration only adds RESTRICTIVE ones)
+CREATE TYPE chat_message_role AS ENUM ('user','assistant','system');
+CREATE TABLE trip_chat_messages (id uuid primary key default gen_random_uuid(), trip_id uuid not null references trips(id) on delete cascade, user_id uuid references users(id), role chat_message_role not null, content text not null, actions_executed jsonb default '[]'::jsonb, had_write_actions boolean default false, metadata jsonb default '{}'::jsonb, created_at timestamptz default now());
+ALTER TABLE trip_chat_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "stub: participants can view chat messages" ON trip_chat_messages FOR SELECT USING (is_trip_participant(trip_id, auth.uid()));
+CREATE TABLE ai_usage (id uuid primary key default gen_random_uuid(), user_id uuid references users(id) on delete set null, trip_id uuid references trips(id) on delete set null, function_name text not null, model text not null, input_tokens int, output_tokens int, cache_read_tokens int, cache_write_tokens int, estimated_cost_usd numeric(10,6), created_at timestamptz not null default now());
+ALTER TABLE ai_usage ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view their own ai usage" ON ai_usage FOR SELECT USING (auth.uid() = user_id);
+-- Supabase default ACLs: every new table/function in public is open to the three API roles (the migrations revoke what must not be)
   GRANT USAGE ON SCHEMA public, auth TO anon, authenticated, service_role;
   GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
   ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;

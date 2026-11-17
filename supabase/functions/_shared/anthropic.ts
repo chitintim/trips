@@ -86,7 +86,7 @@ export type AnthropicContentBlock =
   // Thinking blocks must be replayed to the API exactly as received (signature included).
   | { type: 'thinking'; thinking: string; signature?: string }
   | { type: 'redacted_thinking'; data: string }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; cache_control?: { type: 'ephemeral' } }
 
 export interface AnthropicMessage {
   // 'system' = a mid-conversation operator message (Sonnet 5.5 and later only).

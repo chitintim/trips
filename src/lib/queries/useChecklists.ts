@@ -6,6 +6,7 @@ import { queryKeys } from './queryKeys'
 import { useOptimisticMutation } from './makeOptimisticMutation'
 import { assertRowsAffected, throwIfError } from './assertRowsAffected'
 import { callClaimTodo } from './claimTodo'
+import type { InvalidatingClient, UndoDescriptor } from './mutationUndo'
 
 export type ChecklistItem = Tables<'trip_checklists'>
 
@@ -26,14 +27,22 @@ export function useChecklists(tripId: string | undefined) {
   })
 }
 
+/** Create a "bring" to-do (trip_checklists row). Plain function shared by the hook and the trip chat. */
+export async function createChecklistItem(tripId: string, input: Omit<TablesInsert<'trip_checklists'>, 'trip_id'>): Promise<void> {
+  const { error } = await supabase.from('trip_checklists').insert({ trip_id: tripId, ...input })
+  if (error) throw error
+}
+
+/** Refresh what a checklist write changes. Same call the hooks make. */
+export function invalidateAfterChecklistChange(queryClient: InvalidatingClient, tripId: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.checklists(tripId) })
+}
+
 export function useCreateChecklistItem(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: Omit<TablesInsert<'trip_checklists'>, 'trip_id'>) => {
-      const { error } = await supabase.from('trip_checklists').insert({ trip_id: tripId, ...input })
-      if (error) throw error
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.checklists(tripId) }),
+    mutationFn: (input: Omit<TablesInsert<'trip_checklists'>, 'trip_id'>) => createChecklistItem(tripId, input),
+    onSuccess: () => invalidateAfterChecklistChange(queryClient, tripId),
   })
 }
 
@@ -56,25 +65,40 @@ export interface ClaimChecklistItemVars {
   claim: boolean
 }
 
-/** Claim / give back a bring item. A claim only matches while nobody holds it, so the first tap wins. */
+/**
+ * Claim / give back a bring item. A claim only matches while nobody holds it, so the first tap wins.
+ * Plain function shared by the hook and the trip chat; resolves with an undo descriptor (the opposite claim).
+ */
+export async function claimChecklistItem(
+  { id, userId, claim }: ClaimChecklistItemVars
+): Promise<{ undo: UndoDescriptor<'claimChecklistItem', [ClaimChecklistItemVars]> }> {
+  const undo: UndoDescriptor<'claimChecklistItem', [ClaimChecklistItemVars]> = {
+    fn: 'claimChecklistItem',
+    args: [{ id, userId, claim: !claim }],
+    label: claim ? 'Give this one back' : 'Take this one again',
+  }
+  const rpc = await callClaimTodo('checklist', id, claim ? 'claim' : 'give_back')
+  if (!rpc.missing) return { undo }
+  // claim_todo is not deployed yet: the pre-migration direct update (creator / organizer only).
+  const base = supabase.from('trip_checklists')
+  const { data, error } = claim
+    ? await base.update({ assigned_to: userId }).eq('id', id).is('assigned_to', null).select('id')
+    : await base.update({ assigned_to: null, done: false, done_at: null, done_by: null }).eq('id', id).eq('assigned_to', userId).select('id')
+  throwIfError(error)
+  assertRowsAffected(
+    data,
+    claim ? 'Someone else just took this one, or it is no longer up for grabs.' : "You can't give this one back, or it no longer exists."
+  )
+  return { undo }
+}
+
 export function useClaimChecklistItem(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, userId, claim }: ClaimChecklistItemVars) => {
-      const rpc = await callClaimTodo('checklist', id, claim ? 'claim' : 'give_back')
-      if (!rpc.missing) return
-      // claim_todo is not deployed yet: the pre-migration direct update (creator / organizer only).
-      const base = supabase.from('trip_checklists')
-      const { data, error } = claim
-        ? await base.update({ assigned_to: userId }).eq('id', id).is('assigned_to', null).select('id')
-        : await base.update({ assigned_to: null, done: false, done_at: null, done_by: null }).eq('id', id).eq('assigned_to', userId).select('id')
-      throwIfError(error)
-      assertRowsAffected(
-        data,
-        claim ? 'Someone else just took this one, or it is no longer up for grabs.' : "You can't give this one back, or it no longer exists."
-      )
+    mutationFn: async (vars: ClaimChecklistItemVars) => {
+      await claimChecklistItem(vars)
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.checklists(tripId) }),
+    onSettled: () => invalidateAfterChecklistChange(queryClient, tripId),
   })
 }
 
@@ -88,24 +112,38 @@ export interface ToggleChecklistItemVars {
 const TOGGLE_MUTATION_KEY = 'toggleChecklistItem'
 
 /**
- * Check/uncheck a checklist item — optimistic. `doneBy` is the acting
+ * Check/uncheck a checklist item. `doneBy` is the acting
  * user's id (the assignee marking their own item, or an organizer
  * overriding on someone else's behalf); it's only persisted when `done` is
  * true and cleared back to null on un-check, regardless of who un-checks.
+ * Plain function shared by the hook and the trip chat; resolves with an undo descriptor (the opposite toggle).
  */
+export async function toggleChecklistItem(
+  { id, done, doneBy }: ToggleChecklistItemVars
+): Promise<{ undo: UndoDescriptor<'toggleChecklistItem', [ToggleChecklistItemVars]> }> {
+  const undo: UndoDescriptor<'toggleChecklistItem', [ToggleChecklistItemVars]> = {
+    fn: 'toggleChecklistItem',
+    args: [{ id, done: !done, doneBy }],
+    label: done ? 'Untick this to-do' : 'Tick this to-do again',
+  }
+  const rpc = await callClaimTodo('checklist', id, done ? 'tick' : 'untick')
+  if (!rpc.missing) return { undo }
+  const { data, error } = await supabase
+    .from('trip_checklists')
+    .update({ done, done_at: done ? new Date().toISOString() : null, done_by: done ? doneBy : null })
+    .eq('id', id)
+    .select('id')
+  throwIfError(error)
+  // A refused update (RLS) returns no error and no rows: say so instead of silently reverting.
+  assertRowsAffected(data, "You can't tick this one off, or it no longer exists.")
+  return { undo }
+}
+
+/** Check/uncheck a checklist item — optimistic. See `toggleChecklistItem` for what is written. */
 export function useToggleChecklistItem(tripId: string) {
   return useOptimisticMutation<void, ToggleChecklistItemVars, ChecklistItem[]>({
-    mutationFn: async ({ id, done, doneBy }) => {
-      const rpc = await callClaimTodo('checklist', id, done ? 'tick' : 'untick')
-      if (!rpc.missing) return
-      const { data, error } = await supabase
-        .from('trip_checklists')
-        .update({ done, done_at: done ? new Date().toISOString() : null, done_by: done ? doneBy : null })
-        .eq('id', id)
-        .select('id')
-      throwIfError(error)
-      // A refused update (RLS) returns no error and no rows: say so instead of silently reverting.
-      assertRowsAffected(data, "You can't tick this one off, or it no longer exists.")
+    mutationFn: async (vars) => {
+      await toggleChecklistItem(vars)
     },
     queryKey: () => queryKeys.checklists(tripId),
     updater: (items, { id, done, doneBy }) =>

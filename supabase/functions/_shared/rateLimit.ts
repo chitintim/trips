@@ -42,9 +42,9 @@ export async function consumeRateLimit(client: SupabaseClient, config: RateLimit
 export const RATE_LIMITS = {
   /** parse-receipt: 20 parses/day/user (plan §10). */
   parseReceipt: { feature: 'parse_receipt', capacity: 20, refillPerDay: 20 },
-  /** trip-chat: organizers 40/day, participants 15/day (plan §13). */
+  /** trip-chat: organisers 40/day, everyone else 30/day (D7). */
   chatOrganizer: { feature: 'trip_chat', capacity: 40, refillPerDay: 40 },
-  chatParticipant: { feature: 'trip_chat', capacity: 15, refillPerDay: 15 },
+  chatParticipant: { feature: 'trip_chat', capacity: 30, refillPerDay: 30 },
   /** ingest: 10/day (plan §9). */
   ingest: { feature: 'ingest', capacity: 10, refillPerDay: 10 },
   /** nudge-draft: 20/day (plan §14). */

@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { reportError } from '../reportError'
 import { Expense, ExpenseSplit, ExpenseInsert, ExpenseUpdate, User } from '../../types'
@@ -8,6 +8,9 @@ import { assertRowsAffected } from './assertRowsAffected'
 import { toMinorUnits } from '../money'
 import { allLinesClaimedWithinDust } from '../../features/expenses/lib/balances'
 import { refreshAfterRefusal } from '../writeRefusals'
+import { resolveExpenseFxFields } from '../fx/resolveExpenseFxFields'
+import { buildSplitRows, buildExpensePayload } from '../../features/expenses/editor/expenseSavePayload'
+import type { ExpenseWizardDraft } from '../../features/expenses/editor/wizardState'
 
 export type ExpenseLineItem = Tables<'expense_line_items'>
 export type ExpenseItemClaim = Tables<'expense_item_claims'>
@@ -132,35 +135,85 @@ export interface SplitRow {
   base_currency_amount?: number | null
 }
 
+/**
+ * Insert an expense and its splits (the plain write under `useCreateExpense`). Returns the created expense row.
+ * If the splits cannot be stored the just-created expense is deleted again. Throws the database error as-is
+ * (a plain object with `message`, `code`, `hint`; `hint` is `frozen` / `reload` / `use_rpc` for the phase-4
+ * refusals, see `describeWriteError`).
+ */
+export async function insertExpenseWithSplits(tripId: string, { expense, splits }: { expense: Omit<ExpenseInsert, 'trip_id'>; splits: SplitRow[] }) {
+  const { data: expenseData, error: expenseError } = await supabase
+    .from('expenses')
+    .insert({ trip_id: tripId, ...expense })
+    .select()
+    .single()
+  if (expenseError) throw expenseError
+
+  if (splits.length > 0) {
+    const rows: TablesInsert<'expense_splits'>[] = splits.map((s) => ({ expense_id: expenseData.id, ...s }))
+    const { error: splitsError } = await supabase.from('expense_splits').insert(rows)
+    if (splitsError) {
+      // Roll back the just-created expense so a splits failure can't
+      // leave an orphaned expense corrupting zero-sum balances (mirrors
+      // applyProposal's create_expense_draft rollback).
+      const { error: rollbackError } = await supabase.from('expenses').delete().eq('id', expenseData.id)
+      if (rollbackError) reportError(rollbackError, 'useCreateExpense.rollback')
+      throw splitsError
+    }
+  }
+
+  return expenseData
+}
+
+/** The already-validated values of the one-screen expense form (amount parsed, who/what/when chosen). */
+export interface CreateExpenseFormValues {
+  /** The form's draft: description, currency, category, paidBy, participantIds, split mode and entries, optional manual rate. */
+  draft: ExpenseWizardDraft
+  /** The amount in major units (e.g. 40.5), already validated as positive. */
+  amountMajor: number
+  /** Stored receipt path, or null. */
+  receiptUrl: string | null
+  /** The trip's base currency, for the FX fields. */
+  baseCurrency: string
+}
+
+/**
+ * Create a plain-split (non-itemised) expense exactly as the one-screen form does: resolve the FX fields,
+ * build the expense row and split rows with the same builders (`expenseSavePayload`), then insert both.
+ * Returns the created expense row (`.id`, `.description`). The `expense_added` activity row and the cache
+ * refresh stay with the caller (`invalidateAfterCreateExpense`; on failure `refreshAfterCreateExpenseError`).
+ */
+export async function createExpenseWithSplits(tripId: string, values: CreateExpenseFormValues) {
+  const { draft, amountMajor, receiptUrl, baseCurrency } = values
+  const fx = await resolveExpenseFxFields({
+    amountMajor,
+    currency: draft.currency,
+    baseCurrency,
+    paymentDate: draft.paymentDate,
+    manualRate: draft.fxRateOverride ? parseFloat(draft.fxRateOverride) || null : null,
+  })
+  const splits = buildSplitRows(draft, amountMajor, fx)
+  const expense = buildExpensePayload(draft, amountMajor, receiptUrl, fx, { includeParticipantIds: true })
+  return insertExpenseWithSplits(tripId, { expense, splits })
+}
+
+/** Refresh what a new expense changes. Same call the hook makes. */
+export function invalidateAfterCreateExpense(queryClient: QueryClient, tripId: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) })
+}
+
+/** After a failed expense write: refetch the true state when the database refused it (frozen, reload). Same call the hook makes. */
+export function refreshAfterCreateExpenseError(queryClient: QueryClient, tripId: string, err: unknown): void {
+  refreshAfterRefusal(queryClient, tripId, err)
+}
+
 /** Create expense + splits (insert path from AddExpenseModal). */
 export function useCreateExpense(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async ({ expense, splits }: { expense: Omit<ExpenseInsert, 'trip_id'>; splits: SplitRow[] }) => {
-      const { data: expenseData, error: expenseError } = await supabase
-        .from('expenses')
-        .insert({ trip_id: tripId, ...expense })
-        .select()
-        .single()
-      if (expenseError) throw expenseError
-
-      if (splits.length > 0) {
-        const rows: TablesInsert<'expense_splits'>[] = splits.map((s) => ({ expense_id: expenseData.id, ...s }))
-        const { error: splitsError } = await supabase.from('expense_splits').insert(rows)
-        if (splitsError) {
-          // Roll back the just-created expense so a splits failure can't
-          // leave an orphaned expense corrupting zero-sum balances (mirrors
-          // applyProposal's create_expense_draft rollback).
-          const { error: rollbackError } = await supabase.from('expenses').delete().eq('id', expenseData.id)
-          if (rollbackError) reportError(rollbackError, 'useCreateExpense.rollback')
-          throw splitsError
-        }
-      }
-
-      return expenseData
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
-    onError: (err) => refreshAfterRefusal(queryClient, tripId, err),
+    mutationFn: (vars: { expense: Omit<ExpenseInsert, 'trip_id'>; splits: SplitRow[] }) => insertExpenseWithSplits(tripId, vars),
+    onSuccess: () => invalidateAfterCreateExpense(queryClient, tripId),
+    onError: (err) => refreshAfterCreateExpenseError(queryClient, tripId, err),
   })
 }
 

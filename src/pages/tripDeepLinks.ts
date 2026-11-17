@@ -30,6 +30,8 @@ export type OpenTarget =
   | { kind: 'decide'; id: string }
   | { kind: 'book'; id: string }
   | { kind: 'actions'; segment: 'actions' | 'bring' }
+  /** Opens the trip assistant (chat). */
+  | { kind: 'ask' }
 
 /** Values that carry an id after a colon: `question:<id>` etc. */
 const ID_KINDS = ['question', 'todo', 'bring', 'payment', 'item', 'claim', 'decide', 'book'] as const
@@ -42,6 +44,7 @@ const BARE_KINDS: Record<string, OpenTarget> = {
   settle: { kind: 'settle' },
   'travel-details': { kind: 'travel-details' },
   setup: { kind: 'setup' },
+  ask: { kind: 'ask' },
   // Older links (action notes, emails sent before the to-dos engine).
   actions: { kind: 'actions', segment: 'actions' },
   // The whole grouped To-dos sheet (Today's "All to-dos" row, emails, the console).
@@ -137,6 +140,7 @@ export type DeepLinkSheet =
   | { sheet: 'add-participant' }
   | { sheet: 'add-to-plan'; asQuestion?: boolean }
   | { sheet: 'scroll-todos' }
+  | { sheet: 'ask' }
 
 export interface DeepLinkPlan {
   space: SpaceId
@@ -178,6 +182,10 @@ export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLink
   switch (target.kind) {
     case 'todos':
       return { space: 'today', open: { sheet: 'scroll-todos' } }
+
+    // The assistant opens over whatever space the person is on; `space` is only the type's required field.
+    case 'ask':
+      return { space: 'today', open: { sheet: 'ask' } }
 
     case 'rsvp':
       return ctx.isParticipant ? { space: 'today', open: { sheet: 'rsvp' } } : soft(DEEP_LINK_TOASTS.rsvp)

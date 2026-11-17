@@ -42,7 +42,8 @@ export function ProposalReview({ proposal, trip }: ProposalReviewProps) {
   const logActivity = useTripActivityLog(trip.id)
   const { data: sections } = useSections(trip.id)
 
-  const entries = useMemo(() => parseProposalActions(proposal.actions), [proposal.actions])
+  // Delete cards are never shown (their text came from the model, not from the thing being deleted): deleting is done on the real screen.
+  const entries = useMemo(() => parseProposalActions(proposal.actions).filter((e) => e.action?.type !== 'delete_request'), [proposal.actions])
 
   // id -> title lookups for review-card summaries (describeAction's ctx
   // param): options/sections that already exist, PLUS every create_section

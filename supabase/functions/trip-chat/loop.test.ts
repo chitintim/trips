@@ -76,7 +76,7 @@ Deno.test('thinking blocks are replayed byte-identical in the next request', asy
       { type: 'tool_use', id: 't1', name: 'get_expenses', input: { x: 1 } },
     ],
   })
-  assertEquals((second[2] as { content: unknown[] }).content, [{ type: 'tool_result', tool_use_id: 't1', content: '{"ok":"t1"}' }])
+  assertEquals((second[2] as { content: unknown[] }).content, [{ type: 'tool_result', tool_use_id: 't1', content: '{"ok":"t1"}', cache_control: { type: 'ephemeral' } }])
 })
 
 Deno.test('redacted_thinking is replayed too', async () => {

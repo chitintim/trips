@@ -72,3 +72,15 @@ const phase2src = fs.readFileSync(rel('supabase/migrations/20261126090000_receip
   fs.writeFileSync(rel('supabase/rehearsal/20261128090000_freeze_and_claims_rehearsal.sql'), text)
   console.log(JSON.stringify({ out: 'supabase/rehearsal/20261128090000_freeze_and_claims_rehearsal.sql', bytes: text.length, overclaimMd5: tags['@@OVERCLAIM_MD5@@'], resplitMd5: tags['@@RESPLIT_MD5@@'], embedded: all.length }))
 }
+
+// 4. trip chat A1: the three chat migrations applied in order
+{
+  const names = ['20261129090000_chat_actions.sql', '20261129100000_chat_private_threads.sql', '20261129110000_admin_ai_usage.sql']
+  const ms = names.map(n => fs.readFileSync(rel('supabase/migrations/' + n), 'utf8'))
+  ms.forEach(guardMigration)
+  let tpl = fs.readFileSync(rel('supabase/rehearsal/rehearsal_chat.template.sql'), 'utf8')
+  for (const tag of ['@@MIGRATION1@@', '@@MIGRATION2@@', '@@MIGRATION3@@']) if (!tpl.includes(tag)) throw new Error('rehearsal_chat.template.sql lacks ' + tag)
+  const text = tpl.replace('@@MIGRATION1@@', () => ms[0].trimEnd()).replace('@@MIGRATION2@@', () => ms[1].trimEnd()).replace('@@MIGRATION3@@', () => ms[2].trimEnd())
+  fs.writeFileSync(rel('supabase/rehearsal/20261129090000_trip_chat_rehearsal.sql'), text)
+  console.log(JSON.stringify({ out: 'supabase/rehearsal/20261129090000_trip_chat_rehearsal.sql', bytes: text.length }))
+}

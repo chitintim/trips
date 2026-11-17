@@ -12,10 +12,11 @@ import {
   Selection,
   User,
 } from '../../types'
-import { Tables } from '../../types/database.types'
+import { Tables, type Json } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { useTripActivityLog } from '../../features/organizer/lib/activity'
 import { assertRowsAffected, throwIfError } from './assertRowsAffected'
+import type { InvalidatingClient } from './mutationUndo'
 import { useTrip, useParticipants, type ParticipantWithUser } from './useTrip'
 import { isTripFinished, type PassKind } from '../answers/answers'
 import {
@@ -31,6 +32,7 @@ import {
   type AnswerPlan,
   type ModelSection,
   type ModelViewer,
+  type PlanInput,
 } from '../../features/decisions/lib/answerModel'
 
 export type OptionVote = Tables<'option_votes'>
@@ -187,15 +189,25 @@ export function useUpdateSection(tripId: string) {
   })
 }
 
+/** Add an option to a question (organizers). Returns the created row. Plain function shared by the hook and the trip chat. */
+export async function addOptionToQuestion(input: OptionInsert): Promise<Option> {
+  const { data, error } = await supabase.from('options').insert(input).select().single()
+  throwIfError(error)
+  return data
+}
+
+/** Refresh what a question or option write changes. Same call the hooks make. */
+export function invalidateAfterQuestionChange(queryClient: InvalidatingClient, tripId: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
+}
+
+export const invalidateAfterAddOption = invalidateAfterQuestionChange
+
 export function useCreateOption(tripId: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (input: OptionInsert) => {
-      const { data, error } = await supabase.from('options').insert(input).select().single()
-      throwIfError(error)
-      return data
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) }),
+    mutationFn: (input: OptionInsert) => addOptionToQuestion(input),
+    onSuccess: () => invalidateAfterAddOption(queryClient, tripId),
   })
 }
 
@@ -397,6 +409,73 @@ export async function executeAnswerPlan(plan: AnswerPlan, client: AnswerWriteCli
   for (const step of orderedSteps(plan)) await runAnswerStep(client, step)
 }
 
+/** Everything `planAnswer` needs, plus the action: the live question, my id, the gate and the current votes/passes. */
+export interface AnswerQuestionInput extends PlanInput {
+  action: AnswerAction
+}
+
+/** My answer as it was before a write, as data: enough to put it back. */
+export interface PreviousAnswer {
+  sectionId: string
+  userId: string
+  /** My option_votes on this question (rank null for unranked). */
+  votes: Array<{ optionId: string; rank: number | null }>
+  /** My "No preference" / "None for me" pass, or null. `undefined` when passes were unavailable. */
+  pass: PassKind | null | undefined
+  /** My own-choice selections on this question (metadata holds quantity / variant). */
+  selections: Array<{ optionId: string; metadata: Json | null }>
+}
+
+/** Capture my current answer to a question (for an undo descriptor). Pure. */
+export function previousAnswerOf(input: Pick<PlanInput, 'section' | 'userId' | 'votes' | 'passes'>): PreviousAnswer {
+  const { section, userId } = input
+  const optionIds = new Set(section.options.map((o) => o.id))
+  return {
+    sectionId: section.id,
+    userId,
+    votes: input.votes.filter((v) => v.user_id === userId && optionIds.has(v.option_id)).map((v) => ({ optionId: v.option_id, rank: v.rank ?? null })),
+    pass: input.passes === undefined ? undefined : input.passes.find((p) => p.section_id === section.id && p.user_id === userId)?.kind ?? null,
+    selections: section.options.flatMap((o) => (o.selections ?? []).filter((s) => s.user_id === userId).map((s) => ({ optionId: o.id, metadata: s.metadata ?? null }))),
+  }
+}
+
+/** Data only: what to put back. There is no restore function yet; a caller re-plans from `previous` with `answerQuestion`. */
+export interface AnswerUndo {
+  label: string
+  previous: PreviousAnswer
+}
+
+/**
+ * Plan the answer from the given live data, then write it (the same `planAnswer` + `executeAnswerPlan` the
+ * `useAnswer` hook uses; the hook only adds its optimistic cache update and write queue between the two).
+ * Throws an Error with the plan's plain reason when the answer is refused, or the server's error. Resolves
+ * with the plan and an undo descriptor holding my previous answer (null when nothing was written).
+ */
+export async function answerQuestion(
+  input: AnswerQuestionInput,
+  client: AnswerWriteClient = supabase
+): Promise<{ plan: AnswerPlan; undo: AnswerUndo | null }> {
+  const { action, ...planInput } = input
+  const result = planAnswer(planInput, action)
+  if (!result.ok) throw new Error(result.reason)
+  const { plan } = result
+  if (plan.noop) return { plan, undo: null }
+  const previous = previousAnswerOf(planInput)
+  await executeAnswerPlan(plan, client)
+  return { plan, undo: { label: 'Put back your earlier answer', previous } }
+}
+
+/**
+ * Refresh everything an answer changes (votes, questions, passes, to-dos). The same four calls `useAnswer`
+ * makes once its write queue has drained.
+ */
+export function invalidateAfterAnswer(queryClient: InvalidatingClient, tripId: string): void {
+  void queryClient.invalidateQueries({ queryKey: queryKeys.votes(tripId) })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
+  void queryClient.invalidateQueries({ queryKey: questionPassesKey(tripId) })
+  void queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) })
+}
+
 export interface UseAnswerResult {
   /**
    * Answer a question. Computes the writes from the CURRENT cache, updates the
@@ -464,10 +543,7 @@ export function useAnswer(tripId: string): UseAnswerResult {
     // failure the refetch is what undoes the optimistic update.
     onSettled: () => {
       if (queryClient.isMutating({ mutationKey: ['answer', tripId] }) > 1) return
-      void queryClient.invalidateQueries({ queryKey: queryKeys.votes(tripId) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
-      void queryClient.invalidateQueries({ queryKey: questionPassesKey(tripId) })
-      void queryClient.invalidateQueries({ queryKey: queryKeys.actions(tripId) })
+      invalidateAfterAnswer(queryClient, tripId)
     },
   })
 

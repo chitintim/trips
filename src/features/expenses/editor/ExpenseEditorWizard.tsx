@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { Modal, Button, Skeleton, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import {
-  useCreateExpense,
+  createExpenseWithSplits,
+  invalidateAfterCreateExpense,
+  refreshAfterCreateExpenseError,
   useUpdateExpense,
   useCreateItemizedExpense,
   useConvertFromItemizedExpense,
@@ -78,7 +81,7 @@ export function ExpenseEditorWizard({
   const { showToast } = useToast()
   const navigate = useNavigate()
   const { data: timelineEvents = [] } = useTimeline(trip.id)
-  const createExpense = useCreateExpense(trip.id)
+  const queryClient = useQueryClient()
   const updateExpense = useUpdateExpense(trip.id)
   const createItemizedExpense = useCreateItemizedExpense(trip.id)
   const reitemizeExpense = useReitemizeExpense(trip.id)
@@ -241,6 +244,24 @@ export function ExpenseEditorWizard({
         return
       }
 
+      if (!editingExpense) {
+        // A new plain-split expense: the same shared function the trip assistant runs when its suggestion is confirmed, so the
+        // screen and the chat write exactly the same rows (FX fields, expense row, split rows, rollback on a split failure).
+        let created: Awaited<ReturnType<typeof createExpenseWithSplits>>
+        try {
+          created = await createExpenseWithSplits(trip.id, { draft, amountMajor, receiptUrl, baseCurrency: trip.base_currency })
+        } catch (err) {
+          refreshAfterCreateExpenseError(queryClient, trip.id, err)
+          throw err
+        }
+        await invalidateAfterCreateExpense(queryClient, trip.id)
+        logActivity({ verb: 'expense_added', entity: { type: 'expense', id: created.id, label: created.description } })
+        showToast({ type: 'success', message: 'Expense added' })
+        clearDraft()
+        handleClosed()
+        return
+      }
+
       const fx = await resolveExpenseFxFields({
         amountMajor,
         currency: draft.currency,
@@ -250,36 +271,31 @@ export function ExpenseEditorWizard({
       })
 
       const splitRows = buildSplitRows(draft, amountMajor, fx)
-      const expensePayload = buildExpensePayload(draft, amountMajor, receiptUrl, fx, { includeParticipantIds: !isEditMode || participantsChanged })
+      const expensePayload = buildExpensePayload(draft, amountMajor, receiptUrl, fx, { includeParticipantIds: participantsChanged })
 
-      if (isEditMode && editingExpense) {
-        if (wasItemized && draft.splitMode !== 'itemized') {
-          // The record WAS itemized but the user switched the split mode
-          // away from itemized in this session -- convert it back (clean
-          // up line items/allocation link, write real expense_splits).
-          // SplitStep's mode-change guard already refuses this switch
-          // client-side when claims exist; useConvertFromItemizedExpense
-          // re-checks server-side as a defensive backstop.
-          await convertFromItemizedExpense.mutateAsync({
-            expenseId: editingExpense.id,
-            expense: { ...expensePayload, status: null, ai_parsed: false },
-            splits: splitRows,
-          })
-        } else {
-          const removedUserIds = editingExpense.splits.map((s) => s.user_id).filter((id) => !draft.participantIds.includes(id))
-          await updateExpense.mutateAsync({
-            expenseId: editingExpense.id,
-            expense: expensePayload,
-            splits: splitRows,
-            removedUserIds,
-          })
-        }
+      if (wasItemized && draft.splitMode !== 'itemized') {
+        // The record WAS itemized but the user switched the split mode
+        // away from itemized in this session -- convert it back (clean
+        // up line items/allocation link, write real expense_splits).
+        // SplitStep's mode-change guard already refuses this switch
+        // client-side when claims exist; useConvertFromItemizedExpense
+        // re-checks server-side as a defensive backstop.
+        await convertFromItemizedExpense.mutateAsync({
+          expenseId: editingExpense.id,
+          expense: { ...expensePayload, status: null, ai_parsed: false },
+          splits: splitRows,
+        })
       } else {
-        const created = await createExpense.mutateAsync({ expense: expensePayload, splits: splitRows })
-        logActivity({ verb: 'expense_added', entity: { type: 'expense', id: created.id, label: created.description } })
+        const removedUserIds = editingExpense.splits.map((s) => s.user_id).filter((id) => !draft.participantIds.includes(id))
+        await updateExpense.mutateAsync({
+          expenseId: editingExpense.id,
+          expense: expensePayload,
+          splits: splitRows,
+          removedUserIds,
+        })
       }
 
-      showToast({ type: 'success', message: isEditMode ? 'Expense updated' : 'Expense added' })
+      showToast({ type: 'success', message: 'Expense updated' })
       clearDraft()
       handleClosed()
     } catch (err) {

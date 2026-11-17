@@ -1,15 +1,94 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { supabase } from '../../../lib/supabase'
 import { queryKeys } from '../../../lib/queries/queryKeys'
 import { throwIfError } from '../../../lib/queries/assertRowsAffected'
-import { useSections } from '../../../lib/queries/usePlanning'
+import { useSections, type SectionWithOptions } from '../../../lib/queries/usePlanning'
 import { useTripActivityLog } from '../../organizer/lib/activity'
-import { useSuggestOption } from '../../../lib/queries/useSuggestions'
+import { suggestOption, invalidateAfterSuggestOption } from '../../../lib/queries/useSuggestions'
 import { normalizeSuggestionLink } from '../../decisions/lib/suggestOption'
 import {
   buildEventInsert, buildIdeaOptionRow, buildIdeasSectionInsert, buildQuestionOptionRows, buildSectionInsert, findIdeasQuestion,
   type HappeningValues, type IdeaValues, type QuestionValues,
 } from './addFlow'
+
+/** Create a happening (timeline event). Plain function; the hook adds the activity row and cache refresh. */
+export async function createHappening(tripId: string, userId: string | undefined, v: HappeningValues): Promise<{ id: string }> {
+  if (!userId) throw new Error('You need to be signed in.')
+  const { data, error } = await supabase.from('trip_timeline_events').insert(buildEventInsert(v, tripId, userId)).select('id').single()
+  throwIfError(error)
+  return { id: data!.id }
+}
+
+/**
+ * Create a question with its options (organizers). If the options cannot be stored the empty question is
+ * removed again. Returns the new question's id. Plain function shared by the Add flow and the trip chat; the
+ * activity row (`option_added`) and the cache refresh stay with the caller (`invalidateAfterCreateQuestion`).
+ */
+export async function createQuestionWithOptions(tripId: string, v: QuestionValues): Promise<{ id: string }> {
+  const { data: section, error } = await supabase
+    .from('planning_sections')
+    .insert({ ...buildSectionInsert(v), trip_id: tripId })
+    .select('id')
+    .single()
+  throwIfError(error)
+  const sectionId = section!.id
+  const { error: optionsError } = await supabase.from('options').insert(buildQuestionOptionRows(v, sectionId))
+  if (optionsError) {
+    // Never leave an empty question behind.
+    await supabase.from('planning_sections').delete().eq('id', sectionId)
+    throwIfError(optionsError)
+  }
+  return { id: sectionId }
+}
+
+/**
+ * Add an idea. A participant (not an organizer) goes through the `suggest_option` RPC, which writes the
+ * activity row itself; an organizer finds or creates the Ideas question and inserts the option directly.
+ * `knownSections` is only a fallback for finding the Ideas question when the fresh lookup returns nothing.
+ */
+export async function addIdea(
+  tripId: string,
+  v: IdeaValues,
+  asParticipant: boolean,
+  knownSections?: ReadonlyArray<Pick<SectionWithOptions, 'id' | 'status' | 'title' | 'metadata' | 'created_at'>>
+): Promise<{ questionId: string }> {
+  if (asParticipant) {
+    // People who are not organizers cannot write options or questions; the RPC adds one safe option to the Ideas
+    // question (creating it on first use) and writes the activity row itself.
+    const res = await suggestOption(tripId, { sectionId: null, idea: true, title: v.title, link: normalizeSuggestionLink(v.link) ?? '' })
+    return { questionId: res.section_id }
+  }
+  // Find-or-create defensively: re-query before inserting, and if two buckets ever exist always use the oldest.
+  const { data: existing, error: lookupError } = await supabase
+    .from('planning_sections')
+    .select('id, status, title, metadata, created_at')
+    .eq('trip_id', tripId)
+    .order('created_at', { ascending: true })
+    .order('id', { ascending: true })
+  throwIfError(lookupError)
+  let sectionId = findIdeasQuestion(existing ?? knownSections)?.id
+  if (!sectionId) {
+    const { data, error } = await supabase
+      .from('planning_sections')
+      .insert({ ...buildIdeasSectionInsert(), trip_id: tripId })
+      .select('id')
+      .single()
+    throwIfError(error)
+    sectionId = data!.id
+  }
+  const { error } = await supabase.from('options').insert(buildIdeaOptionRow(v, sectionId))
+  throwIfError(error)
+  return { questionId: sectionId }
+}
+
+/** Refresh what the Add saves change: the timeline for a happening, the questions for the rest. Same calls the hook makes. */
+export function invalidateAfterCreateHappening(queryClient: QueryClient, tripId: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.timeline(tripId) })
+}
+export function invalidateAfterCreateQuestion(queryClient: QueryClient, tripId: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
+}
+export const invalidateAfterAddIdea = invalidateAfterCreateQuestion
 
 /**
  * The three Add saves. New file (not usePlanning.ts) because the existing hooks do not hand back the new
@@ -19,78 +98,33 @@ export function useAddToPlanSave(tripId: string, userId: string | undefined, asP
   const queryClient = useQueryClient()
   const logActivity = useTripActivityLog(tripId)
   const { data: sections } = useSections(tripId)
-  const suggest = useSuggestOption(tripId)
 
   const happening = useMutation({
-    mutationFn: async (v: HappeningValues): Promise<{ id: string }> => {
-      if (!userId) throw new Error('You need to be signed in.')
-      const { data, error } = await supabase.from('trip_timeline_events').insert(buildEventInsert(v, tripId, userId)).select('id').single()
-      throwIfError(error)
-      return { id: data!.id }
-    },
+    mutationFn: (v: HappeningValues): Promise<{ id: string }> => createHappening(tripId, userId, v),
     onSuccess: (_row, v) => {
       logActivity({ verb: 'event_added', entity: { type: 'timeline_event', label: v.title.trim() } })
-      return queryClient.invalidateQueries({ queryKey: queryKeys.timeline(tripId) })
+      return invalidateAfterCreateHappening(queryClient, tripId)
     },
   })
 
   const question = useMutation({
-    mutationFn: async (v: QuestionValues): Promise<{ id: string }> => {
-      const { data: section, error } = await supabase
-        .from('planning_sections')
-        .insert({ ...buildSectionInsert(v), trip_id: tripId })
-        .select('id')
-        .single()
-      throwIfError(error)
-      const sectionId = section!.id
-      const { error: optionsError } = await supabase.from('options').insert(buildQuestionOptionRows(v, sectionId))
-      if (optionsError) {
-        // Never leave an empty question behind.
-        await supabase.from('planning_sections').delete().eq('id', sectionId)
-        throwIfError(optionsError)
-      }
-      return { id: sectionId }
-    },
+    mutationFn: (v: QuestionValues): Promise<{ id: string }> => createQuestionWithOptions(tripId, v),
     onSuccess: (row, v) => {
       logActivity({ verb: 'option_added', entity: { type: 'section', id: row.id, label: v.title.trim() } })
-      return queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
+      return invalidateAfterCreateQuestion(queryClient, tripId)
     },
   })
 
   const idea = useMutation({
-    mutationFn: async (v: IdeaValues): Promise<{ questionId: string }> => {
-      if (asParticipant) {
-        // People who are not organizers cannot write options or questions; the RPC adds one safe option to the Ideas
-        // question (creating it on first use) and writes the activity row itself.
-        const res = await suggest.mutateAsync({ sectionId: null, idea: true, title: v.title, link: normalizeSuggestionLink(v.link) ?? '' })
-        return { questionId: res.section_id }
-      }
-      // Find-or-create defensively: re-query before inserting, and if two buckets ever exist always use the oldest.
-      const { data: existing, error: lookupError } = await supabase
-        .from('planning_sections')
-        .select('id, status, title, metadata, created_at')
-        .eq('trip_id', tripId)
-        .order('created_at', { ascending: true })
-        .order('id', { ascending: true })
-      throwIfError(lookupError)
-      let sectionId = findIdeasQuestion(existing ?? sections)?.id
-      if (!sectionId) {
-        const { data, error } = await supabase
-          .from('planning_sections')
-          .insert({ ...buildIdeasSectionInsert(), trip_id: tripId })
-          .select('id')
-          .single()
-        throwIfError(error)
-        sectionId = data!.id
-      }
-      const { error } = await supabase.from('options').insert(buildIdeaOptionRow(v, sectionId))
-      throwIfError(error)
-      return { questionId: sectionId }
-    },
+    mutationFn: (v: IdeaValues): Promise<{ questionId: string }> => addIdea(tripId, v, asParticipant, sections),
     onSuccess: (row, v) => {
-      if (asParticipant) return queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
+      if (asParticipant) {
+        // The suggestion went through suggest_option, whose own hook refreshes every decision key first.
+        invalidateAfterSuggestOption(queryClient, tripId)
+        return invalidateAfterAddIdea(queryClient, tripId)
+      }
       logActivity({ verb: 'option_added', entity: { type: 'section', id: row.questionId, label: v.title.trim() } })
-      return queryClient.invalidateQueries({ queryKey: queryKeys.sections(tripId) })
+      return invalidateAfterAddIdea(queryClient, tripId)
     },
   })
 

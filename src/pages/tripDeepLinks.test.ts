@@ -354,3 +354,11 @@ describe('planDeepLink', () => {
     })
   })
 })
+
+describe('?open=ask (the trip assistant)', () => {
+  it('parses, round-trips and opens the assistant without picking a sheet to land on', () => {
+    expect(resolveOpenParam('ask')).toEqual({ kind: 'ask' })
+    expect(formatOpenParam({ kind: 'ask' })).toBe('ask')
+    expect(planDeepLink({ kind: 'ask' }, ctx()).open).toEqual({ sheet: 'ask' })
+  })
+})

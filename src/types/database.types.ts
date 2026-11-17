@@ -451,6 +451,113 @@ export type Database = {
           },
         ]
       }
+      chat_actions: {
+        Row: {
+          basis: Json
+          created_at: string
+          edited: boolean
+          error: string | null
+          expires_at: string
+          finished_at: string | null
+          id: string
+          kind: string
+          message_id: string | null
+          params: Json
+          preview: Json
+          requires: "tap" | "review"
+          result: Json | null
+          started_at: string | null
+          status: "proposed" | "executing" | "done" | "failed" | "dismissed" | "expired" | "edited_elsewhere"
+          trip_id: string
+          turn_id: string
+          user_id: string
+        }
+        Insert: {
+          basis: Json
+          created_at?: string
+          edited?: boolean
+          error?: string | null
+          expires_at?: string
+          finished_at?: string | null
+          id?: string
+          kind: string
+          message_id?: string | null
+          params: Json
+          preview: Json
+          requires: "tap" | "review"
+          result?: Json | null
+          started_at?: string | null
+          status?: "proposed" | "executing" | "done" | "failed" | "dismissed" | "expired" | "edited_elsewhere"
+          trip_id: string
+          turn_id: string
+          user_id: string
+        }
+        Update: {
+          edited?: boolean
+          error?: string | null
+          finished_at?: string | null
+          result?: Json | null
+          started_at?: string | null
+          status?: "proposed" | "executing" | "done" | "failed" | "dismissed" | "expired" | "edited_elsewhere"
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chat_actions_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "chat_actions_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "chat_actions_message_id_fkey"
+            columns: ["message_id"]
+            isOneToOne: false
+            referencedRelation: "trip_chat_messages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      trip_chat_threads: {
+        Row: {
+          cleared_at: string | null
+          last_seen_at: string
+          trip_id: string
+          user_id: string
+        }
+        Insert: {
+          cleared_at?: string | null
+          last_seen_at?: string
+          trip_id: string
+          user_id: string
+        }
+        Update: {
+          cleared_at?: string | null
+          last_seen_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trip_chat_threads_trip_id_fkey"
+            columns: ["trip_id"]
+            isOneToOne: false
+            referencedRelation: "trips"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "trip_chat_threads_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_direct_writes: {
         Row: {
           at: string
@@ -1784,7 +1891,9 @@ export type Database = {
           id: string
           metadata: Json | null
           role: Database["public"]["Enums"]["chat_message_role"]
+          thread_user_id?: string | null
           trip_id: string
+          turn_id?: string | null
           user_id: string | null
         }
         Insert: {
@@ -1795,7 +1904,9 @@ export type Database = {
           id?: string
           metadata?: Json | null
           role: Database["public"]["Enums"]["chat_message_role"]
+          thread_user_id?: string | null
           trip_id: string
+          turn_id?: string | null
           user_id?: string | null
         }
         Update: {
@@ -1806,7 +1917,9 @@ export type Database = {
           id?: string
           metadata?: Json | null
           role?: Database["public"]["Enums"]["chat_message_role"]
+          thread_user_id?: string | null
           trip_id?: string
+          turn_id?: string | null
           user_id?: string | null
         }
         Relationships: [
@@ -2364,6 +2477,42 @@ export type Database = {
       }
       reitemize_expense: {
         Args: { p_expense_id: string; p_header: Json; p_lines: Json; p_preview?: boolean }
+        Returns: Json
+      }
+      begin_chat_action: {
+        Args: { p_id: string }
+        Returns: Json
+      }
+      finish_chat_action: {
+        Args: { p_error?: string; p_id: string; p_ok: boolean; p_result?: Json }
+        Returns: Json
+      }
+      dismiss_chat_action: {
+        Args: { p_id: string }
+        Returns: Json
+      }
+      mark_chat_action_edited: {
+        Args: { p_id: string; p_result?: Json }
+        Returns: Json
+      }
+      mark_chat_action_undone: {
+        Args: { p_id: string }
+        Returns: Json
+      }
+      chat_actions_expire_stale: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      new_chat: {
+        Args: { p_trip_id: string }
+        Returns: Json
+      }
+      mark_chat_seen: {
+        Args: { p_trip_id: string }
+        Returns: Json
+      }
+      admin_ai_usage_summary: {
+        Args: { p_days?: number }
         Returns: Json
       }
       set_my_receipt_claims: {

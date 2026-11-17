@@ -1636,3 +1636,53 @@ SELECT build, tbl, op, count(*) AS statements, max(at) AS last_seen FROM public.
 -- 24g. Table-share activity so far (POST-APPLY). Informational.
 SELECT created_at, metadata ->> 'line' AS line, metadata ->> 'from' AS from_amount, metadata ->> 'to' AS to_amount FROM public.activity_feed WHERE verb = 'receipt_table_share_changed' ORDER BY created_at DESC LIMIT 20;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================================
+-- 25. Trip chat A1: 20261129090000_chat_actions.sql, 20261129100000_chat_private_threads.sql, 20261129110000_admin_ai_usage.sql. All read-only except the closing NOTIFY.
+--     The LIVE policies of trip_chat_messages are not in the repo: the private-threads migration adds only RESTRICTIVE policies and fails loudly if the table is not as expected.
+--     RUN 25b FIRST and read it: it is the evidence the migration's pre-flight assumes.
+-- =====================================================================================
+
+-- 25a. Names are free. Safe: zero rows from every statement.
+SELECT c.relname FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('chat_actions', 'trip_chat_threads');
+SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'trip_chat_messages' AND column_name IN ('thread_user_id', 'turn_id');
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('begin_chat_action', 'finish_chat_action', 'dismiss_chat_action', 'mark_chat_action_edited',
+  'chat_actions_expire_stale', 'mark_chat_action_undone', '_chat_action_json', '_chat_action_own', 'guard_chat_action_update', 'new_chat', 'mark_chat_seen', 'admin_ai_usage_summary');
+SELECT policyname FROM pg_policies WHERE schemaname = 'public' AND (policyname LIKE 'Private chat threads:%' OR policyname IN ('Users can view their own chat actions', 'Users can view their own chat thread state'));
+SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND indexname IN ('trip_chat_messages_thread_idx', 'trip_chat_messages_turn_uidx', 'chat_actions_user_turn_idx', 'chat_actions_turn_dedupe_uidx');
+
+-- 25b. THE LIVE STATE OF trip_chat_messages (record all of it). Expected (schema.txt): columns id uuid, trip_id uuid NOT NULL, user_id uuid, role chat_message_role NOT NULL (user|assistant|system),
+--      content text NOT NULL, actions_executed jsonb, had_write_actions bool, metadata jsonb, created_at timestamptz; RLS ON; at least ONE permissive SELECT policy (the migration refuses otherwise).
+SELECT column_name, data_type, udt_name, is_nullable, column_default FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'trip_chat_messages' ORDER BY ordinal_position;
+SELECT c.relrowsecurity AS rls_on, c.relforcerowsecurity AS rls_forced, c.relreplident AS replica_identity FROM pg_class c WHERE c.oid = 'public.trip_chat_messages'::regclass;
+SELECT policyname, cmd, permissive, roles, qual, with_check FROM pg_policies WHERE schemaname = 'public' AND tablename = 'trip_chat_messages' ORDER BY cmd, policyname;
+SELECT tgname, tgenabled, pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = 'public.trip_chat_messages'::regclass AND NOT tgisinternal;
+SELECT conname, contype, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.trip_chat_messages'::regclass ORDER BY 1;
+SELECT conrelid::regclass AS referencing, conname FROM pg_constraint WHERE confrelid = 'public.trip_chat_messages'::regclass;   -- chat_actions.message_id will be the first FK into it
+SELECT pubname FROM pg_publication_tables WHERE schemaname = 'public' AND tablename = 'trip_chat_messages';   -- realtime: the restrictive SELECT policy filters what subscribers receive
+SELECT has_table_privilege('authenticated', 'public.trip_chat_messages', 'INSERT') AS auth_insert, has_table_privilege('authenticated', 'public.trip_chat_messages', 'UPDATE') AS auth_update,
+       has_table_privilege('authenticated', 'public.trip_chat_messages', 'DELETE') AS auth_delete;
+SELECT count(*) AS rows, count(*) FILTER (WHERE user_id IS NULL) AS assistant_or_null_user, min(created_at), max(created_at) FROM public.trip_chat_messages;   -- the existing rows become the READ-ONLY legacy history (thread_user_id NULL)
+SELECT enum_range(NULL::public.chat_message_role) AS roles;
+
+-- 25c. ai_usage (admin summary) and users.role. Expected: ai_usage columns function_name, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, estimated_cost_usd, created_at; users.role has 'admin'.
+SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ai_usage' ORDER BY ordinal_position;
+SELECT policyname, cmd, qual FROM pg_policies WHERE schemaname = 'public' AND tablename = 'ai_usage';
+SELECT count(*) AS ai_usage_rows, min(created_at), max(created_at) FROM public.ai_usage;
+SELECT enum_range(NULL::public.user_role) AS user_roles;
+SELECT count(*) AS site_admins FROM public.users WHERE role::text = 'admin';
+-- 25d. Helpers the migrations call. Safe: is_trip_participant(uuid, uuid) exists (SECURITY DEFINER); auth.role() exists.
+SELECT p.oid::regprocedure, p.prosecdef FROM pg_proc p WHERE p.proname IN ('is_trip_participant', 'role') AND p.pronamespace IN ('public'::regnamespace, 'auth'::regnamespace);
+-- 25e. The chat message bucket today (the daily action cap is NOT a rate_limits bucket: it is counted in begin_chat_action).
+SELECT feature, count(*) FROM public.rate_limits GROUP BY 1 ORDER BY 1;
+-- 25f. No long-running transaction on the chat tables (the migrations set lock_timeout = 5s).
+SELECT pid, now() - xact_start AS open_for, left(query, 100) AS query FROM pg_stat_activity WHERE state <> 'idle' AND xact_start < now() - interval '30 seconds' AND pid <> pg_backend_pid() AND query ILIKE '%trip_chat%';
+-- 25g. POST-APPLY. Safe: the four RESTRICTIVE policies on trip_chat_messages (SELECT, INSERT, UPDATE, DELETE) next to the live permissive ones; every existing row has thread_user_id NULL;
+--      chat_actions and trip_chat_threads have RLS on with ONE select policy each; authenticated has only SELECT on both; the RPCs are executable by authenticated, expire_stale by service_role only.
+SELECT policyname, cmd, permissive FROM pg_policies WHERE schemaname = 'public' AND tablename IN ('trip_chat_messages', 'chat_actions', 'trip_chat_threads') ORDER BY tablename, cmd, policyname;
+SELECT count(*) FILTER (WHERE thread_user_id IS NULL) AS legacy_rows, count(*) FILTER (WHERE thread_user_id IS NOT NULL) AS private_rows FROM public.trip_chat_messages;
+SELECT c.relname, c.relrowsecurity, has_table_privilege('authenticated', c.oid, 'SELECT') AS auth_select, has_table_privilege('authenticated', c.oid, 'INSERT') AS auth_insert, has_table_privilege('authenticated', c.oid, 'UPDATE') AS auth_update
+FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('chat_actions', 'trip_chat_threads') ORDER BY 1;
+SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec, has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_exec
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('begin_chat_action', 'finish_chat_action', 'dismiss_chat_action', 'mark_chat_action_edited', 'chat_actions_expire_stale', 'new_chat', 'mark_chat_seen', 'admin_ai_usage_summary') ORDER BY 1;
+NOTIFY pgrst, 'reload schema';

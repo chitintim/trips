@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../../../lib/supabase'
-import { queryKeys } from '../../../lib/queries/queryKeys'
 import { callRpc } from '../../../lib/queries/useExpenses'
+import { invalidateReceiptTable } from '../../../lib/queries/useReceiptTable'
 import type { ItemizedSaveLine } from '../itemized/itemizedState'
 import { previewReitemize, runReitemize, ReitemizeError, type Db, type ReitemizePreview, type ReitemizeSaveResult } from './reitemizeRun'
 
@@ -58,6 +58,8 @@ export function useReitemizeExpense(tripId: string) {
       }
       return { ...saved, id: expenseId, code: existingLink?.code ?? allocationCode }
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.expenses(tripId) }),
+    // The claim page reads outside the trip expenses prefix (['claimLink', code], ['expenseClaims', id], ['expense', id]), and the to-dos
+    // and balances live under 'actions' / 'settlements': refresh all of them so the claim page never shows the old items or total.
+    onSuccess: (_result, vars) => invalidateReceiptTable(queryClient, tripId, vars.expenseId),
   })
 }

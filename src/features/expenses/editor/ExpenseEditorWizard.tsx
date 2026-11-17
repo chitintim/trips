@@ -24,7 +24,7 @@ import { OneScreenForm } from './OneScreenForm'
 import { buildSplitRows, buildExpensePayload, buildItemizedExpensePayload, buildItemizedHeaderEditPayload } from './expenseSavePayload'
 import { useReitemizeExpense, previewReitemizeExpense } from './useReitemizeExpense'
 import { useSendToTable } from '../../../lib/queries/useReceiptTable'
-import { clearedPeopleLine, receiptColumnsOf, type SendOutcome } from '../claims/receiptTable'
+import { peopleToTellAfterReitemise, reitemiseNoticeLine, receiptColumnsOf, type SendOutcome } from '../claims/receiptTable'
 import { itemiseChoice, isFrozen, pickEditorScreen, startsDirty } from './expenseFormLogic'
 import { FROZEN_EXPENSES_MESSAGE } from '../quick-capture/addExpenseEntry'
 import { emptyWizardDraft, draftFromExpense, draftFromParsedReceipt, parsedLineCount, seedParticipantIds, participantSelectionChanged, withDefaultPayer, type ExpenseWizardDraft } from './wizardState'
@@ -392,17 +392,16 @@ export function ExpenseEditorWizard({
         const cols = receiptColumnsOf(editingExpense)
         let notice: SendOutcome | null = null
         // Both groups look again: claims cleared, and "That's everything" answers deleted.
-        const lookAgain = [...new Set([...result.clearedUserIds, ...result.reconfirmUserIds])]
+        // The person editing is not emailed or counted: they see their own cleared claim in the toast.
+        const told = peopleToTellAfterReitemise(result.clearedUserIds, result.reconfirmUserIds, user.id)
+        const lookAgain = [...new Set([...told.clearedOthers, ...told.reconfirmOthers])]
         if (lookAgain.length > 0 && cols?.claimsSentAt && !cols.claimsClosedAt) {
           notice = await sendToTable.mutateAsync({ expenseId: editingExpense.id, resendUserIds: lookAgain })
         }
         showToast({
           type: notice && (!notice.ok || notice.failed > 0) ? 'warning' : 'success',
           message: 'Itemized expense updated',
-          description:
-            result.clearedUserIds.length > 0 || result.reconfirmUserIds.length > 0
-              ? clearedPeopleLine(result.clearedUserIds.length, notice, result.reconfirmUserIds.length)
-              : undefined,
+          description: reitemiseNoticeLine(told, notice),
         })
         goToWhoHadWhat = result.code
       } else {

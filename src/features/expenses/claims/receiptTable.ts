@@ -188,6 +188,25 @@ export function clearedPeopleLine(cleared: number, outcome: SendOutcome | null, 
   return `${who} ${told}${outcome.failed > 0 ? ` ${failedLine(outcome.failed)}: tap "Tell people what changed".` : ''}`
 }
 
+export const OWN_CLAIM_CLEARED = 'Your claim on the changed item was cleared.'
+
+/** Splits the people a re-itemise affected into "tell these" (everyone but the person editing) and whether the editor's own claim was cleared. */
+export function peopleToTellAfterReitemise(clearedUserIds: string[], reconfirmUserIds: string[], meId: string | null | undefined) {
+  const others = (ids: string[]) => [...new Set(ids)].filter((id) => id !== meId)
+  return {
+    clearedOthers: others(clearedUserIds),
+    reconfirmOthers: others(reconfirmUserIds),
+    ownClaimCleared: !!meId && clearedUserIds.includes(meId),
+  }
+}
+
+/** The toast text after a re-itemise: counts and email wording are about other people only; the editor just hears about their own claim. */
+export function reitemiseNoticeLine(told: ReturnType<typeof peopleToTellAfterReitemise>, outcome: SendOutcome | null): string | undefined {
+  const others = told.clearedOthers.length > 0 || told.reconfirmOthers.length > 0 ? clearedPeopleLine(told.clearedOthers.length, outcome, told.reconfirmOthers.length) : ''
+  const own = told.ownClaimCleared ? OWN_CLAIM_CLEARED : ''
+  return [others, own].filter(Boolean).join(' ') || undefined
+}
+
 const SEND_REASON_COPY: Record<string, string> = {
   not_available: "Sending to the table isn't switched on yet.",
   not_itemised: "This expense isn't split by item.",

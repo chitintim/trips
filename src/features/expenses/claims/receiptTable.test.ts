@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   NO_RPC_SUPPORT,
   clearedPeopleLine,
+  peopleToTellAfterReitemise,
+  reitemiseNoticeLine,
   countToTell,
   deadlinePassed,
   describeSendReason,
@@ -122,6 +124,23 @@ describe('re-itemising a sent receipt', () => {
     expect(clearedPeopleLine(1, { ...ok, sent: 0 })).toContain("they'll see it in the app")
     expect(clearedPeopleLine(1, { ...ok, ok: false, reason: 'deadline_passed' })).toContain('nobody was emailed')
     expect(clearedPeopleLine(1, { ...ok, ok: false, reason: 'send_failed' })).toContain('Tell people what changed')
+  })
+})
+
+describe('re-itemise toast for the person editing', () => {
+  const ok = { ok: true, sent: 2, skipped: 0, failed: 0, alreadyTold: 0, emailConfigured: true, reason: null }
+  it('only your own claim cleared: says so and nothing about emailing', () => {
+    const told = peopleToTellAfterReitemise(['me'], [], 'me')
+    expect(told).toEqual({ clearedOthers: [], reconfirmOthers: [], ownClaimCleared: true })
+    expect(reitemiseNoticeLine(told, null)).toBe('Your claim on the changed item was cleared.')
+  })
+  it('others cleared: existing counts wording, you are left out of the count', () => {
+    const told = peopleToTellAfterReitemise(['me', 'a'], [], 'me')
+    expect(reitemiseNoticeLine(told, ok)).toBe("1 person's claim was cleared. We emailed 2 people to look again. Your claim on the changed item was cleared.")
+    expect(reitemiseNoticeLine(peopleToTellAfterReitemise(['a', 'b'], [], 'me'), { ...ok, sent: 0 })).toContain("they'll see it in the app")
+  })
+  it('nothing cleared: no text', () => {
+    expect(reitemiseNoticeLine(peopleToTellAfterReitemise([], [], 'me'), null)).toBeUndefined()
   })
 })
 

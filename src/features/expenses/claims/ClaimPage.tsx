@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Card, Button, Badge, Spinner, EmptyState, Modal, SegmentedControl, ConfirmDiscardSheet, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
@@ -21,6 +21,7 @@ import { labelOfUser, peopleOnReceipt } from './claimPeople'
 import { moneySpaceUrl } from './claimDone'
 import { ClaimMatrix } from './ClaimMatrix'
 import { WhoHadWhat } from './WhoHadWhat'
+import { resyncSelections } from './claimSelections'
 import { LeftoversSheet } from './LeftoversSheet'
 import { ShareClaimLink } from './ShareClaimLink'
 import { ClaimReplyBar } from './ClaimReplyBar'
@@ -104,6 +105,15 @@ export function ClaimPage() {
   const savedSelections = useMemo(() => (resolution && user ? stepperSelections(resolution.claims) : {}), 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [resolution, user])
+
+  // Follow claims that change elsewhere (Who had what, a re-itemise, another phone), keeping this person's own unsaved taps.
+  const prevSavedRef = useRef(savedSelections)
+  useEffect(() => {
+    const prev = prevSavedRef.current
+    prevSavedRef.current = savedSelections
+    if (prev === savedSelections) return
+    setLocalSelections((cur) => resyncSelections(cur, prev, savedSelections))
+  }, [savedSelections])
 
   const changedLineIds = useMemo(() => {
     const keys = new Set([...Object.keys(localSelections), ...Object.keys(savedSelections)])

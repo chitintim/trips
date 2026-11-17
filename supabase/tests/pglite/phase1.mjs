@@ -296,7 +296,7 @@ const P = await mkExpense({ amount: 46, desc: 'Perm', lines: [['a', 1, 10], ['b'
   await fails('no users field', 2, `select set_receipt_claims($1,$2::jsonb)`, [R.id, JSON.stringify([{ line_item_id: R.lines[0] }])], { hint: 'bad_input' })
   // atomic: second entry invalid, first must roll back
   const before = JSON.stringify(await claimRows(R.id))
-  await fails('atomic', 2, `select set_receipt_claims($1,$2::jsonb)`, [R.id, JSON.stringify([{ line_item_id: R.lines[0], user_ids: [U(2)] }, { line_item_id: R.lines[0].replace(/^./, 'f'), user_ids: [U(2)] }])], { hint: 'bad_line' })
+  await fails('atomic', 2, `select set_receipt_claims($1,$2::jsonb)`, [R.id, JSON.stringify([{ line_item_id: R.lines[0], user_ids: [U(2)] }, { line_item_id: R.lines[0].replace(/^./, c => (c === 'f' ? '0' : 'f')), user_ids: [U(2)] }])], { hint: 'bad_line' })
   eq('atomic: nothing changed', JSON.stringify(await claimRows(R.id)), before)
   // duplicates in user_ids are collapsed (cannot over-claim)
   await SET(2, R.id, [{ line_item_id: R.lines[0], user_ids: [U(3), U(3), U(3)] }])

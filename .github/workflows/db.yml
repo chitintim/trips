@@ -58,10 +58,18 @@ jobs:
         env:
           TEST_PG_URL: postgres://postgres:postgres@localhost:5432/postgres
           LOCKS_ITER: '50'
-      - name: The pglite suites against REAL Postgres (informational, does not fail the job)
+      - name: The pglite suites, phase 2 on REAL Postgres (informational, does not fail the job)
+        # phase1 and the rehearsal dry runs always use PGlite (they open their own in-memory database); only the shared-bootstrap suites honour TEST_PG_URL.
+        # Both suites ALWAYS run (no early exit) and every failing check name is printed.
         continue-on-error: true
+        shell: bash {0}
         run: |
+          rc=0
           for s in phase1 phase2; do
-            psql -h localhost -U postgres -c "create database suite_$s"
-            TEST_PG_URL="postgres://postgres:postgres@localhost:5432/suite_$s" node supabase/tests/pglite/run.mjs $s
+            psql -h localhost -U postgres -c "create database suite_$s" || rc=1
+            TEST_PG_URL="postgres://postgres:postgres@localhost:5432/suite_$s" node supabase/tests/pglite/run.mjs $s 2>&1 | tee "/tmp/suite_$s.log"
+            [ "${PIPESTATUS[0]}" = "0" ] || rc=1
           done
+          echo "---- failing checks ----"
+          grep -h "^FAIL" /tmp/suite_*.log || echo "(none)"
+          exit $rc

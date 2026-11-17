@@ -47,6 +47,7 @@ import { ActionsSheet } from '../features/actions'
 import { retroConfig } from '../features/retrospective'
 import { chatEntryConfig, LazyChatSheet } from '../features/chat'
 import { MoneySpace, QuickCaptureSheet } from '../features/expenses'
+import { ADD_EXPENSE_LABEL, ADD_EXPENSE_NAV_ICON } from '../features/expenses/quick-capture/addExpenseEntry'
 import { MarkPaidSheet } from '../features/expenses/settle-up/MarkPaidSheet'
 
 /**
@@ -436,7 +437,7 @@ export function TripDetail() {
 
   // -------------------------------------------------------------------------
   // The contextual sixth nav slot (UX redesign 5.1). One rule, one action per
-  // space: "Add" on Plan, "Scan receipt" on Money, "Invite" on People
+  // space: "Add" on Plan, "＋ Add expense" on Money, "Invite" on People
   // (organisers only), "Your to-dos" on Today when there are any. Otherwise
   // the slot is simply absent.
   // -------------------------------------------------------------------------
@@ -460,7 +461,7 @@ export function TripDetail() {
               },
             }
       case 'money':
-        return { icon: '📷', label: 'Scan receipt', onClick: openQuickCapture }
+        return { icon: ADD_EXPENSE_NAV_ICON, label: ADD_EXPENSE_LABEL, onClick: openQuickCapture }
       case 'people':
         return isOrganizer ? { icon: '✉️', label: 'Invite', onClick: () => setAddParticipantModalOpen(true) } : null
       case 'today':
@@ -770,7 +771,7 @@ export function TripDetail() {
 
       <TravelDetailsSheet isOpen={travelDetailsOpen} onClose={() => setTravelDetailsOpen(false)} tripId={trip.id} />
 
-      {/* Quick capture (scan receipt / add expense), remounted with a fresh
+      {/* Add expense sheet (scan a receipt or enter it yourself), remounted with a fresh
           key on every open per the feature's contract. */}
       {quickCaptureOpen && (
         <QuickCaptureSheet

@@ -145,7 +145,7 @@ export function TodayTab({
           <TodayItemsList trip={trip} />
           <div className="flex gap-2">
             <Button variant="secondary" fullWidth onClick={onQuickCapture}>
-              📷 Scan a receipt
+              ＋ Add expense
             </Button>
           </div>
           <SettleStatusCard trip={trip} onNavigate={onNavigate} />

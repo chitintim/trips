@@ -12,6 +12,7 @@ import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import { defaultTaggedParticipantIds } from '../lib/participantDefaults'
 import { ExpenseEditorWizard } from '../editor/ExpenseEditorWizard'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
+import { addExpenseBlockedMessage, ADD_EXPENSE_LABEL, SCAN_RECEIPT_CHOICE, ENTER_YOURSELF_CHOICE } from './addExpenseEntry'
 import { initialQuickCaptureState, applyParseResult } from './quickCaptureState'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -172,7 +173,9 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
     }
   }
 
-  if (showFullEditor) {
+  const blockedMessage = addExpenseBlockedMessage(trip)
+
+  if (showFullEditor && !blockedMessage) {
     return (
       <ExpenseEditorWizard
         key={state.receiptPath ?? 'quick-capture-refine'}
@@ -192,10 +195,20 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={requestClose} title="Quick capture" size="sm">
-      {state.stage === 'pick' && (
+    <Modal isOpen={isOpen} onClose={requestClose} title={ADD_EXPENSE_LABEL} size="sm">
+      {blockedMessage && (
         <div className="space-y-4">
-          <p className="text-sm text-[var(--text-secondary)]">Snap a receipt or pick a photo — we'll read it for you.</p>
+          <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300">
+            🔒 {blockedMessage}
+          </div>
+          <Button variant="secondary" fullWidth onClick={resetAndClose}>
+            Close
+          </Button>
+        </div>
+      )}
+
+      {!blockedMessage && state.stage === 'pick' && (
+        <div className="space-y-3">
           <input
             ref={fileInputRef}
             type="file"
@@ -207,16 +220,32 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
               if (file) void handleFilePicked(file)
             }}
           />
-          <Button variant="primary" fullWidth leftIcon={<span>📷</span>} onClick={() => fileInputRef.current?.click()}>
-            Take photo / choose file
-          </Button>
-          <Button variant="ghost" fullWidth onClick={() => setShowFullEditor(true)}>
-            Enter manually instead
-          </Button>
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            className="w-full flex items-center gap-3 text-left rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--surface-card)] hover:bg-[var(--surface-hover)] px-4 py-3 min-h-14 press-scale"
+          >
+            <span className="text-2xl" aria-hidden="true">📷</span>
+            <span>
+              <span className="block font-medium text-[var(--text-primary)]">{SCAN_RECEIPT_CHOICE.label}</span>
+              <span className="block text-sm text-[var(--text-secondary)]">{SCAN_RECEIPT_CHOICE.hint}</span>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowFullEditor(true)}
+            className="w-full flex items-center gap-3 text-left rounded-[var(--radius-md)] border border-[var(--border-default)] bg-[var(--surface-card)] hover:bg-[var(--surface-hover)] px-4 py-3 min-h-14 press-scale"
+          >
+            <span className="text-2xl" aria-hidden="true">✍️</span>
+            <span>
+              <span className="block font-medium text-[var(--text-primary)]">{ENTER_YOURSELF_CHOICE.label}</span>
+              <span className="block text-sm text-[var(--text-secondary)]">{ENTER_YOURSELF_CHOICE.hint}</span>
+            </span>
+          </button>
         </div>
       )}
 
-      {(state.stage === 'uploading' || state.stage === 'parsing') && (
+      {!blockedMessage && (state.stage === 'uploading' || state.stage === 'parsing') && (
         <div className="flex flex-col items-center justify-center py-10 gap-2">
           <Spinner size="lg" />
           <p className="text-sm text-[var(--text-secondary)]">
@@ -232,7 +261,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
         </div>
       )}
 
-      {state.stage === 'confirm' && (
+      {!blockedMessage && state.stage === 'confirm' && (
         <div className="space-y-4">
           <p className="text-sm font-medium text-[var(--text-primary)]">Does this look right?</p>
 
@@ -272,7 +301,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
         </div>
       )}
 
-      {state.stage === 'manual' && (
+      {!blockedMessage && state.stage === 'manual' && (
         <div className="space-y-4">
           <div className="rounded-[var(--radius-md)] border border-warn-200 bg-warn-50 dark:bg-warn-900 dark:border-warn-800 px-3 py-2.5 text-sm text-warn-700 dark:text-warn-300">
             Couldn't read this receipt automatically{state.parseError ? `: ${state.parseError}` : ''}. The photo's attached — just fill in the details.
@@ -283,7 +312,7 @@ export function QuickCaptureSheet({ isOpen, onClose, trip, participants, allExpe
         </div>
       )}
 
-      {state.stage === 'saving' && (
+      {!blockedMessage && state.stage === 'saving' && (
         <div className="flex flex-col items-center justify-center py-10 gap-3">
           <Spinner size="lg" />
           <p className="text-sm text-[var(--text-secondary)]">Saving...</p>

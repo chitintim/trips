@@ -15,7 +15,7 @@ import type { ReceiptClaimStatus } from '../lib/balances'
 function r(id: string, paidBy: string, shortfall: number, currency = 'EUR'): ReceiptClaimStatus {
   return {
     expenseId: id, description: `Dinner ${id}`, paidBy, currency, claimCode: null, totalMinor: 10000, claimedMinor: 10000 - shortfall,
-    leftoverClaimedMinor: 0, pendingMinor: shortfall, unclaimedMinor: shortfall, dustMinor: 0, unclaimedOwnMinor: shortfall, shortfallOwnMinor: shortfall, openDiscountOwnMinor: 0,
+    leftoverClaimedMinor: 0, pendingMinor: shortfall, unclaimedMinor: shortfall, dustMinor: 0, unclaimedOwnMinor: shortfall, shortfallOwnMinor: shortfall,
   }
 }
 

@@ -8,7 +8,7 @@ import type { Settlement } from '../../../lib/queries/useSettlements'
 import { isItemizedExpense } from '../types'
 import { fromMinorUnits, toMinorUnits } from '../../../lib/money'
 
-/** One entry per person: a person can hold several claim rows on a receipt (own + leftover/shared), all counted. */
+/** One entry per person: a person holds one claim row per line (any leftover share is a part of it); all lines are counted. */
 function sumClaimsByUser(claims: ExpenseWithDetails['claims'], currency: string): Map<string, number> {
   const out = new Map<string, number>()
   for (const c of claims) out.set(c.user_id, (out.get(c.user_id) ?? 0) + toMinorUnits(c.amount_owed, currency))

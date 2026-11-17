@@ -7,6 +7,7 @@ import type { ReceiptClaimEntry } from '../../../lib/queries/useExpenses'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Expense } from '../../../types'
 import { formatMoneyMinor } from '../lib/formatMoney'
+import { claimLeftoverAmount, claimLeftoverQuantity, claimOwnAmount, claimOwnQuantity, hasOwnClaim } from '../lib/balances'
 import { formatClaimQuantity } from './claimFractions'
 import { peopleOnReceipt } from './claimPeople'
 import { shareLineMinor, hasDirectUnitClaims, REPLACES_OWN_ENTRIES_WARNING } from './claimMath'
@@ -58,26 +59,26 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
   const peopleIds = useMemo(() => people.map((p) => p.id), [people])
   const labelOf = useCallback((id: string) => people.find((p) => p.id === id)?.label ?? 'Someone', [people])
 
-  // What the server has: per line, who is on it (leftover rows are derived and ignored here).
+  // What the server has: per line, who is on it (the leftover share inside a row is derived and ignored here: only each row's own part counts).
   const serverLines = useMemo(() => {
     const result = new Map<string, { assign: Assign; custom: string | null; amounts: Map<string, number>; hasLeftover: boolean }>()
     for (const li of lineItems) {
       const rows = claims.filter((c) => c.line_item_id === li.id)
-      const own = rows.filter((c) => c.source !== 'leftover')
+      const own = rows.filter(hasOwnClaim)
       const amounts = new Map<string, number>()
-      for (const r of own) amounts.set(r.user_id, (amounts.get(r.user_id) ?? 0) + toMinorUnits(r.amount_owed, currency))
+      for (const r of own) amounts.set(r.user_id, (amounts.get(r.user_id) ?? 0) + toMinorUnits(claimOwnAmount(r), currency))
       const ids = [...new Set(own.map((r) => r.user_id))]
-      const qtys = ids.map((id) => own.filter((r) => r.user_id === id).reduce((s, r) => s + r.quantity_claimed, 0))
+      const qtys = ids.map((id) => own.filter((r) => r.user_id === id).reduce((s, r) => s + claimOwnQuantity(r), 0))
       const sum = qtys.reduce((a, b) => a + b, 0)
       const uneven = qtys.length > 0 && Math.max(...qtys) - Math.min(...qtys) > EQUAL_TOLERANCE
       const partial = ids.length > 0 && !li.shared_by_all && Math.abs(sum - li.quantity) > EQUAL_TOLERANCE
       let custom: string | null = null
-      if (uneven || partial) custom = ids.map((id) => `${formatClaimQuantity(own.filter((r) => r.user_id === id).reduce((s, r) => s + r.quantity_claimed, 0))} ${labelOf(id)}`).join(' · ')
+      if (uneven || partial) custom = ids.map((id) => `${formatClaimQuantity(own.filter((r) => r.user_id === id).reduce((s, r) => s + claimOwnQuantity(r), 0))} ${labelOf(id)}`).join(' · ')
       result.set(li.id, {
         assign: li.shared_by_all ? 'all' : ids,
         custom,
         amounts,
-        hasLeftover: rows.some((c) => c.source === 'leftover'),
+        hasLeftover: rows.some((c) => claimLeftoverAmount(c) > 0 || claimLeftoverQuantity(c) > 0),
       })
     }
     return result
@@ -154,8 +155,8 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
       await setClaims.mutateAsync({ expenseId: expense.id, claims: entries })
       setSaved((prev) => ({ ...prev, ...sent }))
       savedRef.current = { ...savedRef.current, ...sent }
-      // The server deletes every claim on a touched line, leftover rows
-      // included; if leftovers had been shared, share them again the same way.
+      // The server deletes every claim on a touched line, the leftover shares
+      // inside them included; if leftovers had been shared, share them again the same way.
       const hadLeftover = ids.some((id) => serverRef.current.get(id)?.hasLeftover)
       if (hadLeftover) {
         try {

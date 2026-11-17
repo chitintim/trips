@@ -35,8 +35,7 @@ export const SERVER_REPORT_OVERCLAIMED_INTRO = 'On these receipts an item has mo
 export const SERVER_REFUSED_NOTE = 'The server stopped the freeze because some receipts still have unclaimed items.'
 
 /** "Dinner at X — €48.00 not claimed". */
-export function notClaimedLine(r: Pick<ReceiptClaimStatus, 'description' | 'unclaimedOwnMinor' | 'currency'> & { openDiscountOwnMinor?: number }): string {
-  if (r.unclaimedOwnMinor <= 0 && (r.openDiscountOwnMinor ?? 0) > 0) return `${r.description} — a ${formatMoneyMinor(r.openDiscountOwnMinor ?? 0, r.currency)} discount isn't shared yet`
+export function notClaimedLine(r: Pick<ReceiptClaimStatus, 'description' | 'unclaimedOwnMinor' | 'currency'>): string {
   return `${r.description} — ${formatMoneyMinor(r.unclaimedOwnMinor, r.currency)} not claimed`
 }
 

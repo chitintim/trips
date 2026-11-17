@@ -10,9 +10,12 @@ SET LOCAL lock_timeout = '5s';
 -- behalf. The front end fails soft until this is applied.
 --
 -- WHAT IT ADDS
---   expense_item_claims.source      text NOT NULL DEFAULT 'self'  CHECK in (self, on_behalf, shared, leftover)
---   expense_item_claims.created_by  uuid NULL -> users            who recorded the row
---   expense_line_items.shared_by_all boolean NOT NULL DEFAULT false   "table item": shared by everyone tagged
+--   expense_item_claims.source           text NOT NULL DEFAULT 'self'  CHECK in (self, on_behalf, shared, leftover): how the row was FIRST made
+--   expense_item_claims.created_by       uuid NULL -> users            who recorded the row
+--   expense_item_claims.leftover_quantity numeric(10,2) NOT NULL DEFAULT 0   the part of quantity_claimed that came from sharing leftovers
+--   expense_item_claims.leftover_amount   numeric(10,2) NOT NULL DEFAULT 0   the part of amount_owed that came from sharing leftovers
+--                                        (CHECK 0 <= part <= the whole; both parts are 0 on every row that was not touched by the leftovers)
+--   expense_line_items.shared_by_all     boolean NOT NULL DEFAULT false   "table item": shared by everyone tagged
 --   expenses.leftover_mode text NULL CHECK in (everyone, person, payer), expenses.leftover_user_id uuid NULL -> users:
 --                                   how the leftovers were last shared (written only by share_receipt_leftovers; read by mode 'same')
 --   set_receipt_claims(p_expense_id uuid, p_claims jsonb) -> jsonb
@@ -21,13 +24,34 @@ SET LOCAL lock_timeout = '5s';
 --                                   ">>> unclaimed_receipts guard" ... "<<< unclaimed_receipts guard") that refuses while any
 --                                   itemised receipt on the trip has unclaimed value (hint unclaimed_receipts) or an over-claimed line
 --                                   (hint overclaimed_receipts). DETAIL is a JSON array [{id, description, unclaimed_minor|overclaimed_minor}].
---   triggers on expense_item_claims: trg_guard_claim_provenance (clients cannot choose source / created_by),
+--   triggers on expense_item_claims: trg_guard_claim_provenance (clients cannot choose source / created_by / the leftover parts),
 --                                    trg_guard_claim_overclaim (clients cannot take a line above its quantity + 0.011, under the RPCs' lock);
 --   trigger on expenses: trg_guard_expense_leftover_mode (clients cannot write leftover_mode / leftover_user_id).
 --                                   "Client" = current_user in (authenticated, anon). SECURITY DEFINER functions run as their owner
 --                                   (current_user is the owner inside them), the service role is neither: both are unaffected.
 --   refund_rate_limit(p_user_id uuid, p_feature text, p_capacity integer) -> boolean   service_role only (parse-receipt, unbilled failures)
 --   private helpers (_receipt_*, _trip_unclaimed_receipts, _trip_overclaimed_receipts): EXECUTE revoked from everyone but the owner/service role.
+--
+-- THE LIVE SCHEMA THIS IS WRITTEN FOR (read-only checks of the live database, 2026-11-17; PRE_APPLY_CHECKS group 21 re-asserts them):
+--   * expense_item_claims has UNIQUE unique_user_claim_per_item (line_item_id, user_id) and CHECKs quantity_claimed > 0, amount_owed >= 0;
+--     quantity_claimed / amount_owed are numeric(10,2). So there is ONE ROW PER (line, person), always: leftovers are NOT separate rows.
+--     A person's leftover share on a line is a PART of their one row (leftover_quantity / leftover_amount say how much of
+--     quantity_claimed / amount_owed it is). A person with no row on the line gets a new row (source 'leftover'); a row's quantity_claimed
+--     is never 0 (money-only remainders are merged into an existing row, see "DUST").
+--   * expense_line_items has CHECKs quantity > 0 and total_amount >= 0 (so NO negative discount lines exist; zero-total lines do: they
+--     are ignored for money, their quantity can still be claimed) and no UPDATE policy (shared_by_all is only ever written by the RPC).
+--   * a live trigger trigger_auto_update_expense_status fires AFTER INSERT OR UPDATE (not DELETE) on expense_item_claims and sets
+--     expenses.status (enum expense_status: unallocated | pending_allocation | allocated | confirmed) with an EXACT quantity comparison
+--     (check_all_items_claimed). Its bodies are not replaced here (unknown, SECURITY DEFINER). See "STATUS".
+--   * expense_item_claims RLS: SELECT trip participants, INSERT own + participant, UPDATE own, DELETE own / payer / admin.
+--     The RPCs are SECURITY DEFINER, so RLS does not apply to them; every write they make satisfies the CHECKs, FKs and the unique key.
+--
+-- STATUS: the live AFTER trigger recomputes expenses.status after EVERY claim INSERT/UPDATE with an exact comparison, so a legacy
+--   receipt split in thirds (0.33 x 3) reads 'pending_allocation' to it. This migration never fights that trigger: _receipt_refresh_status
+--   (the dust-tolerant rule below, same enum labels, 'confirmed' and NULL never set) runs as the LAST statement of each RPC, so the stored
+--   status after an RPC is the tolerant one. After an OLD client's direct write the live trigger may set 'pending_allocation' on a
+--   legacy-thirds receipt again; that is cosmetic: nothing money-related depends on expenses.status (balances, the freeze guard and the
+--   claim to-do use the dust-tolerant computation on the claims themselves; the client's own status write uses it too).
 --
 -- THE ONE DUST TOLERANCE, 0.011 (client: LINE_QUANTITY_TOLERANCE in balances.ts; shared cases in
 -- src/features/expenses/lib/unclaimedParityCases.json run against both): a line is unclaimed when its quantity left is above 0.011, or the
@@ -36,13 +60,14 @@ SET LOCAL lock_timeout = '5s';
 --
 -- CLAIM REPRESENTATION (matches what the client maths expects; see src/features/expenses/claims/claimMath.ts and
 -- src/features/expenses/lib/balances.ts):
---   * one row per (line, person); quantity_claimed in units of the line (hundredths), amount_owed in the EXPENSE currency;
+--   * one row per (line, person); quantity_claimed in units of the line (hundredths), amount_owed in the EXPENSE currency (2 decimals:
+--     numeric(10,2); currencies with 3 decimals are refused by the RPCs);
 --   * tax, tip, service and discounts are already inside expense_line_items.total_amount (the editor pro-rates them into the
 --     line), and balances.ts sums claim.amount_owed as-is, so a person's share of a line IS their share of those adjustments.
 --     Nothing is stored per claim and nothing is derived at read time; this migration does not invent a second convention;
---   * a line shared by k people is split by largest remainder TWICE: quantity in hundredths (column is numeric(10,2)) and
---     amount in the currency's minor units (JPY 0, GBP/EUR 2, KWD 3 decimals via currency_exponent()). Both sum EXACTLY to the
---     line's quantity and total_amount. Ties go to the lower user_id, so results are deterministic;
+--   * a line shared by k people is split by largest remainder TWICE: quantity in hundredths and amount in the currency's minor units
+--     (JPY 0, GBP/EUR 2 decimals via currency_exponent()). Both sum EXACTLY to the line's quantity and total_amount. Ties go to the lower
+--     user_id, so results are deterministic;
 --   * legacy fractional rows (0.5, 0.33, ...; per-claim rounded amounts) are never rewritten unless a manager reassigns that line.
 --
 -- WHO MAY CALL
@@ -64,8 +89,8 @@ SET LOCAL lock_timeout = '5s';
 --
 -- LEFTOVER RULE (proposal section 2d), as implemented in _receipt_leftover_plan:
 --   T = tagged people, n = |T|; Total = expense amount in minor units; even share F = floor(Total / n);
---   L = sum over lines of max(0, line total - claimed amount_owed on that line)  (existing leftover rows are ignored: they are
---   derived and rebuilt); U = T minus the "confirmed" set; room_u = max(0, F - claimed_u).
+--   L = sum over lines of max(0, line total - claimed amount_owed on that line)  (previous leftover PARTS are ignored: they are
+--   derived and rebuilt); U = T minus the "confirmed" set; room_u = max(0, F - claimed_u) (claimed = own parts only).
 --   1. split L across U equally, nobody above room_u (water-filling: whoever is capped keeps their cap, the excess is split
 --      between the rest of U, repeat);  2. whatever is still left (U empty, or everyone in U capped) is split equally across T;
 --   3. integer pennies by largest remainder, ties by user_id; then each person's total is spread over the unclaimed lines in
@@ -73,21 +98,36 @@ SET LOCAL lock_timeout = '5s';
 --   PHASE 1 has no "That's everything" confirmation, so _receipt_leftover_confirmed returns EVERYONE TAGGED: U is empty and "Share between
 --   everyone" is a PLAIN EQUAL SPLIT of the unclaimed value between everyone tagged (nobody is singled out). Phase 2 replaces that one
 --   function with the real confirmed set; the plan function already handles it (both proposal examples are tested with an explicit set).
---   DISCOUNTS: a line with a NEGATIVE total and no claim rows is shared equally between everyone tagged (largest remainder) by
---   share_receipt_leftovers in every mode, and blocks the freeze until then (nobody can claim a voucher).
+--
+-- WRITING THE LEFTOVERS (share_receipt_leftovers), because there is one row per (line, person):
+--   (i)   previous leftover parts are removed first: for every row with leftover_quantity/amount > 0 they are subtracted from
+--         quantity_claimed / amount_owed and zeroed; a row with nothing of the person's own left (a pure-leftover row) is deleted;
+--   (ii)  the plan and the per-line distribution are computed from the person's OWN parts;
+--   (iii) for each (line, person) share: the person's existing row on the line is UPDATED (quantity, amount and the leftover parts all
+--         grow by the share); a person with no row on the line gets a NEW row (source 'leftover', created_by = caller).
+--   DUST: a share with money but no whole hundredth of quantity (a value-only remainder on a line whose quantity is already fully
+--         claimed, or a tiny share) can never be a row of its own (quantity_claimed > 0). If the person has a row on the line the money
+--         merges into it; otherwise it is added to the person's own row with the largest amount on ANOTHER line of the same receipt (the
+--         receipt total stays exact; the freeze guard nets it at receipt level); otherwise, when the person has no row at all and the
+--         remainder is within the line's dust allowance, it stays with the PAYER'S pending bucket (nothing is written; the freeze guard
+--         does not flag it); a remainder above the allowance becomes a row of 0.01 of a unit so the freeze can always be unblocked.
+--   An OLD cached client re-saves a person's claims by deleting their rows and inserting fresh ones: that drops the leftover part (the
+--   trigger forces leftover_* to 0 on client writes). The payer's unclaimed bucket grows again, the receipt shows as having unclaimed
+--   value, sums are never corrupted; "Share leftovers" (mode same) puts it right.
 --
 -- ASSUMPTIONS (verify with supabase/PRE_APPLY_CHECKS.sql group 21):
---   * expense_item_claims has NO unique constraint on (line_item_id, user_id) (a person can hold a leftover row and an own row on
---     the same line), no CHECK forcing quantity_claimed > 0 (a leftover row for a value-only remainder may carry 0.00), and
---     quantity_claimed is numeric(10,2) (hundredths) and amount_owed numeric;
---   * expenses.status is the enum expense_status (unallocated|pending_allocation|allocated|confirmed); 'confirmed' is never changed;
+--   * the live facts listed above; expense_item_claims.leftover_quantity / leftover_amount do not exist yet;
 --   * activity_feed accepts a NULL actor and has no verb CHECK (live: only FKs);
 --   * currency_exponent(text) (20261116130000) and _settlement_can_manage(uuid, uuid) (20261120100000) exist;
 --   * rate_limits(user_id, feature, tokens, last_refill) exists; auth.role() exists (Supabase).
--- Unchanged: realtime publication, the claim page's own-user policies, guard_immutable_keys.
+-- Unchanged: realtime publication, the claim page's own-user policies, guard_immutable_keys, auto_update_expense_status.
+
 
 ALTER TABLE public.expense_item_claims ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'self';
 ALTER TABLE public.expense_item_claims ADD COLUMN IF NOT EXISTS created_by uuid NULL REFERENCES public.users(id) ON DELETE SET NULL;
+-- The leftover share INSIDE a person's one row on a line (see "WRITING THE LEFTOVERS"). 0 everywhere until leftovers are shared.
+ALTER TABLE public.expense_item_claims ADD COLUMN IF NOT EXISTS leftover_quantity numeric(10,2) NOT NULL DEFAULT 0;
+ALTER TABLE public.expense_item_claims ADD COLUMN IF NOT EXISTS leftover_amount numeric(10,2) NOT NULL DEFAULT 0;
 ALTER TABLE public.expense_line_items ADD COLUMN IF NOT EXISTS shared_by_all boolean NOT NULL DEFAULT false;
 -- How the leftovers on this receipt were last shared (set only by share_receipt_leftovers; read by mode 'same'). Never trusted from
 -- activity_feed, which any participant can write. Clients cannot write these (trg_guard_expense_leftover_mode below).
@@ -103,6 +143,15 @@ BEGIN
     ALTER TABLE public.expense_item_claims
       ADD CONSTRAINT expense_item_claims_source_check
       CHECK (source IN ('self', 'on_behalf', 'shared', 'leftover'));
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.expense_item_claims'::regclass AND conname = 'expense_item_claims_leftover_parts_check'
+  ) THEN
+    ALTER TABLE public.expense_item_claims
+      ADD CONSTRAINT expense_item_claims_leftover_parts_check
+      CHECK (leftover_quantity >= 0 AND leftover_amount >= 0
+             AND leftover_quantity <= quantity_claimed AND leftover_amount <= amount_owed);
   END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
@@ -149,7 +198,7 @@ $$;
 --     src/features/people/lib/inScopePeople.ts: ACTIVE participants (active is not false); when trips.confirmation_enabled is true,
 --     additionally drop declined and cancelled people, and if at least one of the remaining people is 'confirmed' keep ONLY the
 --     confirmed ones. (Waitlist / interested people stay in scope exactly as in the client: it only drops declined and cancelled.)
---   * In BOTH cases also: anyone with a non-leftover claim on the receipt who has a trip_participants row (active or not, replied or not),
+--   * In BOTH cases also: anyone with a claim of their own (not only a leftover part) on the receipt who has a trip_participants row (active or not, replied or not),
 --     and, when there is no explicit list, the payer. Mirrored in src/features/expenses/claims/claimPeople.ts (peopleOnReceipt).
 CREATE OR REPLACE FUNCTION public._receipt_tagged(p_expense_id uuid)
 RETURNS uuid[]
@@ -182,13 +231,13 @@ AS $$
         )
       )
     UNION
-    -- Anyone who holds a (non-derived) claim on the receipt and has a trip_participants row is ALWAYS tagged, whether or not the receipt has an
+    -- Anyone who holds a claim of their OWN (quantity beyond the derived leftover part) on the receipt and has a trip_participants row is ALWAYS tagged, whether or not the receipt has an
     -- explicit list: a "No reply yet" person or someone who has since left must not be locked out of (or silently dropped from) their own claim.
     SELECT cl.user_id AS uid
     FROM public.expense_item_claims cl
     JOIN public.expenses e ON e.id = cl.expense_id
     JOIN public.trip_participants tp ON tp.trip_id = e.trip_id AND tp.user_id = cl.user_id
-    WHERE cl.expense_id = p_expense_id AND cl.source <> 'leftover'
+    WHERE cl.expense_id = p_expense_id AND cl.quantity_claimed - cl.leftover_quantity > 0
     UNION
     -- The payer is always on a receipt that has no explicit list (with an explicit list, the list is exactly who the payer chose).
     SELECT e.paid_by AS uid
@@ -199,7 +248,8 @@ $$;
 
 -- Per line: value and quantity in integer units (minor units / hundredths), claimed, and what is left.
 -- remaining_* are floored at zero (a legacy line whose rounded claims exceed it is not negative-unclaimed).
--- p_include_leftover = false ignores derived leftover rows (used when computing/rebuilding them).
+-- p_include_leftover = false counts only each row's OWN part (quantity_claimed - leftover_quantity, amount_owed - leftover_amount): the state the
+-- leftovers are computed from and rebuilt on, whether or not the previous leftover parts have been stripped yet.
 CREATE OR REPLACE FUNCTION public._receipt_lines(p_expense_id uuid, p_include_leftover boolean)
 RETURNS TABLE (
   line_item_id uuid, line_number integer, total_minor bigint, qty_h bigint,
@@ -220,9 +270,10 @@ AS $$
     SELECT round(li.total_amount * p.pw)::bigint AS total_minor, round(li.quantity * 100)::bigint AS qty_h
   ) t
   LEFT JOIN LATERAL (
-    SELECT sum(round(cl.amount_owed * p.pw)) AS m, sum(round(cl.quantity_claimed * 100)) AS q
+    SELECT sum(round(cl.amount_owed * p.pw) - CASE WHEN p_include_leftover THEN 0 ELSE round(cl.leftover_amount * p.pw) END) AS m,
+           sum(round(cl.quantity_claimed * 100) - CASE WHEN p_include_leftover THEN 0 ELSE round(cl.leftover_quantity * 100) END) AS q
     FROM public.expense_item_claims cl
-    WHERE cl.line_item_id = li.id AND (p_include_leftover OR cl.source <> 'leftover')
+    WHERE cl.line_item_id = li.id
   ) c ON true
   WHERE e.id = p_expense_id
 $$;
@@ -236,8 +287,7 @@ $$;
 --   per receipt: real = sum of the unclaimed lines' left; the receipt is netted against its payer's pending bucket exactly like the client:
 --     unclaimed = min(real converted to the base currency, round(amount * rate) - sum of each claim converted and rounded) and > 0 blocks.
 --   Foreign-currency receipt with fx_rate NULL: the client lists it in its OWN currency (rate 1, no conversion), so does this.
---   DISCOUNTS: a line with a NEGATIVE total and no claim rows at all is "open" (nobody can claim a voucher): it blocks the freeze until
---   share_receipt_leftovers shares it equally between everyone tagged (it does that in every mode). Reported on top of the amount above.
+--   (Zero-total lines never count: there is no money on them. Negative lines cannot exist: CHECK total_amount >= 0.)
 -- unclaimed_minor is in the RECEIPT currency.
 CREATE OR REPLACE FUNCTION public._trip_unclaimed_receipts(p_trip_id uuid)
 RETURNS TABLE (expense_id uuid, description text, unclaimed_minor bigint)
@@ -272,19 +322,17 @@ AS $$
                               AND (quantity - cq > 0.011
                                    OR tot - cm > greatest(1, nrows) + ceil(abs(tot) * 0.011 / nullif(quantity, 0)))
                              THEN tot - cm ELSE 0 END), 0)::bigint AS real_minor,
-           coalesce(sum(cb), 0)::bigint AS claimed_base,
-           coalesce(sum(CASE WHEN tot < 0 AND nrows = 0 THEN -tot ELSE 0 END), 0)::bigint AS open_discount
+           coalesce(sum(cb), 0)::bigint AS claimed_base
     FROM l GROUP BY eid),
   n AS (
-    SELECT e.id, e.description, r.real_minor, r.open_discount,
+    SELECT e.id, e.description, r.real_minor,
            least(CASE WHEN e.same_unit THEN r.real_minor
                       ELSE round(r.real_minor / e.pw * e.rate * e.bpw)::bigint END,
                  round(e.amount * e.rate * e.bpw)::bigint - r.claimed_base) AS net_base
     FROM e JOIN r ON r.eid = e.id)
-  SELECT n.id, n.description,
-         (CASE WHEN n.net_base > 0 THEN n.real_minor ELSE 0 END + n.open_discount)::bigint
+  SELECT n.id, n.description, n.real_minor::bigint
   FROM n
-  WHERE n.net_base > 0 OR n.open_discount > 0
+  WHERE n.net_base > 0
 $$;
 
 -- Over-claimed itemised receipts: a line whose claimed quantity is above its quantity by more than the shared 0.011 tolerance AND whose
@@ -382,13 +430,19 @@ BEGIN
           AND EXISTS (SELECT 1 FROM public.expense_line_items li WHERE li.expense_id = p_expense_id)) THEN
     RAISE EXCEPTION 'This expense isn''t itemised' USING ERRCODE = '22023', HINT = 'not_itemised';
   END IF;
+  -- amount_owed is numeric(10,2): a currency with 3 decimals (KWD, BHD ...) could not be split exactly, so it is refused rather than rounded.
+  IF public.currency_exponent(v_exp.currency) > 2 THEN
+    RAISE EXCEPTION 'Receipts in % can''t be split between people here yet', v_exp.currency USING ERRCODE = '22023', HINT = 'currency_unsupported';
+  END IF;
   RETURN v_exp;
 END
 $$;
 
--- Mirror of the client (isLineReallyUnclaimed): allocated when no line has more than 0.011 of a unit unclaimed (the one shared dust
--- tolerance; 0.33 x 3 of a line leaves 0.01 and counts as fully claimed). Was 0.001, which flipped legacy-thirds receipts to pending.
--- 'confirmed' (and anything unknown) is never touched.
+-- Mirror of the client (allLinesClaimedWithinDust in balances.ts): the dust-tolerant status. 'allocated' when no line that has money on it has
+-- more than 0.011 of a unit unclaimed (the one shared dust tolerance; 0.33 x 3 of a line leaves 0.01 and counts as fully claimed; zero-total
+-- lines are ignored: there is nothing to pay on them), 'unallocated' when nobody holds any claim, else 'pending_allocation'.
+-- Runs as the LAST statement of each RPC, after the live AFTER INSERT/UPDATE trigger (auto_update_expense_status, an exact comparison) has
+-- fired for every row written, so the stored status is this one. 'confirmed' and NULL are never set or changed; the enum cast is explicit.
 CREATE OR REPLACE FUNCTION public._receipt_refresh_status(p_expense_id uuid)
 RETURNS text
 LANGUAGE plpgsql
@@ -397,6 +451,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_all boolean;
+  v_any boolean;
   v_new public.expense_status;
   v_cur public.expense_status;
 BEGIN
@@ -404,12 +459,15 @@ BEGIN
   IF v_cur IS NULL OR v_cur::text NOT IN ('unallocated', 'pending_allocation', 'allocated') THEN
     RETURN v_cur::text;
   END IF;
+  SELECT EXISTS (SELECT 1 FROM public.expense_item_claims cl WHERE cl.expense_id = p_expense_id) INTO v_any;
   SELECT NOT EXISTS (
     SELECT 1 FROM public.expense_line_items li
-    WHERE li.expense_id = p_expense_id
+    WHERE li.expense_id = p_expense_id AND li.total_amount > 0
       AND li.quantity - coalesce((SELECT sum(cl.quantity_claimed) FROM public.expense_item_claims cl WHERE cl.line_item_id = li.id), 0) > 0.011
   ) INTO v_all;
-  v_new := CASE WHEN v_all THEN 'allocated' ELSE 'pending_allocation' END;
+  v_new := CASE WHEN NOT v_any THEN 'unallocated'::public.expense_status
+                WHEN v_all THEN 'allocated'::public.expense_status
+                ELSE 'pending_allocation'::public.expense_status END;
   IF v_new IS DISTINCT FROM v_cur THEN
     UPDATE public.expenses SET status = v_new WHERE id = p_expense_id;
   END IF;
@@ -468,9 +526,9 @@ BEGIN
   v_active := array_fill(false, ARRAY[n]);
   v_cnt := 0;
   FOR i IN 1..n LOOP
-    SELECT coalesce(sum(round(cl.amount_owed * v_pw)), 0)::bigint INTO v_tmp
+    SELECT coalesce(sum(round(cl.amount_owed * v_pw) - round(cl.leftover_amount * v_pw)), 0)::bigint INTO v_tmp
     FROM public.expense_item_claims cl
-    WHERE cl.expense_id = p_expense_id AND cl.user_id = v_tagged[i] AND cl.source <> 'leftover';
+    WHERE cl.expense_id = p_expense_id AND cl.user_id = v_tagged[i];
     v_claimed[i] := v_tmp;
     v_room[i] := greatest(0, v_even - v_claimed[i]);
     IF NOT (v_tagged[i] = ANY (coalesce(p_confirmed, ARRAY[]::uuid[]))) THEN
@@ -654,6 +712,130 @@ BEGIN
 END
 $$;
 
+-- Step (i) of writing the leftovers: take every previous leftover part back out of the rows that carry one. A row with nothing of the
+-- person's own left (a pure-leftover row) is deleted; the others keep their own quantity and amount. Returns the number of rows touched.
+CREATE OR REPLACE FUNCTION public._receipt_strip_leftovers(p_expense_id uuid)
+RETURNS integer
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_deleted integer;
+  v_updated integer;
+BEGIN
+  DELETE FROM public.expense_item_claims
+   WHERE expense_id = p_expense_id AND (leftover_quantity > 0 OR leftover_amount > 0) AND quantity_claimed - leftover_quantity <= 0;
+  GET DIAGNOSTICS v_deleted = ROW_COUNT;
+  UPDATE public.expense_item_claims
+     SET quantity_claimed = quantity_claimed - leftover_quantity,
+         amount_owed = amount_owed - leftover_amount,
+         leftover_quantity = 0,
+         leftover_amount = 0
+   WHERE expense_id = p_expense_id AND (leftover_quantity > 0 OR leftover_amount > 0);
+  GET DIAGNOSTICS v_updated = ROW_COUNT;
+  RETURN v_deleted + v_updated;
+END
+$$;
+
+-- Step (iii): where each (line, person) share lands, given that a row is ONE per (line, person) and quantity_claimed must stay above 0.
+-- p_dist = [{line_item_id, user_id, amount_minor, qty_h}] from _receipt_leftover_distribute. Output rows:
+--   kind 'row'  : add amount_minor / qty_h to the person's row on line_item_id (UPDATE when they have one, else INSERT; an INSERT always has qty_h > 0)
+--   kind 'dust' : money (no quantity) that could not go anywhere and stays with the payer's pending bucket (nothing is written for it)
+-- A share with quantity (or a person who already has a row on the line) goes on that line. A money-only share of a person with no row on the line
+-- goes to their own row with the largest amount on ANOTHER line of the receipt (or to a row this same run creates for them); with no row at all it
+-- stays with the payer when it is within the line's dust allowance (the same as the freeze guard's), else it becomes a row of 0.01 of a unit.
+-- "Own row" = quantity_claimed - leftover_quantity > 0: the state after the previous leftover parts have been stripped.
+CREATE OR REPLACE FUNCTION public._receipt_leftover_place(p_expense_id uuid, p_dist jsonb)
+RETURNS TABLE (line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint, kind text)
+LANGUAGE plpgsql
+STABLE
+SET search_path = public, pg_temp
+AS $$
+#variable_conflict use_column
+DECLARE
+  v_pw numeric;
+  r record;
+  t record;
+  v_rows jsonb := '[]'::jsonb;
+  v_dust jsonb := '[]'::jsonb;
+  v_left jsonb := '[]'::jsonb;
+  v_has boolean;
+  v_target uuid;
+  v_allow bigint;
+BEGIN
+  SELECT power(10::numeric, public.currency_exponent(e.currency)) INTO v_pw FROM public.expenses e WHERE e.id = p_expense_id;
+  IF v_pw IS NULL THEN
+    RAISE EXCEPTION 'Expense not found' USING ERRCODE = 'P0002', HINT = 'not_found';
+  END IF;
+
+  -- pass 1: shares that can be a row (quantity, or the person already has a row on the line)
+  FOR r IN
+    SELECT x.line_item_id AS lid, x.user_id AS uid, x.amount_minor AS amt, x.qty_h AS qh
+    FROM jsonb_to_recordset(coalesce(p_dist, '[]'::jsonb)) AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint)
+    JOIN public.expense_line_items li ON li.id = x.line_item_id
+    ORDER BY li.line_number, x.user_id
+  LOOP
+    SELECT EXISTS (SELECT 1 FROM public.expense_item_claims cl
+                   WHERE cl.line_item_id = r.lid AND cl.user_id = r.uid AND cl.quantity_claimed - cl.leftover_quantity > 0) INTO v_has;
+    IF v_has OR r.qh > 0 THEN
+      v_rows := v_rows || jsonb_build_object('l', r.lid, 'u', r.uid, 'a', r.amt, 'q', r.qh);
+    ELSE
+      v_dust := v_dust || jsonb_build_object('l', r.lid, 'u', r.uid, 'a', r.amt);
+    END IF;
+  END LOOP;
+
+  -- pass 2: money-only shares of people with no row on that line
+  FOR r IN
+    SELECT (d ->> 'l')::uuid AS lid, (d ->> 'u')::uuid AS uid, (d ->> 'a')::bigint AS amt
+    FROM jsonb_array_elements(v_dust) AS d
+  LOOP
+    SELECT cl.line_item_id INTO v_target
+    FROM public.expense_item_claims cl
+    JOIN public.expense_line_items li ON li.id = cl.line_item_id
+    WHERE cl.expense_id = p_expense_id AND cl.user_id = r.uid AND cl.line_item_id <> r.lid
+      AND cl.quantity_claimed - cl.leftover_quantity > 0
+    ORDER BY cl.amount_owed - cl.leftover_amount DESC, li.line_number, cl.line_item_id
+    LIMIT 1;
+    IF v_target IS NULL THEN
+      SELECT (e ->> 'l')::uuid INTO v_target
+      FROM jsonb_array_elements(v_rows) AS e
+      WHERE (e ->> 'u')::uuid = r.uid AND (e ->> 'l')::uuid <> r.lid
+      ORDER BY (e ->> 'a')::bigint DESC, e ->> 'l'
+      LIMIT 1;
+    END IF;
+    IF v_target IS NOT NULL THEN
+      v_rows := v_rows || jsonb_build_object('l', v_target, 'u', r.uid, 'a', r.amt, 'q', 0);
+    ELSE
+      SELECT greatest(1, (SELECT count(*) FROM public.expense_item_claims cl WHERE cl.line_item_id = r.lid))
+             + ceil(abs(round(li.total_amount * v_pw)) * 0.011 / nullif(li.quantity, 0))
+        INTO v_allow
+      FROM public.expense_line_items li WHERE li.id = r.lid;
+      IF r.amt <= coalesce(v_allow, 0) THEN
+        v_left := v_left || jsonb_build_object('l', r.lid, 'u', r.uid, 'a', r.amt);
+      ELSE
+        v_rows := v_rows || jsonb_build_object('l', r.lid, 'u', r.uid, 'a', r.amt, 'q', 1);
+      END IF;
+    END IF;
+  END LOOP;
+
+  FOR t IN
+    SELECT (e ->> 'l')::uuid AS lid, (e ->> 'u')::uuid AS uid, sum((e ->> 'a')::bigint)::bigint AS amt, sum((e ->> 'q')::bigint)::bigint AS qh
+    FROM jsonb_array_elements(v_rows) AS e
+    GROUP BY 1, 2
+    ORDER BY 1, 2
+  LOOP
+    line_item_id := t.lid; user_id := t.uid; amount_minor := t.amt; qty_h := t.qh; kind := 'row';
+    RETURN NEXT;
+  END LOOP;
+  FOR t IN
+    SELECT (e ->> 'l')::uuid AS lid, (e ->> 'u')::uuid AS uid, (e ->> 'a')::bigint AS amt FROM jsonb_array_elements(v_left) AS e
+  LOOP
+    line_item_id := t.lid; user_id := t.uid; amount_minor := t.amt; qty_h := 0; kind := 'dust';
+    RETURN NEXT;
+  END LOOP;
+END
+$$;
+
 -- ---------------------------------------------------------------------------------------------------------------------
 -- set_receipt_claims
 -- ---------------------------------------------------------------------------------------------------------------------
@@ -768,7 +950,7 @@ BEGIN
           USING ERRCODE = '42501', HINT = 'forbidden';
       END IF;
       SELECT coalesce(array_agg(DISTINCT cl.user_id ORDER BY cl.user_id), ARRAY[]::uuid[]) INTO v_existing
-      FROM public.expense_item_claims cl WHERE cl.line_item_id = v_line AND cl.source <> 'leftover';
+      FROM public.expense_item_claims cl WHERE cl.line_item_id = v_line AND cl.quantity_claimed - cl.leftover_quantity > 0;
       IF NOT (
         (v_users <@ (v_existing || v_uid) AND (v_existing || v_uid) <@ v_users)
         OR (v_uid = ANY (v_existing) AND NOT (v_uid = ANY (v_users))
@@ -780,12 +962,12 @@ BEGIN
       IF EXISTS (SELECT 1 FROM unnest(v_existing) AS x WHERE x <> v_uid) THEN
         v_k := cardinality(v_existing);
         SELECT count(*) = v_k
-               AND coalesce(array_agg(round(cl.quantity_claimed * 100)::bigint ORDER BY cl.user_id), ARRAY[]::bigint[])
+               AND coalesce(array_agg(round((cl.quantity_claimed - cl.leftover_quantity) * 100)::bigint ORDER BY cl.user_id), ARRAY[]::bigint[])
                    = public._receipt_even_split(round(v_li.quantity * 100)::bigint, v_k)
-               AND coalesce(array_agg(round(cl.amount_owed * v_pw)::bigint ORDER BY cl.user_id), ARRAY[]::bigint[])
+               AND coalesce(array_agg(round((cl.amount_owed - cl.leftover_amount) * v_pw)::bigint ORDER BY cl.user_id), ARRAY[]::bigint[])
                    = public._receipt_even_split(round(v_li.total_amount * v_pw)::bigint, v_k)
           INTO v_equal
-        FROM public.expense_item_claims cl WHERE cl.line_item_id = v_line AND cl.source <> 'leftover';
+        FROM public.expense_item_claims cl WHERE cl.line_item_id = v_line AND cl.quantity_claimed - cl.leftover_quantity > 0;
         IF NOT coalesce(v_equal, false) THEN
           RAISE EXCEPTION 'Someone has claimed part of this item on their own (for example 2 of 3). Ask the person who paid or an organizer to change it'
             USING ERRCODE = '42501', HINT = 'forbidden';
@@ -797,10 +979,11 @@ BEGIN
     -- claim into "put down by <someone else>"; a legacy row without a recorder counts as the person's own).
     SELECT coalesce(jsonb_object_agg(x.user_id::text, to_jsonb(coalesce(x.cb, x.user_id))), '{}'::jsonb) INTO v_prev_cb
     FROM (SELECT DISTINCT ON (cl.user_id) cl.user_id, cl.created_by AS cb
-          FROM public.expense_item_claims cl WHERE cl.line_item_id = v_line AND cl.source <> 'leftover'
+          FROM public.expense_item_claims cl WHERE cl.line_item_id = v_line AND cl.quantity_claimed - cl.leftover_quantity > 0
           ORDER BY cl.user_id, cl.claimed_at, cl.id) x;
 
-    -- Replace every claim on this line (any source: own, direct multi-unit rows, leftovers), then write the new split.
+    -- Replace every claim on this line (own, direct multi-unit rows, legacy fractions; the leftover parts inside them go too), then write the
+    -- new split. The caller re-runs share_receipt_leftovers 'same' afterwards if leftovers had been shared.
     DELETE FROM public.expense_item_claims WHERE line_item_id = v_line;
     IF v_is_manager AND v_li.shared_by_all IS DISTINCT FROM v_all THEN
       UPDATE public.expense_line_items SET shared_by_all = v_all WHERE id = v_line;
@@ -812,6 +995,9 @@ BEGIN
       CONTINUE;
     END IF;
     v_assigned := v_assigned + 1;
+    IF v_k > round(v_li.quantity * 100) THEN
+      RAISE EXCEPTION 'This item is too small to share between that many people' USING ERRCODE = '22023', HINT = 'too_many_sharers';
+    END IF;
     v_qs := public._receipt_even_split(round(v_li.quantity * 100)::bigint, v_k);
     v_as := public._receipt_even_split(round(v_li.total_amount * v_pw)::bigint, v_k);
     FOR i IN 1..v_k LOOP
@@ -829,6 +1015,14 @@ BEGIN
     END LOOP;
   END LOOP;
 
+  INSERT INTO public.activity_feed (trip_id, actor, verb, entity, metadata)
+  VALUES (
+    v_exp.trip_id, v_uid, 'receipt_claims_set',
+    jsonb_build_object('type', 'expense', 'id', p_expense_id, 'label', v_exp.description),
+    jsonb_build_object('lines_assigned', v_assigned, 'lines_unassigned', v_unassigned, 'rows', v_rows)
+  );
+
+  -- LAST WRITE: the dust-tolerant status, after the live exact-comparison trigger has fired for every row above.
   v_status := public._receipt_refresh_status(p_expense_id);
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -840,7 +1034,8 @@ BEGIN
            'unclaimed', round(l.remaining_minor::numeric / v_pw, v_exp_digits),
            'people', (SELECT coalesce(jsonb_agg(jsonb_build_object(
                          'user_id', cl.user_id, 'quantity', cl.quantity_claimed,
-                         'amount', cl.amount_owed, 'source', cl.source) ORDER BY cl.user_id), '[]'::jsonb)
+                         'amount', cl.amount_owed, 'source', cl.source,
+                         'leftover_quantity', cl.leftover_quantity, 'leftover_amount', cl.leftover_amount) ORDER BY cl.user_id), '[]'::jsonb)
                       FROM public.expense_item_claims cl WHERE cl.line_item_id = l.line_item_id)
          ) ORDER BY l.line_number, l.line_item_id), '[]'::jsonb)
     INTO v_lines
@@ -857,13 +1052,6 @@ BEGIN
   FROM public._receipt_lines(p_expense_id, true) l
   WHERE l.remaining_minor > 0;
   v_unclaimed := round(v_unclaimed_minor::numeric / v_pw, v_exp_digits);
-
-  INSERT INTO public.activity_feed (trip_id, actor, verb, entity, metadata)
-  VALUES (
-    v_exp.trip_id, v_uid, 'receipt_claims_set',
-    jsonb_build_object('type', 'expense', 'id', p_expense_id, 'label', v_exp.description),
-    jsonb_build_object('lines_assigned', v_assigned, 'lines_unassigned', v_unassigned, 'rows', v_rows)
-  );
 
   RETURN jsonb_build_object(
     'expense_id', p_expense_id,
@@ -904,20 +1092,18 @@ DECLARE
   v_people uuid[] := ARRAY[]::uuid[];
   v_amts bigint[] := ARRAY[]::bigint[];
   v_dist jsonb := '[]'::jsonb;
+  v_place jsonb := '[]'::jsonb;
+  v_dust_minor bigint := 0;
   v_rows integer := 0;
   v_stale integer := 0;
+  v_upd integer := 0;
+  v_ins integer := 0;
   v_status text;
   v_lines jsonb;
   v_people_json jsonb;
   v_even bigint;
   v_preview boolean := coalesce(p_preview, false);
-  v_disc jsonb := '[]'::jsonb;
-  v_dl record;
-  v_ds bigint[];
-  v_dq bigint[];
-  v_n integer;
   v_has_rows boolean;
-  i integer;
 BEGIN
   v_exp := public._receipt_begin(p_expense_id, true);
   v_tagged := public._receipt_tagged(p_expense_id);
@@ -948,29 +1134,11 @@ BEGIN
     END IF;
   END IF;
 
+  -- Everything below is computed from each person's OWN parts (previous leftover parts excluded), so a preview and a write agree and a
+  -- re-share never doubles.
   SELECT coalesce(sum(l.remaining_minor), 0) INTO v_left FROM public._receipt_lines(p_expense_id, false) l;
   v_even := CASE WHEN coalesce(cardinality(v_tagged), 0) > 0
                  THEN greatest(0, floor(round(v_exp.amount * v_pw) / cardinality(v_tagged)))::bigint ELSE 0 END;
-
-  -- Open discount lines (negative total, nobody holds a row): shared equally between everyone tagged, in every mode.
-  v_n := coalesce(cardinality(v_tagged), 0);
-  IF v_n > 0 THEN
-    FOR v_dl IN
-      SELECT li.id AS lid, round(li.total_amount * v_pw)::bigint AS tot, round(li.quantity * 100)::bigint AS qh
-      FROM public.expense_line_items li
-      WHERE li.expense_id = p_expense_id AND round(li.total_amount * v_pw) < 0
-        AND NOT EXISTS (SELECT 1 FROM public.expense_item_claims cl WHERE cl.line_item_id = li.id AND cl.source <> 'leftover')
-      ORDER BY li.line_number, li.id
-    LOOP
-      v_ds := public._receipt_even_split(v_dl.tot, v_n);
-      v_dq := public._receipt_even_split(greatest(v_dl.qh, 0), v_n);
-      FOR i IN 1..v_n LOOP
-        IF v_ds[i] <> 0 OR v_dq[i] > 0 THEN
-          v_disc := v_disc || jsonb_build_object('line_item_id', v_dl.lid, 'user_id', v_tagged[i], 'amount_minor', v_ds[i], 'qty_h', v_dq[i]);
-        END IF;
-      END LOOP;
-    END LOOP;
-  END IF;
 
   IF v_left > 0 THEN
     IF v_mode = 'everyone' THEN
@@ -987,38 +1155,16 @@ BEGIN
     END IF;
     SELECT coalesce(jsonb_agg(to_jsonb(d)), '[]'::jsonb) INTO v_dist
     FROM public._receipt_leftover_distribute(p_expense_id, v_people, v_amts) d;
-  END IF;
-  v_dist := v_dist || v_disc;
-
-  IF NOT v_preview THEN
-    -- Leftover rows are derived: always rebuild from scratch.
-    DELETE FROM public.expense_item_claims WHERE expense_id = p_expense_id AND source = 'leftover';
-    GET DIAGNOSTICS v_stale = ROW_COUNT;
-    IF jsonb_array_length(v_dist) > 0 THEN
-      BEGIN
-        INSERT INTO public.expense_item_claims
-          (line_item_id, user_id, expense_id, quantity_claimed, amount_owed, source, created_by)
-        SELECT x.line_item_id, x.user_id, p_expense_id, x.qty_h::numeric / 100, x.amount_minor::numeric / v_pw, 'leftover', v_uid
-        FROM jsonb_to_recordset(v_dist) AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint);
-        GET DIAGNOSTICS v_rows = ROW_COUNT;
-      EXCEPTION WHEN unique_violation THEN
-        RAISE EXCEPTION 'The claims table does not allow two rows for one person on one line; see PRE_APPLY_CHECKS group 21'
-          USING ERRCODE = 'XX000';
-      END;
-    END IF;
-    v_status := public._receipt_refresh_status(p_expense_id);
-    -- Remember how the leftovers were shared (read by mode 'same'); cleared when no leftover row remains on the receipt.
-    SELECT EXISTS (SELECT 1 FROM public.expense_item_claims WHERE expense_id = p_expense_id AND source = 'leftover') INTO v_has_rows;
-    UPDATE public.expenses
-       SET leftover_mode = CASE WHEN v_has_rows THEN v_mode ELSE NULL END,
-           leftover_user_id = CASE WHEN v_has_rows AND v_mode = 'person' THEN v_target ELSE NULL END
-     WHERE id = p_expense_id
-       AND (leftover_mode IS DISTINCT FROM CASE WHEN v_has_rows THEN v_mode ELSE NULL END
-            OR leftover_user_id IS DISTINCT FROM CASE WHEN v_has_rows AND v_mode = 'person' THEN v_target ELSE NULL END);
-  ELSE
-    v_status := v_exp.status::text;
+    SELECT coalesce(jsonb_agg(jsonb_build_object('line_item_id', pl.line_item_id, 'user_id', pl.user_id,
+                                                 'amount_minor', pl.amount_minor, 'qty_h', pl.qty_h) ORDER BY pl.line_item_id, pl.user_id)
+                    FILTER (WHERE pl.kind = 'row'), '[]'::jsonb),
+           coalesce(sum(pl.amount_minor) FILTER (WHERE pl.kind = 'dust'), 0)
+      INTO v_place, v_dust_minor
+    FROM public._receipt_leftover_place(p_expense_id, v_dist) pl;
   END IF;
 
+  -- What the screens show: per person (after merging dust into their other rows) and per line (as planned). Own parts only, so it is the
+  -- same before and after the write.
   SELECT coalesce(jsonb_agg(jsonb_build_object(
            'user_id', q.uid,
            'amount', round(q.amt::numeric / v_pw, v_digits),
@@ -1028,12 +1174,12 @@ BEGIN
     INTO v_people_json
   FROM (
     SELECT x.user_id AS uid, sum(x.amount_minor) AS amt
-    FROM jsonb_to_recordset(v_dist) AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint)
+    FROM jsonb_to_recordset(v_place) AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint)
     GROUP BY x.user_id
   ) q
   LEFT JOIN LATERAL (
-    SELECT sum(round(cl.amount_owed * v_pw)) AS m FROM public.expense_item_claims cl
-    WHERE cl.expense_id = p_expense_id AND cl.user_id = q.uid AND cl.source <> 'leftover'
+    SELECT sum(round(cl.amount_owed * v_pw) - round(cl.leftover_amount * v_pw)) AS m FROM public.expense_item_claims cl
+    WHERE cl.expense_id = p_expense_id AND cl.user_id = q.uid
   ) c ON true;
 
   SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -1049,18 +1195,58 @@ BEGIN
   FROM public._receipt_lines(p_expense_id, false) l
   WHERE l.remaining_minor > 0;
 
-  IF NOT v_preview AND (v_left > 0 OR v_stale > 0 OR jsonb_array_length(v_disc) > 0) THEN
-    INSERT INTO public.activity_feed (trip_id, actor, verb, entity, metadata)
-    VALUES (
-      v_exp.trip_id, v_uid, 'receipt_leftovers_shared',
-      jsonb_build_object('type', 'expense', 'id', p_expense_id, 'label', v_exp.description),
-      jsonb_build_object(
-        'mode', v_mode,
-        'user_id', CASE WHEN v_mode = 'person' THEN v_target ELSE NULL END,
-        'total', round(v_left::numeric / v_pw, v_digits),
-        'people', v_people_json
-      )
-    );
+  IF NOT v_preview THEN
+    -- (i) take the previous leftover parts out of their rows (a row with nothing of the person's own is deleted) ...
+    v_stale := public._receipt_strip_leftovers(p_expense_id);
+    IF jsonb_array_length(v_place) > 0 THEN
+      -- (iii) ... then add each share to the person's row on the line, or create the row. v_place has ONE entry per (line, person), so the
+      -- unique key (line_item_id, user_id) is never at risk; every INSERT carries quantity_claimed > 0 (see _receipt_leftover_place).
+      UPDATE public.expense_item_claims c
+         SET quantity_claimed = c.quantity_claimed + x.qty_h::numeric / 100,
+             amount_owed = c.amount_owed + x.amount_minor::numeric / v_pw,
+             leftover_quantity = c.leftover_quantity + x.qty_h::numeric / 100,
+             leftover_amount = c.leftover_amount + x.amount_minor::numeric / v_pw
+        FROM jsonb_to_recordset(v_place) AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint)
+       WHERE c.line_item_id = x.line_item_id AND c.user_id = x.user_id;
+      GET DIAGNOSTICS v_upd = ROW_COUNT;
+      INSERT INTO public.expense_item_claims
+        (line_item_id, user_id, expense_id, quantity_claimed, amount_owed, source, created_by, leftover_quantity, leftover_amount)
+      SELECT x.line_item_id, x.user_id, p_expense_id, x.qty_h::numeric / 100, x.amount_minor::numeric / v_pw, 'leftover', v_uid,
+             x.qty_h::numeric / 100, x.amount_minor::numeric / v_pw
+      FROM jsonb_to_recordset(v_place) AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint)
+      WHERE NOT EXISTS (SELECT 1 FROM public.expense_item_claims c WHERE c.line_item_id = x.line_item_id AND c.user_id = x.user_id);
+      GET DIAGNOSTICS v_ins = ROW_COUNT;
+      v_rows := v_upd + v_ins;
+    END IF;
+
+    -- Remember how the leftovers were shared (read by mode 'same'); cleared when no leftover part remains on the receipt.
+    SELECT EXISTS (SELECT 1 FROM public.expense_item_claims
+                   WHERE expense_id = p_expense_id AND (leftover_quantity > 0 OR leftover_amount > 0)) INTO v_has_rows;
+    UPDATE public.expenses
+       SET leftover_mode = CASE WHEN v_has_rows THEN v_mode ELSE NULL END,
+           leftover_user_id = CASE WHEN v_has_rows AND v_mode = 'person' THEN v_target ELSE NULL END
+     WHERE id = p_expense_id
+       AND (leftover_mode IS DISTINCT FROM CASE WHEN v_has_rows THEN v_mode ELSE NULL END
+            OR leftover_user_id IS DISTINCT FROM CASE WHEN v_has_rows AND v_mode = 'person' THEN v_target ELSE NULL END);
+
+    IF v_left > 0 OR v_stale > 0 THEN
+      INSERT INTO public.activity_feed (trip_id, actor, verb, entity, metadata)
+      VALUES (
+        v_exp.trip_id, v_uid, 'receipt_leftovers_shared',
+        jsonb_build_object('type', 'expense', 'id', p_expense_id, 'label', v_exp.description),
+        jsonb_build_object(
+          'mode', v_mode,
+          'user_id', CASE WHEN v_mode = 'person' THEN v_target ELSE NULL END,
+          'total', round(v_left::numeric / v_pw, v_digits),
+          'people', v_people_json
+        )
+      );
+    END IF;
+
+    -- LAST WRITE: the dust-tolerant status, after the live exact-comparison trigger has fired for every row above.
+    v_status := public._receipt_refresh_status(p_expense_id);
+  ELSE
+    v_status := v_exp.status::text;
   END IF;
 
   RETURN jsonb_build_object(
@@ -1069,10 +1255,9 @@ BEGIN
     'preview', v_preview,
     'currency', v_exp.currency,
     'unclaimed_total', round(v_left::numeric / v_pw, v_digits),
-    'allocated_total', round(coalesce((SELECT sum(x.amount_minor) FROM jsonb_to_recordset(v_dist)
+    'allocated_total', round(coalesce((SELECT sum(x.amount_minor) FROM jsonb_to_recordset(v_place)
                               AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint)), 0)::numeric / v_pw, v_digits),
-    'discount_total', round(coalesce((SELECT sum(x.amount_minor) FROM jsonb_to_recordset(v_disc)
-                              AS x(line_item_id uuid, user_id uuid, amount_minor bigint, qty_h bigint)), 0)::numeric / v_pw, v_digits),
+    'kept_by_payer', round(v_dust_minor::numeric / v_pw, v_digits),
     'even_share', round(v_even::numeric / v_pw, v_digits),
     'confirmed_user_ids', to_jsonb(v_conf),
     'people', v_people_json,
@@ -1294,6 +1479,10 @@ $$;
 
 -- A client cannot choose the provenance of a claim row: source is forced to 'self' and created_by to the caller on INSERT, and both are
 -- frozen on UPDATE. (Otherwise a person could mark their own claim 'leftover' to have it dumped on the table, or pose as "put down by <payer>".)
+-- The leftover parts (leftover_quantity / leftover_amount) are protected the same way: 0 on a client INSERT, and on a client UPDATE the OLD
+-- values are kept (but never more than the row's new quantity / amount, so the parts CHECK cannot fail). An old cached client re-saves by
+-- deleting the person's rows and inserting fresh ones: the leftover part goes with the deleted row and the new row starts at 0, so the
+-- payer's unclaimed bucket grows again; sums stay exact (the leftovers can be shared again).
 CREATE OR REPLACE FUNCTION public.guard_claim_provenance()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1304,9 +1493,13 @@ BEGIN
     IF TG_OP = 'INSERT' THEN
       NEW.source := 'self';
       NEW.created_by := auth.uid();
+      NEW.leftover_quantity := 0;
+      NEW.leftover_amount := 0;
     ELSE
       NEW.source := OLD.source;
       NEW.created_by := OLD.created_by;
+      NEW.leftover_quantity := least(OLD.leftover_quantity, NEW.quantity_claimed);
+      NEW.leftover_amount := least(OLD.leftover_amount, NEW.amount_owed);
     END IF;
   END IF;
   RETURN NEW;
@@ -1320,9 +1513,8 @@ CREATE TRIGGER trg_guard_claim_provenance BEFORE INSERT OR UPDATE ON public.expe
 -- shared dust tolerance) + 0.01 per OTHER claim row on the line (each row is rounded to hundredths, so legacy lines such as 0.17 x 6 = 1.02 or
 -- 0.34 x 3 of a quantity-1 line legitimately exceed it by a few hundredths). If the line is ALREADY over that limit without this write
 -- (legacy data), the write is allowed: an old cached client that deleted its rows and re-inserts them must never be refused after its delete
--- committed (that would lose the person's claims); the freeze guard's overclaimed_receipts report catches such lines. Lines with
--- quantity <= 0 (discount / zero lines) skip the check. Takes the same per-expense advisory lock the RPCs take, so a direct insert cannot
--- race set_receipt_claims. Derived 'leftover' rows count (they are real money on the line); re-run "Share leftovers" to rebuild them.
+-- committed (that would lose the person's claims); the freeze guard's overclaimed_receipts report catches such lines. Takes the same per-expense advisory lock the RPCs take, so a direct insert cannot
+-- race set_receipt_claims. Leftover parts count (they are real money on the line); re-run "Share leftovers" to rebuild them.
 -- SECURITY INVOKER (default): it runs as the client, so authenticated needs EXECUTE on pg_advisory_xact_lock(bigint) and hashtextextended
 -- (both are granted to PUBLIC by default; checked in PRE_APPLY_CHECKS 21n). The table reads it does are allowed by the claims policies.
 CREATE OR REPLACE FUNCTION public.guard_claim_overclaim()
@@ -1416,6 +1608,8 @@ REVOKE ALL ON FUNCTION public._receipt_begin(uuid, boolean) FROM PUBLIC, anon, a
 REVOKE ALL ON FUNCTION public._receipt_refresh_status(uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public._receipt_leftover_plan(uuid, uuid[]) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public._receipt_leftover_distribute(uuid, uuid[], bigint[]) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._receipt_leftover_place(uuid, jsonb) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._receipt_strip_leftovers(uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public._trip_overclaimed_receipts(uuid) FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.guard_claim_provenance() FROM PUBLIC, anon, authenticated, service_role;
 REVOKE ALL ON FUNCTION public.guard_claim_overclaim() FROM PUBLIC, anon, authenticated, service_role;

@@ -6,6 +6,7 @@ import { Tables, TablesInsert } from '../../types/database.types'
 import { queryKeys } from './queryKeys'
 import { assertRowsAffected } from './assertRowsAffected'
 import { toMinorUnits } from '../money'
+import { allLinesClaimedWithinDust } from '../../features/expenses/lib/balances'
 
 export type ExpenseLineItem = Tables<'expense_line_items'>
 export type ExpenseItemClaim = Tables<'expense_item_claims'>
@@ -670,8 +671,11 @@ export function useSaveItemClaims() {
         .eq('expense_id', expenseId)
       if (fetchErr) throw fetchErr
 
-      const { data: allItemsClaimed } = await supabase.rpc('check_all_items_claimed', { p_expense_id: expenseId })
-      const newStatus = allItemsClaimed ? 'allocated' : 'pending_allocation'
+      // The stored status uses the SAME dust-tolerant rule as the claims everywhere else (0.33 x 3 of a line is claimed). The database
+      // trigger / check_all_items_claimed compare quantities exactly, so asking them would flip a legacy-thirds receipt back to pending.
+      const { data: lines, error: linesErr } = await supabase.from('expense_line_items').select('id, quantity, total_amount').eq('expense_id', expenseId)
+      if (linesErr) throw linesErr
+      const newStatus = (allClaims ?? []).length === 0 ? 'unallocated' : allLinesClaimedWithinDust(lines ?? [], allClaims ?? []) ? 'allocated' : 'pending_allocation'
 
       const { data: statusRows, error: statusError } = await supabase
         .from('expenses')

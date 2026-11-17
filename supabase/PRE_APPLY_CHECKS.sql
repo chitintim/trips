@@ -1090,20 +1090,21 @@ NOTIFY pgrst, 'reload schema';
 -- 21a. Names are free. Safe: zero rows from all three (if a column exists, the ADD COLUMN IF NOT EXISTS is a no-op: check its type).
 SELECT table_name, column_name, data_type, column_default, is_nullable FROM information_schema.columns
 WHERE table_schema = 'public' AND (
-  (table_name = 'expense_item_claims' AND column_name IN ('source', 'created_by'))
+  (table_name = 'expense_item_claims' AND column_name IN ('source', 'created_by', 'leftover_quantity', 'leftover_amount'))
   OR (table_name = 'expense_line_items' AND column_name = 'shared_by_all'));
 SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
   AND (p.proname IN ('set_receipt_claims', 'share_receipt_leftovers', '_trip_unclaimed_receipts', '_trip_overclaimed_receipts', 'refund_rate_limit',
                      'guard_claim_provenance', 'guard_claim_overclaim', 'guard_expense_leftover_mode') OR p.proname LIKE '\_receipt\_%');
-SELECT conname FROM pg_constraint WHERE conname IN ('expense_item_claims_source_check', 'expenses_leftover_mode_check');
+SELECT conname FROM pg_constraint WHERE conname IN ('expense_item_claims_source_check', 'expense_item_claims_leftover_parts_check', 'expenses_leftover_mode_check');
 -- Also free: the two expenses columns and the three new trigger names. Safe: zero rows.
 SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'expenses' AND column_name IN ('leftover_mode', 'leftover_user_id');
 SELECT tgname FROM pg_trigger WHERE NOT tgisinternal AND tgname IN ('trg_guard_claim_provenance', 'trg_guard_claim_overclaim', 'trg_guard_expense_leftover_mode');
 
--- 21b. Columns the migration relies on, with types. Safe: expense_item_claims.quantity_claimed numeric(10,2) (precision 10, scale 2),
---      amount_owed numeric; expense_line_items.quantity/total_amount numeric; expenses.amount numeric, currency text NOT NULL,
---      status expense_status (nullable), ai_parsed boolean, participant_ids uuid[] (_uuid), paid_by uuid NOT NULL, description text NOT NULL;
---      trips.settlement_snapshot jsonb. A different scale on quantity_claimed (e.g. 3) is harmless but note it.
+-- 21b. Columns the migration relies on, with types. Safe (live, 2026-11-17): expense_item_claims.quantity_claimed and amount_owed numeric(10,2)
+--      (precision 10, scale 2, NOT NULL); expense_line_items.quantity numeric(10,2), total_amount numeric(10,2); expenses.amount numeric(10,2),
+--      currency text NOT NULL, status expense_status (nullable, default 'confirmed'), ai_parsed boolean, participant_ids uuid[] (_uuid),
+--      paid_by uuid NOT NULL, description text NOT NULL; trips.settlement_snapshot jsonb. The leftover parts are numeric(10,2) too, so a currency with
+--      3 decimals cannot be split exactly: the RPCs refuse it (live receipts are GBP, USD, EUR, JPY, HKD).
 SELECT table_name, column_name, data_type, udt_name, numeric_precision, numeric_scale, is_nullable
 FROM information_schema.columns WHERE table_schema = 'public' AND (
   (table_name = 'expense_item_claims' AND column_name IN ('id', 'line_item_id', 'user_id', 'expense_id', 'quantity_claimed', 'amount_owed', 'confirmed', 'claimed_at', 'updated_at'))
@@ -1113,27 +1114,51 @@ FROM information_schema.columns WHERE table_schema = 'public' AND (
 ORDER BY table_name, column_name;
 
 -- 21c. Constraints, indexes and triggers on the claims and line-item tables.
---      Safe: NO unique index/constraint other than the primary key on expense_item_claims (a person may hold a leftover row and an own row
---      on the same line; the migration's leftover insert fails with a clear message otherwise), no CHECK on quantity_claimed > 0
---      (a leftover row for a value-only remainder can carry 0.00), FKs to expenses/expense_line_items/users (cascade on delete).
+--      Safe (live, 2026-11-17): expense_item_claims has UNIQUE unique_user_claim_per_item (line_item_id, user_id) (the migration KEEPS it: one row per
+--      line and person, leftovers are a part of that row), CHECK quantity_claimed > 0, CHECK amount_owed >= 0, FKs to expenses / expense_line_items
+--      (CASCADE) and users; expense_line_items has CHECK quantity > 0 and total_amount >= 0 (no negative discount lines can exist).
 SELECT conrelid::regclass AS tbl, conname, contype, pg_get_constraintdef(oid) AS def FROM pg_constraint
 WHERE conrelid IN ('public.expense_item_claims'::regclass, 'public.expense_line_items'::regclass) ORDER BY 1, 2;
 SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename IN ('expense_item_claims', 'expense_line_items') ORDER BY 1, 2;
--- Unique shape in one line. Safe: zero rows.
+-- ASSERTION: the assumptions the migration is written for. Safe: every column is true.
+SELECT
+  EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.expense_item_claims'::regclass AND conname = 'unique_user_claim_per_item' AND contype = 'u'
+          AND conkey = ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid = 'public.expense_item_claims'::regclass AND attname = 'line_item_id'),
+                             (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.expense_item_claims'::regclass AND attname = 'user_id')]) AS claims_unique_line_user,
+  EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.expense_item_claims'::regclass AND contype = 'c'
+          AND pg_get_constraintdef(oid) ~ 'quantity_claimed > ') AS claims_quantity_positive_check,
+  EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.expense_item_claims'::regclass AND contype = 'c'
+          AND pg_get_constraintdef(oid) ~ 'amount_owed >= ') AS claims_amount_nonnegative_check,
+  EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.expense_line_items'::regclass AND contype = 'c'
+          AND pg_get_constraintdef(oid) ~ 'quantity > ') AS lines_quantity_positive_check,
+  EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.expense_line_items'::regclass AND contype = 'c'
+          AND pg_get_constraintdef(oid) ~ 'total_amount >= ') AS lines_total_nonnegative_check;
+-- Column types the leftover parts must match. Safe: quantity_claimed and amount_owed both numeric(10,2) (numeric_precision 10, numeric_scale 2).
+SELECT column_name, numeric_precision, numeric_scale FROM information_schema.columns
+WHERE table_schema = 'public' AND table_name = 'expense_item_claims' AND column_name IN ('quantity_claimed', 'amount_owed') ORDER BY 1;
+-- Unique shape in one line. Safe: exactly ONE row, unique_user_claim_per_item.
 SELECT i.indexrelid::regclass FROM pg_index i WHERE i.indrelid = 'public.expense_item_claims'::regclass AND i.indisunique AND NOT i.indisprimary;
--- Triggers. Safe: none on expense_item_claims and expense_line_items (or only updated_at helpers); anything that rewrites amounts or blocks
--- inserts would change what set_receipt_claims writes.
+-- Triggers. Safe (live): on expense_item_claims only trigger_auto_update_expense_status (AFTER INSERT OR UPDATE, FOR EACH ROW, calls
+-- auto_update_expense_status()); on expenses set_updated_at and trigger_guard_immutable_keys (BEFORE UPDATE); on expense_line_items none.
 SELECT tgrelid::regclass AS tbl, tgname, tgenabled, pg_get_triggerdef(t.oid) AS def FROM pg_trigger t
 WHERE NOT tgisinternal AND tgrelid IN ('public.expense_item_claims'::regclass, 'public.expense_line_items'::regclass, 'public.expenses'::regclass) ORDER BY 1, 2;
+-- ASSERTION: the live status trigger is there as recorded, and its two functions are the ones that were inspected (the migration does NOT replace
+-- them; their bodies could not be printed, so the md5 is the tripwire: if either differs, read the bodies before applying).
+-- Safe: trigger_present true; auto_update_expense_status md5 bc28b37aaee626a396740a259df151bd len 460 (security definer);
+-- check_all_items_claimed(uuid) md5 bf9e725353d764d312825d0adf1081b7 len 520.
+SELECT EXISTS (SELECT 1 FROM pg_trigger t WHERE NOT t.tgisinternal AND t.tgrelid = 'public.expense_item_claims'::regclass
+               AND t.tgname = 'trigger_auto_update_expense_status' AND pg_get_triggerdef(t.oid) ~ 'AFTER INSERT OR UPDATE ON') AS trigger_present,
+       (SELECT md5(prosrc) = 'bc28b37aaee626a396740a259df151bd' AND length(prosrc) = 460 FROM pg_proc
+         WHERE pronamespace = 'public'::regnamespace AND proname = 'auto_update_expense_status') AS auto_update_expense_status_unchanged,
+       (SELECT md5(prosrc) = 'bf9e725353d764d312825d0adf1081b7' AND length(prosrc) = 520 FROM pg_proc
+         WHERE pronamespace = 'public'::regnamespace AND proname = 'check_all_items_claimed') AS check_all_items_claimed_unchanged;
 
 -- The foreign key the client now pins in its embeds (expense_item_claims_user_id_fkey). Safe: one row, FOREIGN KEY (user_id) REFERENCES users(id).
 SELECT conname, pg_get_constraintdef(oid) AS def FROM pg_constraint
 WHERE conrelid = 'public.expense_item_claims'::regclass AND conname = 'expense_item_claims_user_id_fkey';
--- The live trigger function auto_update_expense_status: DUMP ITS BODY and read it. It is not defined in the repo. Safe: it is a trigger function
--- that either is not attached to expense_item_claims at all, or only recomputes expenses.status the same way as _receipt_refresh_status (allocated when
--- every line is claimed, else pending_allocation, never touching 'confirmed'). If it is attached to expense_item_claims it fires per row inside the RPCs;
--- the end state is the same as long as it does not use a stricter tolerance than 0.011 (then a legacy-thirds receipt would flip to pending_allocation:
--- cosmetic only, nothing in the ledger reads expenses.status for claims).
+-- The live trigger function auto_update_expense_status: it is not defined in the repo. If your tool prints bodies, read it. It fires per row inside the
+-- RPCs and compares quantities EXACTLY; the RPCs end with _receipt_refresh_status (tolerant 0.011), so the stored status after an RPC is the tolerant one.
+-- After an OLD client's direct write it may set pending_allocation on a legacy-thirds receipt: cosmetic, nothing in the ledger reads expenses.status.
 SELECT p.oid::regprocedure AS fn, p.prosecdef, pg_get_functiondef(p.oid) AS body
 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('auto_update_expense_status', 'check_all_items_claimed', 'guard_immutable_keys');
 -- Which triggers call it (or the other two). Safe: read the list; nothing here is changed by the migration.
@@ -1154,8 +1179,12 @@ WHERE schemaname = 'public' AND tablename IN ('expense_item_claims', 'expense_li
 SELECT p.oid::regprocedure, p.prosecdef, p.proconfig FROM pg_proc p
 WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('_settlement_can_manage', 'currency_exponent', 'settlement_assert_can_manage', 'is_admin', 'is_trip_organizer', 'is_trip_participant');
 SELECT public.currency_exponent('JPY') AS jpy, public.currency_exponent('GBP') AS gbp, public.currency_exponent('KWD') AS kwd, public.currency_exponent('XYZ') AS other;
--- The expense_status enum values. Safe: unallocated, pending_allocation, allocated, confirmed.
+-- The expense_status enum values. Safe: unallocated, pending_allocation, allocated, confirmed (in that order); expenses.status is nullable, default 'confirmed'.
 SELECT enumlabel FROM pg_enum WHERE enumtypid = 'public.expense_status'::regtype ORDER BY enumsortorder;
+SELECT (SELECT array_agg(enumlabel::text ORDER BY enumsortorder) FROM pg_enum WHERE enumtypid = 'public.expense_status'::regtype)
+         = ARRAY['unallocated', 'pending_allocation', 'allocated', 'confirmed'] AS enum_labels_as_assumed,
+       (SELECT udt_name = 'expense_status' AND is_nullable = 'YES' AND column_default ~ 'confirmed' FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'expenses' AND column_name = 'status') AS status_column_as_assumed;
 -- activity_feed has no verb CHECK. Safe: no CHECK constraints (only FKs).
 SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'public.activity_feed'::regclass AND contype = 'c';
 
@@ -1178,7 +1207,7 @@ SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regna
 
 -- 21g. DATA PREVIEW = SQL-1 (informational). Every itemised receipt the freeze guard would flag, AS THE FIRST DRAFT WROTE IT (raw remainders:
 --      flagged_as_written_minor) and WITH THE RULE THE MIGRATION SHIPS (flagged_with_rule_minor, identical to _trip_unclaimed_receipts: dust
---      tolerance 0.011, netted per receipt, missing FX in the receipt's own currency, unshared discount lines). Own-currency minor units.
+--      tolerance 0.011, netted per receipt, missing FX in the receipt's own currency). Own-currency minor units.
 --      Safe: flagged_with_rule_minor = 0 for EVERY row on the real trips (Meribel, La Tania, JaPOW; legacy 0.33 x 26 / 0.3 x 30 rows are dust).
 --      Test trips (test4, Test3) may show real value. Any non-zero flagged_with_rule_minor on a real trip is genuinely unclaimed money: look at it
 --      before applying; the front end offers "Share leftovers" for it.
@@ -1205,18 +1234,16 @@ r AS (
          coalesce(sum(CASE WHEN tot - cm > 0 AND quantity > 0 AND (quantity - cq > 0.011
                    OR tot - cm > greatest(1, nrows) + ceil(abs(tot) * 0.011 / quantity)) THEN tot - cm ELSE 0 END), 0) AS real_minor,
          sum(cb) AS claimed_base,
-         coalesce(sum(CASE WHEN tot < 0 AND nrows = 0 THEN -tot ELSE 0 END), 0) AS open_discount,
          count(*) FILTER (WHERE tot - cm > 0) AS lines_short,
-         count(*) FILTER (WHERE cm > tot) AS lines_over,
-         count(*) FILTER (WHERE tot < 0) AS negative_lines
+         count(*) FILTER (WHERE cm > tot) AS lines_over
   FROM l GROUP BY eid)
 SELECT t.name AS trip, t.settlement_snapshot IS NOT NULL AS frozen, e.description, e.currency, e.fx_rate IS NULL AND e.currency <> e.base_currency AS missing_fx,
        r.raw_minor AS flagged_as_written_minor,
        (CASE WHEN least(CASE WHEN e.same_unit THEN r.real_minor ELSE round(r.real_minor / e.pw * e.rate * e.bpw) END,
-                        round(e.amount * e.rate * e.bpw) - r.claimed_base) > 0 THEN r.real_minor ELSE 0 END + r.open_discount) AS flagged_with_rule_minor,
-       r.open_discount AS open_discount_minor, r.lines_short, r.lines_over, r.negative_lines
+                        round(e.amount * e.rate * e.bpw) - r.claimed_base) > 0 THEN r.real_minor ELSE 0 END) AS flagged_with_rule_minor,
+       r.lines_short, r.lines_over
 FROM e JOIN r ON r.eid = e.id JOIN public.trips t ON t.id = e.trip_id
-WHERE r.raw_minor > 0 OR r.lines_over > 0 OR r.negative_lines > 0
+WHERE r.raw_minor > 0 OR r.lines_over > 0
 ORDER BY t.name, flagged_as_written_minor DESC;
 -- Lines whose claims exceed the line value (over-claimed by rounding or by hand). Informational: counted as zero unclaimed, never negative.
 SELECT e.description, l.line_number, l.total_amount, sum(c.amount_owed) AS claimed, sum(c.quantity_claimed) AS qty_claimed, l.quantity
@@ -1227,8 +1254,7 @@ HAVING sum(c.amount_owed) > l.total_amount OR sum(c.quantity_claimed) > l.quanti
 -- Distinct quantity fractions in use (legacy shares). Informational: 0.5, 0.2, 0.1, 0.17, 0.25, 0.3, 0.33 expected; these rows are never
 -- rewritten unless a manager reassigns that line.
 SELECT quantity_claimed, count(*) FROM public.expense_item_claims WHERE quantity_claimed <> trunc(quantity_claimed) GROUP BY 1 ORDER BY 2 DESC;
--- Receipts where a person already has more than one row on the same line (the table allows it; the client reads only the first).
--- Safe: zero rows today.
+-- Receipts where a person has more than one row on the same line (the unique key forbids it). Safe: zero rows.
 SELECT line_item_id, user_id, count(*) FROM public.expense_item_claims GROUP BY 1, 2 HAVING count(*) > 1;
 -- Who is "tagged" today: itemised receipts with participant_ids NULL/empty fall back to the trip's ACTIVE participants.
 SELECT (participant_ids IS NULL OR cardinality(participant_ids) = 0) AS tagged_from_trip_roster, count(*) FROM public.expenses
@@ -1238,10 +1264,10 @@ WHERE coalesce(ai_parsed, false) AND status IS NOT NULL GROUP BY 1;
 SELECT pid, state, now() - xact_start AS xact_age, left(query, 120) AS query FROM pg_stat_activity
 WHERE state <> 'idle' AND pid <> pg_backend_pid() AND (query ILIKE '%expense_item_claims%' OR query ILIKE '%expense_line_items%');
 
--- 21n. SQL-2: more than one claim row per (line, user) today (the RPCs replace them all; the leftover insert needs no unique key). Safe: zero rows.
+-- 21n. SQL-2: more than one claim row per (line, user) today (impossible under unique_user_claim_per_item). Safe: zero rows.
 SELECT line_item_id, user_id, count(*) FROM public.expense_item_claims GROUP BY 1, 2 HAVING count(*) > 1;
--- 21o. SQL-3: negative or zero lines. Negative lines = discounts/vouchers (an unclaimed one is shared by everyone by share_receipt_leftovers and
---      blocks a freeze until then). Safe: zero rows, or only discount lines on test trips. A zero quantity line is never counted unclaimed.
+-- 21o. SQL-3: zero lines. Safe (live): no negative total and no zero quantity (the CHECKs forbid both); ZERO-TOTAL lines exist (9 on 2026-11-17, 3 with
+--      claims): they carry no money, are never counted unclaimed, and their quantity can still be claimed.
 SELECT e.description, li.line_number, li.total_amount, li.quantity FROM public.expense_line_items li JOIN public.expenses e ON e.id = li.expense_id
 WHERE li.total_amount <= 0 OR li.quantity <= 0;
 -- 21p. SQL-4: who is on the trip but NOT in scope (the receipts have participant_ids NULL, so "tagged" = in-scope people: active, and with
@@ -1267,13 +1293,16 @@ SELECT tgrelid::regclass, tgname, tgtype FROM pg_trigger WHERE NOT tgisinternal 
 -- ---------------------------------------------------------------------------------------------------------------------
 -- 21 POST-APPLY (run after the migration; compare with the pre-apply output)
 -- ---------------------------------------------------------------------------------------------------------------------
--- 21i. Columns, defaults, constraint. Safe: source text NOT NULL default 'self'::text; created_by uuid nullable; shared_by_all boolean NOT NULL default false;
---      the source CHECK is validated.
-SELECT table_name, column_name, data_type, column_default, is_nullable FROM information_schema.columns
-WHERE table_schema = 'public' AND ((table_name = 'expense_item_claims' AND column_name IN ('source', 'created_by')) OR (table_name = 'expense_line_items' AND column_name = 'shared_by_all'))
+-- 21i. Columns, defaults, constraints. Safe: source text NOT NULL default 'self'::text; created_by uuid nullable; leftover_quantity and leftover_amount
+--      numeric(10,2) NOT NULL default 0; shared_by_all boolean NOT NULL default false; the source and leftover-parts CHECKs are validated; the live
+--      unique key and CHECKs are still there.
+SELECT table_name, column_name, data_type, numeric_precision, numeric_scale, column_default, is_nullable FROM information_schema.columns
+WHERE table_schema = 'public' AND ((table_name = 'expense_item_claims' AND column_name IN ('source', 'created_by', 'leftover_quantity', 'leftover_amount')) OR (table_name = 'expense_line_items' AND column_name = 'shared_by_all'))
 ORDER BY 1, 2;
-SELECT conname, convalidated, pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'expense_item_claims_source_check';
+SELECT conname, convalidated, pg_get_constraintdef(oid) FROM pg_constraint
+WHERE conname IN ('expense_item_claims_source_check', 'expense_item_claims_leftover_parts_check', 'unique_user_claim_per_item');
 SELECT source, count(*) FROM public.expense_item_claims GROUP BY 1;   -- Safe: every existing row is 'self'
+SELECT count(*) AS rows_with_leftover_parts FROM public.expense_item_claims WHERE leftover_quantity <> 0 OR leftover_amount <> 0;   -- Safe: 0 until leftovers are shared
 -- 21j. Privileges. Safe: the two RPCs and freeze_settlements: anon false, authenticated true; every _receipt_* / _trip_* helper: anon and authenticated false.
 SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec,
        p.prosecdef, p.proconfig
@@ -1314,14 +1343,12 @@ JOIN public.trips t ON t.id = e.trip_id
 GROUP BY t.id, t.name, t.settlement_snapshot, e.id, e.description, li.id, li.line_number, li.quantity
 HAVING sum(c.quantity_claimed) > li.quantity + 0.011
 ORDER BY 1, 2, 3;
--- 21n-2. Old receipts with an unclaimed negative (discount) line, by trip, with frozen state. Safe: informational; the unclaimed-receipts guard counts an
---        unclaimed discount line (open_discount) so these trips need the discount assigned before a freeze.
-SELECT t.name, t.settlement_snapshot IS NOT NULL AS frozen, count(DISTINCT e.id) AS receipts, count(*) AS unclaimed_negative_lines, sum(li.total_amount) AS total
-FROM public.expense_line_items li
-JOIN public.expenses e ON e.id = li.expense_id
-JOIN public.trips t ON t.id = e.trip_id
-WHERE li.total_amount < 0 AND NOT EXISTS (SELECT 1 FROM public.expense_item_claims c WHERE c.line_item_id = li.id)
-GROUP BY t.id, t.name, t.settlement_snapshot ORDER BY 1;
+-- 21n-2. POST-APPLY, after leftovers have been shared: per receipt, the rows that carry a leftover part. Safe: leftover_amount <= amount_owed and
+--        leftover_quantity <= quantity_claimed on every row (the CHECK), and no row of source 'leftover' has an own part (quantity = leftover_quantity).
+SELECT e.description, count(*) FILTER (WHERE c.leftover_amount > 0 OR c.leftover_quantity > 0) AS rows_with_leftover_part,
+       count(*) FILTER (WHERE c.source = 'leftover' AND c.quantity_claimed <> c.leftover_quantity) AS pure_rows_with_own_part
+FROM public.expense_item_claims c JOIN public.expenses e ON e.id = c.expense_id
+GROUP BY e.id, e.description HAVING count(*) FILTER (WHERE c.leftover_amount > 0 OR c.leftover_quantity > 0) > 0 ORDER BY 1;
 -- 21n-3. The over-claim trigger is SECURITY INVOKER (it runs as the calling client), so the client roles need EXECUTE on the two functions it calls.
 --        Safe: both true (they are granted to PUBLIC by default).
 SELECT has_function_privilege('authenticated', 'pg_advisory_xact_lock(bigint)', 'EXECUTE') AS advisory_lock_ok,
@@ -1330,11 +1357,11 @@ SELECT has_function_privilege('authenticated', 'pg_advisory_xact_lock(bigint)', 
        has_function_privilege('anon', 'hashtextextended(text,bigint)', 'EXECUTE') AS anon_hashtextextended_ok;
 -- 21n-4. auth users without a public.users row. Safe: 0 (a claim row references public.users).
 SELECT count(*) AS auth_users_without_public_row FROM auth.users u WHERE NOT EXISTS (SELECT 1 FROM public.users p WHERE p.id = u.id);
--- 21n-5. POST-APPLY: claimants (with a trip_participants row, not derived leftover rows) who are not in _receipt_tagged(expense_id). Safe: zero rows.
+-- 21n-5. POST-APPLY: claimants (with a trip_participants row, with a claim of their own, not only a leftover part) who are not in _receipt_tagged(expense_id). Safe: zero rows.
 SELECT c.expense_id, c.user_id FROM public.expense_item_claims c
 JOIN public.expenses e ON e.id = c.expense_id
 JOIN public.trip_participants tp ON tp.trip_id = e.trip_id AND tp.user_id = c.user_id
-WHERE c.source <> 'leftover' AND NOT (c.user_id = ANY (public._receipt_tagged(c.expense_id)))
+WHERE c.quantity_claimed - c.leftover_quantity > 0 AND NOT (c.user_id = ANY (public._receipt_tagged(c.expense_id)))
 GROUP BY 1, 2;
 -- 21m. PostgREST sees the new columns and functions (the migration ends with NOTIFY pgrst, 'reload schema').
 NOTIFY pgrst, 'reload schema';

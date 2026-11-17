@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { toMinorUnits } from '../../../lib/money'
-import { computeBalances, claimSource, findUnclaimedReceipts, findFreezeBlockingReceipts, isLineReallyUnclaimed, collectMoneyUserIds, withMoneyParticipants, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from './balances'
+import { computeBalances, claimSource, findUnclaimedReceipts, findFreezeBlockingReceipts, isLineReallyUnclaimed, claimOwnQuantity, claimOwnAmount, claimLeftoverQuantity, claimLeftoverAmount, hasOwnClaim, allLinesClaimedWithinDust, collectMoneyUserIds, withMoneyParticipants, splitOwedAmounts, BALANCE_EPSILON_MINOR, carryoversToPseudoSettlements, partitionCarryovers } from './balances'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
 import type { Settlement, SettlementCarryover } from '../../../lib/queries/useSettlements'
 
@@ -458,7 +458,7 @@ function makeLine(id: string, total: number, quantity = 1): Line {
 }
 
 let claimSeq = 0
-function makeClaim(lineId: string, userId: string, quantity: number, owed: number, source?: string): Claim {
+function makeClaim(lineId: string, userId: string, quantity: number, owed: number, source?: string, leftover?: { quantity: number; amount: number }): Claim {
   return {
     id: `c${++claimSeq}`,
     expense_id: 'e',
@@ -471,6 +471,7 @@ function makeClaim(lineId: string, userId: string, quantity: number, owed: numbe
     updated_at: null,
     user: {} as never,
     ...(source ? { source } : {}),
+    ...(leftover ? { leftover_quantity: leftover.quantity, leftover_amount: leftover.amount } : {}),
   } as unknown as Claim
 }
 
@@ -530,11 +531,11 @@ describe('unclaimed itemised value', () => {
     expect(r.receipts[0]).toMatchObject({ unclaimedMinor: 0, dustMinor: 0, pendingMinor: 0 })
   })
 
-  it('leftover rows are ordinary claims, and a missing source reads as self', () => {
+  it('a leftover part is an ordinary part of the one row, and a missing source reads as self', () => {
     const e = receipt('r', 'alice', 30, [makeLine('a', 10), makeLine('b', 20)], [
       makeClaim('a', 'bob', 1, 10),
-      makeClaim('b', 'bob', 0.5, 10, 'leftover'),
-      makeClaim('b', 'alice', 0.5, 10, 'leftover'),
+      makeClaim('b', 'bob', 0.5, 10, 'leftover', { quantity: 0.5, amount: 10 }),
+      makeClaim('b', 'alice', 0.5, 10, 'leftover', { quantity: 0.5, amount: 10 }),
     ])
     const r = computeBalances([e], [], ['alice', 'bob'], 'GBP')
     expect(r.unclaimedReceipts).toEqual([])
@@ -617,7 +618,7 @@ describe('unclaimed itemised value', () => {
           const q = rnd() < 0.5 ? Math.min(left, 1) : Math.round(Math.min(left, rnd() * left + 0.01) * 100) / 100
           left -= q
           const owed = Math.round(((t / qty) * q + (rnd() - 0.5) * 0.02) * 10 ** exp) / 10 ** exp // deliberate per-claim rounding noise
-          claims.push(makeClaim(`l${l}`, people[Math.floor(rnd() * 5)], q, Math.max(0, owed), rnd() < 0.2 ? 'leftover' : undefined))
+          claims.push(makeClaim(`l${l}`, people[Math.floor(rnd() * 5)], q, Math.max(0, owed), rnd() < 0.2 ? 'leftover' : undefined, rnd() < 0.2 ? { quantity: q, amount: Math.max(0, owed) } : undefined))
         }
       }
       total = Math.round(total * 10 ** exp) / 10 ** exp
@@ -703,10 +704,24 @@ describe('legacy rounding dust is never "unclaimed"', () => {
     expect(r.receipts[0].dustMinor).toBe(6)
   })
 
-  it('multiple rows for one person (own + leftover) are summed, and still dust-free', () => {
-    const e = receipt('r', 'alice', 10, [makeLine('l', 10)], [makeClaim('l', 'a', 0.33, 3.3), makeClaim('l', 'a', 0.33, 3.3, 'leftover'), makeClaim('l', 'b', 0.33, 3.3)])
+  it('a row with a leftover part counts in full (own + leftover in ONE row), and is still dust-free', () => {
+    const e = receipt('r', 'alice', 10, [makeLine('l', 10)], [makeClaim('l', 'a', 0.66, 6.6, 'self', { quantity: 0.33, amount: 3.3 }), makeClaim('l', 'b', 0.33, 3.3)])
     const r = expectQuiet(e, ids(['a', 'b']), 'GBP')
     expect(r.balances.find((b) => b.userId === 'a')!.totalOwedMinor).toBe(660)
+    expect(r.receipts[0].leftoverClaimedMinor).toBe(330)
+  })
+
+  it('own parts and the dust-tolerant status', () => {
+    const row = { quantity_claimed: 1.34, amount_owed: 13.34, leftover_quantity: 0.34, leftover_amount: 3.34 }
+    expect([claimOwnQuantity(row), claimOwnAmount(row), claimLeftoverQuantity(row), claimLeftoverAmount(row), hasOwnClaim(row)]).toEqual([1, 10, 0.34, 3.34, true])
+    const pure = { quantity_claimed: 0.33, amount_owed: 3.33, leftover_quantity: 0.33, leftover_amount: 3.33 }
+    expect(hasOwnClaim(pure)).toBe(false)
+    // columns absent (front end before the migration): the whole row is the person's own
+    expect([claimOwnQuantity({ quantity_claimed: 2 }), hasOwnClaim({ quantity_claimed: 2 })]).toEqual([2, true])
+    const lines = [{ id: 'a', quantity: 1, total_amount: 10 }, { id: 'z', quantity: 1, total_amount: 0 }]
+    expect(allLinesClaimedWithinDust(lines, [{ line_item_id: 'a', quantity_claimed: 0.99 }])).toBe(true) // 0.33 x 3 style dust; the zero-total line is ignored
+    expect(allLinesClaimedWithinDust(lines, [{ line_item_id: 'a', quantity_claimed: 0.9 }])).toBe(false)
+    expect(allLinesClaimedWithinDust(lines, [])).toBe(false)
   })
 
   it('real unclaimed quantity still counts, and so does a large amount gap on a fully claimed line', () => {
@@ -734,7 +749,7 @@ describe('freeze blocking agrees with the server guard (shared cases)', () => {
       const claims = c.lines.flatMap((l, i) => (l[2] as number[][]).map(([q, a], k) => makeClaim(`l${i}`, `u${k}`, q, a)))
       const e = receipt('r', 'alice', c.amount, lines, claims, { currency: c.currency, fx_rate: c.fx })
       const blocking = findFreezeBlockingReceipts([e], c.base)
-      const got = blocking.length === 0 ? 0 : blocking[0].unclaimedOwnMinor + blocking[0].openDiscountOwnMinor
+      const got = blocking.length === 0 ? 0 : blocking[0].unclaimedOwnMinor
       expect(got).toBe(c.blockedOwnMinor)
     })
   }

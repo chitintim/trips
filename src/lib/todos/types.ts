@@ -104,7 +104,17 @@ export interface SnapshotExpense {
   ai_parsed: boolean | null
   status: string | null
   participant_ids: ReadonlyArray<string> | null
-  claims: ReadonlyArray<{ user_id: string; source?: string | null; created_by?: string | null }>
+  claims: ReadonlyArray<{
+    user_id: string
+    source?: string | null
+    created_by?: string | null
+    /** Quantity columns, when the snapshot has them: lets the claim to-do tell a claim of one's own from a share of the leftovers. */
+    line_item_id?: string
+    quantity_claimed?: number
+    leftover_quantity?: number | null
+  }>
+  /** The receipt's lines, when the snapshot has them: lets the claim to-do judge "everything is claimed" with the dust tolerance instead of the exact expenses.status. */
+  line_items?: ReadonlyArray<{ id: string; quantity: number; total_amount?: number | null }>
   /** The claim link (`expense_allocation_links` row). No link = nobody can claim, so there is no claim to-do. */
   allocation_link?: { code: string; expires_at?: string | null } | null
 }

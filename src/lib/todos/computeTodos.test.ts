@@ -431,7 +431,7 @@ describe('claim, travel, waitlist, scope', () => {
   })
 
   it('claim: only a row the person made themselves clears the claim to-do', () => {
-    const has = (claims: Array<{ user_id: string; source?: string | null; created_by?: string | null }>) =>
+    const has = (claims: Array<{ user_id: string; source?: string | null; created_by?: string | null; quantity_claimed?: number; leftover_quantity?: number | null }>) =>
       kinds(snap({ expenses: [{ ...receipt, claims }] }), 'sam').includes('claim')
     expect(has([{ user_id: 'sam', source: 'self', created_by: 'sam' }])).toBe(false)
     expect(has([{ user_id: 'sam', source: 'self' }])).toBe(false)
@@ -445,6 +445,17 @@ describe('claim, travel, waitlist, scope', () => {
     expect(has([{ user_id: 'sam', source: 'shared', created_by: 'tim' }])).toBe(true)
     expect(has([{ user_id: 'sam', source: 'shared', created_by: null }])).toBe(true)
     expect(has([{ user_id: 'chai', source: 'self' }])).toBe(true) // someone else's row
+    // one row per person and line: a row that only holds a share of the leftovers is not a claim the person made
+    expect(has([{ user_id: 'sam', source: 'leftover', created_by: 'tim', quantity_claimed: 0.33, leftover_quantity: 0.33 }])).toBe(true)
+    expect(has([{ user_id: 'sam', source: 'self', created_by: 'sam', quantity_claimed: 1.33, leftover_quantity: 0.33 }])).toBe(false)
+  })
+
+  it('claim: the status column is exact, the to-do is dust-tolerant (0.33 x 3 reads pending_allocation but is fully claimed)', () => {
+    const thirds = ['a', 'b', 'c'].map((u) => ({ user_id: u, source: 'self', line_item_id: 'l1', quantity_claimed: 0.33 }))
+    const lines = [{ id: 'l1', quantity: 1, total_amount: 10 }, { id: 'l0', quantity: 1, total_amount: 0 }]
+    expect(kinds(snap({ expenses: [{ ...receipt, claims: thirds }] }), 'sam')).toContain('claim') // no lines in the snapshot: only the status is known
+    expect(kinds(snap({ expenses: [{ ...receipt, claims: thirds, line_items: lines }] }), 'sam')).not.toContain('claim')
+    expect(kinds(snap({ expenses: [{ ...receipt, claims: thirds.slice(0, 2), line_items: lines }] }), 'sam')).toContain('claim')
   })
 
   it('D5: no claim to-do without a usable link, or while balances are frozen', () => {

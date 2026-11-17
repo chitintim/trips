@@ -182,7 +182,9 @@ describe('lineIsEqualSplit (mirror of the server check)', () => {
   it('legacy 0.33 x 2 rows and a direct 2 of 3 are not equal splits; leftover rows are ignored; nobody is trivially equal', () => {
     expect(lineIsEqualSplit(line, [row('a', 0.33, 3.3), row('b', 0.33, 3.3)], 'EUR')).toBe(false)
     expect(lineIsEqualSplit({ quantity: 3, total_amount: 15 }, [row('a', 2, 10, 'self')], 'EUR')).toBe(false)
-    expect(lineIsEqualSplit(line, [row('a', 1, 10, 'self'), row('b', 0, 0, 'leftover')], 'EUR')).toBe(true)
+    expect(lineIsEqualSplit(line, [row('a', 1, 10, 'self'), { user_id: 'b', quantity_claimed: 0.5, amount_owed: 5, source: 'leftover', leftover_quantity: 0.5, leftover_amount: 5 }], 'EUR')).toBe(true)
+    // a leftover share INSIDE a person's row does not change the equal-split test: only the own part counts
+    expect(lineIsEqualSplit(line, [{ user_id: 'a', quantity_claimed: 1.5, amount_owed: 15, source: 'self', leftover_quantity: 0.5, leftover_amount: 5 }], 'EUR')).toBe(true)
     expect(lineIsEqualSplit(line, [], 'EUR')).toBe(true)
   })
 })

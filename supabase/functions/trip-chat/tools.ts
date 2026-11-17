@@ -16,6 +16,7 @@ import {
   type ChatToolName,
   type ChatToolArgs,
 } from '../_shared/contracts/chatToolContracts.ts'
+import { receiptFullyClaimedWithinDust } from '../_shared/receiptDust.ts'
 
 /** Builds the Anthropic `tools` array (name + input_schema) for the given tool names. */
 export function buildAnthropicToolDefs(names: readonly ChatToolName[]) {
@@ -199,12 +200,14 @@ export async function executeReadTool(
       const a = parsed as ChatToolArgs<'get_pending_claims'>
       const { data, error } = await ctx.client
         .from('expenses')
-        .select('id, description, amount, currency, status, expense_item_claims(user_id), expense_allocation_links(code)')
+        .select('id, description, amount, currency, status, expense_item_claims(user_id, line_item_id, quantity_claimed), expense_line_items(id, quantity, total_amount), expense_allocation_links(code)')
         .eq('trip_id', ctx.tripId)
         .eq('ai_parsed', true)
         .in('status', ['unallocated', 'pending_allocation'])
       if (error) throw new Error(`get_pending_claims failed: ${error.message}`)
-      let results = data ?? []
+      // The status column comes from a trigger that compares quantities exactly: drop receipts that are fully claimed within the dust tolerance.
+      // deno-lint-ignore no-explicit-any
+      let results = (data ?? []).filter((e: any) => !receiptFullyClaimedWithinDust(e.expense_line_items, e.expense_item_claims ?? []))
       if (a.user_id) {
         results = results.filter((e: any) => !(e.expense_item_claims ?? []).some((c: any) => c.user_id === a.user_id))
       }

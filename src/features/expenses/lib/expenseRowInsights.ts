@@ -147,7 +147,7 @@ export function computeExpenseStake(expense: ExpenseWithDetails, viewerId: strin
       return { kind: null, involved: true }
     }
 
-    // A person can hold several rows (own + leftover/shared): sum them all.
+    // A person holds one row per line (any leftover share is a part of it): sum the lines.
     const viewerRows = expense.claims.filter((c) => c.user_id === viewerId)
     if (viewerRows.length > 0) {
       const mineMinor = viewerRows.reduce((s, c) => s + toMinorUnits(c.amount_owed, currency), 0)

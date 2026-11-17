@@ -3,6 +3,7 @@ import { fromMinorUnits, toMinorUnits } from '../../../lib/money'
 import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
 import { formatClaimQuantity } from './claimFractions'
 import { nameOfUser } from './claimPeople'
+import { claimLeftoverAmount, claimLeftoverQuantity, hasOwnClaim } from '../lib/balances'
 import { unclaimedMinor } from './claimMath'
 import type { ClaimRow, LineRow } from './claimMath'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
@@ -15,15 +16,13 @@ export interface ClaimMatrixProps {
   participants: ParticipantWithUser[]
 }
 
-/** Marker + words for where a claim row came from. */
+/** Marker + words for where the OWN part of a claim row came from (the leftover share inside a row gets its own marker, below). */
 function sourceInfo(row: ClaimRow, participants: ParticipantWithUser[]): { mark: string; words: string } {
   switch (row.source) {
     case 'on_behalf':
       return { mark: '✎', words: row.created_by && row.created_by !== row.user_id ? `put down by ${nameOfUser(row.created_by, participants)}` : 'claimed by themselves' }
     case 'shared':
       return { mark: '÷', words: 'shared' }
-    case 'leftover':
-      return { mark: '↺', words: 'share of the leftovers' }
     default:
       return { mark: '', words: 'claimed by themselves' }
   }
@@ -58,7 +57,7 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
   // Legacy rounding dust on a fully claimed line is not "left" (see isLineReallyUnclaimed).
   const leftFor = (li: LineRow) => unclaimedMinor([li], claims.filter((c) => c.line_item_id === li.id), currency)
   const anyLeft = lineItems.some((li) => leftFor(li) > 0)
-  const hasMarkers = claims.some((c) => c.source && c.source !== 'self')
+  const hasMarkers = claims.some((c) => (c.source && c.source !== 'self') || claimLeftoverAmount(c) > 0 || claimLeftoverQuantity(c) > 0)
 
   return (
     <div className="space-y-3">
@@ -99,7 +98,11 @@ export function ClaimMatrix({ expense, lineItems, claims, participants }: ClaimM
                     )
                   }
                   const qty = rows.reduce((s, r) => s + r.quantity_claimed, 0)
-                  const infos = rows.map((r) => sourceInfo(r, participants))
+                  // ONE row per person and line: its own part and/or a share of the leftovers inside it.
+                  const infos = rows.flatMap((r) => [
+                    ...(hasOwnClaim(r) ? [sourceInfo(r, participants)] : []),
+                    ...(claimLeftoverAmount(r) > 0 || claimLeftoverQuantity(r) > 0 ? [{ mark: '↺', words: 'share of the leftovers' }] : []),
+                  ])
                   const words = infos.map((i) => i.words).join(', ')
                   return (
                     <td key={p.user_id} className="px-2 py-2 text-center tabular-nums text-xs" title={words} aria-label={`${formatClaimQuantity(qty)}, ${words}`}>

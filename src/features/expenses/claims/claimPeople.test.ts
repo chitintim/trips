@@ -14,8 +14,8 @@ describe('taggedUserIds / peopleOnReceipt', () => {
   it('explicit list: only those, payer not forced in', () => {
     expect([...taggedUserIds({ participant_ids: ['b'], paid_by: 'a' }, all)]).toEqual(['b'])
   })
-  it('a claimant outside the list is added (both with and without an explicit list); leftover rows do not count', () => {
-    const claims = [{ user_id: 'c', source: 'self' }, { user_id: 'd', source: 'leftover' }]
+  it('a claimant outside the list is added (both with and without an explicit list); a row that only carries a leftover share does not count', () => {
+    const claims = [{ user_id: 'c', source: 'self', quantity_claimed: 1 }, { user_id: 'd', source: 'leftover', quantity_claimed: 0.33, leftover_quantity: 0.33 }, { user_id: 'b', source: 'self', quantity_claimed: 1.33, leftover_quantity: 0.33 }]
     expect(peopleOnReceipt({ participant_ids: ['b'], paid_by: 'a' }, all, claims).map((p) => p.id)).toEqual(['b', 'c'])
     expect(peopleOnReceipt({ participant_ids: null, paid_by: 'a' }, all.slice(0, 2), claims).map((p) => p.id)).toEqual(['a', 'b']) // claimant c has no row in the people list, so cannot be shown
   })

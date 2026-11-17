@@ -459,6 +459,8 @@ export type Database = {
           created_by?: string | null
           expense_id: string
           id: string
+          leftover_amount?: number
+          leftover_quantity?: number
           line_item_id: string
           quantity_claimed: number
           source?: string
@@ -472,6 +474,8 @@ export type Database = {
           created_by?: string | null
           expense_id: string
           id?: string
+          leftover_amount?: number
+          leftover_quantity?: number
           line_item_id: string
           quantity_claimed: number
           source?: string
@@ -485,6 +489,8 @@ export type Database = {
           created_by?: string | null
           expense_id?: string
           id?: string
+          leftover_amount?: number
+          leftover_quantity?: number
           line_item_id?: string
           quantity_claimed?: number
           source?: string

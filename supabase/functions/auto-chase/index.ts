@@ -138,6 +138,7 @@ import {
 } from './autoDecide.ts'
 import { decideEmailSuppression } from './emailSuppression.ts'
 import { type AnswerPass } from '../_shared/answers/answers.ts'
+import { receiptFullyClaimedWithinDust } from '../_shared/receiptDust.ts'
 import type { Json } from '../_shared/todos/deps/json.ts'
 import {
   addPassesToSectionVoters,
@@ -565,12 +566,15 @@ Deno.serve(async (req) => {
       if (moneyOpen && claimChaseOpen(trip.settlement_snapshot)) {
         const { data: expenses } = await admin
           .from('expenses')
-          .select('id, description, amount, currency, paid_by, participant_ids, created_at, expense_item_claims(user_id), expense_allocation_links(code)')
+          .select('id, description, amount, currency, paid_by, participant_ids, created_at, expense_item_claims(user_id, line_item_id, quantity_claimed), expense_line_items(id, quantity, total_amount), expense_allocation_links(code)')
           .eq('trip_id', trip.id)
           .eq('ai_parsed', true)
           .in('status', ['unallocated', 'pending_allocation'])
           .lt('created_at', hoursAgoIso(trip.settings.delay_hours, now))
         for (const e of expenses ?? []) {
+          // expenses.status is set by a database trigger that compares quantities exactly; a legacy receipt split in thirds (0.33 x 3) can read
+          // 'pending_allocation' while every item is in fact claimed. Judge it with the shared dust tolerance, never chase for that.
+          if (receiptFullyClaimedWithinDust(e.expense_line_items, e.expense_item_claims ?? [])) continue
           // Chase only tagged people when participant_ids is set (plan §14
           // "itemized receipts chase only tagged people"), else everyone.
           const targets: string[] = (e.participant_ids && e.participant_ids.length > 0 ? e.participant_ids : allActiveIds)

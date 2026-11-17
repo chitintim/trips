@@ -62,6 +62,42 @@ export function claimSource(claim: { source?: string | null }): ClaimSource {
 }
 
 /**
+ * A person has ONE claim row per line (the database keeps unique (line_item_id, user_id)). The part of that row that came from sharing the
+ * leftovers is `leftover_quantity` / `leftover_amount`; the rest is the person's OWN claim. Both columns are added by the receipt-claims
+ * migration, so before it is applied (or for rows written by an old client) they are absent and read as 0: the whole row is the person's own.
+ */
+type ClaimParts = { quantity_claimed: number; amount_owed: number; leftover_quantity?: number | null; leftover_amount?: number | null }
+
+function nonNegative(n: number | null | undefined): number {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0
+}
+
+/** The leftover share inside this row, in units of the line (hundredths). */
+export function claimLeftoverQuantity(c: Pick<ClaimParts, 'leftover_quantity'>): number {
+  return nonNegative(c.leftover_quantity)
+}
+
+/** The leftover share inside this row, in the expense currency. */
+export function claimLeftoverAmount(c: Pick<ClaimParts, 'leftover_amount'>): number {
+  return nonNegative(c.leftover_amount)
+}
+
+/** The person's own quantity on the line: quantity_claimed minus the leftover share (hundredths, never below 0). */
+export function claimOwnQuantity(c: Pick<ClaimParts, 'quantity_claimed' | 'leftover_quantity'>): number {
+  return Math.max(0, Math.round((c.quantity_claimed - claimLeftoverQuantity(c)) * 100) / 100)
+}
+
+/** The person's own amount on the line: amount_owed minus the leftover share (never below 0). */
+export function claimOwnAmount(c: Pick<ClaimParts, 'amount_owed' | 'leftover_amount'>): number {
+  return Math.max(0, Math.round((c.amount_owed - claimLeftoverAmount(c)) * 100) / 100)
+}
+
+/** True when the row holds a claim of the person's own (not only a share of the leftovers). */
+export function hasOwnClaim(c: Pick<ClaimParts, 'quantity_claimed' | 'leftover_quantity'>): boolean {
+  return claimOwnQuantity(c) > 0
+}
+
+/**
  * How much of one itemised receipt has an owner. All `*Minor` fields are in
  * the trip's BASE currency (the ledger's unit); `unclaimedOwnMinor` and
  * `currency` are the receipt's own currency, for printing "EUR 48.00".
@@ -85,7 +121,7 @@ export interface ReceiptClaimStatus {
   claimCode: string | null
   totalMinor: number
   claimedMinor: number
-  /** Part of claimedMinor that arrived as 'leftover' rows (shared out at the end). */
+  /** Part of claimedMinor that arrived as the leftover share inside people's rows (leftover_amount; shared out at the end). */
   leftoverClaimedMinor: number
   pendingMinor: number
   unclaimedMinor: number
@@ -99,11 +135,6 @@ export interface ReceiptClaimStatus {
    * `unclaimedOwnMinor` (see isLineReallyUnclaimed).
    */
   shortfallOwnMinor: number
-  /**
-   * Own-currency value of DISCOUNT lines (negative total) that nobody holds a claim on. Nobody can claim a voucher, so these are
-   * shared equally between everyone on the receipt by "Share leftovers"; until then they block a freeze (the server mirrors this).
-   */
-  openDiscountOwnMinor: number
 }
 
 export interface BalanceComputationResult {
@@ -179,21 +210,19 @@ export function analyseReceiptClaims(expense: ExpenseWithDetails, baseCurrency: 
   for (const c of expense.claims) {
     const base = toMinorUnits(c.amount_owed * rate, baseCurrency)
     claimedMinor += base
-    if (claimSource(c as { source?: string | null }) === 'leftover') leftoverClaimedMinor += base
+    leftoverClaimedMinor += toMinorUnits(claimLeftoverAmount(c) * rate, baseCurrency)
     qtyByLine.set(c.line_item_id, (qtyByLine.get(c.line_item_id) ?? 0) + c.quantity_claimed)
     ownMinorByLine.set(c.line_item_id, (ownMinorByLine.get(c.line_item_id) ?? 0) + toMinorUnits(c.amount_owed, own))
   }
 
   let unclaimedOwnMinor = 0
   let shortfallOwnMinor = 0
-  let openDiscountOwnMinor = 0
   const rowsByLine = new Map<string, number>()
   for (const c of expense.claims) rowsByLine.set(c.line_item_id, (rowsByLine.get(c.line_item_id) ?? 0) + 1)
   for (const line of expense.line_items) {
     const lineMinor = toMinorUnits(line.total_amount, own)
     const leftMinor = Math.max(0, lineMinor - (ownMinorByLine.get(line.id) ?? 0))
     shortfallOwnMinor += leftMinor
-    if (lineMinor < 0 && (rowsByLine.get(line.id) ?? 0) === 0) openDiscountOwnMinor += -lineMinor
     if (isLineReallyUnclaimed(line.quantity, qtyByLine.get(line.id) ?? 0, leftMinor, rowsByLine.get(line.id) ?? 0, lineMinor)) unclaimedOwnMinor += leftMinor
   }
 
@@ -214,13 +243,26 @@ export function analyseReceiptClaims(expense: ExpenseWithDetails, baseCurrency: 
     dustMinor: pendingMinor - unclaimedMinor,
     unclaimedOwnMinor: unclaimedMinor > 0 ? unclaimedOwnMinor : 0,
     shortfallOwnMinor,
-    openDiscountOwnMinor,
   }
 }
 
-/** True when a receipt must be sorted out before balances can freeze: real unclaimed value, or an unshared discount. */
-export function blocksFreeze(r: Pick<ReceiptClaimStatus, 'unclaimedOwnMinor' | 'openDiscountOwnMinor'>): boolean {
-  return r.unclaimedOwnMinor > 0 || r.openDiscountOwnMinor > 0
+/** True when a receipt must be sorted out before balances can freeze: real unclaimed value. */
+export function blocksFreeze(r: Pick<ReceiptClaimStatus, 'unclaimedOwnMinor'>): boolean {
+  return r.unclaimedOwnMinor > 0
+}
+
+/**
+ * The dust-tolerant "every item has an owner" test, the client twin of the server's _receipt_refresh_status: no line that has money on it has
+ * more than LINE_QUANTITY_TOLERANCE of a unit unclaimed (0.33 x 3 leaves 0.01 and counts as claimed; zero-total lines are ignored). Use this, never
+ * the exact comparison of the database trigger (expenses.status), to decide whether anything is left to claim.
+ */
+export function allLinesClaimedWithinDust(
+  lines: ReadonlyArray<{ id: string; quantity: number; total_amount?: number | null }>,
+  claims: ReadonlyArray<{ line_item_id: string; quantity_claimed: number }>
+): boolean {
+  const qty = new Map<string, number>()
+  for (const c of claims) qty.set(c.line_item_id, (qty.get(c.line_item_id) ?? 0) + c.quantity_claimed)
+  return lines.every((l) => !((l.total_amount ?? 1) > 0) || Math.round((l.quantity - (qty.get(l.id) ?? 0)) * 1e6) / 1e6 <= LINE_QUANTITY_TOLERANCE)
 }
 
 /** Receipts the Freeze dialog gate lists: only real unclaimed value (see isLineReallyUnclaimed), never legacy dust. Largest first. */

@@ -413,6 +413,7 @@ function moneyTodos(ctx: Ctx, userId: string): Todo[] {
     for (const e of expenses) {
       if (!e.ai_parsed || !e.status) continue
       if (e.status === 'allocated' || e.status === 'confirmed') continue
+      if (receiptFullyClaimed(e)) continue
       if (!hasUsableClaimLink(e, ctx.now)) continue
       if (e.paid_by === userId) continue // the payer is not chased on their own receipt
       const involved = e.participant_ids && e.participant_ids.length > 0 ? e.participant_ids : everyone
@@ -473,14 +474,44 @@ function settleOwed(ctx: Ctx, userId: string): number {
 
 /**
  * A claim row the person made themselves. Legacy rows (no source, no created_by)
- * are 'self'. A 'shared' or 'on_behalf' row counts only when they created it;
- * 'leftover' rows never do.
+ * are 'self'. A 'shared' or 'on_behalf' row counts only when they created it.
+ * A row that holds only a share of the leftovers (no quantity of the person's own) never does:
+ * a claim with own (non-leftover) quantity above 0 is the test, not the source alone.
  */
-function isSelfMadeClaim(c: { user_id: string; source?: string | null; created_by?: string | null }, userId: string): boolean {
+function isSelfMadeClaim(
+  c: { user_id: string; source?: string | null; created_by?: string | null; quantity_claimed?: number; leftover_quantity?: number | null },
+  userId: string
+): boolean {
   if (c.user_id !== userId) return false
   if (c.source === 'leftover') return false
+  if (typeof c.quantity_claimed === 'number' && Math.round((c.quantity_claimed - (c.leftover_quantity ?? 0)) * 100) <= 0) return false
   if (c.source === 'shared' || c.source === 'on_behalf') return c.created_by === userId
   return true
+}
+
+/** The dust tolerance the whole claims feature shares (balances.ts LINE_QUANTITY_TOLERANCE, the server's 0.011). */
+const CLAIM_QUANTITY_TOLERANCE = 0.011
+
+/**
+ * True when every line that has money on it is claimed within the dust tolerance (0.33 x 3 of a line counts as claimed). The database column
+ * expenses.status is set by a trigger that compares quantities exactly, so it can read 'pending_allocation' on a legacy receipt that is in fact
+ * fully claimed; this is the tolerant answer. False when there are no lines (then only the status is known).
+ */
+export function linesFullyClaimedWithinDust(
+  lines: ReadonlyArray<{ id: string; quantity: number; total_amount?: number | null }> | null | undefined,
+  claims: ReadonlyArray<{ line_item_id?: string | null; quantity_claimed?: number | null }>
+): boolean {
+  if (!lines || lines.length === 0) return false
+  const claimed = new Map<string, number>()
+  for (const c of claims) {
+    if (c.line_item_id == null || typeof c.quantity_claimed !== 'number') return false
+    claimed.set(c.line_item_id, (claimed.get(c.line_item_id) ?? 0) + c.quantity_claimed)
+  }
+  return lines.every((l) => !((l.total_amount ?? 1) > 0) || Math.round((l.quantity - (claimed.get(l.id) ?? 0)) * 1e6) / 1e6 <= CLAIM_QUANTITY_TOLERANCE)
+}
+
+function receiptFullyClaimed(e: SnapshotExpense): boolean {
+  return linesFullyClaimedWithinDust(e.line_items, e.claims)
 }
 
 function hasUsableClaimLink(e: SnapshotExpense, now: Date): boolean {

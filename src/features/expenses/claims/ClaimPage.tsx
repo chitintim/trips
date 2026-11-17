@@ -8,6 +8,7 @@ import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { toMinorUnits } from '../../../lib/money'
 import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
+import { claimLeftoverAmount, claimLeftoverQuantity, claimOwnAmount, claimOwnQuantity, hasOwnClaim } from '../lib/balances'
 import { useClaimLink, useClaimRealtime } from './useClaimData'
 import { summarizeLineClaims, summarizeOverallProgress, maxClaimableQuantity, claimAmount, isStepperClaim, shareLineMinor, unclaimedMinor, hasDirectUnitClaims, sharePickProblem, lockedSharePeople, lineIsEqualSplit, selfTogglePick, REPLACES_OWN_ENTRIES_WARNING } from './claimMath'
 import { describeClaimError } from './claimErrors'
@@ -61,11 +62,11 @@ export function ClaimPage() {
   const [shareLineId, setShareLineId] = useState<string | null>(null)
   const [sharePick, setSharePick] = useState<string[]>([])
 
-  /** My whole-unit claims per line (what the steppers edit). Shared, leftover and legacy-fraction rows are not in here. */
+  /** My whole-unit claims per line (what the steppers edit; the own part of the row). Shared, leftover-only and legacy-fraction rows are not in here. */
   const stepperSelections = (claims: ClaimRow[]): Record<string, number> => {
     const mine: Record<string, number> = {}
     for (const claim of claims) {
-      if (claim.user_id === user?.id && isStepperClaim(claim)) mine[claim.line_item_id] = (mine[claim.line_item_id] ?? 0) + claim.quantity_claimed
+      if (claim.user_id === user?.id && isStepperClaim(claim)) mine[claim.line_item_id] = (mine[claim.line_item_id] ?? 0) + claimOwnQuantity(claim)
     }
     return mine
   }
@@ -175,9 +176,9 @@ export function ClaimPage() {
   }
 
   const afterOwnChange = async () => {
-    // The server removes my leftover rows on a line I edit; if leftovers had
+    // The leftover share inside my row on a line I edit goes with the row; if leftovers had
     // been shared, they need sharing again (payer / managers only).
-    if (!claims.some((c) => c.source === 'leftover')) return
+    if (!claims.some((c) => claimLeftoverAmount(c) > 0 || claimLeftoverQuantity(c) > 0)) return
     if (canLeftovers) {
       try {
         await shareLeftovers.mutateAsync({ expenseId: expense.id, mode: 'same', currency })
@@ -224,7 +225,7 @@ export function ClaimPage() {
   const toggleSelf = async (li: LineRow, on: boolean) => {
     if (!user) return
     const rows = claimsByLine.get(li.id) ?? []
-    const existing = [...new Set(rows.filter((c) => c.source !== 'leftover').map((c) => c.user_id))]
+    const existing = [...new Set(rows.filter(hasOwnClaim).map((c) => c.user_id))]
     const pick = selfTogglePick(existing, user.id, on)
     const problem = sharePickProblem({
       fullPower: false,
@@ -253,7 +254,7 @@ export function ClaimPage() {
   }
 
   const openSharePicker = (li: LineRow) => {
-    const current = (claimsByLine.get(li.id) ?? []).filter((c) => c.source !== 'leftover').map((c) => c.user_id)
+    const current = (claimsByLine.get(li.id) ?? []).filter(hasOwnClaim).map((c) => c.user_id)
     // "I shared this" starts with me and everyone already on the item switched on.
     setSharePick([...new Set([...(user ? [user.id] : []), ...current])])
     setShareLineId(li.id)
@@ -277,8 +278,9 @@ export function ClaimPage() {
   }
 
   const myTotalMinor = lineItems.reduce((sum, li) => {
-    const own = (claimsByLine.get(li.id) ?? []).filter((c) => c.user_id === user?.id && !isStepperClaim(c)) // fixed shares and leftovers
-    const fixed = own.reduce((s, c) => s + toMinorUnits(c.amount_owed, currency), 0)
+    // Fixed shares count in full; a stepper row counts only its leftover share (its own part is the stepper value below).
+    const mineHere = (claimsByLine.get(li.id) ?? []).filter((c) => c.user_id === user?.id)
+    const fixed = mineHere.reduce((s, c) => s + toMinorUnits(isStepperClaim(c) ? claimLeftoverAmount(c) : c.amount_owed, currency), 0)
     const qty = localSelections[li.id] ?? 0
     return sum + fixed + (qty > 0 ? toMinorUnits(myAmount(li, qty), currency) : 0)
   }, 0)
@@ -287,7 +289,7 @@ export function ClaimPage() {
   const putDownByOthers = claims.filter((c) => c.user_id === user?.id && c.source === 'on_behalf' && c.created_by && c.created_by !== user.id)
   const putDownByNames = [...new Set(putDownByOthers.map((c) => nameOfUser(c.created_by, participants)))]
   const shareLine = shareLineId ? lineItems.find((l) => l.id === shareLineId) : null
-  const shareExisting = shareLine ? [...new Set((claimsByLine.get(shareLine.id) ?? []).filter((c) => c.source !== 'leftover').map((c) => c.user_id))] : []
+  const shareExisting = shareLine ? [...new Set((claimsByLine.get(shareLine.id) ?? []).filter(hasOwnClaim).map((c) => c.user_id))] : []
   const shareProblem = shareLine && user ? sharePickProblem({ fullPower: canRecord, me: user.id, pick: sharePick, existing: shareExisting, lineSharedByAll: !!shareLine.shared_by_all }) : null
   const shareLocked = user ? lockedSharePeople({ fullPower: canRecord, me: user.id, people: people.map((p) => p.id) }) : new Set<string>()
   const shareReplaces = !!shareLine && hasDirectUnitClaims(shareLine, claimsByLine.get(shareLine.id) ?? [])
@@ -410,13 +412,14 @@ export function ClaimPage() {
                 const maxQty = maxClaimableQuantity(summary)
                 const name = li.name_english || li.name_original
                 const myFixed = claimsForLine.filter((c) => c.user_id === user?.id && !isStepperClaim(c))
-                const myShared = myFixed.filter((c) => c.source !== 'leftover')
-                const myLeftover = myFixed.filter((c) => c.source === 'leftover')
-                const sharers = claimsForLine.filter((c) => c.source !== 'leftover')
+                const myShared = myFixed.filter(hasOwnClaim)
+                // ONE row per person and line: the leftover share is a part of it (any of my rows on this line may carry one).
+                const myLeftoverAmount = claimsForLine.filter((c) => c.user_id === user?.id).reduce((s, c) => s + claimLeftoverAmount(c), 0)
+                const sharers = claimsForLine.filter(hasOwnClaim)
                 const sharerCount = new Set(sharers.map((c) => c.user_id)).size
                 const othersText = claimsForLine
-                  .filter((c) => c.user_id !== user?.id && c.source !== 'leftover')
-                  .map((c) => `${nameOfUser(c.user_id, participants)} ${formatClaimQuantity(c.quantity_claimed)}`)
+                  .filter((c) => c.user_id !== user?.id && hasOwnClaim(c))
+                  .map((c) => `${nameOfUser(c.user_id, participants)} ${formatClaimQuantity(claimOwnQuantity(c))}`)
                   .join(' · ')
 
                 return (
@@ -471,8 +474,8 @@ export function ClaimPage() {
                     {myShared.length > 0 && (
                       <div className="mt-1.5 flex items-center justify-between gap-2">
                         <p className="text-xs text-accent-700 dark:text-accent-400 font-medium">
-                          You: {myShared.length > 0 && sharerCount > 1 ? `÷${sharerCount} share` : formatClaimQuantity(myShared.reduce((s, c) => s + c.quantity_claimed, 0))} —{' '}
-                          {formatMoney(myShared.reduce((s, c) => s + c.amount_owed, 0), currency)}
+                          You: {myShared.length > 0 && sharerCount > 1 ? `÷${sharerCount} share` : formatClaimQuantity(myShared.reduce((s, c) => s + claimOwnQuantity(c), 0))} —{' '}
+                          {formatMoney(myShared.reduce((s, c) => s + claimOwnAmount(c), 0), currency)}
                           {myShared[0].created_by && myShared[0].created_by !== user?.id && ` · put down by ${nameOfUser(myShared[0].created_by, participants)}`}
                         </p>
                         {!isReadOnly && (
@@ -494,9 +497,9 @@ export function ClaimPage() {
                       </div>
                     )}
 
-                    {myLeftover.length > 0 && (
+                    {myLeftoverAmount > 0 && (
                       <p className="text-xs text-[var(--text-secondary)] mt-1.5">
-                        {formatMoney(myLeftover.reduce((s, c) => s + c.amount_owed, 0), currency)} added to you from the leftovers
+                        {formatMoney(myLeftoverAmount, currency)} added to you from the leftovers
                       </p>
                     )}
 

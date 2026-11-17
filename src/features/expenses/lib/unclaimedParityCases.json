@@ -11,9 +11,7 @@
     { "name": "foreign receipt with a rate", "currency": "EUR", "base": "GBP", "fx": 0.5, "amount": 10, "lines": [[1, 10, []]], "blockedOwnMinor": 1000 },
     { "name": "foreign receipt without a rate is judged in its own currency", "currency": "EUR", "base": "GBP", "fx": null, "amount": 10, "lines": [[1, 10, []]], "blockedOwnMinor": 1000 },
     { "name": "JPY thirds dust", "currency": "JPY", "base": "JPY", "fx": null, "amount": 1000, "lines": [[1, 1000, [[0.33, 333], [0.33, 333], [0.33, 333]]]], "blockedOwnMinor": 0 },
-    { "name": "unshared discount line blocks", "currency": "EUR", "base": "EUR", "fx": null, "amount": 100, "lines": [[1, 110, [[1, 110]]], [1, -10, []]], "blockedOwnMinor": 1000 },
-    { "name": "discount line somebody holds is fine", "currency": "EUR", "base": "EUR", "fx": null, "amount": 100, "lines": [[1, 110, [[1, 110]]], [1, -10, [[1, -10]]]], "blockedOwnMinor": 0 },
-    { "name": "quantity gap of exactly 0.011 is within tolerance (float noise: 1.001 - 0.99)", "currency": "EUR", "base": "EUR", "fx": null, "amount": 10, "lines": [[1.001, 10, [[0.99, 9.9]]]], "blockedOwnMinor": 0 },
+    { "name": "a hundredth of a unit left (0.99 of 1) is within tolerance", "currency": "EUR", "base": "EUR", "fx": null, "amount": 10, "lines": [[1, 10, [[0.99, 9.9]]]], "blockedOwnMinor": 0 },
     { "name": "allowance edge: 12p left on 10.00 with one row (1 + ceil(11)) is dust", "currency": "EUR", "base": "EUR", "fx": null, "amount": 10, "lines": [[1, 10, [[1, 9.88]]]], "blockedOwnMinor": 0 },
     { "name": "allowance edge: 13p left is real", "currency": "EUR", "base": "EUR", "fx": null, "amount": 10, "lines": [[1, 10, [[1, 9.87]]]], "blockedOwnMinor": 13 }
   ]

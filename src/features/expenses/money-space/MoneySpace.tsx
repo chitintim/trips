@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { Modal, Skeleton } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
@@ -48,6 +48,7 @@ export interface MoneySpaceProps {
 export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null }: MoneySpaceProps) {
   const { user } = useAuth()
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { canManageTrip } = useTripPermissions(trip)
   const { data, isLoading, isError, refetch } = useExpenses(trip.id)
   const { data: participants = [] } = useParticipants(trip.id)
@@ -84,6 +85,22 @@ export function MoneySpace({ trip, initialScreen = null, initialConfirmId = null
   )
   const grouped = useMemo(() => groupMoneyFeedByDay(filtered, filteredSettlements), [filtered, filteredSettlements])
   const participantsByUserId = useMemo(() => Object.fromEntries(participants.map((p) => [p.user_id, p])), [participants])
+
+  // ?editExpense=<id> (from "Edit items" on Who had what) opens that expense in the editor once the list has loaded.
+  const editRequest = searchParams.get('editExpense')
+  useEffect(() => {
+    if (!editRequest || !data) return
+    const found = expenses.find((e) => e.id === editRequest)
+    if (found && !trip.settlement_snapshot) {
+      setEditingExpense(found)
+      setEditorKey((k) => k + 1)
+      setEditorOpen(true)
+    }
+    const next = new URLSearchParams(searchParams)
+    next.delete('editExpense')
+    setSearchParams(next, { replace: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editRequest, data])
 
   const openAdd = () => {
     setEditingExpense(null)

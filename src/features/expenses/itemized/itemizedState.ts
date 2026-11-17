@@ -129,11 +129,23 @@ export function headerTextProblems(description: string, vendorName: string): { d
   return out
 }
 
+/** What the form still needs before an itemised receipt can be saved: a title and a payer. Shown on the itemised screen, which has neither field. */
+export function itemizedMissingHeader(description: string, paidBy: string): string[] {
+  const out: string[] = []
+  if (description.trim().length === 0) out.push('Add what it was for: tap Back and fill in "What was it for?".')
+  if (!paidBy) out.push('Choose who paid: tap Back and pick the payer.')
+  return out
+}
+
 /** Why an itemised save would be refused before it reaches the database (zero total, over-long text), or null. */
 export function itemizedWriteProblem(
-  expense: { description?: string | null; vendor_name?: string | null; amount?: number | null },
+  expense: { description?: string | null; vendor_name?: string | null; amount?: number | null; paid_by?: string | null },
   lines: Array<{ name_original: string; name_english: string | null }>,
 ): string | null {
+  if (expense.paid_by !== undefined) {
+    const missing = itemizedMissingHeader(expense.description ?? '', expense.paid_by ?? '')
+    if (missing.length > 0) return missing[0]
+  }
   if (expense.amount != null && !(expense.amount > 0)) return ZERO_TOTAL_MESSAGE
   const h = headerTextProblems(expense.description ?? '', expense.vendor_name ?? '')
   if (h.description) return h.description

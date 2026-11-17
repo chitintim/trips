@@ -14,6 +14,7 @@ import {
   validateDraftLines,
   headerTextProblems,
   itemizedWriteProblem,
+  itemizedMissingHeader,
   ZERO_TOTAL_MESSAGE,
   MAX_ITEM_NAME_LENGTH,
   parseLineQuantity,
@@ -352,5 +353,20 @@ describe('database limits', () => {
     expect(itemizedWriteProblem({ description: 'D', vendor_name: 'v'.repeat(201), amount: 5 }, lines)).toMatch(/place name/)
     expect(itemizedWriteProblem({ description: 'D', amount: 5 }, [{ name_original: 'A', name_english: 'e'.repeat(201) }])).toMatch(/item names/)
     expect(itemizedWriteProblem({ description: 'D', vendor_name: 'V', amount: 5 }, lines)).toBeNull()
+  })
+})
+
+describe('itemizedMissingHeader', () => {
+  it('asks for a title and a payer before an itemised save', () => {
+    expect(itemizedMissingHeader('', '')).toHaveLength(2)
+    expect(itemizedMissingHeader('  ', 'u1')[0]).toMatch(/what it was for/)
+    expect(itemizedMissingHeader('Pizza', '')[0]).toMatch(/who paid/)
+    expect(itemizedMissingHeader('Pizza', 'u1')).toEqual([])
+  })
+  it('makes the write check refuse a missing payer or title', () => {
+    const lines = [{ name_original: 'A', name_english: null }]
+    expect(itemizedWriteProblem({ description: 'D', amount: 5, paid_by: '' }, lines)).toMatch(/who paid/)
+    expect(itemizedWriteProblem({ description: '', amount: 5, paid_by: 'u1' }, lines)).toMatch(/what it was for/)
+    expect(itemizedWriteProblem({ description: 'D', amount: 5, paid_by: 'u1' }, lines)).toBeNull()
   })
 })

@@ -99,3 +99,15 @@ describe('review fixes', () => {
     expect(startsDirty({ receiptPath: 'u1/r.jpg' })).toBe(true)
   })
 })
+
+import { withDefaultPayer } from './wizardState'
+describe('withDefaultPayer', () => {
+  const blank = emptyWizardDraft({ today: '2026-01-01', baseCurrency: 'GBP', currentUserId: '', allParticipantIds: ['a'] })
+  it('fills the payer once the user is known', () => {
+    expect(withDefaultPayer(blank, 'me').paidBy).toBe('me')
+  })
+  it('keeps an existing choice and ignores an unknown user', () => {
+    expect(withDefaultPayer({ ...blank, paidBy: 'other' }, 'me').paidBy).toBe('other')
+    expect(withDefaultPayer(blank, undefined)).toBe(blank)
+  })
+})

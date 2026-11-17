@@ -63,6 +63,11 @@ export function emptyWizardDraft(defaults: {
   }
 }
 
+/** A new expense's payer is the signed-in user; if they were not known when the draft was made, fill it in later but never over a choice. */
+export function withDefaultPayer(draft: ExpenseWizardDraft, userId: string | undefined): ExpenseWizardDraft {
+  return draft.paidBy || !userId ? draft : { ...draft, paidBy: userId }
+}
+
 export const WIZARD_STEPS = [
   { key: 'details', label: 'Details' },
   { key: 'payer', label: 'Payer' },

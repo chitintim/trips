@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Button, Card, Modal, useToast } from '../../../components/ui'
 import { useAuth } from '../../../hooks/useAuth'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
@@ -19,7 +20,7 @@ import { useReceiptPeople } from './useReceiptPeople'
 import { shareLineMinor, hasDirectUnitClaims, REPLACES_OWN_ENTRIES_WARNING } from './claimMath'
 import { describeClaimError } from './claimErrors'
 import { leftoverFollowUp } from './leftoverReshare'
-import { LEAVE_IT_FOR_NOW, SORT_OUT_THE_REST, unassignedPrompt } from './claimDone'
+import { LEAVE_IT_FOR_NOW, SORT_OUT_THE_REST, canEditItems, editExpenseUrl, unassignedPrompt } from './claimDone'
 import { SendToTableSheet } from './SendToTableSheet'
 import { ReceiptTableStatus } from './ReceiptTableStatus'
 import { countToTell, receiptTableSupport, summarizeReplies } from './receiptTable'
@@ -63,6 +64,7 @@ export interface WhoHadWhatProps {
  */
 export function WhoHadWhat({ expense, lineItems, claims, participants, disabled: frozen = false, onDone, onOpenLeftovers }: WhoHadWhatProps) {
   const { showToast } = useToast()
+  const navigate = useNavigate()
   const { user } = useAuth()
   const setClaims = useSetReceiptClaims()
   const shareLeftovers = useShareLeftovers()
@@ -100,12 +102,17 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
 
   // What the server has: per line, who is on it (the leftover share inside a row is derived and ignored here: only each row's own part counts).
   const serverLines = useMemo(() => {
-    const result = new Map<string, { assign: Assign; custom: string | null; amounts: Map<string, number>; hasLeftover: boolean }>()
+    const result = new Map<string, { assign: Assign; custom: string | null; amounts: Map<string, number>; leftovers: Map<string, number>; hasLeftover: boolean }>()
     for (const li of lineItems) {
       const rows = claims.filter((c) => c.line_item_id === li.id)
       const own = rows.filter(hasOwnClaim)
       const amounts = new Map<string, number>()
       for (const r of own) amounts.set(r.user_id, (amounts.get(r.user_id) ?? 0) + toMinorUnits(claimOwnAmount(r), currency))
+      const leftovers = new Map<string, number>()
+      for (const r of rows) {
+        const m = toMinorUnits(claimLeftoverAmount(r), currency)
+        if (m > 0) leftovers.set(r.user_id, (leftovers.get(r.user_id) ?? 0) + m)
+      }
       const ids = [...new Set(own.map((r) => r.user_id))]
       const qtys = ids.map((id) => own.filter((r) => r.user_id === id).reduce((s, r) => s + claimOwnQuantity(r), 0))
       const sum = qtys.reduce((a, b) => a + b, 0)
@@ -117,6 +124,7 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
         assign: li.shared_by_all ? 'all' : ids,
         custom,
         amounts,
+        leftovers,
         hasLeftover: rows.some((c) => claimLeftoverAmount(c) > 0 || claimLeftoverQuantity(c) > 0),
       })
     }
@@ -300,6 +308,13 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
           assignedMinor += m
         }
       }
+      // A closed receipt has had its leftovers shared: that share is where the item went, so it is no longer unassigned.
+      if (closed && loc === undefined && sv) {
+        for (const [id, m] of sv.leftovers) {
+          totals.set(id, (totals.get(id) ?? 0) + m)
+          assignedMinor += m
+        }
+      }
       const left = Math.max(0, lineMinor - assignedMinor)
       if (left > 0) {
         unassignedCount += 1
@@ -307,7 +322,7 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
       }
     }
     return { totals, unassignedCount, unassignedMinor }
-  }, [lineItems, local, serverLines, peopleIds, currency])
+  }, [lineItems, local, serverLines, peopleIds, currency, closed])
 
   const handleDone = async () => {
     if (dirtyLineIds.length > 0 || inFlight.current) {
@@ -327,6 +342,19 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
       return
     }
     finish()
+  }
+
+  const showEditItems = canEditItems({ isPayer: !!user && user.id === expense.paid_by, canManageTrip, frozen, closed })
+  /** Opens the expense editor on its items (the re-itemise flow); pending taps are saved first. */
+  const editItems = async () => {
+    if (dirtyLineIds.length > 0 || inFlight.current) {
+      const ok = inFlight.current ? false : await flush()
+      if (!ok) {
+        showToast({ type: 'error', message: "Your last changes aren't saved yet", description: 'Your taps are kept. Try again.' })
+        return
+      }
+    }
+    navigate(editExpenseUrl(expense.trip_id, expense.id))
   }
 
   /** Leaving "Who had what": a receipt that is ready to send goes to the table first (the sheet then leaves); otherwise straight out. */
@@ -352,7 +380,9 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
         <div className="flex items-center justify-between gap-2">
           <p className="text-sm font-semibold text-[var(--text-primary)]" aria-live="polite">
             {unassignedCount === 0
-              ? 'Everything is assigned ✓'
+              ? closed && leftoversText
+                ? `Everything is assigned ✓ Shared as leftovers: ${leftoversText}`
+                : 'Everything is assigned ✓'
               : `Unassigned (${unassignedCount} ${unassignedCount === 1 ? 'item' : 'items'} · ${formatMoneyMinor(unassignedMinor, currency)})`}
           </p>
           <div className="flex items-center gap-2 shrink-0">
@@ -380,6 +410,15 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled:
           leftoversText={leftoversText}
           frozen={frozen}
         />
+      )}
+
+      {showEditItems && (
+        <div>
+          <Button variant="secondary" size="sm" className="min-h-11" onClick={() => void editItems()}>
+            Edit items
+          </Button>
+          <p className="mt-1 text-xs text-[var(--text-muted)]">Change names, prices or tax. Claims on items you don't change are kept.</p>
+        </div>
       )}
 
       {frozen && <p className="text-sm text-[var(--text-secondary)]">🔒 Balances are frozen, so this can't be changed. An organizer can unfreeze them.</p>}

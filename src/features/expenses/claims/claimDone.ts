@@ -26,3 +26,13 @@ export function unassignedPrompt(args: { count: number; minor: number; currency:
 export function moneySpaceUrl(tripId: string): string {
   return `/${encodeURIComponent(tripId)}?tab=money`
 }
+
+/** The trip's Money space with the expense editor opened on one expense (used by "Edit items" on Who had what). */
+export function editExpenseUrl(tripId: string, expenseId: string): string {
+  return `${moneySpaceUrl(tripId)}&editExpense=${encodeURIComponent(expenseId)}`
+}
+
+/** Who may change a receipt's items from Who had what: the payer or a trip manager, while balances are not frozen and claims are not closed. */
+export function canEditItems(args: { isPayer: boolean; canManageTrip: boolean; frozen: boolean; closed: boolean }): boolean {
+  return (args.isPayer || args.canManageTrip) && !args.frozen && !args.closed
+}

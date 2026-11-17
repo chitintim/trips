@@ -27,8 +27,8 @@ import { useSendToTable } from '../../../lib/queries/useReceiptTable'
 import { clearedPeopleLine, receiptColumnsOf, type SendOutcome } from '../claims/receiptTable'
 import { itemiseChoice, isFrozen, pickEditorScreen, startsDirty } from './expenseFormLogic'
 import { FROZEN_EXPENSES_MESSAGE } from '../quick-capture/addExpenseEntry'
-import { emptyWizardDraft, draftFromExpense, draftFromParsedReceipt, parsedLineCount, seedParticipantIds, participantSelectionChanged, type ExpenseWizardDraft } from './wizardState'
-import { emptyItemizedDraft, fromReceiptParseResult, fromExpenseLineItems, itemizedWriteProblem, headerTextProblems } from '../itemized/itemizedState'
+import { emptyWizardDraft, draftFromExpense, draftFromParsedReceipt, parsedLineCount, seedParticipantIds, participantSelectionChanged, withDefaultPayer, type ExpenseWizardDraft } from './wizardState'
+import { emptyItemizedDraft, fromReceiptParseResult, fromExpenseLineItems, itemizedWriteProblem, headerTextProblems, itemizedMissingHeader } from '../itemized/itemizedState'
 import { ItemizedEditorScreen, type ClearClaimsPreview, type ItemizedSaveParams } from '../itemized/ItemizedEditorScreen'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { ExpenseWithDetails } from '../../../lib/queries/useExpenses'
@@ -139,6 +139,12 @@ export function ExpenseEditorWizard({
     setValues: setDraft,
     clearDraft,
   } = useFormDraft<ExpenseWizardDraft>(draftKey, seededInitialValue, { enabled: !isEditMode })
+
+  // The signed-in user can arrive after the first render (the draft is seeded once): default the payer to them, never over a choice.
+  useEffect(() => {
+    if (isEditMode || !user?.id) return
+    setDraft((prev) => withDefaultPayer(prev, user.id))
+  }, [isEditMode, user?.id, setDraft])
 
   const [itemiseChoiceDismissed, setItemiseChoiceDismissed] = useState(false)
   const [receiptFile, setReceiptFile] = useState<File | null>(null)
@@ -336,7 +342,7 @@ export function ExpenseEditorWizard({
   const handleItemizedSave = async (params: ItemizedSaveParams): Promise<boolean> => {
     if (!user) return false
     const writeProblem = itemizedWriteProblem(
-      { description: draft.description.trim() || draft.vendorName, vendor_name: draft.vendorName.trim(), amount: params.totalMajor },
+      { description: draft.description.trim() || draft.vendorName, vendor_name: draft.vendorName.trim(), amount: params.totalMajor, paid_by: draft.paidBy },
       params.lineItems,
     )
     if (writeProblem) {
@@ -520,7 +526,7 @@ export function ExpenseEditorWizard({
           initialParticipantIds={draft.participantIds}
           existingLineItems={wasItemized ? editingExpense?.line_items : undefined}
           existingCurrency={editingExpense?.currency}
-          headerProblems={Object.values(headerTextProblems(draft.description, draft.vendorName))}
+          headerProblems={[...itemizedMissingHeader(draft.description.trim() || draft.vendorName, draft.paidBy), ...Object.values(headerTextProblems(draft.description, draft.vendorName))]}
           existingClaims={wasItemized ? editingExpense?.claims : undefined}
           // claimDeadlineSlot: Phase 2 supplies the "Claim by ..." line here.
         />

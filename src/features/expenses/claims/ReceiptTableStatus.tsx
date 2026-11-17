@@ -125,6 +125,10 @@ export function ReceiptTableStatus({ expense, tripId, columns, replies, rpc, par
   const line = day ? (replies.total > 0 ? STATUS_COPY.sent(day, replies.replied, replies.total) : STATUS_COPY.sentNoCount(day)) : 'Sent'
   const canAct = !frozen
 
+  // Every option counts from now, so "Tomorrow" can be earlier than the current deadline: say so instead of calling it an extension.
+  const extendPick = pickDeadline(choice, new Date(), custom)
+  const movesEarlier = extendPick.ok && !!deadline && new Date(extendPick.iso).getTime() < new Date(deadline).getTime()
+
   const doExtend = async () => {
     const pick = pickDeadline(choice, new Date(), custom)
     if (!pick.ok) return setPickError(pick.error)
@@ -187,7 +191,7 @@ export function ReceiptTableStatus({ expense, tripId, columns, replies, rpc, par
         </div>
       )}
 
-      <Modal isOpen={extendOpen} onClose={() => setExtendOpen(false)} title="Extend the reply time">
+      <Modal isOpen={extendOpen} onClose={() => setExtendOpen(false)} title={movesEarlier ? "Move the reply time earlier" : "Extend the reply time"}>
         <div className="space-y-3">
           {deadlineChooser('New reply time')}
           <div className="flex gap-2 justify-end">
@@ -195,7 +199,7 @@ export function ReceiptTableStatus({ expense, tripId, columns, replies, rpc, par
               Not now
             </Button>
             <Button variant="primary" onClick={doExtend} isLoading={extend.isPending}>
-              Extend
+              {movesEarlier && extendPick.ok ? `Move the deadline to ${formatDeadlineDay(extendPick.iso)}` : 'Extend'}
             </Button>
           </div>
         </div>

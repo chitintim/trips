@@ -8,10 +8,11 @@ import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useUnsavedChangesGuard } from '../../../lib/forms'
 import { toMinorUnits } from '../../../lib/money'
 import { formatMoney, formatMoneyMinor } from '../lib/formatMoney'
-import { claimLeftoverAmount, claimLeftoverQuantity, claimOwnAmount, claimOwnQuantity, hasOwnClaim } from '../lib/balances'
+import { claimLeftoverAmount, claimOwnAmount, claimOwnQuantity, hasOwnClaim } from '../lib/balances'
 import { useClaimLink, useClaimRealtime } from './useClaimData'
 import { summarizeLineClaims, summarizeOverallProgress, maxClaimableQuantity, claimAmount, isStepperClaim, shareLineMinor, unclaimedMinor, hasDirectUnitClaims, sharePickProblem, lockedSharePeople, lineIsEqualSplit, selfTogglePick, REPLACES_OWN_ENTRIES_WARNING } from './claimMath'
 import { describeClaimError } from './claimErrors'
+import { leftoverFollowUp, everythingSharedOut } from './leftoverReshare'
 import type { ClaimRow, LineRow } from './claimMath'
 import { formatClaimQuantity } from './claimFractions'
 import { nameOfUser, peopleOnReceipt } from './claimPeople'
@@ -176,10 +177,11 @@ export function ClaimPage() {
   }
 
   const afterOwnChange = async () => {
-    // The leftover share inside my row on a line I edit goes with the row; if leftovers had
-    // been shared, they need sharing again (payer / managers only).
-    if (!claims.some((c) => claimLeftoverAmount(c) > 0 || claimLeftoverQuantity(c) > 0)) return
-    if (canLeftovers) {
+    // The leftover share inside my row on a line I edit goes with the row; if leftovers had been shared on the receipt (any line), they
+    // need sharing again (payer / managers only). For anyone else the removed value returns to "unclaimed" for the payer, who is told.
+    const followUp = leftoverFollowUp({ expense, claims, canShare: canLeftovers })
+    if (followUp === 'none') return
+    if (followUp === 'reshare') {
       try {
         await shareLeftovers.mutateAsync({ expenseId: expense.id, mode: 'same', currency })
       } catch {
@@ -295,6 +297,10 @@ export function ClaimPage() {
   const shareReplaces = !!shareLine && hasDirectUnitClaims(shareLine, claimsByLine.get(shareLine.id) ?? [])
   const shareEach = shareLine && sharePick.length > 0 ? shareLineMinor(toMinorUnits(shareLine.total_amount, currency), sharePick) : null
 
+  // Once the leftovers are shared every line is full: an own claim would be refused, so say so plainly instead of offering steppers.
+  const payerFirstName = isPayer ? 'the person who paid' : (nameOfUser(expense.paid_by, participants).split(' ')[0] || 'the person who paid')
+  const sharedOutNotice = !isReadOnly && !canRecord && everythingSharedOut(lineItems, claims, currency)
+
   const goBack = () => (window.history.length > 1 ? navigate(-1) : navigate(`/${resolution.tripId}`))
 
   const viewOptions: Array<{ value: View; label: string }> = [
@@ -401,6 +407,15 @@ export function ClaimPage() {
                     )
                   })}
                 </ul>
+              </Card>
+            )}
+
+            {sharedOutNotice && (
+              <Card noPadding className="p-3">
+                <p className="text-sm text-[var(--text-primary)]">
+                  Everything on this receipt has been shared out — ask {payerFirstName} if something&apos;s wrong.
+                </p>
+                <p className="text-xs text-[var(--text-secondary)] mt-1">You can still take yourself off an item you are on with “Not mine”.</p>
               </Card>
             )}
 

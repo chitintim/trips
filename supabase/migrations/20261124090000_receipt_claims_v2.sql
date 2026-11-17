@@ -25,7 +25,9 @@ SET LOCAL lock_timeout = '5s';
 --                                   itemised receipt on the trip has unclaimed value (hint unclaimed_receipts) or an over-claimed line
 --                                   (hint overclaimed_receipts). DETAIL is a JSON array [{id, description, unclaimed_minor|overclaimed_minor}].
 --   triggers on expense_item_claims: trg_guard_claim_provenance (clients cannot choose source / created_by / the leftover parts),
---                                    trg_guard_claim_overclaim (clients cannot take a line above its quantity + 0.011, under the RPCs' lock);
+--                                    trg_guard_claim_overclaim (clients cannot take a line above its quantity + 0.011, under the RPCs' lock; the claim's
+--                                    expense_id must be its line's expense (hint bad_expense); no claim INSERT/UPDATE while the trip's balances are
+--                                    frozen (hint frozen; deleting a claim stays possible)),
 --   trigger on expenses: trg_guard_expense_leftover_mode (clients cannot write leftover_mode / leftover_user_id).
 --                                   "Client" = current_user in (authenticated, anon). SECURITY DEFINER functions run as their owner
 --                                   (current_user is the owner inside them), the service role is neither: both are unaffected.
@@ -111,10 +113,16 @@ SET LOCAL lock_timeout = '5s';
 --         receipt total stays exact; the freeze guard nets it at receipt level); otherwise, when the person has no row at all and the
 --         remainder is within the line's dust allowance, it stays with the PAYER'S pending bucket (nothing is written; the freeze guard
 --         does not flag it); a remainder above the allowance becomes a row of 0.01 of a unit so the freeze can always be unblocked.
---   An OLD cached client re-saves a person's claims by deleting their rows and inserting fresh ones: that drops the leftover part (the
---   trigger forces leftover_* to 0 on client writes). The payer's unclaimed bucket grows again, the receipt shows as having unclaimed
---   value, sums are never corrupted; "Share leftovers" (mode same) puts it right.
+--   An OLD cached client loads a person's claim as mine = quantity_claimed (INCLUDING the leftover part) and re-saves it by deleting their
+--   rows and inserting fresh ones with the amount recomputed from that quantity: the leftover share becomes the person's OWN claim
+--   (the trigger forces leftover_* to 0 on client writes, so it is no longer tracked as leftover). Sums stay exact and never exceed the
+--   line; the only effect is that this share is now "own" and a later 'same' re-share recomputes the leftovers from the new own parts.
+--   Acceptable: shipping the new front end before applying this migration is not required for safety.
 --
+-- ONCE LEFTOVERS ARE SHARED EVERY LINE IS FULL, so an ordinary person cannot ADD an own claim (the over-claim trigger refuses it) until
+--   the payer / a manager reassigns the line or re-shares. The claim page says so plainly ("Everything on this receipt has been shared out
+--   - ask <payer> if something's wrong") instead of offering steppers that would be refused; taking yourself off a line stays possible.
+
 -- ASSUMPTIONS (verify with supabase/PRE_APPLY_CHECKS.sql group 21):
 --   * the live facts listed above; expense_item_claims.leftover_quantity / leftover_amount do not exist yet;
 --   * activity_feed accepts a NULL actor and has no verb CHECK (live: only FKs);
@@ -285,7 +293,9 @@ $$;
 --       ( quantity - claimed_quantity > 0.011   OR   left > greatest(1, number of claim rows on the line) + ceil(|total| * 0.011 / quantity) )
 --     i.e. legacy rounding dust on a line whose quantity is complete (0.33 x 3 of a line) is NOT unclaimed;
 --   per receipt: real = sum of the unclaimed lines' left; the receipt is netted against its payer's pending bucket exactly like the client:
---     unclaimed = min(real converted to the base currency, round(amount * rate) - sum of each claim converted and rounded) and > 0 blocks.
+--     unclaimed = min(min(real, round(amount) - sum of the claims, both in the receipt's OWN currency) converted to the base currency,
+--                     round(amount * rate) - sum of each claim converted and rounded) and > 0 blocks. (The own-currency netting matters when
+--                     dust was merged into ANOTHER line: the unclaimed line's remainder is then already covered by a claim elsewhere.)
 --   Foreign-currency receipt with fx_rate NULL: the client lists it in its OWN currency (rate 1, no conversion), so does this.
 --   (Zero-total lines never count: there is no money on them. Negative lines cannot exist: CHECK total_amount >= 0.)
 -- unclaimed_minor is in the RECEIPT currency.
@@ -322,12 +332,13 @@ AS $$
                               AND (quantity - cq > 0.011
                                    OR tot - cm > greatest(1, nrows) + ceil(abs(tot) * 0.011 / nullif(quantity, 0)))
                              THEN tot - cm ELSE 0 END), 0)::bigint AS real_minor,
-           coalesce(sum(cb), 0)::bigint AS claimed_base
+           coalesce(sum(cb), 0)::bigint AS claimed_base,
+           coalesce(sum(cm), 0)::bigint AS claimed_own
     FROM l GROUP BY eid),
   n AS (
     SELECT e.id, e.description, r.real_minor,
            least(CASE WHEN e.same_unit THEN r.real_minor
-                      ELSE round(r.real_minor / e.pw * e.rate * e.bpw)::bigint END,
+                      ELSE round(greatest(0, least(r.real_minor, round(e.amount * e.pw)::bigint - r.claimed_own)) / e.pw * e.rate * e.bpw)::bigint END,
                  round(e.amount * e.rate * e.bpw)::bigint - r.claimed_base) AS net_base
     FROM e JOIN r ON r.eid = e.id)
   SELECT n.id, n.description, n.real_minor::bigint
@@ -645,11 +656,17 @@ BEGIN
     IF v_j = v_n THEN
       FOR u IN 1..v_k LOOP
         v_a[u] := p_amounts[u] - v_cum[u];
+        -- Tripwire: the capped floor below keeps v_cum[u] <= p_amounts[u], so this can never be negative. A negative share would be
+        -- silently dropped by the caller (over-claimed receipt), so stop the whole statement instead.
+        IF v_a[u] < 0 THEN
+          RAISE EXCEPTION 'Leftover share went negative (person %, line %)', u, v_j USING ERRCODE = 'XX000';
+        END IF;
       END LOOP;
     ELSE
       v_sum := 0;
       FOR u IN 1..v_k LOOP
-        v_a[u] := floor(v_line.r::numeric * p_amounts[u] / v_total)::bigint;
+        -- Capped at what the person still has to receive: earlier lines' pennies can already have taken them past their proportional share.
+        v_a[u] := least(floor(v_line.r::numeric * p_amounts[u] / v_total)::bigint, p_amounts[u] - v_cum[u]);
         v_sum := v_sum + v_a[u];
       END LOOP;
       v_pen := v_line.r - v_sum;
@@ -1481,8 +1498,9 @@ $$;
 -- frozen on UPDATE. (Otherwise a person could mark their own claim 'leftover' to have it dumped on the table, or pose as "put down by <payer>".)
 -- The leftover parts (leftover_quantity / leftover_amount) are protected the same way: 0 on a client INSERT, and on a client UPDATE the OLD
 -- values are kept (but never more than the row's new quantity / amount, so the parts CHECK cannot fail). An old cached client re-saves by
--- deleting the person's rows and inserting fresh ones: the leftover part goes with the deleted row and the new row starts at 0, so the
--- payer's unclaimed bucket grows again; sums stay exact (the leftovers can be shared again).
+-- deleting the person's rows and inserting fresh ones, with the quantity it loaded (leftover part INCLUDED) and the amount recomputed
+-- from it: the new row starts with leftover_* = 0, so the leftover share becomes the person's OWN claim; sums stay exact and a later
+-- 'same' re-share recomputes the leftovers from the new own parts.
 CREATE OR REPLACE FUNCTION public.guard_claim_provenance()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1527,12 +1545,29 @@ DECLARE
   v_expense uuid;
   v_sum numeric;
   v_rows bigint;
+  v_frozen boolean;
 BEGIN
   IF current_user IN ('authenticated', 'anon') THEN
-    IF TG_OP = 'UPDATE' AND NEW.quantity_claimed IS NOT DISTINCT FROM OLD.quantity_claimed AND NEW.line_item_id = OLD.line_item_id THEN
+    -- A write that changes nothing about WHAT is claimed (e.g. the confirmed flag) is not checked.
+    IF TG_OP = 'UPDATE' AND NEW.quantity_claimed IS NOT DISTINCT FROM OLD.quantity_claimed AND NEW.line_item_id = OLD.line_item_id
+       AND NEW.amount_owed IS NOT DISTINCT FROM OLD.amount_owed AND NEW.user_id = OLD.user_id AND NEW.expense_id = OLD.expense_id THEN
       RETURN NEW;
     END IF;
     SELECT li.quantity, li.expense_id INTO v_qty, v_expense FROM public.expense_line_items li WHERE li.id = NEW.line_item_id;
+    IF FOUND THEN
+      -- The claim's expense_id must be the line's own expense (the column is client-supplied; every guard below keys on the line's expense).
+      IF NEW.expense_id IS DISTINCT FROM v_expense THEN
+        RAISE EXCEPTION 'That item belongs to a different expense' USING ERRCODE = 'P0001', HINT = 'bad_expense';
+      END IF;
+      -- No claim changes while the trip's balances are frozen (the same test the RPCs use). The old front end already locks the claim page
+      -- while frozen, so this only stops a stale page from desyncing claims from the frozen snapshot. Removing a claim stays possible (DELETE).
+      SELECT t.settlement_snapshot IS NOT NULL INTO v_frozen
+      FROM public.expenses e JOIN public.trips t ON t.id = e.trip_id WHERE e.id = v_expense;
+      IF coalesce(v_frozen, false) THEN
+        RAISE EXCEPTION 'Balances are frozen for this trip. Ask an organizer to unfreeze before changing who had what.'
+          USING ERRCODE = 'P0001', HINT = 'frozen';
+      END IF;
+    END IF;
     IF FOUND AND v_qty > 0 THEN
       PERFORM pg_advisory_xact_lock(hashtextextended('receipt_claims:' || v_expense::text, 0));
       SELECT coalesce(sum(c.quantity_claimed), 0), count(*) INTO v_sum, v_rows

@@ -12,6 +12,7 @@ import { formatClaimQuantity } from './claimFractions'
 import { peopleOnReceipt } from './claimPeople'
 import { shareLineMinor, hasDirectUnitClaims, REPLACES_OWN_ENTRIES_WARNING } from './claimMath'
 import { describeClaimError } from './claimErrors'
+import { leftoverFollowUp } from './leftoverReshare'
 import type { ClaimRow, LineRow } from './claimMath'
 
 /** Who a line belongs to: a list of people (shared equally) or the whole table. */
@@ -97,6 +98,10 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
   const localRef = useRef(local)
   const savedRef = useRef(saved)
   const serverRef = useRef(serverLines)
+  const expenseRef = useRef(expense)
+  const claimsRef = useRef(claims)
+  expenseRef.current = expense
+  claimsRef.current = claims
   localRef.current = local
   savedRef.current = saved
   serverRef.current = serverLines
@@ -155,10 +160,10 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
       await setClaims.mutateAsync({ expenseId: expense.id, claims: entries })
       setSaved((prev) => ({ ...prev, ...sent }))
       savedRef.current = { ...savedRef.current, ...sent }
-      // The server deletes every claim on a touched line, the leftover shares
-      // inside them included; if leftovers had been shared, share them again the same way.
-      const hadLeftover = ids.some((id) => serverRef.current.get(id)?.hasLeftover)
-      if (hadLeftover) {
+      // The server deletes every claim on a touched line, the leftover shares inside them included, and dust may have been merged
+      // into a line we did not touch: if leftovers had been shared ANYWHERE on this receipt, share them again the same way.
+      // (This screen is only open to the payer / managers, who are allowed to.)
+      if (leftoverFollowUp({ expense: expenseRef.current, claims: claimsRef.current, canShare: true }) === 'reshare') {
         try {
           await shareLeftovers.mutateAsync({ expenseId: expense.id, mode: 'same', currency })
         } catch {

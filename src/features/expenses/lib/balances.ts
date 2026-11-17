@@ -226,9 +226,17 @@ export function analyseReceiptClaims(expense: ExpenseWithDetails, baseCurrency: 
     if (isLineReallyUnclaimed(line.quantity, qtyByLine.get(line.id) ?? 0, leftMinor, rowsByLine.get(line.id) ?? 0, lineMinor)) unclaimedOwnMinor += leftMinor
   }
 
+  // Net in the receipt's OWN currency too, before converting: per-row base rounding can leave a base-currency sliver "pending" on a receipt
+  // whose claims already add up to its amount in its own currency (dust merged into another line), which would read as unclaimed forever.
+  // Mirrors _trip_unclaimed_receipts (claimed_own). Only the DECISION uses it: the reported value stays the lines' own-currency value.
+  let ownClaimedTotal = 0
+  for (const v of ownMinorByLine.values()) ownClaimedTotal += v
+  const ownNetMinor = Math.max(0, toMinorUnits(expense.amount, own) - ownClaimedTotal)
+
   const pendingMinor = totalMinor - claimedMinor
   const unclaimedOwnBaseMinor = own === baseCurrency ? unclaimedOwnMinor : toMinorUnits(fromMinorUnits(unclaimedOwnMinor, own) * rate, baseCurrency)
-  const unclaimedMinor = Math.max(0, Math.min(unclaimedOwnBaseMinor, pendingMinor))
+  const ownNetBaseMinor = own === baseCurrency ? ownNetMinor : toMinorUnits(fromMinorUnits(ownNetMinor, own) * rate, baseCurrency)
+  const unclaimedMinor = Math.max(0, Math.min(unclaimedOwnBaseMinor, pendingMinor, ownNetBaseMinor))
   return {
     expenseId: expense.id,
     description: expense.description,

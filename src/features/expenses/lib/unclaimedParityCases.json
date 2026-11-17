@@ -1,6 +1,7 @@
 {
   "_comment": "Shared by balances.test.ts (client: findFreezeBlockingReceipts) and the in-memory Postgres script (server: _trip_unclaimed_receipts). One tolerance (0.011). blockedOwnMinor = value the freeze guard reports in the receipt's own currency (0 = not blocked). A line is [quantity, total, [[quantity_claimed, amount_owed], ...]].",
   "cases": [
+    { "name": "foreign receipt, dust merged into another line: netted in its own currency before converting", "currency": "EUR", "base": "GBP", "fx": 0.37, "amount": 10, "lines": [[1, 5, [[0.5, 2.55], [0.5, 2.55]]], [1, 5, [[0.5, 4.9]]]], "blockedOwnMinor": 0 },
     { "name": "legacy thirds 0.33 x 3 on 10.00 is dust", "currency": "EUR", "base": "EUR", "fx": null, "amount": 10, "lines": [[1, 10, [[0.33, 3.3], [0.33, 3.3], [0.33, 3.3]]]], "blockedOwnMinor": 0 },
     { "name": "a real unit left (1 of 2 beers)", "currency": "EUR", "base": "EUR", "fx": null, "amount": 20, "lines": [[2, 20, [[1, 10]]]], "blockedOwnMinor": 1000 },
     { "name": "exactly claimed", "currency": "EUR", "base": "EUR", "fx": null, "amount": 10, "lines": [[1, 10, [[1, 10]]]], "blockedOwnMinor": 0 },

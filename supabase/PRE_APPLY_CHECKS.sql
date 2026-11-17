@@ -1234,12 +1234,14 @@ r AS (
          coalesce(sum(CASE WHEN tot - cm > 0 AND quantity > 0 AND (quantity - cq > 0.011
                    OR tot - cm > greatest(1, nrows) + ceil(abs(tot) * 0.011 / quantity)) THEN tot - cm ELSE 0 END), 0) AS real_minor,
          sum(cb) AS claimed_base,
+         sum(cm) AS claimed_own,
          count(*) FILTER (WHERE tot - cm > 0) AS lines_short,
          count(*) FILTER (WHERE cm > tot) AS lines_over
   FROM l GROUP BY eid)
 SELECT t.name AS trip, t.settlement_snapshot IS NOT NULL AS frozen, e.description, e.currency, e.fx_rate IS NULL AND e.currency <> e.base_currency AS missing_fx,
        r.raw_minor AS flagged_as_written_minor,
-       (CASE WHEN least(CASE WHEN e.same_unit THEN r.real_minor ELSE round(r.real_minor / e.pw * e.rate * e.bpw) END,
+       (CASE WHEN least(CASE WHEN e.same_unit THEN r.real_minor
+                             ELSE round(greatest(0, least(r.real_minor, round(e.amount * e.pw) - r.claimed_own)) / e.pw * e.rate * e.bpw) END,
                         round(e.amount * e.rate * e.bpw) - r.claimed_base) > 0 THEN r.real_minor ELSE 0 END) AS flagged_with_rule_minor,
        r.lines_short, r.lines_over
 FROM e JOIN r ON r.eid = e.id JOIN public.trips t ON t.id = e.trip_id

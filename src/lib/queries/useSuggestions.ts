@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { supabase } from '../supabase'
 import { isRpcMissingError, toRpcError, invalidateDecisionKeys } from './useDecide'
 
@@ -7,27 +7,13 @@ import { isRpcMissingError, toRpcError, invalidateDecisionKeys } from './useDeci
  * `suggest_option` adds ONE safe option to an open question (or an idea to the Ideas
  * question) and `withdraw_suggestion` takes your own back while nobody has answered with it.
  *
- * FAIL-SOFT: `useSuggestionsAvailable` probes the RPC with an empty title, which the function
- * rejects before it reads or writes anything. Only "function not found" hides the entry; any
- * other answer (including "not allowed") means the migration is there. Before the migration the
- * UI simply offers no suggestion entry.
+ * The migration is applied on live, so the entry is always offered. This used to probe the
+ * RPC with an empty title on every trip page load, which showed up as a failed (400) request
+ * each time. If the function were ever missing, the mutation below still says so plainly.
  */
 
 export function useSuggestionsAvailable(): boolean {
-  const query = useQuery({
-    queryKey: ['rpc-available', 'suggest_option'],
-    queryFn: async (): Promise<boolean> => {
-      try {
-        const { error } = await supabase.rpc('suggest_option', { p_section_id: null, p_title: '' })
-        return !(error && isRpcMissingError(error, 'suggest_option'))
-      } catch {
-        return false
-      }
-    },
-    retry: false,
-    staleTime: 10 * 60_000,
-  })
-  return query.data === true
+  return true
 }
 
 export interface SuggestInput {

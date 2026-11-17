@@ -149,6 +149,8 @@ $$;
 --     src/features/people/lib/inScopePeople.ts: ACTIVE participants (active is not false); when trips.confirmation_enabled is true,
 --     additionally drop declined and cancelled people, and if at least one of the remaining people is 'confirmed' keep ONLY the
 --     confirmed ones. (Waitlist / interested people stay in scope exactly as in the client: it only drops declined and cancelled.)
+--   * In BOTH cases also: anyone with a non-leftover claim on the receipt who has a trip_participants row (active or not, replied or not),
+--     and, when there is no explicit list, the payer. Mirrored in src/features/expenses/claims/claimPeople.ts (peopleOnReceipt).
 CREATE OR REPLACE FUNCTION public._receipt_tagged(p_expense_id uuid)
 RETURNS uuid[]
 LANGUAGE sql
@@ -179,6 +181,19 @@ AS $$
           )
         )
       )
+    UNION
+    -- Anyone who holds a (non-derived) claim on the receipt and has a trip_participants row is ALWAYS tagged, whether or not the receipt has an
+    -- explicit list: a "No reply yet" person or someone who has since left must not be locked out of (or silently dropped from) their own claim.
+    SELECT cl.user_id AS uid
+    FROM public.expense_item_claims cl
+    JOIN public.expenses e ON e.id = cl.expense_id
+    JOIN public.trip_participants tp ON tp.trip_id = e.trip_id AND tp.user_id = cl.user_id
+    WHERE cl.expense_id = p_expense_id AND cl.source <> 'leftover'
+    UNION
+    -- The payer is always on a receipt that has no explicit list (with an explicit list, the list is exactly who the payer chose).
+    SELECT e.paid_by AS uid
+    FROM public.expenses e
+    WHERE e.id = p_expense_id AND coalesce(cardinality(e.participant_ids), 0) = 0
   ) s
 $$;
 
@@ -255,7 +270,7 @@ AS $$
     SELECT eid,
            coalesce(sum(CASE WHEN tot - cm > 0 AND quantity > 0
                               AND (quantity - cq > 0.011
-                                   OR tot - cm > greatest(1, nrows) + ceil(abs(tot) * 0.011 / quantity))
+                                   OR tot - cm > greatest(1, nrows) + ceil(abs(tot) * 0.011 / nullif(quantity, 0)))
                              THEN tot - cm ELSE 0 END), 0)::bigint AS real_minor,
            coalesce(sum(cb), 0)::bigint AS claimed_base,
            coalesce(sum(CASE WHEN tot < 0 AND nrows = 0 THEN -tot ELSE 0 END), 0)::bigint AS open_discount
@@ -296,7 +311,7 @@ AS $$
   SELECT l.eid, l.description, sum(l.cm - l.tot)::bigint
   FROM l
   WHERE l.quantity > 0 AND l.tot > 0 AND l.cq - l.quantity > 0.011
-    AND l.cm - l.tot > greatest(1, l.nrows) + ceil(abs(l.tot) * 0.011 / l.quantity)
+    AND l.cm - l.tot > greatest(1, l.nrows) + ceil(abs(l.tot) * 0.011 / nullif(l.quantity, 0))
   GROUP BY l.eid, l.description
 $$;
 
@@ -1301,9 +1316,15 @@ DROP TRIGGER IF EXISTS trg_guard_claim_provenance ON public.expense_item_claims;
 CREATE TRIGGER trg_guard_claim_provenance BEFORE INSERT OR UPDATE ON public.expense_item_claims
   FOR EACH ROW EXECUTE FUNCTION public.guard_claim_provenance();
 
--- A client write cannot take a line's claimed quantity above its quantity + 0.011 (the shared dust tolerance). It takes the same
--- per-expense advisory lock the RPCs take, so a direct insert cannot race set_receipt_claims. Derived 'leftover' rows count (they are
--- real money on the line); re-run "Share leftovers" to rebuild them after someone claims directly.
+-- A client write is refused only when THE WRITE ITSELF takes a line's claimed quantity over its limit. The limit is quantity + 0.011 (the
+-- shared dust tolerance) + 0.01 per OTHER claim row on the line (each row is rounded to hundredths, so legacy lines such as 0.17 x 6 = 1.02 or
+-- 0.34 x 3 of a quantity-1 line legitimately exceed it by a few hundredths). If the line is ALREADY over that limit without this write
+-- (legacy data), the write is allowed: an old cached client that deleted its rows and re-inserts them must never be refused after its delete
+-- committed (that would lose the person's claims); the freeze guard's overclaimed_receipts report catches such lines. Lines with
+-- quantity <= 0 (discount / zero lines) skip the check. Takes the same per-expense advisory lock the RPCs take, so a direct insert cannot
+-- race set_receipt_claims. Derived 'leftover' rows count (they are real money on the line); re-run "Share leftovers" to rebuild them.
+-- SECURITY INVOKER (default): it runs as the client, so authenticated needs EXECUTE on pg_advisory_xact_lock(bigint) and hashtextextended
+-- (both are granted to PUBLIC by default; checked in PRE_APPLY_CHECKS 21n). The table reads it does are allowed by the claims policies.
 CREATE OR REPLACE FUNCTION public.guard_claim_overclaim()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1313,17 +1334,20 @@ DECLARE
   v_qty numeric;
   v_expense uuid;
   v_sum numeric;
+  v_rows bigint;
 BEGIN
   IF current_user IN ('authenticated', 'anon') THEN
     IF TG_OP = 'UPDATE' AND NEW.quantity_claimed IS NOT DISTINCT FROM OLD.quantity_claimed AND NEW.line_item_id = OLD.line_item_id THEN
       RETURN NEW;
     END IF;
     SELECT li.quantity, li.expense_id INTO v_qty, v_expense FROM public.expense_line_items li WHERE li.id = NEW.line_item_id;
-    IF FOUND THEN
+    IF FOUND AND v_qty > 0 THEN
       PERFORM pg_advisory_xact_lock(hashtextextended('receipt_claims:' || v_expense::text, 0));
-      SELECT coalesce(sum(c.quantity_claimed), 0) INTO v_sum
+      SELECT coalesce(sum(c.quantity_claimed), 0), count(*) INTO v_sum, v_rows
       FROM public.expense_item_claims c WHERE c.line_item_id = NEW.line_item_id AND c.id <> NEW.id;
-      IF v_sum + NEW.quantity_claimed > v_qty + 0.011 THEN
+      -- refuse only when the line was within its limit before this write and this write takes it over
+      IF v_sum <= v_qty + 0.011 + 0.01 * v_rows
+         AND v_sum + NEW.quantity_claimed > v_qty + 0.011 + 0.01 * v_rows THEN
         RAISE EXCEPTION 'There is not that much of this item left to claim' USING ERRCODE = 'P0001', HINT = 'overclaimed';
       END IF;
     END IF;

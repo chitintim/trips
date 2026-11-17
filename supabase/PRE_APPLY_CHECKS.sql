@@ -1297,5 +1297,44 @@ FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname = 'freeze_s
 -- 21l2. Post-apply: SQL-1 (21g) now shows flagged_with_rule_minor = 0 for the real trips, and the real guard agrees. Safe: zero rows for real trips.
 SELECT t.name, count(*) AS receipts_flagged FROM public.trips t, LATERAL public._trip_unclaimed_receipts(t.id) u GROUP BY t.name ORDER BY 1;
 SELECT t.name, count(*) AS receipts_overclaimed FROM public.trips t, LATERAL public._trip_overclaimed_receipts(t.id) o GROUP BY t.name ORDER BY 1;
+-- 21n. Over-claim trigger gate and hardening checks.
+-- 21n-1. Lines whose claimed quantity ALREADY exceeds quantity + 0.011 (legacy rounding, e.g. 0.17 x 6 = 1.02, 0.34 x 3). Informational: the new trigger
+--        allows any write on a line that is already over its limit (quantity + 0.011 + 0.01 per other claim row) and only refuses a write that itself
+--        takes a line over, so an old cached client's "delete my rows, then insert them again" re-save is never refused after its delete committed.
+--        Expected: a handful of legacy lines. Safe reading: rows listed here are tolerated, never refused; whether they block a freeze is decided by
+--        _trip_overclaimed_receipts (21l2), which uses the stricter money test.
+SELECT t.name, e.description, li.line_number, li.quantity, sum(c.quantity_claimed) AS claimed_qty, count(*) AS claim_rows,
+       sum(c.quantity_claimed) - li.quantity AS over_by,
+       sum(c.quantity_claimed) > li.quantity + 0.011 + 0.01 * (count(*) - 1) AS over_even_with_row_allowance,
+       t.settlement_snapshot IS NOT NULL AS trip_frozen
+FROM public.expense_item_claims c
+JOIN public.expense_line_items li ON li.id = c.line_item_id
+JOIN public.expenses e ON e.id = li.expense_id
+JOIN public.trips t ON t.id = e.trip_id
+GROUP BY t.id, t.name, t.settlement_snapshot, e.id, e.description, li.id, li.line_number, li.quantity
+HAVING sum(c.quantity_claimed) > li.quantity + 0.011
+ORDER BY 1, 2, 3;
+-- 21n-2. Old receipts with an unclaimed negative (discount) line, by trip, with frozen state. Safe: informational; the unclaimed-receipts guard counts an
+--        unclaimed discount line (open_discount) so these trips need the discount assigned before a freeze.
+SELECT t.name, t.settlement_snapshot IS NOT NULL AS frozen, count(DISTINCT e.id) AS receipts, count(*) AS unclaimed_negative_lines, sum(li.total_amount) AS total
+FROM public.expense_line_items li
+JOIN public.expenses e ON e.id = li.expense_id
+JOIN public.trips t ON t.id = e.trip_id
+WHERE li.total_amount < 0 AND NOT EXISTS (SELECT 1 FROM public.expense_item_claims c WHERE c.line_item_id = li.id)
+GROUP BY t.id, t.name, t.settlement_snapshot ORDER BY 1;
+-- 21n-3. The over-claim trigger is SECURITY INVOKER (it runs as the calling client), so the client roles need EXECUTE on the two functions it calls.
+--        Safe: both true (they are granted to PUBLIC by default).
+SELECT has_function_privilege('authenticated', 'pg_advisory_xact_lock(bigint)', 'EXECUTE') AS advisory_lock_ok,
+       has_function_privilege('authenticated', 'hashtextextended(text,bigint)', 'EXECUTE') AS hashtextextended_ok,
+       has_function_privilege('anon', 'pg_advisory_xact_lock(bigint)', 'EXECUTE') AS anon_advisory_lock_ok,
+       has_function_privilege('anon', 'hashtextextended(text,bigint)', 'EXECUTE') AS anon_hashtextextended_ok;
+-- 21n-4. auth users without a public.users row. Safe: 0 (a claim row references public.users).
+SELECT count(*) AS auth_users_without_public_row FROM auth.users u WHERE NOT EXISTS (SELECT 1 FROM public.users p WHERE p.id = u.id);
+-- 21n-5. POST-APPLY: claimants (with a trip_participants row, not derived leftover rows) who are not in _receipt_tagged(expense_id). Safe: zero rows.
+SELECT c.expense_id, c.user_id FROM public.expense_item_claims c
+JOIN public.expenses e ON e.id = c.expense_id
+JOIN public.trip_participants tp ON tp.trip_id = e.trip_id AND tp.user_id = c.user_id
+WHERE c.source <> 'leftover' AND NOT (c.user_id = ANY (public._receipt_tagged(c.expense_id)))
+GROUP BY 1, 2;
 -- 21m. PostgREST sees the new columns and functions (the migration ends with NOTIFY pgrst, 'reload schema').
 NOTIFY pgrst, 'reload schema';

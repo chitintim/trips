@@ -146,7 +146,7 @@ export function ClaimPage() {
   const canRecord = isPayer || canManageTrip
   const canWho = canRecord && rpc.setClaims
   const canLeftovers = canRecord && rpc.leftovers
-  const people = peopleOnReceipt(expense, participants)
+  const people = peopleOnReceipt(expense, participants, claims)
   const isTagged = !!user && people.some((p) => p.id === user.id)
   // Payer and managers have full power (they pick anyone). A tagged person can only toggle THEMSELVES on an item
   // ("I had some of this too" / "Not mine"), within the server's rules (sharePickProblem).

@@ -54,7 +54,7 @@ export function WhoHadWhat({ expense, lineItems, claims, participants, disabled 
   const setClaims = useSetReceiptClaims()
   const shareLeftovers = useShareLeftovers()
   const currency = expense.currency
-  const people = useMemo(() => peopleOnReceipt(expense, participants), [expense, participants])
+  const people = useMemo(() => peopleOnReceipt(expense, participants, claims), [expense, participants, claims])
   const peopleIds = useMemo(() => people.map((p) => p.id), [people])
   const labelOf = useCallback((id: string) => people.find((p) => p.id === id)?.label ?? 'Someone', [people])
 

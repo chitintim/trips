@@ -422,24 +422,48 @@ NOTIFY pgrst, 'reload schema';
 -- ===== END MIGRATION =====
 
 -- ===== 0b. the people: the real site admin, an organiser and a plain member of the test trip, someone who is not on it ===========================================
+-- The live test trip has only two people (the site admin as organiser + one participant), so the organiser who is NOT the admin and/or the plain member may not exist. Whatever is missing is
+-- created INSIDE this transaction (rolled back with everything else): an existing non-admin user who is not on the trip is added to it by cloning an existing participant row (the same technique as
+-- the phase-4 throwaway trip), with the missing role. A real organiser / member is used when the trip has one. Anything that cannot be set up makes setup.people FAIL and the behaviour steps are skipped.
+-- The temporary rows are plain INSERTs by the owner (no JWT); side_effects.no_notifications at the end proves no notification (and so no mail) came out of them.
 DO $rh$
 DECLARE
   v_trip constant uuid := 'be551bc4-a524-4b6a-a0c9-b74a7168ced4';
-  v_admin uuid; v_org uuid; v_mem uuid; v_out uuid;
+  v_admin uuid; v_org uuid; v_mem uuid; v_out uuid; v_cand uuid; v_added text := ''; v_tpl public.trip_participants; v_n integer; v_cnt_n integer; v_cnt_a integer;
 BEGIN
   BEGIN
     IF NOT EXISTS (SELECT 1 FROM public.trips WHERE id = v_trip) THEN PERFORM pg_temp.rh_rec('setup.trip', false, 'test trip not found'); RETURN; END IF;
+    SELECT count(*) INTO v_cnt_n FROM public.notifications;
+    SELECT count(*) INTO v_cnt_a FROM public.activity_feed;
+    INSERT INTO _rh_ctx VALUES ('notif0', v_cnt_n::text), ('act0', v_cnt_a::text);
     SELECT u.id INTO v_admin FROM public.users u WHERE u.role::text = 'admin' ORDER BY u.id LIMIT 1;
     SELECT tp.user_id INTO v_org FROM public.trip_participants tp WHERE tp.trip_id = v_trip AND tp.role::text = 'organizer' AND tp.active AND tp.user_id IS DISTINCT FROM v_admin ORDER BY tp.user_id LIMIT 1;
-    SELECT tp.user_id INTO v_mem FROM public.trip_participants tp WHERE tp.trip_id = v_trip AND tp.role::text <> 'organizer' AND tp.user_id IS DISTINCT FROM v_admin AND tp.user_id IS DISTINCT FROM v_org ORDER BY tp.user_id LIMIT 1;
+    SELECT tp.user_id INTO v_mem FROM public.trip_participants tp WHERE tp.trip_id = v_trip AND tp.role::text <> 'organizer' AND tp.active AND tp.user_id IS DISTINCT FROM v_admin AND tp.user_id IS DISTINCT FROM v_org ORDER BY tp.user_id LIMIT 1;
+    SELECT * INTO v_tpl FROM public.trip_participants tp WHERE tp.trip_id = v_trip ORDER BY (tp.user_id IS NOT DISTINCT FROM v_admin), tp.user_id LIMIT 1;
+    -- missing organiser, then missing member: an existing non-admin user who is not on the trip yet, added to it for this transaction only
+    FOR v_n IN 1..2 LOOP
+      IF (v_n = 1 AND v_org IS NOT NULL) OR (v_n = 2 AND v_mem IS NOT NULL) THEN CONTINUE; END IF;
+      SELECT u.id INTO v_cand FROM public.users u WHERE u.role::text <> 'admin' AND NOT EXISTS (SELECT 1 FROM public.trip_participants tp WHERE tp.trip_id = v_trip AND tp.user_id = u.id) ORDER BY u.id LIMIT 1;
+      IF v_cand IS NULL THEN CONTINUE; END IF;
+      IF v_tpl.trip_id IS NOT NULL THEN
+        INSERT INTO public.trip_participants SELECT (jsonb_populate_record(NULL::public.trip_participants, to_jsonb(v_tpl) || jsonb_build_object('user_id', v_cand, 'role', CASE WHEN v_n = 1 THEN 'organizer' ELSE 'participant' END, 'active', true))).*;
+      ELSE
+        INSERT INTO public.trip_participants (trip_id, user_id, role, active) VALUES (v_trip, v_cand, (CASE WHEN v_n = 1 THEN 'organizer' ELSE 'participant' END)::public.participant_role, true);
+      END IF;
+      IF v_n = 1 THEN v_org := v_cand; v_added := v_added || 'organiser '; ELSE v_mem := v_cand; v_added := v_added || 'member '; END IF;
+    END LOOP;
     SELECT u.id INTO v_out FROM public.users u WHERE u.role::text <> 'admin' AND NOT EXISTS (SELECT 1 FROM public.trip_participants tp WHERE tp.trip_id = v_trip AND tp.user_id = u.id) ORDER BY u.id LIMIT 1;
+    -- the roles really are what the steps assume (read back, not assumed)
+    IF v_org IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.trip_participants tp WHERE tp.trip_id = v_trip AND tp.user_id = v_org AND tp.role::text = 'organizer' AND tp.active) THEN v_org := NULL; END IF;
+    IF v_mem IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.trip_participants tp WHERE tp.trip_id = v_trip AND tp.user_id = v_mem AND tp.role::text <> 'organizer' AND tp.active) THEN v_mem := NULL; END IF;
     INSERT INTO _rh_ctx VALUES ('trip', v_trip::text);
     IF v_admin IS NOT NULL THEN INSERT INTO _rh_ctx VALUES ('admin', v_admin::text); END IF;
     IF v_org IS NOT NULL THEN INSERT INTO _rh_ctx VALUES ('org', v_org::text); END IF;
     IF v_mem IS NOT NULL THEN INSERT INTO _rh_ctx VALUES ('mem', v_mem::text); END IF;
     IF v_out IS NOT NULL THEN INSERT INTO _rh_ctx VALUES ('out', v_out::text); END IF;
-    PERFORM pg_temp.rh_rec('setup.people', v_admin IS NOT NULL AND v_org IS NOT NULL AND v_mem IS NOT NULL AND v_out IS NOT NULL,
-      format('site admin %s; active organiser (not the admin) %s; plain member %s; outsider %s', v_admin IS NOT NULL, v_org IS NOT NULL, v_mem IS NOT NULL, v_out IS NOT NULL));
+    PERFORM pg_temp.rh_rec('setup.people', v_admin IS NOT NULL AND v_org IS NOT NULL AND v_mem IS NOT NULL AND v_out IS NOT NULL
+      AND v_admin IS DISTINCT FROM v_org AND v_admin IS DISTINCT FROM v_mem AND v_org IS DISTINCT FROM v_mem AND v_out NOT IN (v_admin, v_org, v_mem),
+      format('site admin %s; active organiser (not the admin) %s; plain member %s; outsider %s; added to the trip inside the transaction: %s', v_admin IS NOT NULL, v_org IS NOT NULL, v_mem IS NOT NULL, v_out IS NOT NULL, coalesce(nullif(trim(v_added), ''), 'nobody')));
   EXCEPTION WHEN OTHERS THEN
     PERFORM pg_temp.rh_rec('setup.people', false, 'ERROR ' || SQLSTATE || ' ' || SQLERRM);
   END;
@@ -572,6 +596,19 @@ BEGIN
   END;
   PERFORM pg_temp.rh_rec('info.seed_effect', true, format('at the end (mode actions, scope upcoming, trips as they are now) %s of %s trips would have actions on',
     (SELECT count(*) FROM public.trips t WHERE (public._chat_effective('actions', 'upcoming', 'inherit', coalesce((SELECT c.actions FROM public.trip_chat_settings c WHERE c.trip_id = t.id), 'inherit'), t.start_date, t.end_date) ->> 'actions')::boolean), v_trips));
+END
+$rh$;
+
+-- ===== side effects: the temporary people and the settings calls sent nothing ===============================================================================
+DO $rh$
+DECLARE
+  v_n integer; v_a integer;
+BEGIN
+  IF pg_temp.rh_ctx('notif0') IS NULL THEN PERFORM pg_temp.rh_rec('side_effects.no_notifications', false, 'no baseline (setup did not run)'); RETURN; END IF;
+  SELECT count(*) INTO v_n FROM public.notifications;
+  SELECT count(*) INTO v_a FROM public.activity_feed;
+  PERFORM pg_temp.rh_rec('side_effects.no_notifications', v_n = pg_temp.rh_ctx('notif0')::integer, format('notifications before=%s now=%s (adding the temporary people and every call above wrote none; the database never sends mail)', pg_temp.rh_ctx('notif0'), v_n));
+  PERFORM pg_temp.rh_rec('info.activity_rows', true, format('activity_feed before=%s now=%s (informational; rolled back)', pg_temp.rh_ctx('act0'), v_a));
 END
 $rh$;
 

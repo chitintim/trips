@@ -73,7 +73,9 @@ if (process.env.REH_FILE && (process.env.REH_FILE.startsWith('20261129') || proc
 if (process.env.REH_FILE && process.env.REH_FILE.startsWith('20261130')) for (const f of ['20261129090000_chat_actions.sql', '20261129100000_chat_private_threads.sql', '20261129110000_admin_ai_usage.sql']) await db.exec(fs.readFileSync(M + f, 'utf8'))   // chat-settings rehearsal starts from the LIVE trip-chat state (applied 2026-11-18)
 const TT = 'be551bc4-a524-4b6a-a0c9-b74a7168ced4'
 await db.query(`insert into trips(id,name,created_by,base_currency) values ($1,'TEST payment email - delete me',$2,'GBP')`, [TT, U(1)])
-await db.query(`insert into trip_participants(trip_id,user_id,role,active) values ($1,$2,'organizer',true),($1,$3,'participant',true)`, [TT, U(1), U(2)])
+// the chat-settings rehearsal mirrors the LIVE shape that once broke it: the test trip's only organiser is the site admin (U(10)) plus one plain participant
+const chatSettings = !!process.env.REH_FILE && process.env.REH_FILE.startsWith('20261130')
+await db.query(`insert into trip_participants(trip_id,user_id,role,active) values ($1,$2,'organizer',true),($1,$3,'participant',true)`, [TT, U(chatSettings ? 10 : 1), U(2)])
 if (process.env.FROZEN) await db.query(`update trips set settlement_snapshot='{"transactions":[]}' where id=$1`, [TT])
 await db.query(`insert into notifications(trip_id,user_id,kind,dedupe_key) values ($1,$2,'action_due_7d','existing:1')`, [TT, U(1)])
 const snap = async () => JSON.stringify([

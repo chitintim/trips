@@ -165,6 +165,12 @@ const SHORT_ANSWER_CHARS = 200
 export const ANSWER_NUDGE =
   'Your reply so far has a button but does not answer the question. If the person asked about money, a receipt or anything else you can look up, use the read tools (get_my_money for what they owe or are owed, get_balances for everyone) if you have not already, then write the answer in words with the actual names and amounts. If they asked for something you cannot do, say so in one sentence and who can. Do not call open_screen again.'
 
+/** The text already says, in a full sentence, that this cannot be done from chat. Pure. */
+export function refusalAlreadyGiven(text: string): boolean {
+  const t = text.trim()
+  return t.length >= TRIVIAL_TEXT_CHARS && SAYS_CANNOT.test(t) && /[.!?]["')\]]*$/.test(t)
+}
+
 /**
  * True when the turn is about to end with a button (or a lookup) and no real answer: the final text is trivial,
  * or a money / receipt read ran but the text carries no figure, or a money screen was opened with no read at all.
@@ -401,6 +407,9 @@ export async function runChatTurn(deps: ChatLoopDeps): Promise<ChatTurnResult> {
           }
         }
       }))
+      // A complete refusal was already written and the only tools were buttons: the answer is done. Another model call
+      // would only paraphrase it as a second paragraph ("...I've put a button there...").
+      if (turn.toolUses.every((tu) => tu.name === 'open_screen') && refusalAlreadyGiven(finalText)) break
       conversation.push({ role: 'user', content: capRoundResults(rawResults, MAX_ROUND_RESULT_CHARS) })
       moveToolBreakpoint(conversation)
       continue

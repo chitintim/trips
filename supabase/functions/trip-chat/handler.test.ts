@@ -359,3 +359,25 @@ Deno.test('legacy organiser proposals are stored without the organiser\'s wordin
   const rows = h.db.tables.ai_proposals ?? []
   if (rows.length) assertEquals(rows[0].source_text, null)
 })
+
+Deno.test('stored reply equals the streamed reply and keeps the turn\'s link buttons as target + ids only', async () => {
+  const h = harness({ rounds: [
+    [{ text: 'Looking at the screens for you. ' }, { tool: 'open_screen', input: { target: 'settle', id: null } }, { tool: 'open_screen', input: { target: 'todos', id: null } }],
+    [{ text: "Looking at the screens for you. Balances can't be frozen from chat; an organiser can do it." }],
+  ] })
+  const r = await post(h, { message: 'freeze the balances', turnId: TURN })
+  const streamedText = r.events.filter((e) => e.type === 'text').map((e) => e.text).join('')
+  const done = r.events.at(-1)!
+  const row = (h.db.tables.trip_chat_messages ?? []).find((m) => m.role === 'assistant')!
+  assertEquals(row.content, streamedText)
+  assertEquals(done.message, streamedText)
+  assertEquals((streamedText.match(/Looking at the screens/g) ?? []).length, 1)
+  assertEquals(row.metadata, { links: [{ target: 'settle', id: null, subject: null }, { target: 'todos', id: null, subject: null }] })
+  assert(!JSON.stringify(row.metadata).includes('open_param') && !JSON.stringify(row.metadata).includes('http'))
+})
+
+Deno.test('a reply with no buttons and no cards stores no metadata', async () => {
+  const h = harness({ rounds: [[{ text: 'Fine.' }]] })
+  await post(h, { message: 'hi', turnId: TURN })
+  assertEquals((h.db.tables.trip_chat_messages ?? []).find((m) => m.role === 'assistant')!.metadata, null)
+})

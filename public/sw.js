@@ -35,6 +35,11 @@ self.addEventListener('install', (event) => {
   self.skipWaiting()
 })
 
+// The page's Reload button (src/lib/appUpdate.ts) sends this if a worker is ever left waiting.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting()
+})
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim())
 })

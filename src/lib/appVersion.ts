@@ -6,7 +6,8 @@
  *   functions only allow the headers listed in supabase/functions/_shared/cors.ts, and a new one would fail every browser call.
  * - Every build also writes `version.json` ({build, builtAt}) next to index.html. An open tab fetches it (never cached: `cache: 'no-store'`
  *   plus a throwaway query string, because the host serves static files with a short max-age) and compares it with its own `APP_BUILD`.
- *   public/sw.js caches nothing and ignores GET requests, so the service worker cannot serve a stale copy either.
+ *   public/sw.js caches nothing and ignores GET requests, so the service worker cannot serve a stale copy either. Applying the update
+ *   (service-worker check, cache-bypassing refresh, single reload) lives in src/lib/appUpdate.ts.
  *
  * The check never reloads anything: the banner (src/components/NewVersionBanner.tsx) offers "Reload", and a reload with an unsaved
  * form still hits the browser's own leave-site prompt (useUnsavedChangesGuard).

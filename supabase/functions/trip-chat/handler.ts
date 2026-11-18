@@ -24,6 +24,7 @@ import { chatStreamErrorLog, chatStreamErrorPayload } from './streamError.ts'
 import { actionsEnabledFor } from './flags.ts'
 import { normalizeToolInput } from './toolSchema.ts'
 import { LEGACY_PROPOSE_ACTIONS, TOOL_BY_NAME, buildToolDefs, statusLabelFor } from './registry.ts'
+import { storedLinkOf, type StoredLink } from './storedLinks.ts'
 import { STATIC_SYSTEM, tripBlock } from './prompt.ts'
 import { stageWords } from './tools/read/index.ts'
 import {
@@ -109,6 +110,7 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
     const envelopes: ChatActionEnvelope[] = []
     let proposalId: string | null = null
     const proposalSummaries: Array<{ type: string; summary: string }> = []
+    const links: StoredLink[] = []
 
     // Stream plumbing (the tool context needs `send` for action events).
     const encoder = new TextEncoder()
@@ -123,6 +125,8 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
       proposedThisTurn: { count: 0 },
       emitAction: (a) => {
         envelopes.push(a)
+        const link = storedLinkOf(a)
+        if (link) links.push(link)
         if (a.requires !== 'link') proposedIds.push(a.id)
         send({ type: 'action', action: a })
       },
@@ -211,7 +215,9 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
           })
 
           let messageId: string | null = null
-          const metadata = proposalId || proposedIds.length ? { ...(proposalId ? { proposal_id: proposalId } : {}), ...(proposedIds.length ? { action_ids: proposedIds } : {}) } : null
+          const metadata = proposalId || proposedIds.length || links.length
+            ? { ...(proposalId ? { proposal_id: proposalId } : {}), ...(proposedIds.length ? { action_ids: proposedIds } : {}), ...(links.length ? { links } : {}) }
+            : null
           const saved = await admin.from('trip_chat_messages')
             .insert({ trip_id: tripId, user_id: null, role: 'assistant', content: result.finalText, had_write_actions: proposalId != null || proposedIds.length > 0, metadata, ...rowBase })
             .select('id').single()

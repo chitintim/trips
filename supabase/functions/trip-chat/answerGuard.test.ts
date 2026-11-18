@@ -4,7 +4,7 @@ import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { AiCallError } from '../_shared/aiError.ts'
 import type { AnthropicMessage, AnthropicRequestOptions, AnthropicUsage } from '../_shared/anthropic.ts'
 import { buildMessageBody } from '../_shared/anthropic.ts'
-import { ANSWER_NUDGE, answerNudgeNeeded, RepeatFilter, runChatTurn } from './loop.ts'
+import { ANSWER_NUDGE, answerNudgeNeeded, refusalAlreadyGiven, RepeatFilter, runChatTurn } from './loop.ts'
 
 type Ev = Record<string, unknown>
 const sse = (events: Ev[]) => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''))
@@ -143,4 +143,51 @@ Deno.test('RepeatFilter: drops repeated sentences and lines, keeps short repeats
   // split across deltas
   const k = new RepeatFilter()
   assertEquals(k.push('Everything is settled u') + k.push('p between you now. ') + k.push('Everything is settled up') + k.push(' between you now.') + k.flush(), 'Everything is settled up between you now. ')
+})
+
+const streamed = (sent: Ev[]) => sent.filter((e) => e.type === 'text').map((e) => e.text).join('')
+
+Deno.test('parity: the text kept for storage is exactly the text streamed, on the nudge path', async () => {
+  const r = await run([
+    toolRound('Let me look at that for you.', ['o1', 'open_screen', '{"target":"settle","id":null}']),
+    finalRound('Here is the Settle up page. Let me look at that for you.'),
+    finalRound('Sam owes Tim £12.50; everyone else is all square.'),
+  ])
+  assertEquals(r.error, undefined)
+  assertEquals(r.result!.finalText, streamed(r.sent))
+  assertEquals(r.result!.finalText.split('Let me look at that for you.').length - 1, 1) // the repeat is in neither
+})
+
+Deno.test('parity: after a retried call, only the attempt that streamed is kept and stored', async () => {
+  const r = await run([new AiCallError('busy', 'overloaded'), finalRound('Sam owes Tim £12.50 in total.')])
+  assertEquals(r.error, undefined)
+  assertEquals(r.result!.finalText, 'Sam owes Tim £12.50 in total.')
+  assertEquals(r.result!.finalText, streamed(r.sent))
+})
+
+Deno.test('parity: notices and the cut-short marker are streamed and kept alike', async () => {
+  const cut = await run([[start(), ...textBlock(0, 'Sam owes Tim '), end('max_tokens')]])
+  assertEquals(cut.result!.finalText, streamed(cut.sent))
+  assert(cut.result!.finalText.endsWith('(cut short)'))
+  const empty = await run([[start(), end('end_turn')]])
+  assertEquals(empty.result!.finalText, streamed(empty.sent))
+  assert(empty.result!.finalText.length > 0)
+})
+
+Deno.test('a refusal written before open_screen ends the turn: no second paragraph about the button', async () => {
+  const r = await run([
+    toolRound("You can't delete an expense from chat; an organiser can remove it from its screen.", ['o1', 'open_screen', '{"target":"claim","id":null}']),
+    finalRound("I've put a button there that opens the expense."),
+  ])
+  assertEquals(r.bodies.length, 1)
+  assertEquals(r.result!.finalText, "You can't delete an expense from chat; an organiser can remove it from its screen.")
+  assertEquals(r.result!.finalText, streamed(r.sent))
+  // other tools in the round, or a preamble, still get their answer
+  const withRead = await run([
+    toolRound("You can't do that from chat.", ['b1', 'get_balances', '{}'], ['o1', 'open_screen', '{"target":"settle","id":null}']),
+    finalRound('Sam owes Tim £12.50.'),
+  ])
+  assertEquals(withRead.bodies.length, 2)
+  assertEquals(refusalAlreadyGiven('Let me check that for you.'), false)
+  assertEquals(refusalAlreadyGiven("I can't"), false)
 })

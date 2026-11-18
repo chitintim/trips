@@ -125,5 +125,5 @@ import { STATIC_SYSTEM } from './prompt.ts'
 Deno.test('prompt and tool text never name a card button', () => {
   assert(!/\b(tap|taps|press|click)\s+(Confirm|Suggest|Add)/i.test(STATIC_SYSTEM), 'prompt names a button')
   for (const t of ALL_TOOLS) assert(!/\b(tap|taps|press|click)\s+(Confirm|Suggest|Add)/i.test(t.description), `${t.name} names a button`)
-  assert(/never say where the button is/.test(STATIC_SYSTEM))
+  assert(/Never mention or describe the button/.test(STATIC_SYSTEM))
 })

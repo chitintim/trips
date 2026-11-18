@@ -12,7 +12,7 @@ export function registerShareTargetSw(): void {
   // the path is always `${base}sw.js` — base is configurable via the
   // VITE_BASE env var (see vite.config.ts), defaulting to `/trips/`.
   const base = import.meta.env.BASE_URL
-  navigator.serviceWorker.register(`${base}sw.js`, { scope: base }).catch(() => {
+  navigator.serviceWorker.register(`${base}sw.js`, { scope: base, updateViaCache: 'none' }).catch(() => {
     // Share-target is a progressive enhancement; a failed registration
     // (unsupported browser, blocked by privacy settings, etc.) shouldn't
     // surface as an error anywhere in the app.

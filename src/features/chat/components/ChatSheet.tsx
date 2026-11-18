@@ -15,10 +15,11 @@ import { chipsFor, spaceFor, type ChatChip } from '../lib/chips'
 import { mergeAction } from '../lib/confirmFlow'
 import { ownPendingProposals } from '../lib/ownProposals'
 import { readLive, refreshLive, useChatLive } from '../lib/live'
-import { dedupeLinkCards, detachedActions, resolveLink, withoutLinkCards } from '../lib/linkTargets'
+import { dedupeLinkCards, detachedActions, resolveLink, storedLinks, withoutLinkCards } from '../lib/linkTargets'
 import { ChatMarkdown } from '../lib/markdown'
 import type { ChatActionEnvelope } from '../lib/payload'
 import { ChatQuotaError, streamChatMessage } from '../lib/streamChat'
+import { statusLine } from '../lib/turnStatus'
 import { useRevealedText } from '../lib/useRevealedText'
 import { ActionCard, type ActionRuntime } from './ActionCard'
 import { LinkCard } from './LinkCard'
@@ -71,6 +72,8 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
   const [streamText, setStreamText] = useState<string | null>(null)
   const [statusLabel, setStatusLabel] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
+  /** The reply is still arriving (false from the moment the stream ends, while `sending` also covers the refetch after it). */
+  const [streaming, setStreaming] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [retry, setRetry] = useState<{ text: string; turnId: string } | null>(null)
   const [currentTurn, setCurrentTurn] = useState<string | null>(null)
@@ -88,11 +91,13 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
     setInput('')
     setEcho([])
     setStreamText(null)
+    setStreaming(false)
     setStatusLabel(null)
     setNotice(null)
     setRetry(null)
     setCurrentTurn(null)
     setKnown({})
+    setActionsEnabled(null)
     setClearedLocally(null)
     setShowLegacy(false)
   }, [tripId])
@@ -227,6 +232,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
     setNotice(null)
     setRetry(null)
     setSending(true)
+    setStreaming(true)
     setCurrentTurn(turnId)
     if (!reuseTurnId) setEcho((prev) => [...prev, { id: `echo-${turnId}`, turnId, content: trimmed }])
     setStreamText('')
@@ -249,10 +255,14 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
           onAction: (a) => shownTrip.current === tripId && upsertAction({ ...a, turn_id: a.turn_id ?? turnId }),
           onProposal: () => queryClient.invalidateQueries({ queryKey: queryKeys.proposals(tripId) }),
           onDone: (_full, info) => {
+            setStreaming(false)
+            setStatusLabel(null)
             if (info?.actionsEnabled != null) setActionsEnabled(info.actionsEnabled)
           },
           onError: (error) => {
             failed = true
+            setStreaming(false)
+            setStatusLabel(null)
             setNotice(error)
           },
         },
@@ -266,6 +276,9 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
       } else setNotice((err as Error).message)
     } finally {
       if (failed) setRetry({ text: trimmed, turnId })
+      // The turn is over however it ended: the status line goes now, not after the refetch below.
+      setStreaming(false)
+      setStatusLabel(null)
       await Promise.all([queryClient.invalidateQueries({ queryKey: queryKeys.chatMessages(tripId) }), queryClient.invalidateQueries({ queryKey: chatActionsKey(tripId) })])
       setStreamText(null)
       setStatusLabel(null)
@@ -286,6 +299,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
         setRetry(null)
         setCurrentTurn(null)
         setStreamText(null)
+        setStreaming(false)
         setStatusLabel(null)
         // Link cards are not stored anywhere else: they belong to the chat that was just closed.
         setKnown(withoutLinkCards)
@@ -306,6 +320,9 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
     const mine = msg.user_id === user?.id
     const meta = msg.metadata as { proposal_id?: string } | null
     const inlineProposal = meta?.proposal_id ? proposalsById.get(meta.proposal_id) : undefined
+    // Buttons come back from the stored reply; while this device still holds the live ones for the turn, those are drawn instead (never both).
+    const liveHasLinks = !!msg.turn_id && (actionsByTurn.get(msg.turn_id) ?? []).some((a) => a.kind === 'open_screen')
+    const keptLinks = msg.role === 'assistant' && !liveHasLinks ? storedLinks(msg.metadata) : []
     return (
       <div key={msg.id}>
         <div className={`flex items-end gap-2 ${isUser && mine ? 'flex-row-reverse' : ''}`}>
@@ -335,6 +352,20 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
           </div>
         )}
         {!readOnly && msg.role === 'assistant' && msg.turn_id && actionsByTurn.get(msg.turn_id) && <div className="mt-2 space-y-2 pl-7">{renderActions(actionsByTurn.get(msg.turn_id))}</div>}
+        {!readOnly && msg.role === 'assistant' && keptLinks.length > 0 && onOpenLink && (
+          <div className="mt-2 space-y-2 pl-7">
+            {keptLinks.map((link) => (
+              <LinkCard
+                key={link.openParam}
+                link={link}
+                onOpen={(p) => {
+                  onClose()
+                  onOpenLink(p)
+                }}
+              />
+            ))}
+          </div>
+        )}
       </div>
     )
   }
@@ -396,8 +427,8 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
                 ✨
               </span>
               <div className={`${bubble} border border-[var(--border-subtle)] bg-[var(--surface-raised)] text-[var(--text-primary)]`} aria-live="polite">
-                {revealed ? <ChatMarkdown>{revealed}</ChatMarkdown> : <span className="text-[var(--text-muted)]">{statusLabel ?? 'Thinking…'}</span>}
-                {revealed && sending && <span className="mt-1 block text-xs text-[var(--text-muted)]">{statusLabel ?? 'Working on it…'}</span>}
+                {revealed ? <ChatMarkdown>{revealed}</ChatMarkdown> : <span className="text-[var(--text-muted)]">{statusLine({ streaming, hasText: false, label: statusLabel }) ?? ''}</span>}
+                {revealed && statusLine({ streaming, hasText: true, label: statusLabel }) && <span className="mt-1 block text-xs text-[var(--text-muted)]">{statusLine({ streaming, hasText: true, label: statusLabel })}</span>}
               </div>
             </div>
           )}

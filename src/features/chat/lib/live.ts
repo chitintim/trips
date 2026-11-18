@@ -91,7 +91,7 @@ export function readLive(queryClient: QueryClient, trip: Trip, userId: string, c
     passes: passesState?.status === 'success' ? queryClient.getQueryData<QuestionPass[]>(questionPassesKey(t)) ?? [] : undefined,
     actions: queryClient.getQueryData<ActionWithCompletions[]>(queryKeys.actions(t)),
     checklists: queryClient.getQueryData<ChecklistItem[]>(queryKeys.checklists(t)),
-    todoWho: queryClient.getQueryData<boolean>(['todoWhoSupport']) === true,
+    todoWho: true,
   })
 }
 

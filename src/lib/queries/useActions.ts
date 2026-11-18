@@ -9,7 +9,7 @@ import { useParticipants } from './useTrip'
 import { withClosedSections, type SectionVoterIds } from '../../features/actions/lib/actionStatus'
 import { buildAnsweredSectionVoters } from '../answers/answers'
 import { assertRowsAffected, throwIfError } from './assertRowsAffected'
-import { callClaimTodo, claimTodoExists } from './claimTodo'
+import { callClaimTodo } from './claimTodo'
 import type { InvalidatingClient, UndoDescriptor } from './mutationUndo'
 
 export type ActionCompletion = Pick<Tables<'trip_action_completions'>, 'user_id' | 'completed_at'>
@@ -66,23 +66,13 @@ export function useSectionVoters(tripId: string | undefined): SectionVoterIds {
 
 /**
  * Whether 20261117100000_todo_who_mode.sql is applied (the `who_mode` column, the optional due date and
- * the `claim_todo` RPC). Probed once per session with a zero-row select that errors if the column is
- * missing, plus a harmless RPC call on a made-up id; FAILS SOFT to `false`, which makes the To-dos sheet behave exactly as before the
- * migration (no Anyone for general to-dos, a required deadline, claims only for creator/organizer).
+ * the `claim_todo` RPC). It is applied on live, so this is always true. It used to probe on every open of
+ * the trip chat and To-dos sheet (a select plus a `claim_todo` call on a made-up id, which showed up as a
+ * failed 400 request each time). If the function were ever missing, the claim mutations still fall back
+ * to the pre-migration behaviour.
  */
 export function useTodoWhoSupport(): boolean {
-  const query = useQuery({
-    queryKey: ['todoWhoSupport'],
-    queryFn: async (): Promise<boolean> => {
-      const { error } = await supabase.from('trip_actions').select('who_mode').limit(0)
-      if (error) return false
-      // Claiming goes through the claim_todo RPC; without it the old front end behaviour is kept.
-      return claimTodoExists()
-    },
-    staleTime: Infinity,
-    retry: false,
-  })
-  return query.data === true
+  return true
 }
 
 /**

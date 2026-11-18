@@ -51,13 +51,3 @@ export async function callClaimTodo(source: ClaimTodoSource, id: string, action:
   err.code = error.code
   throw err
 }
-
-/** Probe: does the RPC exist? A made-up id raises a rule error ('no longer exists') when it does. */
-export async function claimTodoExists(): Promise<boolean> {
-  const { error } = await supabase.rpc('claim_todo', {
-    p_source: 'action',
-    p_id: '00000000-0000-0000-0000-000000000000',
-    p_action: 'claim',
-  })
-  return !isClaimTodoMissing(error)
-}

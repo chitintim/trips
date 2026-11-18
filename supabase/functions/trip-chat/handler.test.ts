@@ -120,7 +120,7 @@ Deno.test('old client: no turnId, no tools -> text + done only, nothing else', a
   assertEquals(h.usage, 1)
 })
 
-Deno.test('request shape: constant tools, two cached system blocks, digest and words are separate blocks, strict tools, effort low', async () => {
+Deno.test('request shape: constant tools, two cached system blocks, digest and words are separate blocks, plain (non-strict) tools, effort low', async () => {
   const h = harness({ rounds: [[{ text: 'ok' }]] })
   await post(h, { message: 'what do I owe?', page: 'money' })
   const req = h.requests[0] as { tools: Array<{ name: string; strict?: boolean }>; system: Array<{ cache_control?: unknown; text: string }>; messages: Array<{ role: string; content: Array<{ text: string }> }>; output_config: { effort: string } }
@@ -135,7 +135,7 @@ Deno.test('request shape: constant tools, two cached system blocks, digest and w
   assertStringIncludes(last.content[0].text, 'money page')
   assertEquals(last.content[1].text, 'what do I owe?')
   assertEquals(req.output_config.effort, 'low')
-  assert(req.tools.filter((t) => t.name !== 'propose_actions').every((t) => t.strict === true))
+  assert(req.tools.every((t) => !('strict' in t)), 'tools must not be strict: the API limits strict schemas to 16 union params and rejects nullable enums')
 })
 
 Deno.test('tools array and system prefix are identical for organiser and participant, flag on or off', async () => {

@@ -78,6 +78,10 @@ export interface ChatLoopDeps {
   maxIterations: number
   /** Called just before a tool runs (all calls of one round start together): the server sends a fixed-label `status` event. */
   onToolStart?: (tu: ToolUse) => void
+  /** Absolute epoch-ms time budget for the turn; a retry is skipped when its wait plus a minimal attempt would not fit. */
+  deadlineAt?: number
+  /** Test seam for the retry backoff. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 /** Maps a stream `error` event to the same coded errors the rest of the AI code uses. */
@@ -149,6 +153,33 @@ export interface ChatTurnResult {
   toolsUsed: string[]
 }
 
+// --- Retry of a model call that failed before any content reached the client -------------------------
+/** Retries after the first attempt. Worst case adds about 2 s of sleeping. */
+export const MAX_CALL_RETRIES = 2
+const RETRY_BACKOFF_MS = [500, 1500]
+const MIN_RETRY_ATTEMPT_MS = 3_000
+const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/** Backoff before retry number attempt+1, or null when this failure is not worth a retry. Only overload/5xx ('busy') and network failures qualify; 4xx and 429 are final. */
+export function retryDelayMs(err: unknown, attempt: number, rand: () => number = Math.random): number | null {
+  if (attempt >= MAX_CALL_RETRIES) return null
+  const transient = (err instanceof AiCallError && err.code === 'busy') || err instanceof TypeError
+  if (!transient) return null
+  const base = RETRY_BACKOFF_MS[attempt] ?? RETRY_BACKOFF_MS[RETRY_BACKOFF_MS.length - 1]
+  return Math.round(base * (0.75 + rand() * 0.5))
+}
+
+function addUsage(into: AnthropicUsage, add: AnthropicUsage): void {
+  into.input_tokens += add.input_tokens
+  into.output_tokens += add.output_tokens
+  into.cache_creation_input_tokens = (into.cache_creation_input_tokens ?? 0) + (add.cache_creation_input_tokens ?? 0)
+  into.cache_read_input_tokens = (into.cache_read_input_tokens ?? 0) + (add.cache_read_input_tokens ?? 0)
+}
+
+function overTurnCap(usage: AnthropicUsage, model: string): boolean {
+  return usage.output_tokens >= MAX_TURN_OUTPUT_TOKENS || estimateCostUsd(usage, model) >= MAX_TURN_COST_USD
+}
+
 export async function runChatTurn(deps: ChatLoopDeps): Promise<ChatTurnResult> {
   const { conversation, send, usage } = deps
   const midSystem = supportsMidConversationSystem(deps.model)
@@ -168,36 +199,44 @@ export async function runChatTurn(deps: ChatLoopDeps): Promise<ChatTurnResult> {
       ? [...conversation, { role: 'system', content: FINAL_ITERATION_INSTRUCTION }]
       : conversation
     iterations++
-    const response = await deps.callModel({
-      model: deps.model,
-      max_tokens: CHAT_MAX_TOKENS,
-      system: deps.system,
-      messages,
-      tools: last && !midSystem ? undefined : deps.tools,
-      output_config: { effort: CHAT_EFFORT },
-    })
-
-    // Iterations after the first start a new paragraph so words never run together.
-    let started = false
-    const progress: StreamProgress = { usage: { ...ZERO_USAGE }, model: '' }
-    let turn
-    try {
-      turn = await consumeAnthropicStream(response, (delta) => {
-        if (!started) {
-          started = true
-          if (finalText.trim()) emit('\n\n')
-        }
-        emit(delta)
-      }, { throwOnStreamError: true, progress })
-    } catch (err) {
-      if (err instanceof StreamEventError) throw streamEventToAiError(err)
-      throw err
-    } finally {
-      usage.input_tokens += progress.usage.input_tokens
-      usage.output_tokens += progress.usage.output_tokens
-      usage.cache_creation_input_tokens = (usage.cache_creation_input_tokens ?? 0) + (progress.usage.cache_creation_input_tokens ?? 0)
-      usage.cache_read_input_tokens = (usage.cache_read_input_tokens ?? 0) + (progress.usage.cache_read_input_tokens ?? 0)
-      if (progress.model) deps.state.model = progress.model
+    // One model call, retried (see shouldRetryCall) only while nothing of it has reached the client.
+    let turn!: Awaited<ReturnType<typeof consumeAnthropicStream>>
+    for (let attempt = 0; ; attempt++) {
+      let started = false // a text delta was sent to the client
+      const progress: StreamProgress = { usage: { ...ZERO_USAGE }, model: '' }
+      try {
+        const response = await deps.callModel({
+          model: deps.model,
+          max_tokens: CHAT_MAX_TOKENS,
+          system: deps.system,
+          messages,
+          tools: last && !midSystem ? undefined : deps.tools,
+          output_config: { effort: CHAT_EFFORT },
+        })
+        // Iterations after the first start a new paragraph so words never run together.
+        turn = await consumeAnthropicStream(response, (delta) => {
+          if (!started) {
+            started = true
+            if (finalText.trim()) emit('\n\n')
+          }
+          emit(delta)
+        }, { throwOnStreamError: true, progress })
+        break
+      } catch (rawErr) {
+        const err = rawErr instanceof StreamEventError ? streamEventToAiError(rawErr) : rawErr
+        // Bill the failed attempt before deciding: the caps below must see what it cost.
+        addUsage(usage, progress.usage)
+        if (progress.model) deps.state.model = progress.model
+        progress.usage = { ...ZERO_USAGE }
+        const delay = started ? null : retryDelayMs(err, attempt)
+        if (delay === null || overTurnCap(usage, deps.state.model || deps.model)) throw err
+        if (deps.deadlineAt != null && deps.deadlineAt - Date.now() < delay + MIN_RETRY_ATTEMPT_MS) throw err
+        await (deps.sleep ?? defaultSleep)(delay)
+        continue
+      } finally {
+        addUsage(usage, progress.usage)
+        if (progress.model) deps.state.model = progress.model
+      }
     }
 
     if (turn.stop_reason === 'tool_use' && turn.toolUses.length > 0) {

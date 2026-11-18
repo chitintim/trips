@@ -125,7 +125,7 @@ export interface ToolModule {
   description: string
   /** Fixed status line for the SSE `status` event. Never model text. */
   statusLabel: string
-  /** Hand-written JSON Schema: type object, additionalProperties:false, every property in `required` (use null-able types for optional). No min/max keywords (strict mode). */
+  /** Hand-written JSON Schema: type object, additionalProperties:false, every property in `required`; optional ones use a nullable type. toolSchema.ts turns this into plain optional parameters for the API (tools are not strict) and maps omitted/null/"" input to null. */
   inputSchema: Record<string, unknown>
   /** Validates raw model input (Zod inside). Throws on bad input: the message goes back as an is_error result. */
   run: (rawInput: unknown, ctx: ToolCtx) => Promise<ToolResult>

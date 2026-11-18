@@ -22,6 +22,7 @@ import { localNow } from './localTime.ts'
 import { CHAT_EFFORT, MAX_ROUND_RESULT_CHARS, runChatTurn, TRUNCATION_NOTE, type ToolOutcome, type ToolUse } from './loop.ts'
 import { chatStreamErrorLog, chatStreamErrorPayload } from './streamError.ts'
 import { actionsEnabledFor } from './flags.ts'
+import { normalizeToolInput } from './toolSchema.ts'
 import { LEGACY_PROPOSE_ACTIONS, TOOL_BY_NAME, buildToolDefs, statusLabelFor } from './registry.ts'
 import { STATIC_SYSTEM, tripBlock } from './prompt.ts'
 import { stageWords } from './tools/read/index.ts'
@@ -177,7 +178,7 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
       if (!tool) {
         return { content: `Unknown tool "${tu.name}". Use one of: ${[...TOOL_BY_NAME.keys()].join(', ')}.`, is_error: true }
       }
-      const out = await tool.run(tu.input, ctx)
+      const out = await tool.run(normalizeToolInput(tool.inputSchema, tu.input), ctx)
       let content = JSON.stringify(out.content)
       if (content.length > MAX_TOOL_RESULT_CHARS) content = content.slice(0, MAX_TOOL_RESULT_CHARS - TRUNCATION_NOTE.length) + TRUNCATION_NOTE
       return { content, ...(out.is_error ? { is_error: true } : {}) }

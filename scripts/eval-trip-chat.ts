@@ -100,6 +100,26 @@ function parseArgs(argv: string[]) {
 
 const money = (n: number) => `$${n.toFixed(n < 1 ? 4 : 2)}`
 
+/**
+ * The shared client keeps only "http 400 invalid_request_error" in its error. A 4xx from the API means the request
+ * itself is wrong (a bad tool schema, say) and every following call will fail the same way, so remember the API's
+ * own message (it describes the request shape, never a key) and abort the run on the first one.
+ */
+let lastClientError: string | null = null
+const realFetch = globalThis.fetch
+globalThis.fetch = async (input, init) => {
+  const res = await realFetch(input, init)
+  if (res.status >= 400 && res.status < 500 && String(input instanceof Request ? input.url : input).includes('api.anthropic.com')) {
+    try {
+      const body = await res.clone().json()
+      lastClientError = `HTTP ${res.status} ${body?.error?.type ?? ''}: ${String(body?.error?.message ?? '').slice(0, 600)}`
+    } catch {
+      lastClientError = `HTTP ${res.status} (unreadable body)`
+    }
+  }
+  return res
+}
+
 async function loadJson<T>(name: string): Promise<T> {
   return JSON.parse(await Deno.readTextFile(new URL(name, FIXTURE_DIR))) as T
 }
@@ -237,6 +257,7 @@ async function main() {
   const system = buildSystem(fx)
   let spent = 0
   let stopped = false
+  let fatal = false
   const rows: CaseRow[] = []
 
   for (const c of cases) {
@@ -298,6 +319,7 @@ async function main() {
                 recorded.push({ tool: u.name, input })
                 const proposals = recorded.filter((r) => r.tool.startsWith(PROPOSE_PREFIX)).length
                 if (proposals > MAX_ACTIONS_PER_TURN) return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: false, error: 'Too many actions this turn.' }), is_error: true }
+                if (u.name === OPEN_SCREEN) return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: true, link: { label: String(input.target ?? 'screen'), target: input.target, open_param: String(input.target ?? '') } }) } // same shape as the real open_screen result
                 return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: true, note: 'Stored. The person will see a card and must tap Confirm.' }) }
               }
               recorded.push({ tool: u.name, input })
@@ -320,6 +342,13 @@ async function main() {
     } catch (err) {
       if (err instanceof StopEval || stopped) {
         stopped = true
+      } else if (lastClientError) {
+        // First 4xx: stop spending, say why.
+        console.error(`\nABORT: the API rejected the request, so the rest of the run would fail the same way.\n  ${lastClientError}`)
+        fatal = true
+        stopped = true
+        row.failedChecks++
+        failures.push(`error: ${lastClientError}`)
       } else {
         row.failedChecks++
         failures.push(`error: ${err instanceof Error && 'code' in err ? String((err as { code: unknown }).code) : 'call failed'}`)
@@ -346,6 +375,7 @@ async function main() {
     await Deno.writeTextFile(args.csv, [head, ...lines].join('\n') + '\n')
     console.log(`\nper-case numbers written to ${args.csv} (no text)`)
   }
+  if (fatal) Deno.exit(2)
 }
 
 if (import.meta.main) {

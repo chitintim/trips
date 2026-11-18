@@ -6,10 +6,11 @@ import type { AnthropicToolDef } from '../_shared/anthropic.ts'
 import type { ToolModule } from './tools/types.ts'
 import { READ_TOOLS } from './tools/read/index.ts'
 import { PROPOSE_TOOLS } from './tools/propose/index.ts'
+import { toApiSchema } from './toolSchema.ts'
 
 export const LEGACY_PROPOSE_ACTIONS = 'propose_actions'
 
-/** Legacy organiser changeset tool (no delete_request any more, D5). Not strict: its item schema is open by design. */
+/** Legacy organiser changeset tool (no delete_request any more, D5). Its item schema is open by design. */
 export const LEGACY_PROPOSE_TOOL_DEF = {
   name: LEGACY_PROPOSE_ACTIONS,
   description:
@@ -44,9 +45,9 @@ export const ALL_TOOLS: ToolModule[] = [...READ_TOOLS, ...PROPOSE_TOOLS]
 
 export const TOOL_BY_NAME = new Map(ALL_TOOLS.map((t) => [t.name, t]))
 
-export function buildToolDefs(): Array<AnthropicToolDef & { strict?: boolean }> {
+export function buildToolDefs(): AnthropicToolDef[] {
   return [
-    ...ALL_TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema, strict: true })),
+    ...ALL_TOOLS.map((t) => ({ name: t.name, description: t.description, input_schema: toApiSchema(t.inputSchema) as Record<string, unknown> })),
     LEGACY_PROPOSE_TOOL_DEF,
   ]
 }

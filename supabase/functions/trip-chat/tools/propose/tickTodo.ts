@@ -157,7 +157,7 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
 export const proposeTickTodo: ToolModule = {
   name: 'propose_tick_todo',
   description:
-    "Suggest ticking off, unticking, claiming or giving back one of the PERSON'S OWN to-dos (including bring-list items). Never for someone else: for that, use open_screen. Nothing changes until they tap Confirm.",
+    "Suggest ticking off, unticking, claiming or giving back one of the PERSON'S OWN to-dos (including bring-list items). Never for someone else: for that, use open_screen. Nothing changes until they approve the card.",
   statusLabel: 'Preparing to update your to-do…',
   inputSchema: tickTodoSchema,
   run,

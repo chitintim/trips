@@ -15,7 +15,7 @@ import { chipsFor, spaceFor, type ChatChip } from '../lib/chips'
 import { mergeAction } from '../lib/confirmFlow'
 import { ownPendingProposals } from '../lib/ownProposals'
 import { readLive, refreshLive, useChatLive } from '../lib/live'
-import { dedupeLinkCards, resolveLink } from '../lib/linkTargets'
+import { dedupeLinkCards, detachedActions, resolveLink, withoutLinkCards } from '../lib/linkTargets'
 import { ChatMarkdown } from '../lib/markdown'
 import type { ChatActionEnvelope } from '../lib/payload'
 import { ChatQuotaError, streamChatMessage } from '../lib/streamChat'
@@ -79,6 +79,23 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
   const [actionsEnabled, setActionsEnabled] = useState<boolean | null>(null)
   const [clearedLocally, setClearedLocally] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
+
+  // Everything below is per trip: opening the sheet for another trip must not show the last one's turn, cards or status.
+  const shownTrip = useRef(tripId)
+  useEffect(() => {
+    if (shownTrip.current === tripId) return
+    shownTrip.current = tripId
+    setInput('')
+    setEcho([])
+    setStreamText(null)
+    setStatusLabel(null)
+    setNotice(null)
+    setRetry(null)
+    setCurrentTurn(null)
+    setKnown({})
+    setClearedLocally(null)
+    setShowLegacy(false)
+  }, [tripId])
 
   const upsertAction = useCallback((a: ChatActionEnvelope) => setKnown((prev) => ({ ...prev, [a.id]: mergeAction(prev[a.id], a) })), [])
 
@@ -153,7 +170,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
   // Once the stored reply for this turn is in the list, the streamed copy (and its echo / cards) must not also be drawn.
   const currentTurnStored = !!currentTurn && turnsWithMessage.has(currentTurn)
   const storedUserTurns = new Set(myRows.filter((m) => m.role === 'user' && m.turn_id).map((m) => m.turn_id as string))
-  const detached = Object.values(known).filter((a) => a.status === 'proposed' && a.turn_id !== currentTurn && !(a.turn_id && turnsWithMessage.has(a.turn_id)))
+  const detached = detachedActions(known, currentTurn, turnsWithMessage)
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
@@ -222,11 +239,14 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
         trimmed,
         {
           onText: (delta) => {
+            if (shownTrip.current !== tripId) return
             setStatusLabel(null)
             setStreamText((prev) => (prev ?? '') + delta)
           },
-          onStatus: setStatusLabel,
-          onAction: (a) => upsertAction({ ...a, turn_id: a.turn_id ?? turnId }),
+          onStatus: (label) => {
+            if (shownTrip.current === tripId) setStatusLabel(label)
+          },
+          onAction: (a) => shownTrip.current === tripId && upsertAction({ ...a, turn_id: a.turn_id ?? turnId }),
           onProposal: () => queryClient.invalidateQueries({ queryKey: queryKeys.proposals(tripId) }),
           onDone: (_full, info) => {
             if (info?.actionsEnabled != null) setActionsEnabled(info.actionsEnabled)
@@ -263,6 +283,12 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
         setClearedLocally(at)
         setEcho([])
         setNotice(null)
+        setRetry(null)
+        setCurrentTurn(null)
+        setStreamText(null)
+        setStatusLabel(null)
+        // Link cards are not stored anywhere else: they belong to the chat that was just closed.
+        setKnown(withoutLinkCards)
         void queryClient.invalidateQueries({ queryKey: chatThreadKey(tripId, user?.id ?? '') })
       }
     } catch (err) {
@@ -329,7 +355,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
             )}
           </div>
         </div>
-        {showInfo && <p className="mb-2 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] px-3 py-2 text-xs text-[var(--text-secondary)]">It can look things up and suggest changes. Nothing changes until you tap Confirm.</p>}
+        {showInfo && <p className="mb-2 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] px-3 py-2 text-xs text-[var(--text-secondary)]">It can look things up and suggest changes. Nothing changes until you approve a suggestion.</p>}
 
         <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto pb-3 pr-1">
           {legacyRows.length > 0 && (

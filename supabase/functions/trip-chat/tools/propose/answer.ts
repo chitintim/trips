@@ -261,7 +261,7 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
 export const proposeAnswer: ToolModule = {
   name: 'propose_answer',
   description:
-    "Suggest recording the PERSON'S OWN answer to an open question (pick, rank, Own-choice order, No preference/None for me, or clear). Never for someone else. Nothing is recorded until they tap Confirm.",
+    "Suggest recording the PERSON'S OWN answer to an open question (pick, rank, Own-choice order, No preference/None for me, or clear). Never for someone else. Nothing is recorded until they approve the card.",
   statusLabel: 'Preparing your answer…',
   inputSchema: answerSchema,
   run,

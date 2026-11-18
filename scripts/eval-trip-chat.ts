@@ -342,7 +342,7 @@ async function main() {
                 const proposals = recorded.filter((r) => r.tool.startsWith(PROPOSE_PREFIX)).length
                 if (proposals > MAX_ACTIONS_PER_TURN) return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: false, error: 'Too many actions this turn.' }), is_error: true }
                 if (u.name === OPEN_SCREEN) return { type: 'tool_result', tool_use_id: u.id, content: openScreenResult(input) } // same content as the real open_screen result
-                return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: true, note: 'Stored. The person will see a card and must tap Confirm.' }) }
+                return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: true, note: 'Stored. The person will see a card and must approve it.' }) }
               }
               recorded.push({ tool: u.name, input })
               const r = readFromFixture(fx, u.name, input, c.as)

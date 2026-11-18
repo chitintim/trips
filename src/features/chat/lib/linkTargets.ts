@@ -5,21 +5,22 @@ export interface LinkCopy {
   button: string
 }
 
+/** What the button does, in a neutral line. It describes where the button goes; it never says what the person asked or why. */
 const COPY: Partial<Record<OpenTarget['kind'], LinkCopy>> = {
-  decide: { message: 'Deciding is done by an organizer on the question itself.', button: 'Open Decide' },
-  book: { message: 'Marking something as booked is done by an organizer on the question itself.', button: 'Open Mark booked' },
-  settle: { message: 'Settling up is done on the Settle up screen.', button: 'Open Settle up' },
-  payment: { message: 'Payments are marked on their own screen.', button: 'Open the payment' },
-  question: { message: 'The question has everything you need.', button: 'Open the question' },
-  'answer-all': { message: 'Your open questions are all in one place.', button: 'Answer my questions' },
-  todo: { message: 'You can see it with your to-dos.', button: 'Open the to-do' },
-  bring: { message: 'You can see it with your to-dos.', button: 'Open the to-do' },
-  todos: { message: 'Your to-dos are on Today.', button: 'Open my to-dos' },
-  rsvp: { message: 'Your reply is changed on its own screen.', button: 'Open my reply' },
-  'travel-details': { message: 'Travel details are added on their own screen.', button: 'Open travel details' },
-  claim: { message: 'Who had what is sorted on the receipt.', button: 'Open the receipt' },
-  item: { message: 'It is on the plan.', button: 'Open it' },
-  setup: { message: 'Setting up is done on its own screen.', button: 'Open setup' },
+  decide: { message: 'Opens the question.', button: 'Open Decide' },
+  book: { message: 'Opens the question.', button: 'Open Mark booked' },
+  settle: { message: 'Opens the Settle up screen.', button: 'Open Settle up' },
+  payment: { message: 'Opens the payment.', button: 'Open the payment' },
+  question: { message: 'Opens the question.', button: 'Open the question' },
+  'answer-all': { message: 'Opens your open questions.', button: 'Answer my questions' },
+  todo: { message: 'Opens the to-do.', button: 'Open the to-do' },
+  bring: { message: 'Opens the to-do.', button: 'Open the to-do' },
+  todos: { message: 'Opens your to-dos.', button: 'Open my to-dos' },
+  rsvp: { message: 'Opens your reply.', button: 'Open my reply' },
+  'travel-details': { message: 'Opens your travel details.', button: 'Open travel details' },
+  claim: { message: 'Opens the receipt.', button: 'Open the receipt' },
+  item: { message: 'Opens the item on the plan.', button: 'Open it' },
+  setup: { message: 'Opens trip setup.', button: 'Open setup' },
 }
 
 export interface ResolvedLink {
@@ -35,7 +36,7 @@ export function resolveLink(params: Record<string, unknown>): ResolvedLink | nul
   const raw = typeof params.open_param === 'string' ? params.open_param : null
   const target = resolveOpenParam(raw)
   if (!raw || !target) return null
-  return { openParam: raw, copy: COPY[target.kind] ?? { message: 'It is done on its own screen.', button: 'Open it' } }
+  return { openParam: raw, copy: COPY[target.kind] ?? { message: 'Opens the screen.', button: 'Open it' } }
 }
 
 /** Link cards of one reply, each target once (the server may repeat a link; the person should see one button). */
@@ -48,4 +49,17 @@ export function dedupeLinkCards<T extends { kind: string; params: Record<string,
     seen.add(key)
     return true
   })
+}
+
+/**
+ * Link cards are never stored on the server, so the only copy lives in client state and belongs to the turn that made it.
+ * "New chat" and a change of trip drop them; they are also never "detached" (shown away from their own reply).
+ */
+export function withoutLinkCards<T extends { kind: string }>(known: Record<string, T>): Record<string, T> {
+  return Object.fromEntries(Object.entries(known).filter(([, a]) => a.kind !== 'open_screen'))
+}
+
+/** Stored suggestions still waiting for a tap whose own reply is not on screen. Link cards are excluded: they show only under their own turn. */
+export function detachedActions<T extends { kind: string; status: string; turn_id?: string | null }>(known: Record<string, T>, currentTurn: string | null, turnsWithMessage: ReadonlySet<string>): T[] {
+  return Object.values(known).filter((a) => a.kind !== 'open_screen' && a.status === 'proposed' && a.turn_id !== currentTurn && !(a.turn_id && turnsWithMessage.has(a.turn_id)))
 }

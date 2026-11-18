@@ -119,3 +119,11 @@ Deno.test('an unknown key or bad value is a plain tool error, not a throw', asyn
   const r = await t.run(normalizeToolInput(t.inputSchema, { title: 'x', who: 'martian', due: 'none', bogus: 1 }), h.ctx)
   assertEquals(r.is_error, true)
 })
+
+// Card copy must never name a button label that is not on the card (tap cards say "Confirm", review cards use their own label).
+import { STATIC_SYSTEM } from './prompt.ts'
+Deno.test('prompt and tool text never name a card button', () => {
+  assert(!/\b(tap|taps|press|click)\s+(Confirm|Suggest|Add)/i.test(STATIC_SYSTEM), 'prompt names a button')
+  for (const t of ALL_TOOLS) assert(!/\b(tap|taps|press|click)\s+(Confirm|Suggest|Add)/i.test(t.description), `${t.name} names a button`)
+  assert(/never say where the button is/.test(STATIC_SYSTEM))
+})

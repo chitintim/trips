@@ -2,16 +2,18 @@ import { buildActionColumns } from '../../actions/lib/todoModel'
 import { invalidateAfterCreateTodo } from '../../../lib/queries/useActions'
 import type { AddTodoParams } from '../lib/payload'
 import type { ActionModule, LiveData } from './types'
-import { FINISHED_CARD_MESSAGE, addDays, formatDay, isBool, isDay, isNonEmptyStr, isStrOrNull, joinWords, personActive, personName } from './common'
+import { FINISHED_CARD_MESSAGE, formatDay, isBool, isDay, isNonEmptyStr, isStrOrNull, personActive, personName } from './common'
 
-/** Reminder emails go out 7 days and 1 day before a due date and again when it is overdue (the existing action_due_* emails). */
-export const REMINDER_DAYS_BEFORE = [7, 1] as const
-
-export function reminderWords(dueDate: string, who: 'me' | 'person' | 'everyone' | 'anyone', whoName: string, today: string): string {
-  const days = REMINDER_DAYS_BEFORE.map((n) => addDays(dueDate, -n)).filter((d) => d >= today)
-  const subject = who === 'me' ? "You'll get" : who === 'person' ? `${whoName} gets` : who === 'everyone' ? 'Everyone gets' : 'Whoever takes it gets'
-  if (days.length === 0) return `${subject} an email if it's still open after ${formatDay(dueDate)}.`
-  return `${subject} an email on ${joinWords(days.map((d) => formatDay(d)))}, and another if it's still open after ${formatDay(dueDate)}.`
+/**
+ * Reminder emails come from the daily auto-chase run (about 09:00 UTC), which reads the to-dos that are still open at that
+ * moment: nothing is queued when the to-do is made, a ticked or deleted to-do gets none, and an "anyone" to-do gets none until
+ * someone takes it. Stages (actionDueDate.ts): once in the week before the due date, once the day before, once overdue; a to-do
+ * made late skips the earlier stages. So the card promises no dates.
+ */
+export function reminderWords(who: 'me' | 'person' | 'everyone' | 'anyone', whoName: string): string {
+  if (who === 'anyone') return 'No reminder email until someone takes it.'
+  const subject = who === 'me' ? "you'll get" : who === 'person' ? `${whoName} gets` : 'people who have not done it get'
+  return `If it's still open, ${subject} a reminder email in the week before it's due and another once it's overdue.`
 }
 
 const p = (a: { params: Record<string, unknown> }) => a.params as unknown as AddTodoParams
@@ -50,7 +52,7 @@ export const addTodoModule: ActionModule = {
       { label: 'To-do', value: params.title.trim(), quoted: true, field: 'title' },
       { label: 'For', value: who.label },
       { label: 'Due', value: due },
-      ...(params.due_date && !params.before_trip ? [{ label: 'Reminders', value: reminderWords(params.due_date, who.kind, who.name, new Date().toISOString().slice(0, 10)) }] : []),
+      ...(params.due_date && !params.before_trip ? [{ label: 'Reminders', value: reminderWords(who.kind, who.name) }] : []),
       ...(params.notes?.trim() ? [{ label: 'Notes', value: params.notes.trim(), quoted: true }] : []),
       ...(q ? [{ label: 'About', value: q.title }] : []),
     ]

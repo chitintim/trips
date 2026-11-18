@@ -52,7 +52,7 @@ describe('cards are built from the structured action and live data only', () => 
     expect(t).toContain('Book the ferry')
     expect(t).toContain('For Sam')
     expect(t).toContain('Sat 21 Nov')
-    expect(t).toMatch(/Sam gets an email/)
+    expect(t).toMatch(/Sam gets a reminder email/)
     expect(t).not.toContain('MODEL PROSE')
     expect(t).toContain('Add to-do')
     expect(t).toContain('Not now')
@@ -157,7 +157,7 @@ describe('link cards', () => {
     const l = resolveLink({ target: 'decide', id: 'q1', open_param: 'decide:q1' })!
     expect(l.openParam).toBe('decide:q1')
     const t = text(renderToStaticMarkup(createElement(LinkCard, { link: l, onOpen: () => undefined })))
-    expect(t).toContain('Deciding is done by an organizer')
+    expect(t).toContain('Opens the question.')
     expect(t).toContain('Open Decide')
     expect(resolveLink({ open_param: 'https://evil.example/x' })).toBeNull()
     expect(resolveLink({ open_param: 'javascript:alert(1)' })).toBeNull()

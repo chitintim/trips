@@ -46,6 +46,8 @@ import { OrganizerConsole } from '../features/organizer'
 import { ActionsSheet } from '../features/actions'
 import { retroConfig } from '../features/retrospective'
 import { chatEntryConfig, LazyChatSheet } from '../features/chat'
+import { useChatAvailability } from '../features/chat/lib/useChatSettings'
+import { AssistantTripSettings } from '../features/chat/components/AssistantTripSettings'
 import { MoneySpace, QuickCaptureSheet } from '../features/expenses'
 import { ADD_EXPENSE_LABEL, ADD_EXPENSE_NAV_ICON } from '../features/expenses/quick-capture/addExpenseEntry'
 import { MarkPaidSheet } from '../features/expenses/settle-up/MarkPaidSheet'
@@ -155,6 +157,9 @@ export function TripDetail() {
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
+  const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false)
+  // Fails open: chat is shown while this loads and whenever it cannot be read.
+  const { chatOn, availability: chatAvailability } = useChatAvailability(trip?.id)
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [recapOpen, setRecapOpen] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -243,8 +248,9 @@ export function TripDetail() {
       itemIds,
       options,
       ownChoiceSectionIds,
+      chatEnabled: chatOn,
     }
-  }, [trip, snapshot, timelineData, user?.id, isOrganizer, myParticipant, participants.length, todos, expensesData])
+  }, [trip, snapshot, timelineData, user?.id, isOrganizer, myParticipant, participants.length, todos, expensesData, chatOn])
 
   const applyDeepLinkPlan = (plan: DeepLinkPlan) => {
     // `?open=ask` opens the assistant over the current space instead of switching to Today.
@@ -303,7 +309,7 @@ export function TripDetail() {
         setTodosScrollNonce((n) => n + 1)
         break
       case 'ask':
-        setChatOpen(true)
+        if (chatOn) setChatOpen(true)
         break
     }
   }
@@ -546,14 +552,16 @@ export function TripDetail() {
                   <TodoPill count={todoCount} hasOverdue={todosOverdue} onClick={goToTodos} />
                 )}
                 {/* Ask AI — header entry point, all screens */}
-                <button
-                  onClick={() => setChatOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-accent-700 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-950 rounded-[var(--radius-md)] transition-colors border border-accent-200 dark:border-accent-800"
-                  title="Ask the trip assistant"
-                >
-                  <span aria-hidden="true">{chatEntryConfig.icon}</span>
-                  <span className="hidden sm:inline">{chatEntryConfig.label}</span>
-                </button>
+                {chatOn && (
+                  <button
+                    onClick={() => setChatOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-accent-700 dark:text-accent-400 hover:bg-accent-50 dark:hover:bg-accent-950 rounded-[var(--radius-md)] transition-colors border border-accent-200 dark:border-accent-800"
+                    title="Ask the trip assistant"
+                  >
+                    <span aria-hidden="true">{chatEntryConfig.icon}</span>
+                    <span className="hidden sm:inline">{chatEntryConfig.label}</span>
+                  </button>
+                )}
                 {isOrganizer && (
                   <div className="relative" ref={overflowRef}>
                     <Button
@@ -593,6 +601,18 @@ export function TripDetail() {
                         >
                           ✏️ Edit trip
                         </button>
+                        {chatAvailability?.canManage && (
+                          <button
+                            role="menuitem"
+                            className="w-full text-left px-3 py-2 text-sm text-[var(--text-primary)] hover:bg-[var(--surface-sunken)]"
+                            onClick={() => {
+                              setOverflowOpen(false)
+                              setAssistantSettingsOpen(true)
+                            }}
+                          >
+                            ✨ Assistant
+                          </button>
+                        )}
                         {trip.status === 'trip_completed' && (
                           <button
                             role="menuitem"
@@ -689,6 +709,8 @@ export function TripDetail() {
           inner Suspense — see features/chat/index.tsx — so this outer one is
           a belt-and-suspenders fallback for the boundary closest to the
           mount site.) */}
+      {assistantSettingsOpen && <AssistantTripSettings tripId={trip.id} isOpen={assistantSettingsOpen} onClose={() => setAssistantSettingsOpen(false)} />}
+
       {chatOpen && (
         <Suspense fallback={<Skeleton variant="card" height={420} />}>
           <LazyChatSheet

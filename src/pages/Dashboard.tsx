@@ -27,6 +27,7 @@ import { ManageInvitationAccountSheet } from '../components/ManageInvitationAcco
 import { MemberDashboard, CreateTripWizard } from '../features/dashboard'
 import { AdminAnnouncementsTab } from '../features/announcements'
 import { AdminAiUsageTab } from '../features/aiUsage'
+import { AdminAssistantTab } from '../features/chat/components/AdminAssistantTab'
 import { useTrips, useCurrentUserRow, type TripWithCount } from '../lib/queries/useTrip'
 import { useCreateInvitation, useDeleteInvitation } from '../lib/queries/useInvitations'
 import { useInvitationAdminDetails, type InvitationAdminDetail } from '../lib/queries/useInvitationAdminAccounts'
@@ -36,7 +37,7 @@ import { useFormDraft, useUnsavedChangesGuard } from '../lib/forms'
 import { User, Trip } from '../types'
 import { getTripStatusBadgeVariant, getTripStatusLabel, getTripTiming, isConfirmationEnabled } from '../lib/tripStatus'
 
-type AdminTab = 'trips' | 'users' | 'invitations' | 'announcements' | 'aiUsage'
+type AdminTab = 'trips' | 'users' | 'invitations' | 'announcements' | 'aiUsage' | 'assistant'
 
 /**
  * Dashboard page (workstream G rebuild): non-admins get the new
@@ -137,6 +138,7 @@ export function Dashboard() {
                   <Tabs.Tab value="invitations">🎫 Invitations</Tabs.Tab>
                   <Tabs.Tab value="announcements">📢 Announcements</Tabs.Tab>
                   <Tabs.Tab value="aiUsage">✨ AI usage</Tabs.Tab>
+                  <Tabs.Tab value="assistant">🤖 Assistant</Tabs.Tab>
                 </Tabs.List>
               </Tabs>
             </div>
@@ -153,6 +155,7 @@ export function Dashboard() {
             {activeTab === 'invitations' && <AdminInvitationsTab />}
             {activeTab === 'announcements' && <AdminAnnouncementsTab />}
             {activeTab === 'aiUsage' && <AdminAiUsageTab />}
+            {activeTab === 'assistant' && <AdminAssistantTab />}
           </>
         ) : (
           <MemberDashboard />

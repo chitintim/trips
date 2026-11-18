@@ -9,7 +9,7 @@
 //  - SSE events are additive: status, text, action, done, error (+ legacy proposal).
 import type { SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 import { corsHeaders, handleCorsPreflight } from '../_shared/cors.ts'
-import { errorResponse, HttpError, RateLimitedError } from '../_shared/errors.ts'
+import { errorResponse, ForbiddenError, HttpError, RateLimitedError } from '../_shared/errors.ts'
 import { callerClient, requireTripParticipant, requireUser, serviceClient } from '../_shared/supabaseClients.ts'
 import { consumeRateLimit, RATE_LIMITS } from '../_shared/rateLimit.ts'
 import { createMessageStream, MODEL_TRIP_CHAT, type AnthropicMessage, type AnthropicRequestOptions, type AnthropicUsage } from '../_shared/anthropic.ts'
@@ -21,7 +21,7 @@ import { enforceDailySpend, DAILY_LIMIT_CODE, SPEND_LIMIT_CODE, SpendLimitError 
 import { localNow } from './localTime.ts'
 import { CHAT_EFFORT, MAX_ROUND_RESULT_CHARS, runChatTurn, TRUNCATION_NOTE, type ToolOutcome, type ToolUse } from './loop.ts'
 import { chatStreamErrorLog, chatStreamErrorPayload } from './streamError.ts'
-import { actionsEnabledFor } from './flags.ts'
+import { CHAT_OFF_CODE, CHAT_OFF_MESSAGE, decideChat } from './chatSettings.ts'
 import { normalizeToolInput } from './toolSchema.ts'
 import { LEGACY_PROPOSE_ACTIONS, TOOL_BY_NAME, buildToolDefs, statusLabelFor } from './registry.ts'
 import { storedLinkOf, type StoredLink } from './storedLinks.ts'
@@ -40,6 +40,11 @@ export const MAX_TOOL_RESULT_CHARS = 8000
 export { MAX_ROUND_RESULT_CHARS }
 const PING_MS = 10_000
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** Chat is switched off for this trip (site switch or trip switch). HTTP 403 with code `chat_off`. */
+class ChatOffError extends ForbiddenError {
+  constructor() { super(CHAT_OFF_MESSAGE) }
+}
 
 export interface ChatDeps {
   callerClient: (req: Request) => SupabaseClient
@@ -85,10 +90,14 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
     await requireTripParticipant(client, tripId, user.id)
     const { trip, roster, viewer } = await loadTripAndRoster(client, tripId, user.id)
 
+    // ONE decision per request (site switch + trip switch + env ceiling, chatSettings.ts): chat off is refused here, before any rate-limit token,
+    // spend check, model call or message insert; the same decision feeds the tools, the prompt wording, action gating and done.actions_enabled.
+    const admin = deps.serviceClient()
+    const decision = await decideChat(admin, tripId, trip, deps.env('TRIP_CHAT_ACTIONS'), deps.now())
+    if (!decision.chat) throw new ChatOffError()
+
     const maxLength = viewer.canManageTrip ? MAX_LENGTH_ORGANIZER : MAX_LENGTH_PARTICIPANT
     if (message.length > maxLength) throw new Error(`Message too long (${message.length} chars). Maximum is ${maxLength} characters.`)
-
-    const admin = deps.serviceClient()
 
     // Retry of a turn that already finished: answer from the stored reply, no model call, no charge.
     if (clientTurnId) {
@@ -103,7 +112,7 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
     const nameById = new Map(roster.map((p) => [p.userId, p.name]))
     const history = await loadHistory(client, tripId, user.id, thread.clearedAt, nameById, turnId)
 
-    const actionsEnabled = actionsEnabledFor(deps.env('TRIP_CHAT_ACTIONS'), tripId, trip, deps.now())
+    const actionsEnabled = decision.actions
     const local = localNow(deps.now(), tz)
     const now = local.now
     const proposedIds: string[] = []
@@ -228,7 +237,7 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
             input: totalUsage.input_tokens, output: totalUsage.output_tokens,
             cache_read: totalUsage.cache_read_input_tokens ?? 0, cache_write: totalUsage.cache_creation_input_tokens ?? 0,
             cost_usd: estimateCostUsd(totalUsage, state.model), actions_proposed: proposedIds.length,
-            actions_enabled: actionsEnabled, ms_first_text: tFirstText, ms_total: Date.now() - t0,
+            actions_enabled: actionsEnabled, settings_source: decision.source, ...(decision.fallback ? { settings_fallback: decision.fallback } : {}), ms_first_text: tFirstText, ms_total: Date.now() - t0,
           }))
 
           send({
@@ -253,6 +262,12 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
     })
     return sseResponse(stream)
   } catch (error) {
+    if (error instanceof ChatOffError) {
+      console.error('[error]', 403, CHAT_OFF_CODE)
+      return new Response(JSON.stringify({ success: false, error: error.message, code: CHAT_OFF_CODE }), {
+        status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
     if (error instanceof SpendLimitError || error instanceof RateLimitedError) {
       const code = error instanceof SpendLimitError ? SPEND_LIMIT_CODE : DAILY_LIMIT_CODE
       console.error('[error]', 429, code)

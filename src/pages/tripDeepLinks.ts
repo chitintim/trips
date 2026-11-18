@@ -122,6 +122,8 @@ export interface DeepLinkContext {
   options: ReadonlyArray<{ id: string; sectionId: string; booked: boolean }>
   /** Section ids that are Own choice (nothing to book). */
   ownChoiceSectionIds: ReadonlySet<string>
+  /** The trip assistant is switched on for this trip. Absent or unknown counts as on (fail open); `false` makes `?open=ask` do nothing. */
+  chatEnabled?: boolean
 }
 
 export type DeepLinkSheet =
@@ -185,7 +187,8 @@ export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLink
 
     // The assistant opens over whatever space the person is on; `space` is only the type's required field.
     case 'ask':
-      return { space: 'today', open: { sheet: 'ask' } }
+      // Switched off for this trip: the link lands on Today and opens nothing.
+      return ctx.chatEnabled === false ? { space: 'today' } : { space: 'today', open: { sheet: 'ask' } }
 
     case 'rsvp':
       return ctx.isParticipant ? { space: 'today', open: { sheet: 'rsvp' } } : soft(DEEP_LINK_TOASTS.rsvp)

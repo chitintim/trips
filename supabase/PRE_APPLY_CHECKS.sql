@@ -1686,3 +1686,46 @@ FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN (
 SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec, has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_exec
 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('begin_chat_action', 'finish_chat_action', 'dismiss_chat_action', 'mark_chat_action_edited', 'chat_actions_expire_stale', 'new_chat', 'mark_chat_seen', 'admin_ai_usage_summary') ORDER BY 1;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================================
+-- 26. Trip chat switches: 20261130090000_chat_settings.sql (site-level and trip-level chat toggles). Read-only except the closing NOTIFY.
+--     Needs 20261129090000 / 20261129100000 live (it refuses otherwise). Applied in order: migration first, then the edge function, then the front end (see README "Assistant switches").
+-- =====================================================================================
+
+-- 26a. Names are free. Safe: zero rows from every statement.
+SELECT c.relname FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('chat_site_settings', 'trip_chat_settings');
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('get_chat_availability', 'set_trip_chat_settings', 'admin_get_chat_settings', 'admin_set_chat_settings',
+  '_chat_trip_upcoming', '_chat_effective', '_chat_is_site_admin', '_chat_availability_json', '_chat_admin_json', 'guard_chat_site_settings_delete');
+
+-- 26b. Helpers and columns the migration relies on (it refuses when they differ). Expected: is_trip_participant(uuid, uuid) exists; chat_actions and trip_chat_threads exist (migrations 1 and 2 applied);
+--      trips.start_date and trips.end_date are type date, trips.created_at is timestamptz, trips.name exists; users.role (enum user_role admin|member); trip_participants.role / active.
+SELECT p.oid::regprocedure, p.prosecdef FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = 'is_trip_participant';
+SELECT to_regclass('public.chat_actions') AS chat_actions, to_regclass('public.trip_chat_threads') AS trip_chat_threads;
+SELECT table_name, column_name, data_type, udt_name FROM information_schema.columns WHERE table_schema = 'public'
+  AND ((table_name = 'trips' AND column_name IN ('id', 'name', 'start_date', 'end_date', 'created_at')) OR (table_name = 'users' AND column_name IN ('id', 'role'))
+    OR (table_name = 'trip_participants' AND column_name IN ('trip_id', 'user_id', 'role', 'active'))) ORDER BY table_name, column_name;
+SELECT enum_range(NULL::public.participant_role) AS participant_roles;   -- must contain 'organizer'
+SELECT count(*) AS site_admins FROM public.users WHERE role::text = 'admin';
+
+-- 26c. The private test trip the seed switches actions ON for (the seed row is only written if it exists). Expected: one row; at least one active organizer and one other active participant.
+SELECT t.id, t.name, t.start_date, t.end_date, t.settlement_snapshot IS NOT NULL AS frozen FROM public.trips t WHERE t.id = 'be551bc4-a524-4b6a-a0c9-b74a7168ced4';
+SELECT tp.user_id, tp.role, tp.active FROM public.trip_participants tp WHERE tp.trip_id = 'be551bc4-a524-4b6a-a0c9-b74a7168ced4' ORDER BY tp.role, tp.user_id;
+-- how many trips the "upcoming" scope would count today (informational; the admin screen shows the same per trip)
+SELECT count(*) AS trips, count(*) FILTER (WHERE coalesce(end_date, start_date) IS NULL OR coalesce(end_date, start_date) >= (now() AT TIME ZONE 'UTC')::date - 30) AS upcoming FROM public.trips;
+
+-- 26d. No long-running transaction on the tables the migration touches (lock_timeout = 5 s; the foreign keys take a short SHARE ROW EXCLUSIVE on trips and users). Expected: zero rows.
+SELECT pid, now() - xact_start AS open_for, left(query, 100) AS query FROM pg_stat_activity WHERE state <> 'idle' AND xact_start < now() - interval '30 seconds' AND pid <> pg_backend_pid()
+  AND (query ILIKE '%public.trips%' OR query ILIKE '% trips %' OR query ILIKE '%trip_participants%' OR query ILIKE '%public.users%');
+
+-- 26e. POST-APPLY. Safe: both tables have RLS ON, NO policies, and the clients (anon, authenticated) have no table privilege; one site row (mode actions, scope upcoming unless changed);
+--      the test trip row has actions = on; the four RPCs are executable by authenticated and not by anon; the internal helpers by nobody.
+SELECT c.relname, c.relrowsecurity, (SELECT count(*) FROM pg_policies p WHERE p.schemaname = 'public' AND p.tablename = c.relname) AS policies,
+       has_table_privilege('anon', c.oid, 'SELECT') AS anon_select, has_table_privilege('authenticated', c.oid, 'SELECT') AS auth_select, has_table_privilege('authenticated', c.oid, 'INSERT') AS auth_insert,
+       has_table_privilege('authenticated', c.oid, 'UPDATE') AS auth_update, has_table_privilege('service_role', c.oid, 'SELECT') AS service_select
+FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('chat_site_settings', 'trip_chat_settings') ORDER BY 1;
+SELECT * FROM public.chat_site_settings;
+SELECT * FROM public.trip_chat_settings ORDER BY updated_at DESC LIMIT 20;
+SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec, has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_exec
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('get_chat_availability', 'set_trip_chat_settings', 'admin_get_chat_settings', 'admin_set_chat_settings',
+  '_chat_trip_upcoming', '_chat_effective', '_chat_is_site_admin', '_chat_availability_json', '_chat_admin_json', 'guard_chat_site_settings_delete') ORDER BY 1;
+NOTIFY pgrst, 'reload schema';

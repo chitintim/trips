@@ -52,3 +52,4 @@ await bootstrapBase(db)
   const cur = (await db.query(`select md5(prosrc) m from pg_proc where proname='freeze_settlements'`)).rows[0]
   eq('old freeze md5: file text == pg prosrc', jsMd5(extractBody(fsrc(oldFreeze))), cur.m)
 }
+const MIG8 = M + '20261130090000_chat_settings.sql'

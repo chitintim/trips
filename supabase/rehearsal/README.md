@@ -74,3 +74,16 @@ Phase 2 review additions: the rehearsal never uses `SET ROLE service_role` (only
 exercises a successful "I wasn't there" on a receipt with a table item (and undo), `apply_receipt_deadline` preview, a link toggle after leftovers were shared, re-itemise
 with leftovers and a removed line, a plain expense with a real split row converted, and reopen + Share now. `pre.begin_live` / `pre.unfreeze_live` fail if the live bodies
 of the replaced `_receipt_begin` / `unfreeze_settlements` differ from the repo text.
+
+---
+
+# Trip chat switches (`20261130090000_chat_settings`): migration rehearsal
+
+`20261130090000_chat_settings_rehearsal.sql` (generated from `rehearsal_chat_settings.template.sql` + `supabase/migrations/20261130090000_chat_settings.sql` by `node scripts/build-rehearsal.mjs`)
+applies ONLY that migration (the three trip-chat migrations are live), exercises the site and trip switches on the private test trip and **ends in an error so everything rolls back**. Run it
+like the others: paste the whole file into the SQL editor as ONE batch; the result is `REHEARSAL PASS (31 steps, 0 failed) [...]` or `REHEARSAL FAIL ...`.
+It uses the real site admin and a real organiser, plain member and outsider of the test trip (no user row is changed), impersonating them with claims + `SET LOCAL ROLE authenticated|anon`.
+Checks: names free and helpers present before; RLS on, no policies, no client privilege, function privileges, seed (site `actions`/`upcoming`, test trip `actions = on`) after; member / organiser /
+admin reads; anon, outsider, member-set, direct table read/write and organiser-as-admin all refused; organiser switch off / back to inherit / cannot force on / invalid value; admin force on; the
+frozen test trip (frozen inside the transaction; skipped with a note if the database refuses that) still accepts the organiser; site mode `answers` and `off`; the admin list covers every trip;
+the site row cannot be deleted. Pre-flight: group 26 of `supabase/PRE_APPLY_CHECKS.sql`.

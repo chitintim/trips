@@ -69,7 +69,8 @@ const cents = x => Math.round(x * 100)
 
 await db.exec(fs.readFileSync(MIG1, 'utf8'))
 if (process.env.REH_FILE && !process.env.REH_FILE.startsWith('20261124') && !process.env.REH_FILE.startsWith('20261126')) await db.exec(fs.readFileSync(MIG2, 'utf8'))
-if (process.env.REH_FILE && process.env.REH_FILE.startsWith('20261129')) { await db.exec(fs.readFileSync(M + '20261128090000_freeze_enforcement.sql', 'utf8')); await db.exec(fs.readFileSync(M + '20261128100000_own_claims_rpc.sql', 'utf8')) }   // chat rehearsal starts from the LIVE phase-4 state   // phase-4 rehearsals start from the LIVE phase-2 state     // LIVE since 2026-11-17
+if (process.env.REH_FILE && (process.env.REH_FILE.startsWith('20261129') || process.env.REH_FILE.startsWith('20261130'))) { await db.exec(fs.readFileSync(M + '20261128090000_freeze_enforcement.sql', 'utf8')); await db.exec(fs.readFileSync(M + '20261128100000_own_claims_rpc.sql', 'utf8')) }   // chat rehearsal starts from the LIVE phase-4 state   // phase-4 rehearsals start from the LIVE phase-2 state     // LIVE since 2026-11-17
+if (process.env.REH_FILE && process.env.REH_FILE.startsWith('20261130')) for (const f of ['20261129090000_chat_actions.sql', '20261129100000_chat_private_threads.sql', '20261129110000_admin_ai_usage.sql']) await db.exec(fs.readFileSync(M + f, 'utf8'))   // chat-settings rehearsal starts from the LIVE trip-chat state (applied 2026-11-18)
 const TT = 'be551bc4-a524-4b6a-a0c9-b74a7168ced4'
 await db.query(`insert into trips(id,name,created_by,base_currency) values ($1,'TEST payment email - delete me',$2,'GBP')`, [TT, U(1)])
 await db.query(`insert into trip_participants(trip_id,user_id,role,active) values ($1,$2,'organizer',true),($1,$3,'participant',true)`, [TT, U(1), U(2)])

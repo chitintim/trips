@@ -54,4 +54,8 @@ export const queryKeys = {
   confirmationSummary: (tripId: string) => ['trip', tripId, 'confirmationSummary'] as const,
   chatMessages: (tripId: string) => ['trip', tripId, 'chatMessages'] as const,
   actions: (tripId: string) => ['trip', tripId, 'actions'] as const,
+  /** Whether the trip assistant is on for this trip (and the switches behind it). */
+  chatAvailability: (tripId: string) => ['chatAvailability', tripId] as const,
+  /** Site admins: the site mode and every trip's assistant switches. */
+  adminChatSettings: () => ['adminChatSettings'] as const,
 } as const

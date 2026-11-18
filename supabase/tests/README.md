@@ -2,7 +2,7 @@
 
 `npm run test:db` runs three suites on an in-memory Postgres (PGlite): `phase1` (receipt claims, 20261124090000), `phase2` (everything after: deadline / links /
 re-itemise / freeze enforcement / own claims; `pglite/parts/*.mjs` are concatenated into ONE module by `pglite/run.mjs` because the checks share variables) and
-`rehearsal` / `rehearsal4` (dry runs of the generated rollback-only rehearsal files in `supabase/rehearsal/`).
+`rehearsal` / `rehearsal4` / `rehearsalchat` / `rehearsalsettings` (dry runs of the generated rollback-only rehearsal files in `supabase/rehearsal/`).
 `node supabase/tests/pglite/run.mjs phase2` runs one suite. Rebuild the rehearsals first after editing a migration: `node scripts/build-rehearsal.mjs`.
 
 `concurrency/locks.mjs` races real transactions on separate connections (lock-order, deadlocks, final money). It needs `TEST_PG_URL` (a Postgres 17); without it

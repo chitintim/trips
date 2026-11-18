@@ -11,6 +11,8 @@ import { useTripActivityLog } from '../../organizer/lib/activity'
 import { defaultDeps } from '../actions/deps'
 import type { ExecCtx } from '../actions/types'
 import { chatActionsKey, chatThreadKey, makeChatRpc, markChatSeen, startNewChat, useChatActions, useChatThreadInfo } from '../lib/chatApi'
+import { CHAT_OFF_MESSAGE } from '../lib/chatSettings'
+import { useChatAvailability } from '../lib/useChatSettings'
 import { chipsFor, spaceFor, type ChatChip } from '../lib/chips'
 import { mergeAction } from '../lib/confirmFlow'
 import { ownPendingProposals } from '../lib/ownProposals'
@@ -18,7 +20,7 @@ import { readLive, refreshLive, useChatLive } from '../lib/live'
 import { dedupeLinkCards, detachedActions, resolveLink, storedLinks, withoutLinkCards } from '../lib/linkTargets'
 import { ChatMarkdown } from '../lib/markdown'
 import type { ChatActionEnvelope } from '../lib/payload'
-import { ChatQuotaError, streamChatMessage } from '../lib/streamChat'
+import { ChatOffError, ChatQuotaError, streamChatMessage } from '../lib/streamChat'
 import { statusLine } from '../lib/turnStatus'
 import { useRevealedText } from '../lib/useRevealedText'
 import { ActionCard, type ActionRuntime } from './ActionCard'
@@ -66,6 +68,10 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
   const { data: threadInfo } = useChatThreadInfo(isOpen ? tripId : undefined, user?.id)
   const { data: fetchedActions } = useChatActions(isOpen ? tripId : undefined)
   const live = useChatLive(trip, user?.id, canManageTrip, isOpen)
+  const { chatOn } = useChatAvailability(tripId)
+  /** The server said no (403 chat_off) even though the page thought chat was on. */
+  const [refusedOff, setRefusedOff] = useState<string | null>(null)
+  const chatOff = !chatOn || refusedOff === tripId
 
   const [input, setInput] = useState('')
   const [echo, setEcho] = useState<EchoMessage[]>([])
@@ -270,7 +276,11 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
       )
     } catch (err) {
       failed = true
-      if (err instanceof ChatQuotaError) {
+      if (err instanceof ChatOffError) {
+        failed = false // retrying cannot help
+        setRefusedOff(tripId)
+        void queryClient.invalidateQueries({ queryKey: queryKeys.chatAvailability(tripId) })
+      } else if (err instanceof ChatQuotaError) {
         setNotice(`⏳ ${err.message}`)
         if (err.code === 'spend_limit') failed = false // retrying cannot help until usage ages out
       } else setNotice((err as Error).message)
@@ -367,6 +377,16 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
           </div>
         )}
       </div>
+    )
+  }
+
+  if (chatOff) {
+    return (
+      <Modal isOpen={isOpen} onClose={onClose} size="lg" title="Trip assistant">
+        <p className="py-6 text-center text-sm text-[var(--text-secondary)]" role="status">
+          {CHAT_OFF_MESSAGE}
+        </p>
+      </Modal>
     )
   }
 

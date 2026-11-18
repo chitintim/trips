@@ -42,7 +42,7 @@ function tables(over: Record<string, Row[]> = {}): Record<string, Row[]> {
   return { ...t, ...over }
 }
 
-interface Harness { deps: ChatDeps; db: FakeDb; requests: Record<string, unknown>[]; logs: string[]; usage: number }
+interface Harness { deps: ChatDeps; db: FakeDb; requests: Record<string, unknown>[]; logs: string[]; usage: number; rpcs: string[] }
 function harness(opts: { rounds: Block[][]; flag?: string; tables?: Record<string, Row[]>; legacy?: boolean; as?: string }): Harness {
   const db = newDb(tables(opts.tables))
   const requests: Record<string, unknown>[] = []
@@ -58,11 +58,11 @@ function harness(opts: { rounds: Block[][]; flag?: string; tables?: Record<strin
         if (opts.legacy && t === 'trip_chat_messages') return legacyProxy(q)
         return q
       },
-      rpc: (name: string) => Promise.resolve({ data: name === 'is_trip_participant' || name === 'consume_rate_limit' ? true : null, error: null }),
+      rpc: (name: string) => { h.rpcs.push(name); return Promise.resolve({ data: name === 'is_trip_participant' || name === 'consume_rate_limit' ? true : null, error: null }) },
       auth: { getUser: () => Promise.resolve(auth ? { data: { user: { id: as } }, error: null } : { data: { user: null }, error: null }) },
     } as unknown as SupabaseClient
   }
-  const h: Harness = { db, requests, logs, usage: 0, deps: undefined as unknown as ChatDeps }
+  const h: Harness = { db, requests, logs, usage: 0, rpcs: [], deps: undefined as unknown as ChatDeps }
   h.deps = {
     callerClient: () => wrap(fakeClient(db, 'user'), true),
     serviceClient: () => wrap(fakeClient(db, 'admin'), false),
@@ -380,4 +380,141 @@ Deno.test('a reply with no buttons and no cards stores no metadata', async () =>
   const h = harness({ rounds: [[{ text: 'Fine.' }]] })
   await post(h, { message: 'hi', turnId: TURN })
   assertEquals((h.db.tables.trip_chat_messages ?? []).find((m) => m.role === 'assistant')!.metadata, null)
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Assistant switches (chatSettings.ts): site mode / scope, trip chat / actions, the env ceiling, the fallback. The fixture trip runs 2026-12-05..12, "now" is 2026-11-17 (upcoming).
+// ---------------------------------------------------------------------------------------------------------------------------------
+const site = (mode: string, actions_scope = 'upcoming'): Record<string, Row[]> => ({ chat_site_settings: [{ id: true, mode, actions_scope }] })
+const tripRow = (chat: string, actions: string): Record<string, Row[]> => ({ trip_chat_settings: [{ trip_id: TRIP, chat, actions }] })
+const OLD_TRIP = { id: TRIP, name: 'Alps', location: 'Chamonix', start_date: '2026-01-05', end_date: '2026-01-12', status: 'booking_details', base_currency: 'GBP', created_by: SAM, confirmation_enabled: false, confirmation_deadline: null, settlement_snapshot: null, chase_settings: null }
+const noWork = (h: Harness) => {
+  assertEquals(h.requests.length, 0, 'no model call')
+  assertEquals(h.usage, 0, 'no usage row')
+  assertEquals(h.rpcs.filter((n) => n === 'consume_rate_limit'), [], 'no rate-limit token consumed')
+  assertEquals(h.db.writes.filter((w) => w.table === 'trip_chat_messages'), [], 'no message stored')
+  assertEquals(h.logs, [], 'no usage log line')
+}
+
+Deno.test('chat off at the SITE level: 403 chat_off before any model call, rate limit, spend check or insert', async () => {
+  for (const flag of [undefined, 'on', 'off']) {
+    const h = harness({ rounds: [[{ text: 'never' }]], flag, tables: site('off') })
+    const r = await post(h, { message: 'hi', turnId: TURN })
+    assertEquals(r.status, 403)
+    const body = JSON.parse(r.raw)
+    assertEquals(body.code, 'chat_off')
+    assertEquals(body.success, false)
+    assertStringIncludes(body.error, 'switched off')
+    noWork(h)
+    assert(!h.db.reads.includes('ai_usage'), 'the spend check did not run')
+  }
+})
+
+Deno.test('chat off for ONE TRIP: that trip is refused, the site stays on', async () => {
+  const h = harness({ rounds: [[{ text: 'never' }]], tables: { ...site('actions'), ...tripRow('off', 'inherit') } })
+  const r = await post(h, { message: 'hi' })
+  assertEquals([r.status, JSON.parse(r.raw).code], [403, 'chat_off'])
+  noWork(h)
+  // another trip id is not affected by this trip's row
+  const h2 = harness({ rounds: [[{ text: 'ok' }]], tables: { ...site('actions'), trip_chat_settings: [{ trip_id: 'someone-elses-trip', chat: 'off', actions: 'off' }] } })
+  assertEquals((await post(h2, { message: 'hi' })).status, 200)
+})
+
+Deno.test('chat off also refuses the replay of an already-stored turn (nothing is served)', async () => {
+  const h = harness({ rounds: [[{ text: 'Hello' }]], tables: site('actions') })
+  await post(h, { message: 'hi', turnId: TURN })
+  h.db.tables.chat_site_settings[0].mode = 'off'
+  const again = await post(h, { message: 'hi', turnId: TURN })
+  assertEquals([again.status, JSON.parse(again.raw).code], [403, 'chat_off'])
+})
+
+Deno.test('site mode answers: chat answers, actions off everywhere (the card tool says not switched on, the prompt says so, done.actions_enabled false), even for a trip forced on', async () => {
+  const h = harness({ rounds: [[addTodo()], [{ text: 'Not yet.' }]], tables: { ...site('answers'), ...tripRow('inherit', 'on') } })
+  const r = await post(h, { message: 'add a to-do', turnId: TURN })
+  assertEquals(r.status, 200)
+  assertEquals(chatActions(h).length, 0)
+  assert(!types(r.events).includes('action'))
+  assertEquals(r.events.at(-1)!.actions_enabled, false)
+  assertStringIncludes(JSON.stringify(h.requests[1].messages), 'not switched on')
+  assertStringIncludes(JSON.stringify(h.requests[0].messages), 'Proposing changes is switched OFF')
+  assertEquals(JSON.parse(h.logs[0]).settings_source, 'db')
+})
+
+Deno.test('site mode actions + scope upcoming: an upcoming trip proposes; one unset env value means the database decides', async () => {
+  const h = harness({ rounds: [[addTodo()], [{ text: 'Added a card.' }]], tables: site('actions', 'upcoming') })
+  const r = await post(h, { message: 'add a to-do', turnId: TURN })
+  assertEquals(chatActions(h).length, 1)
+  assertEquals(r.events.at(-1)!.actions_enabled, true)
+  assert(!JSON.stringify(h.requests[0].messages).includes('Proposing changes is switched OFF'))
+  assertEquals(JSON.parse(h.logs[0]).settings_source, 'db')
+})
+
+Deno.test('scope upcoming excludes a trip that ended more than 30 days ago; trip actions on forces it; scope all includes it; trip actions off excludes an upcoming one', async () => {
+  const run = async (tables: Record<string, Row[]>, trips: Row[] | null = null) => {
+    const h = harness({ rounds: [[{ text: 'x' }]], tables: { ...(trips ? { trips } : {}), ...tables } })
+    const r = await post(h, { message: 'hi' })
+    return [r.status, r.events.at(-1)?.actions_enabled]
+  }
+  assertEquals(await run(site('actions', 'upcoming'), [OLD_TRIP]), [200, false])
+  assertEquals(await run({ ...site('actions', 'upcoming'), ...tripRow('inherit', 'on') }, [OLD_TRIP]), [200, true])
+  assertEquals(await run(site('actions', 'all'), [OLD_TRIP]), [200, true])
+  assertEquals(await run({ ...site('actions', 'all'), ...tripRow('inherit', 'off') }), [200, false])
+  assertEquals(await run({ ...site('actions', 'upcoming'), ...tripRow('inherit', 'off') }), [200, false])
+  assertEquals(await run({ ...site('actions', 'upcoming'), ...tripRow('off', 'on') }), [403, undefined])
+})
+
+Deno.test('env TRIP_CHAT_ACTIONS=off is a CEILING: actions off everywhere, even forced on or scope all; chat itself still follows the database', async () => {
+  for (const flag of ['off', 'OFF', ' false ', '0']) {
+    const h = harness({ rounds: [[addTodo()], [{ text: 'Not yet.' }]], flag, tables: { ...site('actions', 'all'), ...tripRow('inherit', 'on') } })
+    const r = await post(h, { message: 'add a to-do', turnId: TURN })
+    assertEquals([r.status, r.events.at(-1)!.actions_enabled, chatActions(h).length], [200, false, 0], flag)
+  }
+  // any other env value is not a ceiling: the database decides, even 'upcoming,<other trip>' or 'on' on an excluded trip
+  for (const flag of [undefined, '', 'on', 'upcoming', 'some-other-trip']) {
+    const h = harness({ rounds: [[{ text: 'x' }]], flag, tables: { ...site('actions', 'upcoming'), trips: [OLD_TRIP] } })
+    assertEquals((await post(h, { message: 'hi' })).events.at(-1)!.actions_enabled, false, String(flag))
+    const h2 = harness({ rounds: [[{ text: 'x' }]], flag, tables: site('actions', 'upcoming') })
+    assertEquals((await post(h2, { message: 'hi' })).events.at(-1)!.actions_enabled, true, String(flag))
+  }
+})
+
+Deno.test('settings table MISSING (function deployed before the migration): falls back to the env behaviour exactly, chat stays on', async () => {
+  const missing = { code: '42P01', message: 'relation "public.chat_site_settings" does not exist' }
+  const run = async (flag: string | undefined, trips?: Row[]) => {
+    const h = harness({ rounds: [[{ text: 'x' }]], flag, tables: trips ? { trips } : {} })
+    h.db.tableErrors.chat_site_settings = missing
+    h.db.tableErrors.trip_chat_settings = { ...missing, message: 'relation "public.trip_chat_settings" does not exist' }
+    const r = await post(h, { message: 'hi' })
+    const line = JSON.parse(h.logs[0])
+    return [r.status, r.events.at(-1)!.actions_enabled, line.settings_source, typeof line.settings_fallback]
+  }
+  assertEquals(await run(undefined), [200, false, 'env', 'string'])
+  assertEquals(await run('off'), [200, false, 'env', 'string'])
+  assertEquals(await run('on'), [200, true, 'env', 'string'])
+  assertEquals(await run('upcoming'), [200, true, 'env', 'string'])
+  assertEquals(await run('upcoming', [OLD_TRIP]), [200, false, 'env', 'string'])
+  assertEquals(await run(TRIP), [200, true, 'env', 'string'])
+})
+
+Deno.test('settings READ ERROR (permission, timeout, anything): falls back to env, chat stays on, no crash', async () => {
+  for (const which of ['chat_site_settings', 'trip_chat_settings']) {
+    const h = harness({ rounds: [[{ text: 'x' }]], flag: 'on', tables: { ...site('off'), ...tripRow('off', 'off') } })
+    h.db.tableErrors[which] = { code: '57014', message: 'canceling statement due to statement timeout' }
+    const r = await post(h, { message: 'hi' })
+    assertEquals([r.status, r.events.at(-1)!.actions_enabled, JSON.parse(h.logs[0]).settings_source], [200, true, 'env'], which)
+  }
+})
+
+Deno.test('no site row / an unknown value in the settings: falls back to env', async () => {
+  const h = harness({ rounds: [[{ text: 'x' }]], flag: 'on', tables: {} })
+  assertEquals([(await post(h, { message: 'hi' })).events.at(-1)!.actions_enabled, JSON.parse(h.logs[0]).settings_fallback], [true, 'no site settings row'])
+  const g = harness({ rounds: [[{ text: 'x' }]], flag: 'on', tables: site('shouting') })
+  assertEquals([(await post(g, { message: 'hi' })).events.at(-1)!.actions_enabled, JSON.parse(g.logs[0]).settings_fallback], [true, 'unknown settings value'])
+})
+
+Deno.test('the decision costs the service role two reads and writes nothing; the user client never reads the settings', async () => {
+  const h = harness({ rounds: [[{ text: 'x' }]], tables: site('actions') })
+  await post(h, { message: 'hi' })
+  assertEquals(h.db.reads.filter((t) => t === 'chat_site_settings' || t === 'trip_chat_settings').length, 2)
+  assertEquals(h.db.writes.filter((w) => w.table.endsWith('_settings')), [])
 })

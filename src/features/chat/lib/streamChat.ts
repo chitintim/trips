@@ -1,4 +1,5 @@
 import { supabase } from '../../../lib/supabase'
+import { CHAT_OFF_MESSAGE } from './chatSettings'
 import { parseEnvelope, type ChatActionEnvelope } from './payload'
 
 /**
@@ -45,6 +46,15 @@ export class ChatQuotaError extends Error {
     super(code === 'spend_limit' ? CHAT_SPEND_LIMIT_MESSAGE : CHAT_DAILY_LIMIT_MESSAGE)
     this.name = 'ChatQuotaError'
     this.code = code
+  }
+}
+
+/** Thrown for the 403 `chat_off` envelope: the assistant is switched off for this trip, so retrying cannot help. */
+export class ChatOffError extends Error {
+  readonly code = 'chat_off' as const
+  constructor() {
+    super(CHAT_OFF_MESSAGE)
+    this.name = 'ChatOffError'
   }
 }
 
@@ -152,6 +162,7 @@ export async function streamChatMessage(tripId: string, message: string, callbac
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}))
+    if (response.status === 403 && (body as { code?: unknown }).code === 'chat_off') throw new ChatOffError()
     const detail = (body as { error?: unknown }).error
     throw new Error(typeof detail === 'string' && detail.trim() ? serverErrorText(detail) : `Chat request failed (HTTP ${response.status})`)
   }

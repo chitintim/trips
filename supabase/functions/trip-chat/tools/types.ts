@@ -77,7 +77,7 @@ export interface ToolCtx {
   trip: ChatTrip
   roster: RosterPerson[]
   me: ChatViewer
-  /** TRIP_CHAT_ACTIONS resolved for this trip (flags.ts: on, trip ids, or `upcoming`). When false every propose tool answers "not switched on" and writes nothing. */
+  /** The one per-request decision (chatSettings.ts: site switch, trip switch, env ceiling; falls back to TRIP_CHAT_ACTIONS via flags.ts when the settings are unreadable). When false every propose tool answers "not switched on" and writes nothing. */
   actionsEnabled: boolean
   /** Today as YYYY-MM-DD in the trip's world (UTC date; the digest says so). */
   today: string

@@ -361,4 +361,8 @@ describe('?open=ask (the trip assistant)', () => {
     expect(formatOpenParam({ kind: 'ask' })).toBe('ask')
     expect(planDeepLink({ kind: 'ask' }, ctx()).open).toEqual({ sheet: 'ask' })
   })
+  it('opens nothing when the assistant is switched off for the trip, and still opens while that is unknown', () => {
+    expect(planDeepLink({ kind: 'ask' }, ctx({ chatEnabled: false }))).toEqual({ space: 'today' })
+    expect(planDeepLink({ kind: 'ask' }, ctx({ chatEnabled: true })).open).toEqual({ sheet: 'ask' })
+  })
 })

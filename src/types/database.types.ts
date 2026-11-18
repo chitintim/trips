@@ -2515,6 +2515,22 @@ export type Database = {
         Args: { p_days?: number }
         Returns: Json
       }
+      get_chat_availability: {
+        Args: { p_trip_id: string }
+        Returns: Json
+      }
+      set_trip_chat_settings: {
+        Args: { p_actions?: string | null; p_chat?: string | null; p_trip_id: string }
+        Returns: Json
+      }
+      admin_get_chat_settings: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      admin_set_chat_settings: {
+        Args: { p_actions_scope?: string | null; p_mode?: string | null }
+        Returns: Json
+      }
       set_my_receipt_claims: {
         Args: { p_expense_id: string; p_lines: Json }
         Returns: Json

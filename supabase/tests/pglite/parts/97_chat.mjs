@@ -142,7 +142,7 @@ await applyFile(MIG5, 'MIG5'); await applyFile(MIG6, 'MIG6'); await applyFile(MI
 // ---- PRE_APPLY group 25 executes on the stubs (post-apply state) ----------------------------------------------------------------------------------------------------
 {
   const pre = fs.readFileSync(path.join(ROOT, 'supabase/PRE_APPLY_CHECKS.sql'), 'utf8')
-  const g = pre.slice(pre.indexOf('-- 25. Trip chat A1'))
+  const g = pre.slice(pre.indexOf('-- 25. Trip chat A1'), pre.indexOf('-- 26. Trip chat switches'))
   const stub = g.replace(/SELECT enum_range\(NULL::public\.user_role\)[^\n]*\n/, '').replace(/SELECT pubname FROM pg_publication_tables[^\n]*\n/, '')
   try { await db.exec(stub); pass++ } catch (e) { fail++; console.log('FAIL group 25 does not run:', e.message) }
 }

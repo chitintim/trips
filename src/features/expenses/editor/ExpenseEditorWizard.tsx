@@ -12,6 +12,7 @@ import {
   useConvertFromItemizedExpense,
   useDeleteExpense,
 } from '../../../lib/queries/useExpenses'
+import { reportError } from '../../../lib/reportError'
 import { useTimeline } from '../../../lib/queries/useTimeline'
 import { uploadReceipt, getReceiptUrl, isPdfFile, RECEIPT_ACCEPT } from '../../../lib/receiptUpload'
 import { todayLocal } from '../../../lib/localDate'
@@ -252,6 +253,7 @@ export function ExpenseEditorWizard({
           created = await createExpenseWithSplits(trip.id, { draft, amountMajor, receiptUrl, baseCurrency: trip.base_currency })
         } catch (err) {
           refreshAfterCreateExpenseError(queryClient, trip.id, err)
+          reportError(err, 'createExpense') // no longer a mutation, so the global mutation-cache reporter never sees this failure
           throw err
         }
         await invalidateAfterCreateExpense(queryClient, trip.id)

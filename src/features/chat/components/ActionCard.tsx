@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { moduleFor } from '../actions'
 import { withOrigins } from '../actions/common'
 import type { ExecCtx, LiveData } from '../actions/types'
-import type { ChatRpc } from '../lib/chatApi'
+import { ACTIONS_OFF_MESSAGE, type ChatRpc } from '../lib/chatApi'
 import { canUndo, cardPhase, confirmAction, dismissAction, outcomeLine, stuckMessage, undoAction, wasUndone, INVALID_MESSAGE } from '../lib/confirmFlow'
 import type { ChatActionEnvelope } from '../lib/payload'
 import { ActionCardView } from './ActionCardView'
@@ -36,6 +36,10 @@ export interface ActionRuntime {
   recheckServer: () => Promise<void>
   /** Put a new request in the chat box for the person to send ("Ask again" on a card that went stale). */
   askAgain?: (text: string) => void
+  /** True while the chat availability says assistant changes are off for this trip. */
+  actionsOff?: boolean
+  /** Re-read the chat availability (after the server refused a confirm because actions are off). */
+  refreshAvailability?: () => void
 }
 
 /** Connected card: re-checks itself against live data as it changes, and runs Confirm / Not now / Undo. */
@@ -48,6 +52,7 @@ export function ActionCard({ action, live, runtime }: { action: ChatActionEnvelo
   const [undoing, setUndoing] = useState(false)
   const [undoneHere, setUndone] = useState(() => readUndone().has(action.id))
   const [blocked, setBlocked] = useState<string | null>(null)
+  const [offHere, setOffHere] = useState(false)
   const undone = undoneHere || wasUndone(action)
   const tapped = useRef(false)
 
@@ -58,7 +63,7 @@ export function ActionCard({ action, live, runtime }: { action: ChatActionEnvelo
 
   if (!mod || !live) return null
   const nowMs = Date.now()
-  const phase = cardPhase(action, { running, stale, blocked }, nowMs)
+  const phase = cardPhase(action, { running, stale, blocked, actionsOff: offHere || runtime.actionsOff === true }, nowMs)
   if (action.requires === 'link') return null
 
   const fallback: ChatActionEnvelope = action
@@ -87,6 +92,10 @@ export function ActionCard({ action, live, runtime }: { action: ChatActionEnvelo
           break
         case 'blocked':
           setBlocked(out.message)
+          break
+        case 'actions_off':
+          setOffHere(true)
+          runtime.refreshAvailability?.()
           break
         case 'failed':
           setMessage(out.message)
@@ -154,7 +163,7 @@ export function ActionCard({ action, live, runtime }: { action: ChatActionEnvelo
       view={view}
       tier={action.requires === 'tap' ? 'tap' : 'review'}
       phase={phase}
-      message={phase === 'stale' ? stale : phase === 'blocked' ? blocked : phase === 'stuck' ? stuckMessage(action.kind) : message ?? action.error}
+      message={phase === 'stale' ? stale : phase === 'actions_off' ? ACTIONS_OFF_MESSAGE : phase === 'blocked' ? blocked : phase === 'stuck' ? stuckMessage(action.kind) : message ?? action.error}
       doneText={doneText ?? outcomeLine(action)}
       invalid={invalid}
       showUndo={canUndo(action, nowMs, live)}

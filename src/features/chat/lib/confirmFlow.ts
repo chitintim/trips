@@ -3,7 +3,7 @@ import { reportError } from '../../../lib/reportError'
 import { describeWriteError, refreshAfterRefusal } from '../../../lib/writeRefusals'
 import { moduleFor } from '../actions'
 import type { ExecCtx, LiveData } from '../actions/types'
-import { ChatRpcError, type ChatRpc } from './chatApi'
+import { ACTIONS_OFF_MESSAGE, ChatRpcError, type ChatRpc } from './chatApi'
 import type { ChatActionEnvelope } from './payload'
 
 /** How long after finishing a self-only action the Undo stays offered. */
@@ -21,6 +21,8 @@ export type ConfirmOutcome =
   | { kind: 'failed'; message: string; action: ChatActionEnvelope | null }
   /** The bookkeeping call failed before anything ran (cap reached, signed out, not deployed): nothing was changed. */
   | { kind: 'blocked'; message: string }
+  /** The server says assistant changes are switched off for this trip: final, nothing was changed, no retry. */
+  | { kind: 'actions_off'; message: string }
 
 export const INVALID_MESSAGE = "I can't show this suggestion properly, so it can't be run from here."
 export const GENERIC_FAILURE = "That didn't go through. Please check the screen and try again."
@@ -69,6 +71,7 @@ export async function confirmAction(action: ChatActionEnvelope, { rpc, ctx }: Co
     try {
       started = await rpc.begin(action.id)
     } catch (err) {
+      if (err instanceof ChatRpcError && err.hint === 'actions_off') return { kind: 'actions_off', message: ACTIONS_OFF_MESSAGE }
       return { kind: 'blocked', message: err instanceof ChatRpcError ? err.message : GENERIC_FAILURE }
     }
     if (!started.started) {
@@ -215,10 +218,10 @@ export function mergeAction(prev: ChatActionEnvelope | undefined, incoming: Chat
   return incoming
 }
 
-export type CardPhase = 'proposed' | 'running' | 'done' | 'failed' | 'dismissed' | 'expired' | 'edited' | 'stuck' | 'working_elsewhere' | 'stale' | 'blocked'
+export type CardPhase = 'proposed' | 'running' | 'done' | 'failed' | 'dismissed' | 'expired' | 'edited' | 'stuck' | 'working_elsewhere' | 'stale' | 'blocked' | 'actions_off'
 
 /** What the card shows, from the stored status plus this device's transient state. Pure. */
-export function cardPhase(action: ChatActionEnvelope, local: { running: boolean; stale: string | null; blocked?: string | null }, nowMs: number): CardPhase {
+export function cardPhase(action: ChatActionEnvelope, local: { running: boolean; stale: string | null; blocked?: string | null; actionsOff?: boolean }, nowMs: number): CardPhase {
   if (local.running) return 'running'
   switch (action.status) {
     case 'done':
@@ -235,6 +238,7 @@ export function cardPhase(action: ChatActionEnvelope, local: { running: boolean;
       return isStuck(action, nowMs) ? 'stuck' : 'working_elsewhere'
     case 'proposed': {
       if (action.expires_at && Date.parse(action.expires_at) <= nowMs) return 'expired'
+      if (local.actionsOff) return 'actions_off'
       if (local.stale) return 'stale'
       return local.blocked ? 'blocked' : 'proposed'
     }

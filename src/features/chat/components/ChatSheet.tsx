@@ -68,7 +68,8 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
   const { data: threadInfo } = useChatThreadInfo(isOpen ? tripId : undefined, user?.id)
   const { data: fetchedActions } = useChatActions(isOpen ? tripId : undefined)
   const live = useChatLive(trip, user?.id, canManageTrip, isOpen)
-  const { chatOn } = useChatAvailability(tripId)
+  const { chatOn, availability } = useChatAvailability(tripId)
+  const actionsOff = availability?.actions === false
   /** The server said no (403 chat_off) even though the page thought chat was on. */
   const [refusedOff, setRefusedOff] = useState<string | null>(null)
   const chatOff = !chatOn || refusedOff === tripId
@@ -194,6 +195,8 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
     return {
       rpc: makeChatRpc(),
       onUpdate: upsertAction,
+      actionsOff,
+      refreshAvailability: () => void queryClient.invalidateQueries({ queryKey: queryKeys.chatAvailability(tripId) }),
       askAgain: (text) => setInput(`Please check this again and suggest it fresh: ${text}`.slice(0, 1000)),
       recheckServer: async () => {
         await queryClient.invalidateQueries({ queryKey: chatActionsKey(tripId) })
@@ -209,7 +212,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
         now: () => new Date(),
       }),
     }
-  }, [user, upsertAction, queryClient, tripId, trip, canManageTrip, logActivity])
+  }, [user, upsertAction, queryClient, tripId, trip, canManageTrip, logActivity, actionsOff])
 
   const renderActions = (list: ChatActionEnvelope[] | undefined) =>
     dedupeLinkCards(list ?? []).map((a) => {

@@ -36,6 +36,7 @@ export function isMissingObject(error: DbError | null | undefined): boolean {
 // ---------------------------------------------------------------------------
 export const DAILY_CAP_MESSAGE = "You've confirmed a lot today — try again tomorrow."
 export const GONE_MESSAGE = "That suggestion isn't available any more."
+export const ACTIONS_OFF_MESSAGE = "Changes from the assistant are switched off for this trip, so this wasn't done."
 export const CHAT_RPC_MISSING_MESSAGE = 'Confirming from chat is not switched on yet.'
 
 export function describeChatRpcError(error: DbError | null | undefined): string {
@@ -50,6 +51,16 @@ export function describeChatRpcError(error: DbError | null | undefined): string 
       return "You're no longer on this trip, so this can't go ahead."
     case 'auth':
       return 'Please sign in again, then try once more.'
+    case 'actions_off':
+      return ACTIONS_OFF_MESSAGE
+    case 'bad_input':
+      return "That couldn't be saved because the details were too large. Please check the screen."
+    case 'immutable':
+      return "This suggestion can't be changed any more."
+    case 'invalid':
+      return "That setting isn't one this can be set to. Please pick another."
+    case 'admin_only':
+      return 'Only a site admin can change that.'
     case 'not_started':
       return 'This one has not been started yet. Please try again.'
     default:

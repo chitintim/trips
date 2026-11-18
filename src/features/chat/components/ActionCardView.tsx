@@ -33,7 +33,7 @@ const TERMINAL_TEXT: Partial<Record<CardPhase, string>> = {
  * never from anything the model wrote). Tap tier: a compact row. Review tier: every fact, then Confirm / Not now.
  */
 export function ActionCardView(p: ActionCardViewProps) {
-  const live = p.phase === 'proposed' || p.phase === 'running' || p.phase === 'stale' || p.phase === 'blocked'
+  const live = p.phase === 'proposed' || p.phase === 'running' || p.phase === 'stale' || p.phase === 'blocked' || p.phase === 'actions_off'
   const canConfirm = (p.phase === 'proposed' || p.phase === 'blocked') && !p.invalid
   return (
     <div
@@ -89,7 +89,7 @@ export function ActionCardView(p: ActionCardViewProps) {
           This changed: {p.message}
         </p>
       )}
-      {p.phase === 'blocked' && p.message && (
+      {(p.phase === 'blocked' || p.phase === 'actions_off') && p.message && (
         <p role="alert" className="mt-2 text-sm text-danger-700 dark:text-danger-400">
           {p.message}
         </p>
@@ -123,11 +123,11 @@ export function ActionCardView(p: ActionCardViewProps) {
         </div>
       )}
 
-      {(p.phase === 'proposed' || p.phase === 'running' || p.phase === 'stale' || p.phase === 'blocked') && (
+      {(p.phase === 'proposed' || p.phase === 'running' || p.phase === 'stale' || p.phase === 'blocked' || p.phase === 'actions_off') && (
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button size="md" variant="primary" disabled={!canConfirm} isLoading={p.phase === 'running'} onClick={p.onConfirm}>
+          {p.phase !== 'actions_off' && <Button size="md" variant="primary" disabled={!canConfirm} isLoading={p.phase === 'running'} onClick={p.onConfirm}>
             {p.tier === 'tap' ? 'Confirm' : p.view.confirmLabel}
-          </Button>
+          </Button>}
           <Button size="md" variant="ghost" disabled={p.phase === 'running'} onClick={p.onDismiss}>
             Not now
           </Button>

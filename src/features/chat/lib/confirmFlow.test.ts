@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 vi.mock('../../../lib/supabase', () => ({ supabase: { from: vi.fn(), rpc: vi.fn(), auth: { getSession: vi.fn() } } }))
 
 import { __resetInFlightForTests, canUndo, cardPhase, confirmAction, dismissAction, failureMessage, undoAction, UNDO_WINDOW_MS, STUCK_AFTER_MS, GENERIC_FAILURE } from './confirmFlow'
-import { ChatRpcError, DAILY_CAP_MESSAGE, type ChatRpc } from './chatApi'
+import { ACTIONS_OFF_MESSAGE, ChatRpcError, DAILY_CAP_MESSAGE, describeChatRpcError, type ChatRpc } from './chatApi'
 import { envelope, expenseParams, liveFixture, ME, SAM, todoParams } from './chatFixtures'
 import { FROZEN_WRITE_MESSAGE } from '../../../lib/writeRefusals'
 import type { ChatDeps } from '../actions/deps'
@@ -105,6 +105,29 @@ describe('confirm flow', () => {
     expect(await confirmAction(tap(), { rpc, ctx })).toEqual({ kind: 'blocked', message: DAILY_CAP_MESSAGE })
     expect(DAILY_CAP_MESSAGE).toBe("You've confirmed a lot today — try again tomorrow.")
     expect(deps.toggleTodo).not.toHaveBeenCalled()
+  })
+
+  it('actions switched off is a final plain refusal and nothing runs', async () => {
+    const { rpc, ctx, deps } = setup({ rpc: { begin: vi.fn(async () => { throw new ChatRpcError({ message: 'The assistant is not allowed', code: 'P0001', hint: 'actions_off' }) }) } })
+    const out = await confirmAction(tap(), { rpc, ctx })
+    expect(out).toEqual({ kind: 'actions_off', message: "Changes from the assistant are switched off for this trip, so this wasn't done." })
+    expect(ACTIONS_OFF_MESSAGE).toBe((out as { message: string }).message)
+    expect(deps.toggleTodo).not.toHaveBeenCalled()
+  })
+
+  it('every hint the chat RPCs raise has its own plain message', () => {
+    const generic = 'Something went wrong. Please try again.'
+    for (const hint of ['actions_off', 'daily_cap', 'not_found', 'forbidden', 'auth', 'not_started', 'bad_input', 'immutable', 'invalid', 'admin_only']) {
+      const text = describeChatRpcError({ message: 'raw database text', code: 'P0001', hint })
+      expect(text, hint).not.toBe(generic)
+      expect(text, hint).not.toMatch(/raw database text|P0001/)
+    }
+    expect(describeChatRpcError({ message: 'x', hint: 'something_new' })).toBe(generic)
+  })
+
+  it('an actions-off card has no approve path but stays dismissible', () => {
+    expect(cardPhase(tap(), { running: false, stale: null, actionsOff: true }, Date.now())).toBe('actions_off')
+    expect(cardPhase(tap({ status: 'done' }), { running: false, stale: null, actionsOff: true }, Date.now())).toBe('done')
   })
 
   it('someone else\'s action id looks like not found', async () => {

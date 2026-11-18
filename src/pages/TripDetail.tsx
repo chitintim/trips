@@ -26,6 +26,7 @@ import { effectiveTripStage } from '../lib/tripStage'
 import { daysUntil } from '../lib/dates'
 import {
   planDeepLink,
+  deepLinkMustWait,
   fallbackDeepLinkPlan,
   resolveOpenParam,
   stripDeepLinkParams,
@@ -159,7 +160,7 @@ export function TripDetail() {
   const [chatOpen, setChatOpen] = useState(false)
   const [assistantSettingsOpen, setAssistantSettingsOpen] = useState(false)
   // Fails open: chat is shown while this loads and whenever it cannot be read.
-  const { chatOn, availability: chatAvailability } = useChatAvailability(trip?.id)
+  const { chatOn, availability: chatAvailability, isLoading: chatLoading } = useChatAvailability(trip?.id)
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [recapOpen, setRecapOpen] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
@@ -316,11 +317,13 @@ export function TripDetail() {
 
   useEffect(() => {
     if (!pendingOpen || !deepLinkContext || todosLoading) return
+    // ?open=ask waits for the assistant's availability (off => opens nothing; error/missing => opens).
+    if (deepLinkMustWait(pendingOpen, { chatLoading })) return
     setPendingOpen(null)
     applyDeepLinkPlan(planDeepLink(pendingOpen, deepLinkContext))
     // applyDeepLinkPlan only calls state setters, navigate and showToast.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingOpen, deepLinkContext, todosLoading])
+  }, [pendingOpen, deepLinkContext, todosLoading, chatLoading])
 
   // The link must never fail silently: if the data errors or never finishes
   // loading (the router above waits for ALL of it), land on Today with a toast.

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { DEEP_LINKS } from '../lib/todos/copy'
+import { chatIsOn } from '../features/chat/lib/chatSettings'
 import {
+  deepLinkMustWait,
   DEEP_LINK_TOASTS,
   fallbackDeepLinkPlan,
   DEEP_LINK_GONE_TOAST,
@@ -364,5 +366,14 @@ describe('?open=ask (the trip assistant)', () => {
   it('opens nothing when the assistant is switched off for the trip, and still opens while that is unknown', () => {
     expect(planDeepLink({ kind: 'ask' }, ctx({ chatEnabled: false }))).toEqual({ space: 'today' })
     expect(planDeepLink({ kind: 'ask' }, ctx({ chatEnabled: true })).open).toEqual({ sheet: 'ask' })
+  })
+  it('?open=ask waits while availability is loading, then proceeds once known (off, on or errored)', () => {
+    expect(deepLinkMustWait({ kind: 'ask' }, { chatLoading: true })).toBe(true)
+    expect(deepLinkMustWait({ kind: 'todos' }, { chatLoading: true })).toBe(false)
+    // Loaded as off: not opened. Loaded as on, or errored/missing (chatEnabled stays true): opened.
+    expect(deepLinkMustWait({ kind: 'ask' }, { chatLoading: false })).toBe(false)
+    expect(planDeepLink({ kind: 'ask' }, ctx({ chatEnabled: false })).open).toBeUndefined()
+    expect(planDeepLink({ kind: 'ask' }, ctx({ chatEnabled: true })).open).toEqual({ sheet: 'ask' })
+    expect(planDeepLink({ kind: 'ask' }, ctx({ chatEnabled: chatIsOn(null) })).open).toEqual({ sheet: 'ask' })
   })
 })

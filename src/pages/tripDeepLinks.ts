@@ -168,6 +168,14 @@ export const DEEP_LINK_TOASTS = {
   organiserGone: DEEP_LINK_GONE_TOAST,
 } as const
 
+/**
+ * Should a pending `?open=` target keep waiting? `?open=ask` waits for the assistant's availability so a
+ * switched-off trip never flashes the sheet. An error or missing function ends the wait (loading is false), so it still opens.
+ */
+export function deepLinkMustWait(target: OpenTarget, state: { chatLoading: boolean }): boolean {
+  return target.kind === 'ask' && state.chatLoading
+}
+
 const soft = (toast: string): DeepLinkPlan => ({ space: 'today', toast })
 
 /**

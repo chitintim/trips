@@ -103,7 +103,7 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
     const nameById = new Map(roster.map((p) => [p.userId, p.name]))
     const history = await loadHistory(client, tripId, user.id, thread.clearedAt, nameById, turnId)
 
-    const actionsEnabled = actionsEnabledFor(deps.env('TRIP_CHAT_ACTIONS'), tripId)
+    const actionsEnabled = actionsEnabledFor(deps.env('TRIP_CHAT_ACTIONS'), tripId, trip, deps.now())
     const local = localNow(deps.now(), tz)
     const now = local.now
     const proposedIds: string[] = []

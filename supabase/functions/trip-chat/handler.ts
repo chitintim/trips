@@ -205,6 +205,9 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
             state,
             maxIterations: MAX_TOOL_ITERATIONS,
             onToolStart: (tu) => send({ type: 'status', label: statusLabelFor(tu.name) }),
+            // One ai_usage row per model call, written the moment the call ends (the daily spend cap reads these rows):
+            // a turn that is cut off, errors or is abandoned still has every finished call on the books.
+            onCallBilled: (u, model) => deps.logUsage({ userId: user.id, tripId, functionName: 'trip-chat', model, usage: u }),
           })
 
           let messageId: string | null = null
@@ -214,7 +217,6 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
             .select('id').single()
           if (!saved.error && saved.data) messageId = (saved.data as { id: string }).id
 
-          await deps.logUsage({ userId: user.id, tripId, functionName: 'trip-chat', model: state.model, usage: totalUsage })
           deps.log(JSON.stringify({
             fn: 'trip-chat', model: state.model, effort: CHAT_EFFORT, iterations: result.iterations, tools: result.toolsUsed,
             input: totalUsage.input_tokens, output: totalUsage.output_tokens,
@@ -235,9 +237,6 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
           })
         } catch (streamError) {
           console.error('[trip-chat] stream error:', chatStreamErrorLog(streamError))
-          if (totalUsage.input_tokens + totalUsage.output_tokens + (totalUsage.cache_read_input_tokens ?? 0) + (totalUsage.cache_creation_input_tokens ?? 0) > 0) {
-            try { await deps.logUsage({ userId: user.id, tripId, functionName: 'trip-chat', model: state.model, usage: totalUsage }) } catch { /* never mask the stream error */ }
-          }
           send(chatStreamErrorPayload(streamError))
         } finally {
           clearInterval(ping)

@@ -3,7 +3,7 @@ import { moduleFor } from '../actions'
 import { withOrigins } from '../actions/common'
 import type { ExecCtx, LiveData } from '../actions/types'
 import type { ChatRpc } from '../lib/chatApi'
-import { canUndo, cardPhase, confirmAction, dismissAction, stuckMessage, undoAction, wasUndone, INVALID_MESSAGE } from '../lib/confirmFlow'
+import { canUndo, cardPhase, confirmAction, dismissAction, outcomeLine, stuckMessage, undoAction, wasUndone, INVALID_MESSAGE } from '../lib/confirmFlow'
 import type { ChatActionEnvelope } from '../lib/payload'
 import { ActionCardView } from './ActionCardView'
 
@@ -155,7 +155,7 @@ export function ActionCard({ action, live, runtime }: { action: ChatActionEnvelo
       tier={action.requires === 'tap' ? 'tap' : 'review'}
       phase={phase}
       message={phase === 'stale' ? stale : phase === 'blocked' ? blocked : phase === 'stuck' ? stuckMessage(action.kind) : message ?? action.error}
-      doneText={doneText}
+      doneText={doneText ?? outcomeLine(action)}
       invalid={invalid}
       showUndo={canUndo(action, nowMs, live)}
       undoing={undoing}

@@ -279,7 +279,7 @@ Deno.test('prompt-injection posture: obeying a planted instruction still cannot 
 })
 
 Deno.test('open_screen link card is emitted but not stored; stream error keeps the old payload', async () => {
-  const h = harness({ flag: 'on', rounds: [[{ tool: 'open_screen', input: { target: 'settle', id: null } }], [{ text: 'Here is the button.' }]] })
+  const h = harness({ flag: 'on', rounds: [[{ tool: 'open_screen', input: { target: 'settle', id: null } }], [{ text: "I can't freeze the balances from chat; the button takes you to Settle up." }]] })
   const r = await post(h, { message: 'freeze the balances' })
   const act = r.events.find((e) => e.type === 'action') as { action: { kind: string; requires: string } } | undefined
   assertEquals(act?.action.kind, 'open_screen')
@@ -294,7 +294,7 @@ Deno.test('model stream error -> coded error event, usage still logged', async (
   const r = await post(h, { message: 'hi' })
   assertEquals(r.events.at(-1)!.type, 'error')
   assertEquals(r.events.at(-1)!.code, 'busy')
-  assertEquals(h.usage, 1)
+  assertEquals(h.usage, 3) // every billed attempt (the first and its two retries) is on the books, one row each
 })
 
 // ---- cost bounds, spend ceiling, local day, privacy in the handler ------------------------------------------------

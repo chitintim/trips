@@ -1,7 +1,9 @@
 /**
  * propose_suggest_option: a participant adds an option/idea to an open Group-choice question (or the
  * Ideas question). Same rules as src/features/decisions/lib/suggestOption.ts and the suggest_option RPC.
- * Organisers use propose_add_option instead. Executor: suggestOption(tripId, ...).
+ * Organisers add to an EXISTING question with propose_add_option, but they may add an IDEA here: the RPC accepts
+ * any active roster member (organisers included) and creates the Ideas question on first use with the same shape
+ * the organiser's own Add flow writes. Executor: suggestOption(tripId, ...).
  */
 import { z } from 'npm:zod@3'
 import { refuse, type ToolCtx, type ToolModule, type ToolResult } from '../types.ts'
@@ -37,7 +39,7 @@ const Input = z
 export const suggestOptionSchema = {
   type: 'object',
   properties: {
-    question_id: { type: ['string', 'null'], format: 'uuid', description: 'The open question to add to. null = add it to the trip\'s Ideas.' },
+    question_id: { type: ['string', 'null'], format: 'uuid', description: 'The open question to add to (participants only; organisers use propose_add_option for a question). null = add it to the trip\'s Ideas list (everyone, organisers included).' },
     title: { type: 'string', description: 'Short title of the option or idea (up to 120 characters).' },
     note: { type: ['string', 'null'], description: 'Optional note (up to 500 characters).' },
     link: { type: ['string', 'null'], description: 'Optional http(s) link.' },
@@ -57,8 +59,8 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
   const parsed = parseInput(Input, raw)
   if (!parsed.ok) return parsed.result
   const v = parsed.data
-  if (ctx.me.canManageTrip) {
-    return refuse('Organisers add options directly: use propose_add_option (or propose_create_question for a new question) instead of propose_suggest_option.')
+  if (ctx.me.canManageTrip && v.question_id) {
+    return refuse('Organisers add options to a question directly: use propose_add_option (or propose_create_question for a new question). To add an idea to the Ideas list, call propose_suggest_option with question_id null.')
   }
   const state = await tripState(ctx)
   if (state.finished) return refuse(FINISHED_MESSAGE)
@@ -129,7 +131,7 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
 export const proposeSuggestOption: ToolModule = {
   name: 'propose_suggest_option',
   description:
-    'Suggest adding an option to an open question (or an idea to the trip\'s Ideas) on behalf of a PARTICIPANT. Organisers use propose_add_option instead. Nothing is added until the person confirms the card.',
+    'Suggest an idea for the trip\'s Ideas list (question_id null; anyone, organisers too), or an option on an open question (participants; organisers use propose_add_option for that). Nothing is added until the person confirms the card.',
   statusLabel: 'Preparing a suggestion…',
   inputSchema: suggestOptionSchema,
   run,

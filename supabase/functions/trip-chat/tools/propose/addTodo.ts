@@ -48,9 +48,16 @@ async function remindersOn(ctx: ToolCtx): Promise<boolean> {
   }
 }
 
-/** When the existing action_due_7d / 1d / overdue emails go out, in words. */
-export function reminderWords(due: string, today: string, recipients: string, on: boolean): string {
+/**
+ * When the existing action_due_7d / 1d / overdue emails go out, in words. Checked against auto-chase (section 1b):
+ * the reminders are NOT queued when the to-do is created; a daily run (09:00 UTC) reads the open to-dos at that moment,
+ * so a to-do that is done or deleted by then gets no email. The dates are therefore "around": one email per stage,
+ * sent by the daily run, skipped in quiet hours, for people who have emails switched off, and for an "anyone" to-do
+ * until someone grabs it.
+ */
+export function reminderWords(due: string, today: string, recipients: string, on: boolean, anyone = false): string {
   if (!on) return 'Reminder emails are switched off for this trip, so no email goes out.'
+  if (anyone) return 'No reminder email goes out until someone grabs this to-do; after that the app emails them around the due date while it is still open.'
   const days = daysBetween(today, due)
   const parts: string[] = []
   if (days > 7) parts.push(`about a week before (${dayLabel(addDays(due, -7), today)})`)
@@ -58,7 +65,7 @@ export function reminderWords(due: string, today: string, recipients: string, on
   else parts.push('when it is nearly due')
   parts.push(`if it is still open after ${dayLabel(due, today)}`)
   const last = parts.pop()
-  return `${recipients} an email ${parts.join(', ')}${parts.length ? ' and ' : ''}${last}.`
+  return `${recipients} an email around ${parts.join(', ')}${parts.length ? ' and ' : ''}${last}, only while it is still open (none once it is done or deleted).`
 }
 
 async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
@@ -142,7 +149,7 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
     who_label: whoLabel,
     who,
     due_label: beforeTrip ? `Before the trip (${dayLabel(effectiveDue!, ctx.today)})` : dueDate ? dayLabel(dueDate, ctx.today) : null,
-    reminder_words: effectiveDue ? reminderWords(effectiveDue, ctx.today, recipients, on) : null,
+    reminder_words: effectiveDue ? reminderWords(effectiveDue, ctx.today, recipients, on, mode === 'anyone') : null,
     question_title: sectionTitle,
     content_origin: await originsFor(ctx, [{ field: 'title', text: v.title, sources: ['todo', 'option'] }]),
   }
@@ -160,7 +167,7 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
 export const proposeAddTodo: ToolModule = {
   name: 'propose_add_todo',
   description:
-    'Suggest adding a to-do (for the person asking, a named person, everyone, or anyone). Nothing is added until the person taps Confirm on the card. "Remind me to X on Friday" = a to-do for me due that date (the app sends its normal reminder emails).',
+    'Suggest adding a to-do (for the person asking, a named person, everyone, or anyone). Nothing is added until the person taps Confirm on the card. "Remind me to X on Friday" = a to-do for me due that date (the app daily reminder run may email them around the due date while the to-do is still open; do not promise exact dates).',
   statusLabel: 'Preparing a to-do…',
   inputSchema: addTodoSchema,
   run,

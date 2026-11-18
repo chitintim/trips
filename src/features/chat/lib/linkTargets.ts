@@ -37,3 +37,15 @@ export function resolveLink(params: Record<string, unknown>): ResolvedLink | nul
   if (!raw || !target) return null
   return { openParam: raw, copy: COPY[target.kind] ?? { message: 'It is done on its own screen.', button: 'Open it' } }
 }
+
+/** Link cards of one reply, each target once (the server may repeat a link; the person should see one button). */
+export function dedupeLinkCards<T extends { kind: string; params: Record<string, unknown> }>(list: T[]): T[] {
+  const seen = new Set<string>()
+  return list.filter((a) => {
+    if (a.kind !== 'open_screen') return true
+    const key = typeof a.params.open_param === 'string' ? a.params.open_param : JSON.stringify(a.params)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}

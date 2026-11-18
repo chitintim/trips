@@ -22,7 +22,19 @@ Deno.test('suggest_option: null question = an idea for the Ideas list', async ()
   assertEquals(row.preview.is_idea, true)
 })
 
-Deno.test('suggest_option: organisers are pointed at propose_add_option; bad targets refused', async () => {
+Deno.test('suggest_option: an organiser may add an idea (the RPC allows roster organisers); for a question they are pointed at propose_add_option', async () => {
+  const h0 = organiser()
+  const row = assertStored(await call('propose_suggest_option', sug({ question_id: null, title: 'Fado night' }), h0), h0)
+  assertEquals(row.kind, 'suggest_option')
+  assertEquals(row.params.idea, true)
+  assertEquals(row.params.section_id, null)
+  assertEquals(row.requires, 'review')
+  // Not on the roster (site admin / creator only): the RPC would refuse, so the tool does too.
+  const off = organiser({ me: { isOnRoster: false } })
+  assertRefused(await call('propose_suggest_option', sug({ question_id: null }), off), off, /roster/)
+})
+
+Deno.test('suggest_option: organisers are pointed at propose_add_option for a question; bad targets refused', async () => {
   let h = organiser()
   assertRefused(await call('propose_suggest_option', sug(), h), h, /propose_add_option/)
   h = makeCtx()

@@ -46,7 +46,9 @@ export const tickTodoModule: ActionModule = {
   view(action, live) {
     const params = p(action)
     const found = find(params, live)
-    const title = found?.title ?? 'a to-do'
+    // After the to-do changed or went (an Undo, a reload) the stored copy of its title still says what this card was about.
+    const stored = typeof action.preview?.title === 'string' && action.preview.title.trim() ? action.preview.title.trim() : null
+    const title = found?.title ?? stored ?? 'a to-do'
     return {
       icon: params.op === 'claim' || params.op === 'give_back' ? '🙋' : '☑️',
       title: OP_LABEL[params.op],

@@ -8,10 +8,19 @@
 import { z } from 'npm:zod@3'
 import { refuse, type Json, type ToolCtx, type ToolModule, type ToolResult } from '../types.ts'
 import type { OpenScreenParams, OpenScreenPreview } from './cards.ts'
-import { formatOpenParam, isIdTarget, OPEN_TARGETS, TARGET_LABELS, type IdTarget } from './deepLinks.ts'
+import { formatOpenParam, isIdTarget, OPEN_TARGETS, TARGET_LABELS, type IdTarget, type OpenTargetName } from './deepLinks.ts'
 import { baseBasis, parseInput, tripState, uuid } from './common.ts'
 
 export const MAX_LINKS_PER_TURN = 5
+
+/** Said to the model inside every open_screen result: the button is an extra, the words are the answer. */
+export const OPEN_SCREEN_RESULT_NOTE =
+  'The button is shown to the person. It is NOT your answer: your reply must still say, in words, what they asked (names, amounts, dates from the read tools), or briefly why you cannot do it.'
+
+/** The exact content of a successful open_screen result (the eval builds the same one). */
+export function openScreenResultContent(target: OpenTargetName, id: string | null): { ok: true; link: { label: string; target: string; open_param: string }; note: string } {
+  return { ok: true, link: { label: TARGET_LABELS[target], target, open_param: formatOpenParam(target, id) }, note: OPEN_SCREEN_RESULT_NOTE }
+}
 
 const Input = z
   .object({
@@ -115,14 +124,19 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
   }
 
   const openParam = formatOpenParam(target, id)
+  const label = TARGET_LABELS[target]
+  // One button per destination per message: the same screen asked for twice (also under another target name that
+  // reads the same on the button, e.g. todos / actions, or the same label and subject) shows once.
   const memoKey = `open_screen:${openParam}`
+  const buttonKey = `open_screen:button:${label}|${subject ?? ''}`
   if (ctx.memo.has(memoKey)) return (await ctx.memo.get(memoKey)) as ToolResult
-  const n = [...ctx.memo.keys()].filter((k) => k.startsWith('open_screen:')).length + 1
+  if (ctx.memo.has(buttonKey)) return (await ctx.memo.get(buttonKey)) as ToolResult
+  const n = [...ctx.memo.keys()].filter((k) => k.startsWith('open_screen:') && !k.startsWith('open_screen:button:')).length + 1
   if (n > MAX_LINKS_PER_TURN) return refuse(`At most ${MAX_LINKS_PER_TURN} links per message.`)
 
-  const label = TARGET_LABELS[target]
-  const result: ToolResult = { content: { ok: true, link: { label, target, open_param: openParam } } }
+  const result: ToolResult = { content: openScreenResultContent(target, id) }
   ctx.memo.set(memoKey, Promise.resolve(result))
+  ctx.memo.set(buttonKey, Promise.resolve(result))
 
   const params: OpenScreenParams = { target, id, open_param: openParam }
   const preview: OpenScreenPreview = { label, subject }
@@ -144,7 +158,7 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
 export const openScreen: ToolModule = {
   name: 'open_screen',
   description:
-    'Show the person a button that opens the right screen in the app. Use it for anything you must not do yourself: deciding a question, marking something booked, freezing/unfreezing balances, deleting, resetting, settling payments, changing reminder settings, or voting/ticking for someone else. Also handy to point at a question, to-do or expense. Writes nothing.',
+    'Show the person a button that opens the right screen in the app. Use it for anything you must not do yourself: deciding a question, marking something booked, freezing/unfreezing balances (also "freeze/lock/close the trip"), deleting, resetting, settling payments, changing reminder settings, or voting/ticking for someone else. Also handy to point at a question, to-do or expense. Writes nothing. The button NEVER replaces your answer: for a question about money, receipts, to-dos or anything else you can look up, first call the read tools and answer in words with the real figures, and only then (optionally) add the button. For something you cannot do, say so in a sentence and add the button. Call it once per screen.',
   statusLabel: 'Finding the right screen…',
   inputSchema: openScreenSchema,
   run,

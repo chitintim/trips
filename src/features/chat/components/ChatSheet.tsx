@@ -15,7 +15,7 @@ import { chipsFor, spaceFor, type ChatChip } from '../lib/chips'
 import { mergeAction } from '../lib/confirmFlow'
 import { ownPendingProposals } from '../lib/ownProposals'
 import { readLive, refreshLive, useChatLive } from '../lib/live'
-import { resolveLink } from '../lib/linkTargets'
+import { dedupeLinkCards, resolveLink } from '../lib/linkTargets'
 import { ChatMarkdown } from '../lib/markdown'
 import type { ChatActionEnvelope } from '../lib/payload'
 import { ChatQuotaError, streamChatMessage } from '../lib/streamChat'
@@ -39,6 +39,7 @@ type ChatRow = ChatMessage & { thread_user_id?: string | null; turn_id?: string 
 
 interface EchoMessage {
   id: string
+  turnId: string
   content: string
 }
 
@@ -149,6 +150,9 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
     return map
   }, [known])
   const turnsWithMessage = new Set(myRows.filter((m) => m.role === 'assistant' && m.turn_id).map((m) => m.turn_id as string))
+  // Once the stored reply for this turn is in the list, the streamed copy (and its echo / cards) must not also be drawn.
+  const currentTurnStored = !!currentTurn && turnsWithMessage.has(currentTurn)
+  const storedUserTurns = new Set(myRows.filter((m) => m.role === 'user' && m.turn_id).map((m) => m.turn_id as string))
   const detached = Object.values(known).filter((a) => a.status === 'proposed' && a.turn_id !== currentTurn && !(a.turn_id && turnsWithMessage.has(a.turn_id)))
 
   useEffect(() => {
@@ -180,7 +184,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
   }, [user, upsertAction, queryClient, tripId, trip, canManageTrip, logActivity])
 
   const renderActions = (list: ChatActionEnvelope[] | undefined) =>
-    (list ?? []).map((a) => {
+    dedupeLinkCards(list ?? []).map((a) => {
       if (a.kind === 'open_screen') {
         const link = resolveLink(a.params)
         return link && onOpenLink ? (
@@ -207,7 +211,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
     setRetry(null)
     setSending(true)
     setCurrentTurn(turnId)
-    if (!reuseTurnId) setEcho((prev) => [...prev, { id: `echo-${turnId}`, content: trimmed }])
+    if (!reuseTurnId) setEcho((prev) => [...prev, { id: `echo-${turnId}`, turnId, content: trimmed }])
     setStreamText('')
     setStatusLabel(null)
 
@@ -351,7 +355,7 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
             <>
               {myRows.map((m) => renderMessage(m))}
 
-              {echo.map((msg) => (
+              {echo.filter((msg) => !storedUserTurns.has(msg.turnId)).map((msg) => (
                 <div key={msg.id} className="flex flex-row-reverse items-end gap-2">
                   <UserAvatar avatarData={usersById.get(user?.id ?? '') ?? null} size="xs" />
                   <div className={`${bubble} bg-accent-600 text-white whitespace-pre-wrap`}>{msg.content}</div>
@@ -360,19 +364,19 @@ export function ChatSheet({ isOpen, onClose, trip, context, onOpenLink }: ChatSh
             </>
           )}
 
-          {streamText !== null && (
+          {streamText !== null && !currentTurnStored && (
             <div className="flex items-end gap-2">
               <span className="text-lg" aria-hidden="true">
                 ✨
               </span>
               <div className={`${bubble} border border-[var(--border-subtle)] bg-[var(--surface-raised)] text-[var(--text-primary)]`} aria-live="polite">
                 {revealed ? <ChatMarkdown>{revealed}</ChatMarkdown> : <span className="text-[var(--text-muted)]">{statusLabel ?? 'Thinking…'}</span>}
-                {revealed && statusLabel && <span className="mt-1 block text-xs text-[var(--text-muted)]">{statusLabel}</span>}
+                {revealed && sending && <span className="mt-1 block text-xs text-[var(--text-muted)]">{statusLabel ?? 'Working on it…'}</span>}
               </div>
             </div>
           )}
 
-          {currentTurn && actionsByTurn.get(currentTurn) && (sending || !turnsWithMessage.has(currentTurn)) && <div className="space-y-2 pl-7">{renderActions(actionsByTurn.get(currentTurn))}</div>}
+          {currentTurn && actionsByTurn.get(currentTurn) && !currentTurnStored && <div className="space-y-2 pl-7">{renderActions(actionsByTurn.get(currentTurn))}</div>}
           {detached.length > 0 && <div className="space-y-2 pl-7">{renderActions(detached)}</div>}
 
           {orphanProposals.map((proposal) => (

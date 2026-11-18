@@ -179,6 +179,33 @@ export function stuckMessage(kind: string): string {
   return `This didn't finish — check ${STUCK_WHERE[kind] ?? 'the app'} before trying again.`
 }
 
+const TICK_DONE: Record<string, string> = { tick: 'Ticked off.', untick: 'Marked as not done.', claim: "It's yours.", give_back: 'Given back.' }
+/**
+ * The outcome line of a finished card ("Added to your to-dos."), derived from the stored row so a reloaded card
+ * reads the same as it did live. Must match the `doneText` each executor returns (see confirmFlow.test).
+ */
+export function outcomeLine(action: ChatActionEnvelope): string | null {
+  if (action.status !== 'done') return null
+  switch (action.kind) {
+    case 'add_todo':
+      return 'Added to your to-dos.'
+    case 'tick_todo':
+      return TICK_DONE[String(action.params.op)] ?? null
+    case 'answer':
+      return 'Your answer is recorded.'
+    case 'add_expense':
+      return 'Expense added.'
+    case 'suggest_option':
+      return action.params.idea ? 'Added to Ideas.' : 'Suggestion added.'
+    case 'create_question':
+      return 'Question added to the plan.'
+    case 'add_option':
+      return 'Option added.'
+    default:
+      return null
+  }
+}
+
 const TERMINAL = new Set(['done', 'failed', 'dismissed', 'expired', 'edited_elsewhere'])
 /** Combine a known envelope with a newer-looking one: an older snapshot (proposed / executing) never overwrites a finished card. */
 export function mergeAction(prev: ChatActionEnvelope | undefined, incoming: ChatActionEnvelope): ChatActionEnvelope {

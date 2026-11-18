@@ -56,6 +56,10 @@ describe('chips and reveal', () => {
     for (const s of ['today', 'plan', 'money', 'people'] as const) expect(chipsFor(s, false).length).toBeGreaterThanOrEqual(2)
     expect(chipsFor('plan', true).some((c) => c.label === 'Make a poll')).toBe(true)
     expect(chipsFor('plan', false).some((c) => c.label === 'Make a poll')).toBe(false)
+    expect(chipsFor('plan', true).some((c) => c.label === 'Suggest an idea')).toBe(true)
+    expect(chipsFor('plan', false).some((c) => c.label === 'Suggest an idea')).toBe(true)
+    expect(chipsFor('plan', true)).toHaveLength(4)
+    expect(chipsFor('plan', false)).toHaveLength(4)
     // action chips fill the box instead of sending
     expect(chipsFor('money', false).find((c) => c.label === 'Add an expense')?.insert).toBeTruthy()
   })

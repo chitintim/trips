@@ -1,13 +1,14 @@
 import { assert, assertEquals } from 'jsr:@std/assert@1'
 import { call, msg } from './helpers.ts'
 import { OPEN_TARGETS } from './deepLinks.ts'
+import { OPEN_SCREEN_RESULT_NOTE } from './openScreen.ts'
 import { baseTables, forbiddenWrites, makeCtx, OPT_A, OPT_OTHER_TRIP, organiser, SEC_OPEN, SEC_OTHER_TRIP, TODO_MINE, TODO_OTHER_TRIP, TRIP, TURN, actionRows } from './testing.ts'
 
 Deno.test('open_screen: question link is built from the verified id and emitted as a link envelope, nothing stored', async () => {
   const h = makeCtx()
   const r = await call('open_screen', { target: 'question', id: SEC_OPEN }, h)
   assertEquals(r.is_error, undefined)
-  assertEquals(r.content, { ok: true, link: { label: 'Open the question', target: 'question', open_param: `question:${SEC_OPEN}` } })
+  assertEquals(r.content, { ok: true, link: { label: 'Open the question', target: 'question', open_param: `question:${SEC_OPEN}` }, note: OPEN_SCREEN_RESULT_NOTE })
   assertEquals(h.emitted.length, 1)
   assertEquals(h.emitted[0].kind, 'open_screen')
   assertEquals(h.emitted[0].requires, 'link')
@@ -88,4 +89,22 @@ Deno.test('open_screen: the same link twice is one card; link ids count up; capp
   for (const t of ['rsvp', 'answer-all', 'actions']) await call('open_screen', { target: t, id: null }, h)
   const r = await call('open_screen', { target: 'actions-bring', id: null }, h)
   assertEquals(r.is_error, true)
+})
+
+Deno.test('open_screen: the same button asked for twice in one turn shows once (same screen, or the same label and subject)', async () => {
+  const h = makeCtx()
+  const a = await call('open_screen', { target: 'settle', id: null }, h)
+  const b = await call('open_screen', { target: 'settle', id: null }, h)
+  assertEquals(a.content, b.content)
+  assertEquals(h.emitted.length, 1)
+  const q1 = await call('open_screen', { target: 'question', id: SEC_OPEN }, h)
+  const q2 = await call('open_screen', { target: 'question', id: SEC_OPEN }, h)
+  assertEquals(q1.content, q2.content)
+  assertEquals(h.emitted.length, 2)
+})
+
+Deno.test('open_screen: parallel identical calls in one round also give one button', async () => {
+  const h = makeCtx()
+  await Promise.all([1, 2, 3].map(() => call('open_screen', { target: 'question', id: SEC_OPEN }, h)))
+  assertEquals(h.emitted.length, 1)
 })

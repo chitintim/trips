@@ -10,6 +10,9 @@
 //   --only <prefix>      only cases whose id or group starts with this (e.g. "injection", "todo-")
 //   --model <id>         model under test (default claude-sonnet-5-5); --effort low|medium|high (default low)
 //   --csv <path>         also write one numeric row per case (no text)
+//   --no-nudge           turn off the "never end a turn with a button and no facts" continuation (loop.ts answerNudgeNeeded) to
+//                        measure what the prompt alone achieves. By default the eval applies the same rule the edge function does,
+//                        once per turn, and prints "nudged" for a case where it fired.
 //
 // What it does: replays scripted conversations (scripts/fixtures/trip-chat/cases.json) against a frozen fixture trip
 // (trip.json). The request is built from the SAME tool list, system prompt and capability text the edge function uses
@@ -23,10 +26,14 @@
 
 import { billedUsageOf, createMessage, type AnthropicContentBlock, type AnthropicMessage, type AnthropicRequestOptions } from '../supabase/functions/_shared/anthropic.ts'
 import { estimateCostUsd, priceEntryFor } from '../supabase/functions/_shared/pricing.ts'
-import { buildToolDefs } from '../supabase/functions/trip-chat/registry.ts'
+import { buildToolDefs, TOOL_BY_NAME } from '../supabase/functions/trip-chat/registry.ts'
+import { normalizeToolInput } from '../supabase/functions/trip-chat/toolSchema.ts'
 import { STATIC_SYSTEM, tripBlock } from '../supabase/functions/trip-chat/prompt.ts'
-import { capabilitiesText } from '../supabase/functions/trip-chat/context.ts'
+import { capabilitiesText, CONTEXT_FOOTER } from '../supabase/functions/trip-chat/context.ts'
+import * as chatLoop from '../supabase/functions/trip-chat/loop.ts'
 import { CHAT_MAX_TOKENS } from '../supabase/functions/trip-chat/loop.ts'
+import { formatOpenParam, TARGET_LABELS, type OpenTargetName } from '../supabase/functions/trip-chat/tools/propose/deepLinks.ts'
+import * as openScreenTool from '../supabase/functions/trip-chat/tools/propose/openScreen.ts'
 
 const FIXTURE_DIR = new URL('./fixtures/trip-chat/', import.meta.url)
 const DEFAULT_MODEL = 'claude-sonnet-5-5'
@@ -95,6 +102,7 @@ function parseArgs(argv: string[]) {
     model: str('--model') ?? DEFAULT_MODEL,
     effort: effort as 'low' | 'medium' | 'high',
     csv: str('--csv'),
+    nudge: !flags.has('--no-nudge'),
   }
 }
 
@@ -142,6 +150,7 @@ function contextBlock(fx: Fixture, c: Case): string {
     `Today: ${fx.today} (UTC). Talking to: ${viewer.name}.`,
     capabilitiesText(viewer, true, false),
     ...(fx.context[c.as] ?? []),
+    CONTEXT_FOOTER,
   ].join('\n')
 }
 
@@ -158,8 +167,18 @@ function callCostUpperBound(o: AnthropicRequestOptions, model: string): number {
 
 interface Recorded { tool: string; input: Record<string, unknown> }
 
-function readFromFixture(fx: Fixture, name: string, input: Record<string, unknown>): { content: string; is_error?: boolean } {
-  const entry = fx.reads[name] as { $by?: string; values?: Record<string, unknown> } | undefined
+/** The result the real open_screen returns (same builder as the edge function when this checkout has it). */
+function openScreenResult(input: Record<string, unknown>): string {
+  const target = String(input.target ?? '') as OpenTargetName
+  const id = typeof input.id === 'string' ? input.id : null
+  const build = (openScreenTool as { openScreenResultContent?: (t: OpenTargetName, id: string | null) => unknown }).openScreenResultContent
+  if (build) return JSON.stringify(build(target, id))
+  return JSON.stringify({ ok: true, link: { label: TARGET_LABELS[target] ?? target, target, open_param: formatOpenParam(target, id) } })
+}
+
+function readFromFixture(fx: Fixture, name: string, input: Record<string, unknown>, as: string): { content: string; is_error?: boolean } {
+  const entry = fx.reads[name] as { $by?: string; $viewer?: Record<string, unknown>; values?: Record<string, unknown> } | undefined
+  if (entry && typeof entry === 'object' && entry.$viewer) return { content: JSON.stringify(entry.$viewer[as] ?? { ok: false, error: 'No data for this person.' }) }
   if (entry === undefined) return { content: JSON.stringify({ ok: false, error: 'No data for this tool in the eval fixture.' }), is_error: true }
   if (entry && typeof entry === 'object' && '$by' in entry && entry.$by && entry.values) {
     const hit = entry.values[String(input[entry.$by])]
@@ -222,7 +241,7 @@ function grade(expect: Expect | undefined, calls: Recorded[], answer: string): {
 
 class StopEval extends Error {}
 
-interface CaseRow { id: string; group: string; passedChecks: number; failedChecks: number; ok: boolean; calls: number; inTokens: number; outTokens: number; cost: number; latencyMs: number }
+interface CaseRow { nudged: number; id: string; group: string; passedChecks: number; failedChecks: number; ok: boolean; calls: number; inTokens: number; outTokens: number; cost: number; latencyMs: number }
 
 async function main() {
   const args = parseArgs(Deno.args)
@@ -263,7 +282,7 @@ async function main() {
   for (const c of cases) {
     if (stopped) break
     const t0 = performance.now()
-    const row: CaseRow = { id: c.id, group: c.group, passedChecks: 0, failedChecks: 0, ok: false, calls: 0, inTokens: 0, outTokens: 0, cost: 0, latencyMs: 0 }
+    const row: CaseRow = { nudged: 0, id: c.id, group: c.group, passedChecks: 0, failedChecks: 0, ok: false, calls: 0, inTokens: 0, outTokens: 0, cost: 0, latencyMs: 0 }
     const failures: string[] = []
     const conversation: AnthropicMessage[] = []
     try {
@@ -273,6 +292,7 @@ async function main() {
         const recorded: Recorded[] = []
         let answer = ''
         let finished = false
+        let nudgedThisTurn = false
         for (let it = 0; it < MAX_ITERATIONS && !finished; it++) {
           const opts: AnthropicRequestOptions = {
             model: args.model,
@@ -314,22 +334,32 @@ async function main() {
           if (resp.stop_reason === 'tool_use' && uses.length > 0) {
             conversation.push({ role: 'assistant', content: resp.content })
             const results: AnthropicContentBlock[] = uses.map((u) => {
-              const input = (u.input ?? {}) as Record<string, unknown>
+              // The edge function normalises the model's input (omitted optional -> null) before the tool sees it: grade that.
+              const schema = TOOL_BY_NAME.get(u.name)?.inputSchema
+              const input = (schema ? normalizeToolInput(schema, u.input ?? {}) : (u.input ?? {})) as Record<string, unknown>
               if (u.name.startsWith(PROPOSE_PREFIX) || u.name === OPEN_SCREEN) {
                 recorded.push({ tool: u.name, input })
                 const proposals = recorded.filter((r) => r.tool.startsWith(PROPOSE_PREFIX)).length
                 if (proposals > MAX_ACTIONS_PER_TURN) return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: false, error: 'Too many actions this turn.' }), is_error: true }
-                if (u.name === OPEN_SCREEN) return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: true, link: { label: String(input.target ?? 'screen'), target: input.target, open_param: String(input.target ?? '') } }) } // same shape as the real open_screen result
+                if (u.name === OPEN_SCREEN) return { type: 'tool_result', tool_use_id: u.id, content: openScreenResult(input) } // same content as the real open_screen result
                 return { type: 'tool_result', tool_use_id: u.id, content: JSON.stringify({ ok: true, note: 'Stored. The person will see a card and must tap Confirm.' }) }
               }
               recorded.push({ tool: u.name, input })
-              const r = readFromFixture(fx, u.name, input)
+              const r = readFromFixture(fx, u.name, input, c.as)
               return { type: 'tool_result', tool_use_id: u.id, content: r.content, ...(r.is_error ? { is_error: true } : {}) }
             })
             conversation.push({ role: 'user', content: results })
           } else {
             conversation.push({ role: 'assistant', content: resp.content })
-            finished = true
+            const { answerNudgeNeeded, answerNudgeMessage } = chatLoop as Partial<typeof chatLoop>
+            const text = answer
+            const linkTargets = recorded.filter((r) => r.tool === OPEN_SCREEN).map((r) => String(r.input.target ?? ''))
+            if (args.nudge && answerNudgeNeeded && answerNudgeMessage && !nudgedThisTurn && resp.stop_reason === 'end_turn' && it < MAX_ITERATIONS - 1
+              && answerNudgeNeeded({ toolsUsed: recorded.map((r) => r.tool), linkTargets, text })) {
+              nudgedThisTurn = true
+              row.nudged++
+              conversation.push(answerNudgeMessage(args.model))
+            } else finished = true
           }
         }
         if (!finished) failures.push(`turn ${ti + 1}: tool rounds used up`)
@@ -337,6 +367,7 @@ async function main() {
         row.passedChecks += g.passed.length
         row.failedChecks += g.failed.length + (finished ? 0 : 1)
         for (const f of g.failed) failures.push(`turn ${ti + 1}: ${f}`)
+        if (g.failed.length) failures.push(`turn ${ti + 1}: tools called: ${recorded.map((r) => r.tool).join(', ') || '(none)'}; answer length ${answer.trim().length} chars`)
       }
       row.ok = row.failedChecks === 0
     } catch (err) {
@@ -356,7 +387,7 @@ async function main() {
     }
     row.latencyMs = performance.now() - t0
     if (!stopped || row.calls > 0) rows.push(row)
-    console.log(`${row.ok ? 'PASS' : stopped && row.calls === 0 ? 'SKIP' : 'FAIL'}  ${c.id}  (${row.calls} calls, ${money(row.cost)})`)
+    console.log(`${row.ok ? 'PASS' : stopped && row.calls === 0 ? 'SKIP' : 'FAIL'}  ${c.id}  (${row.calls} calls, ${money(row.cost)}${row.nudged ? `, nudged x${row.nudged}` : ''})`)
     for (const f of failures) console.log(`      - ${f}`)
   }
 

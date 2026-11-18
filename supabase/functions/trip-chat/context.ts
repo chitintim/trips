@@ -166,7 +166,7 @@ export function capabilitiesText(viewer: ChatViewer, actionsEnabled: boolean, fr
   if (!actionsEnabled) {
     lines.push('Proposing changes is switched OFF for this trip. If asked, say you can look things up but cannot make changes from chat yet, and offer open_screen links.')
   } else {
-    const can = ['add a to-do (for themselves, someone, everyone or anyone)', 'tick/untick/claim their own to-do', "record their own answer to an open question", frozen ? null : 'add an expense', viewer.canManageTrip ? 'create a question with options, add an option' : 'suggest an option or an idea'].filter(Boolean)
+    const can = ['add a to-do (for themselves, someone, everyone or anyone)', 'tick/untick/claim their own to-do', "record their own answer to an open question", frozen ? null : 'add an expense', viewer.canManageTrip ? 'create a question with options, add an option to a question, add an idea to the Ideas list' : 'suggest an option or an idea'].filter(Boolean)
     lines.push(`They may ask you to: ${can.join('; ')}.`)
     if (frozen) lines.push('Balances are FROZEN: expenses cannot be added. Say so and offer open_screen settle.')
   }
@@ -180,6 +180,13 @@ export interface DigestInput {
   outcomes: string | null
   frozen: boolean
 }
+
+/**
+ * Last line of the [Context] block. Live and in the eval a short imperative message ("Freeze this trip") was answered
+ * with "I only see the context, what would you like to do?" and a recital of the person's to-dos: the model took the
+ * context block for the whole turn. Saying plainly where the context ends and that the next block is the request fixes it.
+ */
+export const CONTEXT_FOOTER = '[End of context. The person\'s own message follows in the next block: it is the request to answer, however short it is.]'
 
 /** The [Context] text block of the current user turn. Never throws: each part degrades to nothing. */
 export async function buildContextBlock(i: DigestInput): Promise<string> {
@@ -203,6 +210,7 @@ export async function buildContextBlock(i: DigestInput): Promise<string> {
   if (toAnswer != null) lines.push(`Questions waiting for your answer: ${toAnswer}.`)
   if (money) lines.push(`Money: ${money}`)
   if (i.outcomes) lines.push(i.outcomes)
+  lines.push(CONTEXT_FOOTER)
   return lines.filter(Boolean).join('\n')
 }
 

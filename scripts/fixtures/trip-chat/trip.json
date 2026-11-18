@@ -31,13 +31,13 @@
       "- Book the ferry (question, id cccccccc-0000-4000-8000-000000000003)",
       "- Upload your passport details (trip, id todo-passport)",
       "Questions waiting for your answer: 1.",
-      "Money: You owe nobody; Sam owes you GBP 12.50."
+      "Money: You're owed £12.50 overall"
     ],
     "participant": [
       "Your to-dos: 1 open:",
       "- Upload your passport details (trip, id todo-passport)",
       "Questions waiting for your answer: 1.",
-      "Money: You owe Tim GBP 12.50."
+      "Money: You owe £12.50 overall"
     ]
   },
   "reads": {
@@ -76,8 +76,24 @@
         }
       }
     },
-    "get_my_money": { "you_owe": [{ "to": "Tim", "amount": "GBP 12.50" }], "owed_to_you": [], "note": "Suggested payments are suggestions, not payments made." },
-    "get_balances": { "currency": "GBP", "people": [{ "name": "Tim", "net": "+12.50" }, { "name": "Sam", "net": "-12.50" }, { "name": "Ana", "net": "0.00" }, { "name": "Ben", "net": "0.00" }] },
+    "get_my_money": {
+      "$viewer": {
+        "organiser": { "headline": "You're owed £12.50", "currency": "GBP", "how_it_adds_up": ["You paid for the group: £50.00", "Your share of everything: £37.50"], "per_person": ["Sam owes you £12.50"], "payments": [], "unclaimed_receipts_you_paid_for": [] },
+        "participant": { "headline": "You owe £12.50", "currency": "GBP", "how_it_adds_up": ["You paid for the group: £0.00", "Your share of everything: £12.50"], "per_person": ["You owe Tim £12.50"], "payments": [], "unclaimed_receipts_you_paid_for": [] }
+      }
+    },
+    "get_balances": {
+      "currency": "GBP",
+      "group_total_spent": "£50.00",
+      "balances": [
+        { "person": "Tim", "paid": "£50.00", "share": "£37.50", "payments_sent": "£0.00", "payments_received": "£0.00", "balance": "Is owed £12.50" },
+        { "person": "Ana", "paid": "£0.00", "share": "£0.00", "payments_sent": "£0.00", "payments_received": "£0.00", "balance": "All square" },
+        { "person": "Ben", "paid": "£0.00", "share": "£0.00", "payments_sent": "£0.00", "payments_received": "£0.00", "balance": "All square" },
+        { "person": "Sam", "paid": "£0.00", "share": "£12.50", "payments_sent": "£0.00", "payments_received": "£0.00", "balance": "Owes £12.50" }
+      ],
+      "payments": [],
+      "unclaimed_receipts": []
+    },
     "list_expenses": { "expenses": [{ "id": "eeeeeeee-0000-4000-8000-000000000001", "description": "Airport taxi", "amount": "GBP 50.00", "paid_by": "Tim", "date": "Tuesday 11 November" }] },
     "get_receipt": {
       "description": "Airport taxi",

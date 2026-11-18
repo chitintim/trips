@@ -6,6 +6,23 @@ import { safeHref } from './safeHref'
 
 const ALLOWED = ['p', 'strong', 'em', 'del', 'ul', 'ol', 'li', 'a', 'br', 'code', 'blockquote']
 
+/**
+ * Drops a paragraph that repeats an earlier one word for word (a reply the model or a retry wrote twice).
+ * Short blocks ("Yes", list items) are never touched.
+ */
+export function collapseRepeatedBlocks(text: string): string {
+  const seen = new Set<string>()
+  const blocks = text.split(/\n{2,}/)
+  const kept = blocks.filter((b) => {
+    const key = b.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (key.length < 20) return true
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  return kept.length === blocks.length ? text : kept.join('\n\n')
+}
+
 /** Never let react-markdown turn anything into an <img>, <script> or raw HTML: only the elements above are rendered. */
 export function ChatMarkdown({ children, className = '' }: { children: string; className?: string }): ReactNode {
   return (
@@ -39,7 +56,7 @@ export function ChatMarkdown({ children, className = '' }: { children: string; c
           blockquote: ({ children: c }) => <blockquote className="border-l-2 border-[var(--border-default)] pl-3 italic text-[var(--text-muted)]">{c}</blockquote>,
         }}
       >
-        {children}
+        {collapseRepeatedBlocks(children)}
       </ReactMarkdown>
     </div>
   )

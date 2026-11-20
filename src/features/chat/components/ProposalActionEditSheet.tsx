@@ -105,8 +105,10 @@ export function ProposalActionEditSheet({ isOpen, onClose, tripId, action, onSav
         )}
 
         {['create_event', 'update_event'].includes(type) && (
-          <div className="grid grid-cols-3 gap-3">
-            <Input label="Date" type="date" value={values.event_date ?? ''} onChange={set('event_date')} />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 min-w-0">
+              <Input label="Date" type="date" value={values.event_date ?? ''} onChange={set('event_date')} />
+            </div>
             <Input label="Start" type="time" value={values.start_time ?? ''} onChange={set('start_time')} />
             <Input label="End" type="time" value={values.end_time ?? ''} onChange={set('end_time')} />
           </div>

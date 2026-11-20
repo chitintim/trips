@@ -38,7 +38,7 @@ import {
 
 import { todayTabConfig } from '../features/today'
 import { planTabConfig, AddToPlanSheet, AnswerFlow } from '../features/plan'
-import { useCanSuggestIdea } from '../features/plan/lib/useCanSuggestIdea'
+import { useAddIntents } from '../features/plan/lib/useAddToPlanSave'
 import type { PlanFocus } from '../features/plan'
 import { QuestionManageSheet } from '../features/decisions'
 import { peopleTabConfig, StatusModal, TravelDetailsSheet } from '../features/people'
@@ -151,9 +151,8 @@ export function TripDetail() {
 
   const myParticipant = participants.find((p) => p.user_id === user?.id) || null
   const { canManageTrip: isOrganizer } = useTripPermissions(trip)
-  // Participants who are coming get the Add entry with exactly one intent ("An idea").
-  const canSuggestIdea = useCanSuggestIdea(trip)
-  const canAdd = isOrganizer || canSuggestIdea
+  // The Add entry shows whenever the Add menu would offer something (organisers: everything; members who are coming: their own plans and ideas).
+  const canAdd = useAddIntents(trip).intents.length > 0
 
   const [editModalOpen, setEditModalOpen] = useState(false)
   const [addParticipantModalOpen, setAddParticipantModalOpen] = useState(false)
@@ -700,7 +699,7 @@ export function TripDetail() {
           )}
           {activeSpace === 'people' && (
             <ErrorBoundary label="People">
-              <peopleTabConfig.Component tripId={trip.id} />
+              <peopleTabConfig.Component tripId={trip.id} onOpenTravel={() => setTravelDetailsOpen(true)} />
             </ErrorBoundary>
           )}
         </div>

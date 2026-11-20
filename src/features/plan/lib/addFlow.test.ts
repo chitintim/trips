@@ -1,21 +1,33 @@
 import { describe, it, expect } from 'vitest'
 import {
-  availableIntents, asPastedUrl, parseOptionLines, guessCategory, emptyHappening, validateHappening, buildEventInsert,
+  availableIntents, asPastedUrl, parseOptionLines, guessCategory, emptyHappening, validateHappening, buildEventInsert, buildMyPlanItemInput,
   emptyQuestion, applyTemplate, validateQuestion, buildSectionInsert, buildQuestionOptionRows,
   emptyIdea, validateIdea, findIdeasQuestion, buildIdeasSectionInsert, buildIdeaOptionRow, viewLink, INTENT_TILES,
 } from './addFlow'
 
 describe('addFlow', () => {
-  it('offers nothing to people who cannot manage the trip', () => {
-    expect(availableIntents(false)).toEqual([])
+  it('gives organisers all three and members their own plans plus ideas', () => {
     expect(availableIntents(true)).toEqual(['happening', 'question', 'idea'])
     expect(availableIntents(true, true)).toEqual(['happening'])
-    // Phase 5A: a participant who may suggest gets exactly one intent; never on a finished trip; organizers keep all three.
-    expect(availableIntents(false, false, true)).toEqual(['idea'])
-    expect(availableIntents(false, true, true)).toEqual([])
-    expect(availableIntents(false, false, false)).toEqual([])
     expect(availableIntents(true, false, true)).toEqual(['happening', 'question', 'idea'])
+    // Members who are coming: their own happening, and an idea when the suggest RPC allows it.
+    expect(availableIntents(false, false, true)).toEqual(['happening', 'idea'])
+    expect(availableIntents(false, false, false)).toEqual(['happening'])
+    // Never on a finished trip.
+    expect(availableIntents(false, true, true)).toEqual([])
+    expect(availableIntents(false, true, false)).toEqual([])
+    // Declined, cancelled or not on the trip: no happening.
+    expect(availableIntents(false, false, true, false)).toEqual(['idea'])
+    expect(availableIntents(false, false, false, false)).toEqual([])
     expect(INTENT_TILES.map((t) => t.title)).toEqual(['Something that’s happening', 'A question for the group', 'An idea'])
+  })
+
+  it('builds a member’s just-me item without attendees or cost', () => {
+    const v = { ...emptyHappening('2026-12-07', 'GBP'), title: ' Dinner in Tokyo ', hasTime: true, startTime: '19:00', endTime: '21:00', costAmount: '40', attendeeIds: ['a', 'b'], notes: ' booked ' }
+    expect(buildMyPlanItemInput(v)).toEqual({
+      title: 'Dinner in Tokyo', date: '2026-12-07', startTime: '19:00', endTime: '21:00', notes: 'booked', placeId: null, location: null, category: 'dining',
+    })
+    expect(buildMyPlanItemInput({ ...v, hasTime: false })).toMatchObject({ startTime: null, endTime: null })
   })
 
   it('recognises a pasted link only when it is the whole text', () => {

@@ -209,7 +209,7 @@ export function SectionEditorSheet({ isOpen, onClose, tripId, section }: Section
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <Input
                 label="Answer by (optional)"
                 type="datetime-local"

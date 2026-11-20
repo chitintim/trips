@@ -199,7 +199,7 @@ export function PlanTab({ trip, focus = null, onNavigate }: PlanTabProps) {
       )}
       {lens === 'map' && (
         <Suspense fallback={<Skeleton variant="card" height={420} />}>
-          <LazyPlanMapLens trip={trip} items={items} onOpenItem={setSelectedItem} />
+          <LazyPlanMapLens trip={trip} items={items} isOrganizer={isOrganizer} onOpenItem={setSelectedItem} />
         </Suspense>
       )}
 

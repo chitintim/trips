@@ -80,7 +80,7 @@ export function PutOnPlanSheet({ isOpen, onClose, trip, target }: PutOnPlanSheet
     <Modal isOpen={isOpen} onClose={onClose} size="sm" title={`Put "${target.title}" on the plan`}>
       <div className="space-y-4">
         <p className="text-sm text-[var(--text-secondary)]">Pick a day, and a time if it has one.</p>
-        <PlanWhenFields date={date} startTime={startTime} onDateChange={setDate} onStartTimeChange={setStartTime} />
+        <PlanWhenFields tripStart={trip.start_date} tripEnd={trip.end_date} date={date} startTime={startTime} onDateChange={setDate} onStartTimeChange={setStartTime} />
         <div className="flex justify-end gap-3 border-t border-[var(--border-subtle)] pt-3">
           <Button variant="ghost" onClick={onClose} disabled={createEvent.isPending}>
             Cancel

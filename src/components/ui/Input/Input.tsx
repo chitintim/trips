@@ -1,4 +1,5 @@
 import { InputHTMLAttributes, forwardRef, useId } from 'react'
+import { DATE_LIKE_INPUT_CLASSES, INPUT_WRAPPER_CLASSES, isDateLikeType } from './inputClasses'
 
 // ============================================================================
 // TYPES
@@ -112,6 +113,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
       ${sizeStyles[size]}
       ${leftAddon ? addonPaddingStyles.left[size] : ''}
       ${rightAddon ? addonPaddingStyles.right[size] : ''}
+      ${isDateLikeType(props.type) ? DATE_LIKE_INPUT_CLASSES : ''}
       ${stateStyles}
       ${className}
     `.trim().replace(/\s+/g, ' ')
@@ -122,7 +124,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
     const rightAddonPosition = { sm: 'right-3', md: 'right-3', lg: 'right-4' }
 
     return (
-      <div className={fullWidth ? 'w-full' : 'w-auto'}>
+      <div className={`${fullWidth ? 'w-full' : 'w-auto'} ${INPUT_WRAPPER_CLASSES}`}>
         {label && (
           <label
             htmlFor={inputId}
@@ -133,7 +135,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           </label>
         )}
 
-        <div className="relative">
+        <div className="relative min-w-0">
           {leftAddon && (
             <div
               className={`${addonBaseStyles} ${addonSizeStyles[size]} ${leftAddonPosition[size]}`}

@@ -7,6 +7,15 @@ export interface DayByDayBarChartProps {
   currency: string
 }
 
+/** Short axis tick from the entry label: the day number in the trip, "B"/"A" outside it (the full label stays on aria-label/title). */
+function tickFor(label: string): string {
+  const day = /^Day (\d+)/.exec(label)
+  if (day) return day[1]
+  if (label.startsWith('Before')) return 'B'
+  if (label.startsWith('After')) return 'A'
+  return label
+}
+
 /**
  * Hand-rolled SVG bar chart of per-day spend (plan §8/§10: "spend per day
  * bars, trip timeline of burn"). No chart library; small SVG, viewBox
@@ -52,8 +61,8 @@ export function DayByDayBarChart({ entries, currency }: DayByDayBarChartProps) {
       </svg>
       <div className="flex text-[10px] text-[var(--text-muted)] mt-1">
         {entries.map((entry, i) => (
-          <span key={entry.date} style={{ width: `${barWidth}%` }} className="text-center truncate">
-            {i === 0 || i === entries.length - 1 || entries.length <= 10 ? i + 1 : ''}
+          <span key={entry.date} style={{ width: `${barWidth}%` }} className="text-center truncate" title={entry.label} aria-label={entry.label}>
+            {i === 0 || i === entries.length - 1 || entries.length <= 10 || !entry.label.startsWith('Day') ? tickFor(entry.label) : ''}
           </span>
         ))}
       </div>

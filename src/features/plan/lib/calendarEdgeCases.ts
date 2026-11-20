@@ -1,26 +1,27 @@
 /**
  * Calendar edge cases (UX_REDESIGN.md Part 3 "Calendar edge cases (handle
- * explicitly)", numbered 1-8 in the spec — #6 pre/post-trip expenses lives
- * in the expenses feature's own module since it's a Money-space concern,
- * see `src/features/expenses/lib/prePostTripExpenses.ts`). Pure logic only
+ * explicitly)", numbered 1-8 in the spec — #6, expenses before or after the
+ * trip, is a Money-space concern and lives in the expenses feature). Pure logic only
  * — no React, no Supabase — so every rule here is unit-testable in
  * isolation.
  */
 import type { PlanItem } from './planItems'
 import { optionDateRange, type DateRange } from '../../today/lib/datePoll'
 import type { SectionWithOptions } from '../../../lib/queries/usePlanning'
+import { isBeyondTravelWindow } from '../../../lib/tripWindow'
+
+export { isBeyondTravelWindow }
 
 // ---------------------------------------------------------------------------
-// #1 Dates changed after planning: items outside the (possibly-updated)
-// trip range get an "outside trip dates" flag with a re-anchor affordance
-// (the caller opens the event editor for the item so the organizer can pick
-// a new date) — items are NEVER auto-deleted or auto-moved.
+// #1 Dates changed after planning: items more than a week outside the
+// (possibly-updated) trip range get a quiet "Check the date" tag. Up to a
+// week either side is normal (see src/lib/tripWindow.ts). Items are NEVER
+// auto-deleted or auto-moved.
 // ---------------------------------------------------------------------------
 
-/** True when a dated PlanItem's date falls outside the trip's [start_date, end_date] window. */
-export function isOutsideTripDates(item: Pick<PlanItem, 'date'>, tripStartDate: string, tripEndDate: string): boolean {
-  if (!item.date) return false
-  return item.date < tripStartDate || item.date > tripEndDate
+/** True when a dated PlanItem is more than a week outside the trip dates (the "Check the date" tag). */
+export function isItemBeyondTravelWindow(item: Pick<PlanItem, 'date'>, tripStartDate: string, tripEndDate: string): boolean {
+  return isBeyondTravelWindow(item.date, tripStartDate, tripEndDate)
 }
 
 // ---------------------------------------------------------------------------

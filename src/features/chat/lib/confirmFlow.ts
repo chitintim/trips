@@ -176,6 +176,8 @@ const STUCK_WHERE: Record<string, string> = {
   suggest_option: 'the Plan tab',
   create_question: 'the Plan tab',
   add_option: 'the Plan tab',
+  set_travel: 'your travel details',
+  add_plan_item: 'the Plan tab',
 }
 /** The wording for a card stuck at "executing". Never offers a retry: a money action must be looked for first. */
 export function stuckMessage(kind: string): string {
@@ -204,6 +206,10 @@ export function outcomeLine(action: ChatActionEnvelope): string | null {
       return 'Question added to the plan.'
     case 'add_option':
       return 'Option added.'
+    case 'set_travel':
+      return 'Travel saved.'
+    case 'add_plan_item':
+      return 'Added to the plan.'
     default:
       return null
   }

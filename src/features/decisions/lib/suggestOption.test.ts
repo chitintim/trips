@@ -123,13 +123,14 @@ const q = (method: string, extra: Partial<SnapshotSection> = {}): SnapshotSectio
   ...extra,
 })
 const snap = (section: SnapshotSection, votes: TripSnapshot['votes']): TripSnapshot => ({
-  trip: { id: 't', name: 'Trip', status: 'confirming_participants', start_date: '2027-02-06', end_date: '2027-02-13', confirmation_enabled: true, confirmation_deadline: null, base_currency: 'GBP', created_by: 'org' },
+  trip: { id: 't', name: 'Trip', status: 'confirming_participants', start_date: '2027-03-06', end_date: '2027-03-13', confirmation_enabled: true, confirmation_deadline: null, base_currency: 'GBP', created_by: 'org' },
   participants: [person('org', 'Org', { role: 'organizer' }), person('sam', 'Sam'), person('kim', 'Kim')],
   sections: [section], votes, actions: [], checklists: [], expenses: [], settlements: [], travelEvents: [],
 })
 const withSuggestion = (s: SnapshotSection): SnapshotSection => ({
   ...s, options: [...s.options, { id: 'q-s', title: 'Suggested', status: 'available', selections: [], metadata: { suggested_by: 'kim' } } as SnapshotSection['options'][number]],
 })
+// Trip starts >90 days after NOW so the travel to-do window (90 days) stays closed and only answers matter here.
 const NOW = new Date(2026, 10, 16, 12, 0, 0)
 
 describe('a newly suggested option does not change anyone\'s to-dos', () => {

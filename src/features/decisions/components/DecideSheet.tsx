@@ -235,7 +235,7 @@ export function DecideSheet({ isOpen, onClose, trip, section, initialOptionId = 
 
         <div className="space-y-2">
           <ToggleRow checked={putOnPlan} onChange={(v) => patch({ plan: v })} title="Put it on the plan" hint={optionDate ? 'This option already has a date.' : 'Give the winner a day on the plan.'}>
-            <PlanWhenFields date={date} startTime={startTime} onDateChange={(v) => patch({ date: v })} onStartTimeChange={(v) => patch({ time: v })} />
+            <PlanWhenFields tripStart={trip.start_date} tripEnd={trip.end_date} date={date} startTime={startTime} onDateChange={(v) => patch({ date: v })} onStartTimeChange={(v) => patch({ time: v })} />
           </ToggleRow>
           <ToggleRow checked={bookTodo} onChange={(v) => patch({ todo: v })} title="Add a to-do to book it" hint="Someone gets “Book: …” on their list.">
             <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">

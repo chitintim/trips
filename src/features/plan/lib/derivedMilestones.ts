@@ -204,7 +204,7 @@ export function spanCoversDate(span: DerivedMilestone, date: string): boolean {
  * Day-N-of-M label (unifies the partial "Day N" logic in dayGrouping.ts
  * with a total-days figure for the "Day N of M" wording UX_REDESIGN Part 3
  * asks for). Returns null when `date` falls outside the trip's dates
- * (pre/post-trip days use dayGrouping's "Pre-trip"/"Post-trip" label
+ * (days before or after the trip use dayGrouping's "Before the trip"/"After the trip" label
  * instead — this function is only for in-range days).
  */
 export function dayNofM(date: string, tripStartDate: string, tripEndDate: string): { n: number; m: number } | null {

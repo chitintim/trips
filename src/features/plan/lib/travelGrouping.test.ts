@@ -19,6 +19,7 @@ interface TravelLeg {
   userId?: string
   title?: string
   travel?: boolean
+  extra?: boolean
   allDay?: boolean
   category?: string | null
 }
@@ -34,6 +35,7 @@ function leg(overrides: TravelLeg): { item: TravelPlanItemLike; event: TravelEve
     userId = `user-${id}`,
     title = `${userId} ${direction === 'arrival' ? 'arrives' : 'departs'}`,
     travel = true,
+    extra = false,
     allDay = false,
     category = flightRef ? 'flight' : 'transfer',
   } = overrides
@@ -54,6 +56,7 @@ function leg(overrides: TravelLeg): { item: TravelPlanItemLike; event: TravelEve
         ? {
             travel_details: true,
             direction,
+            ...(extra ? { leg: 'extra' } : {}),
             ...(flightRef ? { flight_ref: flightRef } : {}),
             ...(airportCode ? { airport_code: airportCode } : {}),
           }
@@ -175,6 +178,16 @@ describe('groupTravelForDay', () => {
     const { items, eventsById } = buildDay([travelLeg])
     eventsById.set('event-dinner', { title: 'Group dinner', participant_ids: null, metadata: null })
     const { groups, groupedItemIds } = groupTravelForDay([...items, dinner, proposal], eventsById)
+    expect(groups).toHaveLength(0)
+    expect(groupedItemIds.size).toBe(0)
+  })
+
+  it('leaves extra journeys out of the grouping', () => {
+    const { items, eventsById } = buildDay([
+      leg({ id: 'a', flightRef: 'JL044', extra: true }),
+      leg({ id: 'b', flightRef: 'JL044', extra: true }),
+    ])
+    const { groups, groupedItemIds } = groupTravelForDay(items, eventsById)
     expect(groups).toHaveLength(0)
     expect(groupedItemIds.size).toBe(0)
   })

@@ -107,6 +107,17 @@ CREATE POLICY "stub: participants can view chat messages" ON trip_chat_messages 
 CREATE TABLE ai_usage (id uuid primary key default gen_random_uuid(), user_id uuid references users(id) on delete set null, trip_id uuid references trips(id) on delete set null, function_name text not null, model text not null, input_tokens int, output_tokens int, cache_read_tokens int, cache_write_tokens int, estimated_cost_usd numeric(10,6), created_at timestamptz not null default now());
 ALTER TABLE ai_usage ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view their own ai usage" ON ai_usage FOR SELECT USING (auth.uid() = user_id);
+-- trip_timeline_events (live shape + the FOUR live policies, verbatim, recorded 2026-11-20: organisers write, participants read) and the enum / places it needs (20261201090000_own_travel_and_plans.sql)
+CREATE TYPE timeline_event_category AS ENUM ('flight','accommodation','transport','activity','dining','transfer','meeting_point','free_time','other');
+CREATE TABLE places (id uuid primary key default gen_random_uuid(), trip_id uuid not null references trips(id) on delete cascade, name text not null default 'Place');
+CREATE TABLE trip_timeline_events (id uuid primary key default gen_random_uuid(), trip_id uuid not null references trips(id) on delete cascade, event_date date not null, start_time time, end_time time, all_day boolean default false, title text not null, description text,
+  category timeline_event_category not null default 'other', location text, participant_ids uuid[], metadata jsonb default '{}'::jsonb, sort_order integer default 0, source_option_id uuid, created_by uuid not null references users(id), created_at timestamptz default now(), updated_at timestamptz default now(),
+  place_id uuid references places(id) on delete set null);
+ALTER TABLE trip_timeline_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY organizers_insert_timeline ON trip_timeline_events FOR INSERT WITH CHECK (is_trip_organizer(trip_id, auth.uid()));
+CREATE POLICY organizers_update_timeline ON trip_timeline_events FOR UPDATE USING (is_trip_organizer(trip_id, auth.uid()));
+CREATE POLICY organizers_delete_timeline ON trip_timeline_events FOR DELETE USING (is_trip_organizer(trip_id, auth.uid()));
+CREATE POLICY participants_view_timeline ON trip_timeline_events FOR SELECT USING (is_trip_participant(trip_id, auth.uid()));
 -- Supabase default ACLs: every new table/function in public is open to the three API roles (the migrations revoke what must not be)
   GRANT USAGE ON SCHEMA public, auth TO anon, authenticated, service_role;
   GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;

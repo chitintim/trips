@@ -74,6 +74,9 @@ if (process.env.REH_FILE && process.env.REH_FILE.startsWith('20261130')) for (co
 const TT = 'be551bc4-a524-4b6a-a0c9-b74a7168ced4'
 await db.query(`insert into trips(id,name,created_by,base_currency) values ($1,'TEST payment email - delete me',$2,'GBP')`, [TT, U(1)])
 // the chat-settings rehearsal mirrors the LIVE shape that once broke it: the test trip's only organiser is the site admin (U(10)) plus one plain participant
+// the own-travel rehearsal needs the live test-trip dates (it refuses a trip with none); users 3.. are not on the trip, so it finds its three people
+const ownTravel = !!process.env.REH_FILE && process.env.REH_FILE.startsWith('20261201')
+if (ownTravel) await db.query(`update trips set start_date='2026-12-10', end_date='2026-12-11' where id=$1`, [TT])
 const chatSettings = !!process.env.REH_FILE && process.env.REH_FILE.startsWith('20261130')
 await db.query(`insert into trip_participants(trip_id,user_id,role,active) values ($1,$2,'organizer',true),($1,$3,'participant',true)`, [TT, U(chatSettings ? 10 : 1), U(2)])
 if (process.env.FROZEN) await db.query(`update trips set settlement_snapshot='{"transactions":[]}' where id=$1`, [TT])
@@ -88,7 +91,9 @@ const snap = async () => JSON.stringify([
   (await db.query(`select count(*)::int n from pg_policies`)).rows[0],
   (await db.query(`select to_regclass('pg_temp._rehearsal') is null as no_temp`)).rows[0],
 ])
+const ownTravelState = async () => (await db.query(`select (select count(*)::int from trip_timeline_events) ev, (select count(*)::int from trip_participants) tp, (select count(*)::int from pg_proc where pronamespace='public'::regnamespace and proname in ('set_my_travel','save_my_plan_item')) fns`)).rows[0]
 const snapBefore = await snap()
+const otBefore = ownTravel ? await ownTravelState() : null
 const script = fs.readFileSync(process.env.REH ?? path.join(ROOT, 'supabase/rehearsal/' + (process.env.REH_FILE ?? '20261126090000_receipt_deadline_rehearsal.sql')), 'utf8')
 let msg = null
 try { await db.exec(script) } catch (e) { msg = e.message }
@@ -100,5 +105,10 @@ ok('reports PASS', !!msg && msg.startsWith('REHEARSAL PASS'))
 ok('message under ~6,200 chars', !!msg && msg.length < 6300, msg?.length)
 const snapAfter = await snap()
 ok('nothing left behind (rows, functions, columns, tables, triggers, constraints, policies, frozen flag)', snapBefore === snapAfter, snapBefore === snapAfter ? '' : { snapBefore, snapAfter })
+if (ownTravel) {
+  const otAfter = await ownTravelState()
+  eq('own travel: no timeline events left, participants unchanged, both functions still absent', otAfter, otBefore)
+  eq('own travel: the harness started without the two functions', otBefore.fns, 0)
+}
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail ? 1 : 0)

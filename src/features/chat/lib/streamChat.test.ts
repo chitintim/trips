@@ -52,3 +52,13 @@ describe('SSE parser', () => {
     expect(b.action.requires).toBe('link')
   })
 })
+
+describe('the travel and plan kinds are known', () => {
+  it('parses an action stream event of each new kind, and still drops an unknown one', () => {
+    for (const kind of ['set_travel', 'add_plan_item']) {
+      const ev = parseStreamEvent(JSON.stringify({ type: 'action', action: { id: 'a1', kind, params: { date: '2026-12-03' }, requires: 'tap', status: 'proposed' } }))
+      expect(ev).toMatchObject({ type: 'action', action: { kind, requires: 'tap' } })
+    }
+    expect(parseStreamEvent(JSON.stringify({ type: 'action', action: { id: 'a1', kind: 'set_travel_for_sam', params: {}, requires: 'tap' } }))).toBeNull()
+  })
+})

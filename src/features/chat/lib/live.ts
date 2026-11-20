@@ -5,8 +5,9 @@ import { queryKeys } from '../../../lib/queries/queryKeys'
 import { useActions, useTodoWhoSupport, type ActionWithCompletions } from '../../../lib/queries/useActions'
 import { useChecklists, type ChecklistItem } from '../../../lib/queries/useChecklists'
 import { questionPassesKey, useQuestionPasses, useSections, useVotes, type OptionVoteWithUser, type QuestionPass, type SectionWithOptions } from '../../../lib/queries/usePlanning'
+import { useTimeline } from '../../../lib/queries/useTimeline'
 import { useParticipants, useTrip, type ParticipantWithUser } from '../../../lib/queries/useTrip'
-import type { Trip } from '../../../types'
+import type { TimelineEvent, Trip } from '../../../types'
 import type { LiveData } from '../actions/types'
 
 interface Inputs {
@@ -19,6 +20,7 @@ interface Inputs {
   passes: QuestionPass[] | undefined
   actions: ActionWithCompletions[] | undefined
   checklists: ChecklistItem[] | undefined
+  events: TimelineEvent[] | undefined
   todoWho: boolean
 }
 
@@ -43,6 +45,7 @@ export function buildLive(i: Inputs): LiveData {
     passes: i.passes,
     actions: i.actions ?? [],
     checklists: i.checklists ?? [],
+    events: i.events,
   }
 }
 
@@ -56,6 +59,8 @@ export function useChatLive(trip: Trip, userId: string | undefined, canManage: b
   const passesResult = useQuestionPasses(id)
   const { data: actions } = useActions(id)
   const { data: checklists } = useChecklists(id)
+  const { data: timeline, status: timelineStatus } = useTimeline(id)
+  const events = timelineStatus === 'success' ? timeline : undefined
   const todoWho = useTodoWhoSupport()
   return useMemo(
     () =>
@@ -70,10 +75,11 @@ export function useChatLive(trip: Trip, userId: string | undefined, canManage: b
             passes: passesResult.available ? passesResult.passes : undefined,
             actions,
             checklists,
+            events,
             todoWho,
           })
         : null,
-    [userId, tripData, trip, canManage, participants, sections, votes, passesResult.available, passesResult.passes, actions, checklists, todoWho]
+    [userId, tripData, trip, canManage, participants, sections, votes, passesResult.available, passesResult.passes, actions, checklists, events, todoWho]
   )
 }
 
@@ -91,6 +97,7 @@ export function readLive(queryClient: QueryClient, trip: Trip, userId: string, c
     passes: passesState?.status === 'success' ? queryClient.getQueryData<QuestionPass[]>(questionPassesKey(t)) ?? [] : undefined,
     actions: queryClient.getQueryData<ActionWithCompletions[]>(queryKeys.actions(t)),
     checklists: queryClient.getQueryData<ChecklistItem[]>(queryKeys.checklists(t)),
+    events: queryClient.getQueryState(queryKeys.timeline(t))?.status === 'success' ? queryClient.getQueryData<TimelineEvent[]>(queryKeys.timeline(t)) : undefined,
     todoWho: true,
   })
 }
@@ -98,7 +105,7 @@ export function readLive(queryClient: QueryClient, trip: Trip, userId: string, c
 /** Refetch what the cards read, so a suggestion is checked (and an answer planned) against the true state. */
 export async function refreshLive(queryClient: QueryClient, tripId: string): Promise<void> {
   await Promise.all(
-    [queryKeys.tripDetail(tripId), queryKeys.participants(tripId), queryKeys.sections(tripId), queryKeys.votes(tripId), questionPassesKey(tripId), queryKeys.actions(tripId), queryKeys.checklists(tripId)].map((queryKey) =>
+    [queryKeys.tripDetail(tripId), queryKeys.participants(tripId), queryKeys.sections(tripId), queryKeys.votes(tripId), questionPassesKey(tripId), queryKeys.actions(tripId), queryKeys.checklists(tripId), queryKeys.timeline(tripId)].map((queryKey) =>
       queryClient.refetchQueries({ queryKey, exact: true }).catch(() => undefined)
     )
   )

@@ -24,7 +24,7 @@ import { buildExpenseDraft } from './addExpense'
 import { createExpenseWithSplits } from '../../../lib/queries/useExpenses'
 import type { ChatDeps } from './deps'
 import type { ExecCtx } from './types'
-import { answerParams, envelope, expenseParams, liveFixture, ANA, BEN, ME, SAM, todoParams } from '../lib/chatFixtures'
+import { answerParams, envelope, expenseParams, liveFixture, planItemParams, travelEvent, travelParams, ANA, BEN, ME, SAM, todoParams } from '../lib/chatFixtures'
 import type { AddExpenseParams } from '../lib/payload'
 
 function fakeDeps(): { [K in keyof ChatDeps]: ReturnType<typeof vi.fn> } {
@@ -40,6 +40,10 @@ function fakeDeps(): { [K in keyof ChatDeps]: ReturnType<typeof vi.fn> } {
     createExpenseWithSplits: vi.fn(async () => ({ id: 'exp-1', description: 'Taxis' })),
     createQuestionWithOptions: vi.fn(async () => ({ id: 'sec-1' })),
     deleteTodo: vi.fn(async () => undefined),
+    setMyTravel: vi.fn(async (_t: string, legs: unknown[]) => ({ legs: legs.map((_, i) => ({ id: `new-${i}`, direction: 'arrival', leg: 'main' })) })),
+    saveMyPlanItem: vi.fn(async (_t: string, id: string | null, item: unknown) => ({ id: item === null ? null : (id ?? 'plan-1') })),
+    createHappening: vi.fn(async () => ({ id: 'ev-9' })),
+    deleteTimelineEvent: vi.fn(async () => undefined),
   }
 }
 
@@ -258,5 +262,191 @@ describe('add_expense parity: the split on the card is the split the shared func
   })
   it('frozen trip: plain refusal at re-check', () => {
     expect(moduleFor('add_expense')!.recheck(envelope('add_expense', expenseParams()), liveFixture({ frozen: true }))).toMatch(/frozen/i)
+  })
+})
+
+
+describe('set_travel', () => {
+  const mod = moduleFor('set_travel')!
+  const tapped = (over: Record<string, unknown> = {}) => envelope('set_travel', travelParams(over), { requires: 'tap', basis: { replaces_updated_at: null } })
+  const replacing = (over: Record<string, unknown> = {}) =>
+    envelope('set_travel', travelParams({ id: 'ev-arr', replaces_event_id: 'ev-arr', ...over }), { basis: { replaces_updated_at: '2026-11-02T10:00:00Z' } })
+  const withSaved = (extra: unknown[] = []) => liveFixture({ events: [travelEvent(), ...extra] as never })
+
+  it('adds a new main leg to the live legs and sends the whole set', async () => {
+    const live = liveFixture({ events: [travelEvent({ id: 'ev-dep', title: 'Departure', event_date: '2026-12-13' }, { direction: 'departure' })] as never })
+    const { ctx, deps } = mkCtx({ live })
+    const out = await mod.execute(tapped(), ctx)
+    const [tripId, legs] = deps.setMyTravel.mock.calls[0] as unknown as [string, Array<Record<string, unknown>>]
+    expect(tripId).toBe('t1')
+    expect(legs.map((l) => [l.direction, l.leg, l.id])).toEqual([['departure', 'main', 'ev-dep'], ['arrival', 'main', null]])
+    expect(legs[1]).toMatchObject({ date: '2026-12-03', time: '10:00', flightRef: 'JL044', airportCode: 'HND', setOffDate: '2026-12-02', setOffTime: '21:00' })
+    expect(deps.setMyTravel.mock.calls[0][2]).toEqual(['ev-dep'])
+    expect(out.doneText).toBe('Travel saved.')
+    expect((out.result.before as unknown[]).length).toBe(1)
+    expect(out.result.after_ids).toEqual(['new-0', 'new-1'])
+  })
+  it('replaces the live main leg and keeps its id from the live row, not the card', async () => {
+    const { ctx, deps } = mkCtx({ live: withSaved() })
+    await mod.execute(replacing({ id: 'forged', date: '2026-12-02' }), ctx)
+    const legs = deps.setMyTravel.mock.calls[0][1] as Array<Record<string, unknown>>
+    expect(legs).toHaveLength(1)
+    expect(legs[0]).toMatchObject({ id: 'ev-arr', date: '2026-12-02' })
+  })
+  it('an extra leg is appended and the saved legs are all sent', async () => {
+    const { ctx, deps } = mkCtx({ live: withSaved() })
+    await mod.execute(tapped({ leg: 'extra', title: 'Flight to Tokyo', set_off_date: null, set_off_time: null }), ctx)
+    const legs = deps.setMyTravel.mock.calls[0][1] as Array<Record<string, unknown>>
+    expect(legs.map((l) => [l.leg, l.id])).toEqual([['main', 'ev-arr'], ['extra', null]])
+  })
+  it('refuses a replace when the live main leg is not the one the card was made against', () => {
+    expect(mod.recheck(replacing(), withSaved())).toBeNull()
+    expect(mod.recheck(replacing({ replaces_event_id: 'ev-other' }), withSaved())).toBe('Your travel has changed since. Open travel details to check.')
+    expect(mod.recheck(replacing(), liveFixture())).toBe('Your travel has changed since. Open travel details to check.')
+    const edited = liveFixture({ events: [travelEvent({ updated_at: '2026-11-05T10:00:00Z' })] as never })
+    expect(mod.recheck(replacing(), edited)).toBe('Your travel has changed since. Open travel details to check.')
+    // a card made for a new leg, but one has been saved since
+    expect(mod.recheck(tapped(), withSaved())).toBe('Your travel has changed since. Open travel details to check.')
+  })
+  it('re-check: finished trip, and too many extra journeys, in plain words', () => {
+    expect(mod.recheck(tapped(), liveFixture({ finished: true }))).toMatch(/finished/)
+    const extras = ['a', 'b', 'c'].map((n, i) => travelEvent({ id: `x${n}`, title: `Flight ${n}`, event_date: `2026-12-0${i + 1}` }, { leg: 'extra' }))
+    expect(mod.recheck(tapped({ leg: 'extra', title: 'One more', set_off_date: null, set_off_time: null }), liveFixture({ events: extras as never }))).toMatch(/up to 3 extra/)
+  })
+  it('a dates-outside-the-trip card is not blocked by anything but the shared rules', () => {
+    expect(mod.recheck(tapped({ date: '2026-12-30', set_off_date: null, set_off_time: null }), liveFixture())).toBeNull()
+  })
+  it('never shows raw database text when the save fails', async () => {
+    const deps = fakeDeps()
+    deps.setMyTravel.mockRejectedValueOnce({ message: 'duplicate key value violates unique constraint "x"', code: '23505' })
+    const { ctx } = mkCtx({ deps })
+    await expect(mod.execute(tapped(), ctx)).rejects.toThrow("Couldn't save your travel. Check your connection and try again.")
+    deps.setMyTravel.mockRejectedValueOnce({ message: 'Setting off must be on or up to 3 days before arriving.', hint: 'bad_set_off' })
+    await expect(mod.execute(tapped(), ctx)).rejects.toThrow(/Setting off must be/)
+  })
+  it('undo sends the legs from before; a row that is gone goes as a new leg; nothing else is touched', async () => {
+    const before = [{ id: 'ev-arr', direction: 'arrival', leg: 'main', title: null, date: '2026-12-04', time: '09:30', flightRef: 'BA117', airportCode: null, setOffDate: null, setOffTime: null, homeDate: null, homeTime: null }]
+    const after = [{ ...before[0], date: '2026-12-02' }]
+    const done = replacing({ date: '2026-12-02' })
+    done.result = { before, after, after_ids: ['ev-arr'] }
+    const live = liveFixture({ events: [travelEvent({ event_date: '2026-12-02' })] as never })
+    expect(mod.undoBlocked!(done, live)).toBeNull()
+    const { ctx, deps } = mkCtx({ live })
+    await mod.undo!(done, ctx)
+    expect(deps.setMyTravel).toHaveBeenCalledWith('t1', [expect.objectContaining({ id: 'ev-arr', date: '2026-12-04' })], ['ev-arr'])
+    // the original row no longer exists (deleted and re-created on the way): send it as new
+    const gone = { ...done, result: { before: [{ ...before[0], id: 'old' }], after } }
+    await mod.undo!(gone, ctx)
+    expect(deps.setMyTravel.mock.calls[1][1]).toEqual([expect.objectContaining({ id: null, date: '2026-12-04' })])
+  })
+  it('undo of a first-ever leg clears it (an empty set), and is blocked once the legs differ from what was saved', async () => {
+    const after = [{ id: 'n0', direction: 'arrival', leg: 'main', title: null, date: '2026-12-03', time: '10:00', flightRef: 'JL044', airportCode: 'HND', setOffDate: '2026-12-02', setOffTime: '21:00', homeDate: null, homeTime: null }]
+    const done = { ...tapped(), result: { before: [], after, after_ids: ['n0'] } }
+    const same = liveFixture({ events: [travelEvent({ id: 'n0', event_date: '2026-12-03', start_time: '10:00:00' }, { flight_ref: 'JL044', airport_code: 'HND', set_off_date: '2026-12-02', set_off_time: '21:00' })] as never })
+    expect(mod.undoBlocked!(done, same)).toBeNull()
+    const { ctx, deps } = mkCtx({ live: same })
+    await mod.undo!(done, ctx)
+    expect(deps.setMyTravel).toHaveBeenCalledWith('t1', [], ['n0'])
+    const changed = liveFixture({ events: [travelEvent({ id: 'n0', event_date: '2026-12-09' })] as never })
+    expect(mod.undoBlocked!(done, changed)).toMatch(/changed since/)
+    expect(mod.undoBlocked!({ ...done, result: null }, same)).toBe('Nothing to undo.')
+  })
+  it('refuses when the timeline is not loaded, and never writes', async () => {
+    const live = liveFixture({ events: undefined })
+    const msg = "Your travel couldn't be checked just now. Open travel details to check."
+    expect(mod.recheck(tapped(), live)).toBe(msg)
+    const { ctx, deps } = mkCtx({ live })
+    await expect(mod.execute(tapped(), ctx)).rejects.toThrow(msg)
+    await expect(mod.undo!({ ...tapped(), result: { before: [], after: [] } }, ctx)).rejects.toThrow(msg)
+    expect(mod.undoBlocked!({ ...tapped(), result: { before: [], after: [] } }, live)).toBe(msg)
+    expect(deps.setMyTravel).not.toHaveBeenCalled()
+  })
+  it('a server "stale" refusal reads as the changed-since message', async () => {
+    const deps = fakeDeps()
+    deps.setMyTravel.mockRejectedValueOnce({ message: 'Your travel has changed since you opened this. Close it, open it again and check.', hint: 'stale' })
+    const { ctx } = mkCtx({ deps })
+    await expect(mod.execute(tapped(), ctx)).rejects.toThrow('Your travel has changed since. Open travel details to check.')
+  })
+  it('validate fails closed on malformed params', () => {
+    expect(mod.validate(travelParams())).toBe(true)
+    expect(mod.validate(travelParams({ direction: 'sideways' }))).toBe(false)
+    expect(mod.validate(travelParams({ date: 'soon' }))).toBe(false)
+    expect(mod.validate(travelParams({ leg: 'extra', title: null }))).toBe(false)
+    expect(mod.validate({})).toBe(false)
+  })
+})
+
+describe('add_plan_item', () => {
+  const mod = moduleFor('add_plan_item')!
+  const mine = () => envelope('add_plan_item', planItemParams(), { requires: 'tap' })
+  const everyone = (over: Record<string, unknown> = {}) => envelope('add_plan_item', planItemParams({ for: 'everyone', ...over }))
+
+  it('for me does not need the timeline to be loaded', async () => {
+    const { ctx, deps } = mkCtx({ live: liveFixture({ events: undefined }) })
+    await mod.execute(mine(), ctx)
+    expect(deps.saveMyPlanItem).toHaveBeenCalled()
+    expect(mod.recheck(mine(), liveFixture({ events: undefined }))).toBeNull()
+  })
+  it('for me goes through saveMyPlanItem with the Add form builder values', async () => {
+    const { ctx, deps } = mkCtx()
+    const out = await mod.execute(mine(), ctx)
+    expect(deps.saveMyPlanItem).toHaveBeenCalledWith('t1', null, { title: 'Dinner in Tokyo', date: '2026-12-02', startTime: '19:00', endTime: '21:00', notes: null, placeId: null, location: null, category: 'dining' })
+    expect(deps.createHappening).not.toHaveBeenCalled()
+    expect(out).toEqual({ result: { created_id: 'plan-1', for: 'me' }, doneText: 'Added to the plan.' })
+  })
+  it('an all-day item sends no times; a late end is kept (runs into the next day)', async () => {
+    const { ctx, deps } = mkCtx()
+    await mod.execute(envelope('add_plan_item', planItemParams({ start_time: null, end_time: null })), ctx)
+    expect(deps.saveMyPlanItem.mock.calls[0][2]).toMatchObject({ startTime: null, endTime: null })
+    await mod.execute(envelope('add_plan_item', planItemParams({ start_time: '22:00', end_time: '02:00' })), ctx)
+    expect(deps.saveMyPlanItem.mock.calls[1][2]).toMatchObject({ startTime: '22:00', endTime: '02:00' })
+  })
+  it('for everyone goes through createHappening (organisers)', async () => {
+    const { ctx, deps } = mkCtx()
+    const out = await mod.execute(everyone(), ctx)
+    expect(deps.createHappening).toHaveBeenCalledWith('t1', ME, expect.objectContaining({ title: 'Dinner in Tokyo', day: '2026-12-02', hasTime: true, startTime: '19:00', endTime: '21:00', attendeeIds: [] }))
+    expect(deps.saveMyPlanItem).not.toHaveBeenCalled()
+    expect(out.result).toEqual({ created_id: 'ev-9', for: 'everyone' })
+    expect(ctx.logActivity).toHaveBeenCalledWith(expect.objectContaining({ verb: 'event_added', entity: expect.objectContaining({ type: 'timeline_event', label: 'Dinner in Tokyo' }) }))
+  })
+  it('a member asking for everyone is refused at re-check and at execute, and nothing is written', async () => {
+    const live = liveFixture({ canManage: false })
+    expect(mod.recheck(everyone(), live)).toBe('Only organisers can add to the group plan.')
+    expect(mod.recheck(mine(), live)).toBeNull()
+    const { ctx, deps } = mkCtx({ live })
+    await expect(mod.execute(everyone(), ctx)).rejects.toThrow(/Only organisers/)
+    expect(deps.createHappening).not.toHaveBeenCalled()
+  })
+  it('finished trip is refused at re-check', () => {
+    expect(mod.recheck(mine(), liveFixture({ finished: true }))).toMatch(/finished/)
+  })
+  it('never shows raw database text', async () => {
+    const deps = fakeDeps()
+    deps.createHappening.mockRejectedValueOnce({ message: 'new row violates row-level security policy for table "trip_timeline_events"', code: '42501' })
+    const { ctx } = mkCtx({ deps })
+    await expect(mod.execute(everyone(), ctx)).rejects.toThrow("Couldn't save that. Check your connection and try again.")
+  })
+  it('undo: a just-me item through saveMyPlanItem(id, null), an everyone item through deleteTimelineEvent', async () => {
+    const row = travelEvent({ id: 'plan-1', title: 'Dinner in Tokyo', event_date: '2026-12-02' })
+    const live = liveFixture({ events: [row] as never })
+    const { ctx, deps } = mkCtx({ live })
+    const a = { ...mine(), result: { created_id: 'plan-1', for: 'me' } }
+    expect(mod.undoBlocked!(a, live)).toBeNull()
+    await mod.undo!(a, ctx)
+    expect(deps.saveMyPlanItem).toHaveBeenCalledWith('t1', 'plan-1', null)
+    await mod.undo!({ ...everyone(), result: { created_id: 'plan-1', for: 'everyone' } }, ctx)
+    expect(deps.deleteTimelineEvent).toHaveBeenCalledWith('t1', 'plan-1')
+  })
+  it('undo is blocked when the item is gone or has been renamed', () => {
+    const a = { ...mine(), result: { created_id: 'plan-1', for: 'me' } }
+    expect(mod.undoBlocked!(a, liveFixture())).toMatch(/already gone/)
+    expect(mod.undoBlocked!(a, liveFixture({ events: [travelEvent({ id: 'plan-1', title: 'Lunch', event_date: '2026-12-02' })] as never }))).toMatch(/changed since/)
+    expect(mod.undoBlocked!(mine(), liveFixture())).toBe('Nothing to undo.')
+  })
+  it('validate fails closed', () => {
+    expect(mod.validate(planItemParams())).toBe(true)
+    expect(mod.validate(planItemParams({ for: 'sam' }))).toBe(false)
+    expect(mod.validate(planItemParams({ title: ' ' }))).toBe(false)
+    expect(mod.validate(planItemParams({ date: '2nd' }))).toBe(false)
   })
 })

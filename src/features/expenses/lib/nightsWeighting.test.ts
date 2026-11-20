@@ -91,6 +91,24 @@ describe('computeNightsWeights', () => {
     expect(results[0].nights).toBe(7) // clamped to full trip range
   })
 
+  it('clamps an early main arrival to the trip start', () => {
+    const events: TimelineEvent[] = [
+      makeEvent({ title: 'Erin arrives', category: 'flight', event_date: '2026-07-30', participant_ids: ['erin'], metadata: { travel_details: true, direction: 'arrival' } }),
+      makeEvent({ title: 'Erin departs', category: 'flight', event_date: '2026-08-05', participant_ids: ['erin'], metadata: { travel_details: true, direction: 'departure' } }),
+    ]
+    const results = computeNightsWeights(['erin'], events, tripStart, tripEnd)
+    expect(results[0]).toMatchObject({ nights: 4, derivedFromEvents: true })
+  })
+
+  it('ignores extra journeys, even ones whose title says leave', () => {
+    const events: TimelineEvent[] = [
+      makeEvent({ title: 'Leave Tokyo', category: 'flight', event_date: '2026-08-03', participant_ids: ['erin'], metadata: { travel_details: true, direction: 'departure', leg: 'extra' } }),
+      makeEvent({ title: 'Arrive in Osaka', category: 'transport', event_date: '2026-08-04', participant_ids: ['erin'], metadata: { travel_details: true, direction: 'arrival', leg: 'extra' } }),
+    ]
+    const results = computeNightsWeights(['erin'], events, tripStart, tripEnd)
+    expect(results[0]).toMatchObject({ nights: 7, derivedFromEvents: false })
+  })
+
   it('never returns fewer than 1 night even for a same-day visitor', () => {
     const events: TimelineEvent[] = [
       makeEvent({ title: 'Arrival', category: 'flight', event_date: '2026-08-08', participant_ids: ['fred'] }),

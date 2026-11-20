@@ -2435,6 +2435,8 @@ export type Database = {
         Args: { p_idea?: boolean; p_link?: string; p_note?: string; p_section_id: string | null; p_title: string; p_trip_id?: string }
         Returns: Json
       }
+      set_my_travel: { Args: { p_trip_id: string; p_legs: Json; p_known_ids: string[] }; Returns: Json }
+      save_my_plan_item: { Args: { p_trip_id: string; p_id?: string; p_item?: Json }; Returns: Json }
       withdraw_suggestion: {
         Args: { p_option_id: string }
         Returns: Json

@@ -2,6 +2,11 @@ import { useEffect, useState } from 'react'
 import { Modal, Button, Input, TextArea, Select, Chip, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { useAuth } from '../../../hooks/useAuth'
+import { useTripPermissions } from '../../../hooks/useTripPermissions'
+import { useQueryClient } from '@tanstack/react-query'
+import { queryKeys } from '../../../lib/queries/queryKeys'
+import { dateNote } from '../../../lib/tripWindow'
+import { isMyPlanItem, saveMyPlanItem, myPlanItemErrorMessage } from '../../plan/lib/myPlanItems'
 import { useCreateTimelineEvent, useUpdateTimelineEvent, useDeleteTimelineEvent } from '../../../lib/queries/useTimeline'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
@@ -56,8 +61,8 @@ function fromEvent(event: TimelineEvent | null, defaultDate: string, currency: s
     category: event.category as TimelineEventCategory,
     eventDate: event.event_date,
     allDay: event.all_day ?? false,
-    startTime: event.start_time ?? '',
-    endTime: event.end_time ?? '',
+    startTime: (event.start_time ?? '').slice(0, 5),
+    endTime: (event.end_time ?? '').slice(0, 5),
     location: event.location ?? '',
     placeId: event.place_id,
     description: event.description ?? '',
@@ -79,8 +84,9 @@ export interface EventEditorSheetProps {
 }
 
 /**
- * Create/edit/delete sheet for a timeline event (organizer-only mutation
- * surface). Form & Flow Standard compliant: draft persistence for create
+ * Create/edit/delete sheet for a timeline event. Organisers write the table directly; anyone else can only
+ * edit or delete their own "just me" item (`isMyPlanItem`), through the `save_my_plan_item` RPC, with no
+ * attendees or cost. Everything else is refused by row-level security, so it is never offered to members. Form & Flow Standard compliant: draft persistence for create
  * (disabled for edit, which always seeds from the record), dirty-close
  * guard, fresh state on every open.
  */
@@ -90,6 +96,12 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
   const tripId = trip.id
   const tripCurrency = trip.base_currency || trip.accommodation_cost_currency || 'GBP'
   const isEditing = !!event
+  const { canManageTrip } = useTripPermissions(trip)
+  const queryClient = useQueryClient()
+  // A member's own just-me item (or a new one): saved through the RPC, no attendees, no cost.
+  const memberMode = !canManageTrip
+  const memberMayEdit = !memberMode || !event || (!!user && isMyPlanItem(event, user.id))
+  const [memberBusy, setMemberBusy] = useState(false)
 
   const createEvent = useCreateTimelineEvent(tripId)
   const updateEvent = useUpdateTimelineEvent(tripId)
@@ -131,7 +143,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
-  const isSaving = createEvent.isPending || updateEvent.isPending
+  const isSaving = createEvent.isPending || updateEvent.isPending || memberBusy
   const activeParticipants = (participants ?? []).filter((p) => p.active !== false)
   const allSelected = values.participantIds === null
   const currencyChoices = Array.from(new Set([values.costCurrency, tripCurrency, 'GBP', 'EUR', 'USD', 'JPY', 'CHF', 'AUD', 'CAD']))
@@ -142,6 +154,8 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
         ? `${formatMoney(costAmountNumber, values.costCurrency)} each`
         : `${formatMoney(costAmountNumber, values.costCurrency)} total, split between everyone going`
       : null
+
+  const dateHelp = values.eventDate ? dateNote(values.eventDate, trip.start_date, trip.end_date)?.text : undefined
 
   const toggleParticipant = (userId: string) => {
     setValues((prev) => {
@@ -167,6 +181,35 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
     const costProblem = validateEventCost(values)
     if (costProblem) {
       showToast({ type: 'error', message: costProblem })
+      return
+    }
+
+    if (memberMode) {
+      if (!memberMayEdit) {
+        showToast({ type: 'error', message: 'Only organisers can change this one' })
+        return
+      }
+      setMemberBusy(true)
+      try {
+        await saveMyPlanItem(tripId, event?.id ?? null, {
+          title: values.title.trim(),
+          date: values.eventDate,
+          startTime: values.allDay ? null : values.startTime || null,
+          endTime: values.allDay ? null : values.endTime || null,
+          notes: values.description.trim() || null,
+          placeId: values.placeId,
+          location: values.location.trim() || null,
+          category: values.category,
+        })
+        await queryClient.invalidateQueries({ queryKey: queryKeys.timeline(tripId) })
+        showToast({ type: 'success', message: isEditing ? 'Event updated' : 'Event added' })
+        clearDraft()
+        onClose()
+      } catch (err) {
+        showToast({ type: 'error', message: 'Could not save event', description: myPlanItemErrorMessage(err) })
+      } finally {
+        setMemberBusy(false)
+      }
       return
     }
 
@@ -203,6 +246,22 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
 
   const handleDelete = async () => {
     if (!event) return
+    if (memberMode) {
+      if (!memberMayEdit) return
+      setMemberBusy(true)
+      try {
+        await saveMyPlanItem(tripId, event.id, null)
+        await queryClient.invalidateQueries({ queryKey: queryKeys.timeline(tripId) })
+        showToast({ type: 'success', message: 'Event deleted' })
+        clearDraft()
+        onClose()
+      } catch (err) {
+        showToast({ type: 'error', message: 'Could not delete event', description: myPlanItemErrorMessage(err) })
+      } finally {
+        setMemberBusy(false)
+      }
+      return
+    }
     try {
       await deleteEvent.mutateAsync(event.id)
       showToast({ type: 'success', message: 'Event deleted' })
@@ -225,16 +284,13 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
           autoFocus
         />
 
-        {/* [&>*]:min-w-0 — native date/time inputs have a large intrinsic
-            min-content width and grid items default to min-width:auto, so
-            these rows overflow at 375px without it (same fix as
-            TravelDetailsSheet). */}
-        <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
+        <div className="grid grid-cols-2 items-start gap-3 [&>*]:min-w-0">
           <Input
             label="Date"
             type="date"
             value={values.eventDate}
             onChange={(e) => updateField('eventDate', e.target.value)}
+            helperText={dateHelp}
           />
           <Select
             label="Category"
@@ -255,7 +311,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
         </label>
 
         {!values.allDay && (
-          <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
+          <div className="grid grid-cols-2 gap-3">
             <Input label="Start time" type="time" value={values.startTime} onChange={(e) => updateField('startTime', e.target.value)} />
             <Input label="End time" type="time" value={values.endTime} onChange={(e) => updateField('endTime', e.target.value)} />
           </div>
@@ -296,6 +352,9 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
           rows={3}
         />
 
+        {memberMode && <p className="text-sm text-[var(--text-muted)]">Just for you. Everyone can see it on the plan.</p>}
+
+        {!memberMode && (
         <div className="space-y-2">
           <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
             <Input
@@ -329,12 +388,23 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
           )}
         </div>
 
+        )}
+
+        {!memberMode && (
         <div>
           <span className="mb-1.5 block text-sm font-medium text-[var(--text-primary)]">Who's this for?</span>
           <div className="flex flex-wrap gap-1.5">
             <Chip selected={allSelected} onClick={() => setValues((prev) => ({ ...prev, participantIds: null }))}>
               Everyone
             </Chip>
+            {user && (
+              <Chip
+                selected={values.participantIds?.length === 1 && values.participantIds[0] === user.id}
+                onClick={() => setValues((prev) => ({ ...prev, participantIds: [user.id] }))}
+              >
+                Just me
+              </Chip>
+            )}
             {activeParticipants.map((p) => {
               const selected = allSelected || (values.participantIds?.includes(p.user_id) ?? false)
               return (
@@ -345,6 +415,7 @@ export function EventEditorSheet({ isOpen, onClose, trip, event, defaultDate, de
             })}
           </div>
         </div>
+        )}
 
         <div className="flex items-center justify-between gap-3 border-t border-[var(--border-subtle)] pt-3">
           {isEditing ? (

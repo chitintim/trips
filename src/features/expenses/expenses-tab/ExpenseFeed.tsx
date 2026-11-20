@@ -50,8 +50,8 @@ function dayHeaderLabel(date: string, tripStartDate: string, tripEndDate: string
     year: 'numeric',
   })
   const kind = classifyDayLabel(date, tripStartDate, tripEndDate)
-  if (kind === 'pre-trip') return `Pre-trip · ${dateLabel}`
-  if (kind === 'post-trip') return `Post-trip · ${dateLabel}`
+  if (kind === 'pre-trip') return `Before the trip · ${dateLabel}`
+  if (kind === 'post-trip') return `After the trip · ${dateLabel}`
   return dateLabel
 }
 

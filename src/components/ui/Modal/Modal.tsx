@@ -227,7 +227,7 @@ export const Modal = forwardRef<HTMLDivElement, ModalProps>(
               </div>
             )}
 
-            <div className="px-5 sm:px-6 py-5 sm:py-6 overflow-y-auto flex-1">
+            <div className="px-5 sm:px-6 py-5 sm:py-6 overflow-y-auto flex-1 min-h-0 scroll-pt-4">
               {children}
             </div>
           </div>

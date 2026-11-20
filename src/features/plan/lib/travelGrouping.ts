@@ -9,8 +9,8 @@
  * the existing item sheet); grouping happens at render time here.
  *
  * Grouping rules:
- *  1. Only travel-details events group (metadata.travel_details === true,
- *     see people/lib/travelDetails.ts). Ordinary events, proposals, and
+ *  1. Only main travel legs group (metadata.travel_details === true and
+ *     leg is not 'extra', see people/lib/travelDetails.ts); extra journeys stay single rows. Ordinary events, proposals, and
  *     derived-milestone rows are untouched.
  *  2. First pass buckets by (direction, flight_ref): the same flight
  *     groups even when two people typed times a few minutes apart, and
@@ -26,7 +26,7 @@
  */
 import type { TimelineEvent } from '../../../types'
 import {
-  isTravelDetailsEvent,
+  isMainTravelLeg,
   travelEventAirportCode,
   travelEventDirection,
   travelEventFlightRef,
@@ -89,7 +89,7 @@ export function groupTravelForDay<T extends TravelPlanItemLike>(
   for (const item of dayItems) {
     if (item.idKind !== 'event' || !item.eventId) continue
     const event = eventsById.get(item.eventId)
-    if (!event || !isTravelDetailsEvent(event)) continue
+    if (!event || !isMainTravelLeg(event)) continue
     const direction = travelEventDirection(event)
     if (!direction) continue
     members.push({

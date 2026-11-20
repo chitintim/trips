@@ -6,9 +6,9 @@
  * Nothing here ever carries model prose: the cards are built from `params` plus the app's own live data.
  */
 
-export type ActionKind = 'add_todo' | 'tick_todo' | 'answer' | 'add_expense' | 'suggest_option' | 'create_question' | 'add_option' | 'open_screen'
+export type ActionKind = 'add_todo' | 'tick_todo' | 'answer' | 'add_expense' | 'suggest_option' | 'create_question' | 'add_option' | 'set_travel' | 'add_plan_item' | 'open_screen'
 
-export const ACTION_KINDS: readonly ActionKind[] = ['add_todo', 'tick_todo', 'answer', 'add_expense', 'suggest_option', 'create_question', 'add_option', 'open_screen']
+export const ACTION_KINDS: readonly ActionKind[] = ['add_todo', 'tick_todo', 'answer', 'add_expense', 'suggest_option', 'create_question', 'add_option', 'set_travel', 'add_plan_item', 'open_screen']
 
 export type ActionStatus = 'proposed' | 'executing' | 'done' | 'failed' | 'dismissed' | 'expired' | 'edited_elsewhere'
 const STATUSES: readonly string[] = ['proposed', 'executing', 'done', 'failed', 'dismissed', 'expired', 'edited_elsewhere']
@@ -161,6 +161,31 @@ export interface AddOptionParams {
   price_minor: number | null
   currency: string | null
   price_basis: 'each' | 'total_split' | null
+}
+
+export interface SetTravelParams {
+  id: string | null
+  direction: 'arrival' | 'departure'
+  leg: 'main' | 'extra'
+  title: string | null
+  date: string
+  time: string | null
+  flight_ref: string | null
+  airport_code: string | null
+  set_off_date: string | null
+  set_off_time: string | null
+  home_date: string | null
+  home_time: string | null
+  replaces_event_id: string | null
+}
+
+export interface AddPlanItemParams {
+  title: string
+  date: string
+  start_time: string | null
+  end_time: string | null
+  for: 'me' | 'everyone'
+  notes: string | null
 }
 
 export interface OpenScreenParams {

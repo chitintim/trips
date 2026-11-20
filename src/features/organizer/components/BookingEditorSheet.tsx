@@ -1,3 +1,4 @@
+import { dateNote } from '../../../lib/tripWindow'
 import { useEffect, useState } from 'react'
 import { supabase } from '../../../lib/supabase'
 import { Modal, Button, Input, TextArea, Select, useToast, ConfirmDiscardSheet, Chip } from '../../../components/ui'
@@ -410,16 +411,13 @@ export function BookingEditorSheet({ isOpen, onClose, trip, booking, initialOpti
             placeholder={baseCurrency}
           />
         </div>
-        {/* [&>*]:min-w-0 — date/datetime inputs have a large intrinsic
-            min-content width and grid items default to min-width:auto, so
-            this row overflows at 375px without it (same fix as
-            TravelDetailsSheet). */}
-        <div className="grid grid-cols-2 gap-3 [&>*]:min-w-0">
+        <div className="grid grid-cols-2 items-start gap-3">
           <Input
             label="Booking date"
             type="date"
             value={values.bookingDate}
             onChange={(e) => updateField('bookingDate', e.target.value)}
+            helperText={values.bookingDate ? dateNote(values.bookingDate, trip.start_date, trip.end_date)?.text : undefined}
           />
           <Input
             label="Free cancellation until"

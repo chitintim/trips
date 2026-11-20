@@ -4,6 +4,7 @@ import type { SectionWithOptions, OptionVoteWithUser, QuestionPass } from '../..
 import type { ActionWithCompletions } from '../../../lib/queries/useActions'
 import type { ChecklistItem } from '../../../lib/queries/useChecklists'
 import type { LogActivityInput } from '../../organizer/lib/activity'
+import type { TimelineEvent } from '../../../types'
 import type { ChatDeps } from './deps'
 
 /** One person on the trip as the cards need them. */
@@ -31,6 +32,8 @@ export interface LiveData {
   passes: QuestionPass[] | undefined
   actions: ActionWithCompletions[]
   checklists: ChecklistItem[]
+  /** The trip's plan rows (travel included). undefined = not loaded (or the last load failed): never act on travel from it. */
+  events: TimelineEvent[] | undefined
   /** The clock the cards judge dates against (tests set it). */
   now?: Date
 }

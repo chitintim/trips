@@ -35,7 +35,7 @@ import {
 import type { SectionVoterIds } from '../actionCompletion/sectionVoters'
 import { inScopePeople } from '../../features/people/lib/inScopePeople'
 import { withClosedSections } from '../../features/actions/lib/actionStatus'
-import { isTravelDetailsEvent, travelEventDirection } from '../../features/people/lib/travelDetails'
+import { isMainTravelLeg, travelEventDirection } from '../../features/people/lib/travelDetails'
 import { resolveWinner } from '../../features/decisions/lib/resolveDecision'
 import {
   DEEP_LINKS,
@@ -781,12 +781,12 @@ function travelTodos(ctx: Ctx, userId: string, p: SnapshotParticipant): Todo[] {
   // Only before the trip starts: not ongoing or finished.
   if (ctx.stageRank >= tripStageRank('trip_ongoing')) return []
   const daysToStart = dayDiff(ctx.today, trip.start_date)
-  if (!(daysToStart <= 30 || ctx.stageRank >= tripStageRank('booked_awaiting_departure'))) return []
+  if (!(daysToStart <= 90 || ctx.stageRank >= tripStageRank('booked_awaiting_departure'))) return []
 
   let arrival = false
   let departure = false
   for (const ev of ctx.s.travelEvents) {
-    if (!isTravelDetailsEvent(ev) || !(ev.participant_ids ?? []).includes(userId)) continue
+    if (!isMainTravelLeg(ev) || !(ev.participant_ids ?? []).includes(userId)) continue
     const dir = travelEventDirection(ev)
     if (dir === 'arrival') arrival = true
     if (dir === 'departure') departure = true

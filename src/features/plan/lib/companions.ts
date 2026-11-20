@@ -18,11 +18,8 @@
  *  3. Two items at overlapping times on the same day -> TIME CLASH flag on
  *     BOTH items (not a create-suggestion — a warning attached to existing
  *     items).
- *  4. A booking whose date falls outside the trip's [start_date, end_date]
- *     -> mismatch flag (reuses calendarEdgeCases.isOutsideTripDates'
- *     concept, but keyed to the booking rather than a PlanItem since a
- *     booking can exist unlinked to any item — see planItems.ts's
- *     `unlinkedBookings`).
+ *  (A fourth rule, flagging bookings outside the trip dates, was removed:
+ *  dates up to a week either side are normal, see src/lib/tripWindow.ts.)
  */
 import type { PlanItem } from './planItems'
 import type { Booking } from '../../../lib/queries/useBookings'
@@ -50,12 +47,6 @@ export interface TimeClashFlag {
   /** The two PlanItem ids in the clash (order-independent; both get flagged). */
   itemIds: [string, string]
   date: string
-}
-
-export interface BookingMismatchFlag {
-  bookingId: string
-  bookingTitle: string
-  bookingDate: string
 }
 
 const THREE_HOURS_MINUTES = 3 * 60
@@ -224,22 +215,6 @@ export function clashedItemIds(flags: TimeClashFlag[]): Set<string> {
     ids.add(flag.itemIds[1])
   }
   return ids
-}
-
-/**
- * Rule 4: a booking whose date falls outside the trip's range -> mismatch
- * flag. Distinct from calendarEdgeCases.isOutsideTripDates (which flags
- * PlanItems) because a booking can be entirely unlinked to any item.
- */
-export function detectBookingDateMismatches(bookings: Booking[], tripStartDate: string, tripEndDate: string): BookingMismatchFlag[] {
-  const flags: BookingMismatchFlag[] = []
-  for (const booking of bookings) {
-    if (!booking.booking_date) continue
-    if (booking.booking_date < tripStartDate || booking.booking_date > tripEndDate) {
-      flags.push({ bookingId: booking.id, bookingTitle: booking.title, bookingDate: booking.booking_date })
-    }
-  }
-  return flags
 }
 
 // ---------------------------------------------------------------------------

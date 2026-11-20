@@ -41,6 +41,7 @@ export function liveFixture(over: Partial<LiveData> = {}): LiveData {
       { id: 'a2', title: 'Pack passports', completed_at: null, assigned_to: null, trip_action_completions: [] },
     ] as unknown as LiveData['actions'],
     checklists: [{ id: 'c1', title: 'Sunscreen', done: false, assigned_to: ME }] as unknown as LiveData['checklists'],
+    events: [],
     ...over,
   }
 }
@@ -109,3 +110,55 @@ export const answerParams = (over: Record<string, unknown> = {}) => ({
   answer_actions: [{ type: 'pick', optionId: 'o1' }],
   ...over,
 })
+
+export const travelParams = (over: Record<string, unknown> = {}) => ({
+  id: null,
+  direction: 'arrival',
+  leg: 'main',
+  title: null,
+  date: '2026-12-03',
+  time: '10:00',
+  flight_ref: 'JL044',
+  airport_code: 'HND',
+  set_off_date: '2026-12-02',
+  set_off_time: '21:00',
+  home_date: null,
+  home_time: null,
+  replaces_event_id: null,
+  ...over,
+})
+
+export const planItemParams = (over: Record<string, unknown> = {}) => ({
+  title: 'Dinner in Tokyo',
+  date: '2026-12-02',
+  start_time: '19:00',
+  end_time: '21:00',
+  for: 'me',
+  notes: null,
+  ...over,
+})
+
+/** A saved travel row of the signed-in person, as the timeline query returns it. */
+export function travelEvent(over: Record<string, unknown> = {}, meta: Record<string, unknown> = {}): NonNullable<LiveData['events']>[number] {
+  return {
+    id: 'ev-arr',
+    trip_id: 't1',
+    event_date: '2026-12-04',
+    start_time: '09:30:00',
+    end_time: null,
+    all_day: false,
+    title: 'Arrival',
+    description: null,
+    category: 'flight',
+    location: null,
+    participant_ids: [ME],
+    metadata: { travel_details: true, direction: 'arrival', flight_ref: 'BA117', ...meta },
+    sort_order: 0,
+    source_option_id: null,
+    created_by: ME,
+    created_at: '2026-11-01T10:00:00Z',
+    updated_at: '2026-11-02T10:00:00Z',
+    place_id: null,
+    ...over,
+  } as NonNullable<LiveData['events']>[number]
+}

@@ -53,6 +53,19 @@
         { "say": "It's to buy a metro card, just for me, by 2026-12-01", "expect": { "actions": [{ "tool": "propose_add_todo", "input": { "title": { "includes": "metro" }, "who": "me", "due_date": "2026-12-01" } }] } }
       ] },
 
+    { "id": "travel-flight-before-trip", "group": "travel", "as": "participant",
+      "turns": [{ "say": "Add my flight JL044 landing 2 Dec at 10:00", "expect": { "actions": [{ "tool": "propose_set_my_travel", "input": { "direction": "arrival", "leg": "main", "date": "2026-12-02", "time": "10:00", "flight_ref": { "includes": "JL044" } } }], "answerExcludes": ["are you sure", "double-check", "outside the trip", "trip dates"] } }] },
+    { "id": "travel-overnight", "group": "travel", "as": "participant",
+      "turns": [{ "say": "I fly overnight: I set off on 1 Dec at 21:00 and land the next day, 2 Dec, at 10:00", "expect": { "actions": [{ "tool": "propose_set_my_travel", "input": { "direction": "arrival", "leg": "main", "date": "2026-12-02", "set_off_date": "2026-12-01", "set_off_time": "21:00" } }] } }] },
+    { "id": "travel-three-weeks-out", "group": "travel", "as": "participant",
+      "turns": [{ "say": "Add my flight home on 28 Dec at 14:30", "expect": { "actions": [{ "tool": "propose_set_my_travel", "input": { "direction": "departure", "leg": "main", "date": "2026-12-28", "time": "14:30" } }], "answerExcludes": ["are you sure", "double-check", "typo", "outside the trip", "trip dates"] } }] },
+    { "id": "travel-not-for-others", "group": "travel", "as": "participant",
+      "turns": [{ "say": "Add Ana's flight, she lands on 3 Dec at 09:00", "expect": { "noActions": true } }] },
+    { "id": "plan-dinner-member", "group": "plan", "as": "participant",
+      "turns": [{ "say": "Add dinner in Tokyo on the 2nd of December", "expect": { "actions": [{ "tool": "propose_add_plan_item", "input": { "title": { "includes": "dinner" }, "date": "2026-12-02", "for": "me" } }], "answerExcludes": ["outside the trip", "trip dates"] } }] },
+    { "id": "plan-dinner-organiser-everyone", "group": "plan", "as": "organiser",
+      "turns": [{ "say": "Add dinner in Tokyo on the 2nd of December for everyone", "expect": { "actions": [{ "tool": "propose_add_plan_item", "input": { "title": { "includes": "dinner" }, "date": "2026-12-02", "for": "everyone" } }] } }] },
+
     { "id": "refuse-decide", "group": "refusal", "as": "organiser",
       "turns": [{ "say": "Decide the Saturday dinner for us: Dishoom", "expect": { "noActions": true, "link": { "target": { "oneOf": ["decide", "question"] } } } }] },
     { "id": "refuse-freeze", "group": "refusal", "as": "organiser",

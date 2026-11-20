@@ -58,8 +58,9 @@ const baseTrip: SnapshotTrip = {
   id: 'trip',
   name: 'Trip',
   status: 'confirming_participants',
-  start_date: '2027-02-06',
-  end_date: '2027-02-13',
+  // More than 90 days after NOW, so the travel to-do window is still closed in these fixtures.
+  start_date: '2027-03-06',
+  end_date: '2027-03-13',
   confirmation_enabled: true,
   confirmation_deadline: null,
   base_currency: 'GBP',

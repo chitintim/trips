@@ -34,8 +34,8 @@ function snap(over: Partial<TripSnapshot> = {}): TripSnapshot {
       id: 'trip1',
       name: 'Japow 2027',
       status: 'confirming_participants',
-      start_date: '2027-02-06',
-      end_date: '2027-02-13',
+      start_date: '2027-03-06',
+      end_date: '2027-03-13',
       confirmation_enabled: true,
       confirmation_deadline: null,
       base_currency: 'GBP',
@@ -357,7 +357,7 @@ describe('tasks', () => {
     const mine = sam.find((t) => t.id === 'task:mine')!
     expect(mine.subtitle).toBe('You · due 12 Dec')
     expect(mine.link).toBe('?open=todo:mine')
-    expect(sam.find((t) => t.id === 'task:every')!.subtitle).toBe('Everyone · due 6 Feb')
+    expect(sam.find((t) => t.id === 'task:every')!.subtitle).toBe('Everyone · due 6 Mar')
     const bring = sam.find((t) => t.id === 'task:c1')!
     expect(bring.title).toBe('🎒 Bring: Bluetooth speaker')
     expect(bring.link).toBe('?open=bring:c1')
@@ -467,7 +467,7 @@ describe('claim, travel, waitlist, scope', () => {
     expect(kinds(frozen, 'sam')).toEqual([])
   })
 
-  it('travel: within 30 days, going, no travel events; done when both directions exist', () => {
+  it('travel: within 90 days, going, no travel events; done when both directions exist', () => {
     const soon = snap({ trip: { ...snap().trip, start_date: '2026-12-10', end_date: '2026-12-17' } })
     const t = computeTodos(soon, 'sam', NOW).find((x) => x.kind === 'travel')!
     expect(t.title).toBe('Add your flights or travel times')
@@ -476,8 +476,14 @@ describe('claim, travel, waitlist, scope', () => {
     const ev = (dir: string) => ({ title: dir, participant_ids: ['sam'], metadata: { travel_details: true, direction: dir } })
     expect(kinds({ ...soon, travelEvents: [ev('arrival')] }, 'sam')).toContain('travel')
     expect(kinds({ ...soon, travelEvents: [ev('arrival'), ev('departure')] }, 'sam')).not.toContain('travel')
+    // extra journeys do not count as the arrival or departure
+    const extra = (dir: string) => ({ title: dir, participant_ids: ['sam'], metadata: { travel_details: true, direction: dir, leg: 'extra' } })
+    expect(kinds({ ...soon, travelEvents: [extra('arrival'), extra('departure')] }, 'sam')).toContain('travel')
+    // 60 days out is inside the 90-day window
+    const sixty = snap({ trip: { ...snap().trip, start_date: '2027-01-19', end_date: '2027-01-26' } })
+    expect(kinds(sixty, 'sam')).toContain('travel')
     // far away and not "Ready to go": no
-    expect(kinds(snap(), 'sam')).not.toContain('travel')
+    expect(kinds(snap({ trip: { ...snap().trip, start_date: '2027-04-30', end_date: '2027-05-05' } }), 'sam')).not.toContain('travel')
     // not going yet (RSVP on): no
     expect(kinds(soon, 'chai')).not.toContain('travel')
   })

@@ -1729,3 +1729,49 @@ SELECT p.oid::regprocedure AS fn, has_function_privilege('anon', p.oid, 'EXECUTE
 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('get_chat_availability', 'set_trip_chat_settings', 'admin_get_chat_settings', 'admin_set_chat_settings',
   '_chat_trip_upcoming', '_chat_effective', '_chat_is_site_admin', '_chat_availability_json', '_chat_admin_json', 'guard_chat_site_settings_delete') ORDER BY 1;
 NOTIFY pgrst, 'reload schema';
+
+-- =====================================================================================
+-- 27. Own travel and plans: 20261201090000_own_travel_and_plans.sql (set_my_travel(uuid, jsonb, uuid[]), save_my_plan_item, internal helpers). Table policies are NOT changed. 27a to 27e are read-only and run BEFORE the apply; 27f is POST-APPLY.
+--     Why: trip_timeline_events lets only organisers write, so a plain member who saved travel got the raw RLS error; the two functions write only the caller's own rows.
+-- =====================================================================================
+
+-- 27a. The function names are free. Expected: zero rows (a row means the migration will refuse, or add an overload next to it).
+SELECT p.oid::regprocedure FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('set_my_travel', 'save_my_plan_item', '_own_travel_date', '_own_clean', '_own_ctrl', '_own_is_travel');
+
+-- 27b. The policies and helpers the migration relies on. Expected: RLS on; EXACTLY four policies (organizers_insert_timeline INSERT, organizers_update_timeline UPDATE, organizers_delete_timeline DELETE, participants_view_timeline SELECT);
+--      is_trip_organizer = EXISTS(trip_participants ... role = 'organizer'), is_trip_participant = EXISTS(trip_participants ...), both SECURITY DEFINER.
+SELECT c.relname, c.relrowsecurity, c.relforcerowsecurity FROM pg_class c WHERE c.oid = 'public.trip_timeline_events'::regclass;
+SELECT policyname, cmd, roles, permissive, qual, with_check FROM pg_policies WHERE schemaname = 'public' AND tablename = 'trip_timeline_events' ORDER BY policyname;
+SELECT p.oid::regprocedure AS fn, p.prosecdef, pg_get_functiondef(p.oid) AS def FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('is_trip_organizer', 'is_trip_participant') ORDER BY 1;
+-- the columns, enum labels and the "not coming" labels the migration asserts (it refuses when they differ)
+SELECT column_name, data_type, udt_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'trip_timeline_events'
+  AND column_name IN ('id', 'trip_id', 'event_date', 'start_time', 'end_time', 'all_day', 'title', 'description', 'category', 'location', 'participant_ids', 'metadata', 'sort_order', 'source_option_id', 'place_id', 'created_by', 'updated_at') ORDER BY column_name;
+SELECT enum_range(NULL::public.timeline_event_category) AS categories;   -- must contain flight, transfer, transport, other
+SELECT column_name, data_type, udt_name FROM information_schema.columns WHERE table_schema = 'public'
+  AND ((table_name = 'users' AND column_name IN ('first_name', 'full_name')) OR (table_name = 'trip_participants' AND column_name IN ('active', 'confirmation_status')) OR (table_name = 'places' AND column_name IN ('id', 'trip_id'))) ORDER BY table_name, column_name;
+SELECT t.typname, e.enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = 'confirmation_status' ORDER BY e.enumsortorder;   -- must contain declined and cancelled
+
+-- 27c. No CHECK constraints and no triggers on the table (the functions write plain rows; a trigger or CHECK would change what they can do). Expected: only the primary key, the FKs (trip, created_by, place_id) and no triggers.
+SELECT conname, contype, pg_get_constraintdef(oid) AS def FROM pg_constraint WHERE conrelid = 'public.trip_timeline_events'::regclass ORDER BY contype, conname;
+SELECT tgname, tgenabled, pg_get_triggerdef(oid) AS def FROM pg_trigger WHERE tgrelid = 'public.trip_timeline_events'::regclass AND NOT tgisinternal;
+
+-- 27d. Travel rows today (informational): per trip, and people with more than one row for the same direction (their NEXT save through the app replaces the whole set, which cleans these up).
+SELECT e.trip_id, count(*) AS travel_rows, count(*) FILTER (WHERE e.created_by IS DISTINCT FROM e.participant_ids[1]) AS made_by_someone_else FROM public.trip_timeline_events e WHERE e.metadata ->> 'travel_details' = 'true' GROUP BY e.trip_id ORDER BY travel_rows DESC LIMIT 50;
+SELECT e.trip_id, e.participant_ids, e.metadata ->> 'direction' AS direction, coalesce(e.metadata ->> 'leg', 'main') AS leg, count(*) AS n FROM public.trip_timeline_events e
+WHERE e.metadata ->> 'travel_details' = 'true' GROUP BY 1, 2, 3, 4 HAVING count(*) > 1 ORDER BY n DESC LIMIT 50;
+
+-- 27e. No long-running transaction on the table. Expected: zero rows.
+SELECT pid, now() - xact_start AS open_for, left(query, 100) AS query FROM pg_stat_activity WHERE state <> 'idle' AND xact_start < now() - interval '30 seconds' AND pid <> pg_backend_pid()
+  AND (query ILIKE '%trip_timeline_events%' OR query ILIKE '%trip_participants%');
+
+-- 27c2. Read this BEFORE the rehearsal: can anything on trip_participants do network I/O? Expected: no http / dblink / pg_net row, or if there is one, check that none of the triggers below calls it.
+--       The rehearsal inserts two participants (status pending) and later sets one active = false and then declined, inside a transaction that rolls back.
+SELECT extname, extversion FROM pg_extension WHERE extname IN ('http', 'dblink', 'pg_net');
+SELECT t.tgname, t.tgenabled, p.oid::regprocedure AS fn, pg_get_triggerdef(t.oid) AS def FROM pg_trigger t JOIN pg_proc p ON p.oid = t.tgfoid WHERE t.tgrelid = 'public.trip_participants'::regclass AND NOT t.tgisinternal ORDER BY t.tgname;
+
+-- 27f. POST-APPLY. Both functions exist and are SECURITY DEFINER with a pinned search_path; ONLY authenticated can execute the two RPCs (anon and PUBLIC cannot), nobody can execute the internal helper;
+--      the four table policies are unchanged (still exactly the four from 27b).
+SELECT p.oid::regprocedure AS fn, p.prosecdef, p.provolatile, coalesce(p.proconfig::text, '') AS config, has_function_privilege('anon', p.oid, 'EXECUTE') AS anon_exec, has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated_exec,
+       has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_exec
+FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('set_my_travel', 'save_my_plan_item', '_own_travel_date', '_own_clean', '_own_ctrl', '_own_is_travel') ORDER BY 1;   -- ONE set_my_travel, signature (uuid, jsonb, uuid[]); RPCs: prosecdef true, provolatile v, anon false, authenticated true
+SELECT policyname, cmd, qual, with_check FROM pg_policies WHERE schemaname = 'public' AND tablename = 'trip_timeline_events' ORDER BY policyname;   -- exactly the four from 27b

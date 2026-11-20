@@ -6,6 +6,7 @@
  * without mounting React.
  */
 import type { TimelineEvent } from '../../../types'
+import { addDays, boardDays, dayHeaderLabel, placeDate } from '../../../lib/tripWindow'
 
 /** Format a Date as a local (not UTC) YYYY-MM-DD string. */
 export function formatLocalDate(date: Date): string {
@@ -15,58 +16,44 @@ export function formatLocalDate(date: Date): string {
   return `${y}-${m}-${d}`
 }
 
-/** Every calendar date from startDate to endDate inclusive, both YYYY-MM-DD. */
+/** Every calendar date from startDate to endDate inclusive, both YYYY-MM-DD (UTC maths, no DST drift). */
 export function generateDateRange(startDate: string, endDate: string): string[] {
   const dates: string[] = []
-  const current = new Date(startDate + 'T00:00:00')
-  const end = new Date(endDate + 'T00:00:00')
-  while (current <= end) {
-    dates.push(formatLocalDate(current))
-    current.setDate(current.getDate() + 1)
-  }
+  for (let d = startDate; d <= endDate && dates.length < 3660; d = addDays(d, 1)) dates.push(d)
   return dates
 }
 
 export interface DayHeaderInfo {
-  /** "Day 3", "Pre-trip", or "Post-trip". */
+  /** "Day 3", "Before the trip" or "After the trip". */
   dayLabel: string
-  /** "Friday, 12 Sep" style weekday + date label. */
+  /** "Sunday 8 Dec" style weekday + date label (en-GB). */
   label: string
-  /** 1-indexed day-of-trip, only meaningful when dayLabel is "Day N". */
+  /** 1-indexed day-of-trip, only set during the trip (null for before/after days). */
   dayNumber: number | null
 }
 
 /** Weekday + date + day-N-of-trip label for a sticky day header. */
 export function formatDayHeader(dateStr: string, tripStartDate: string, tripEndDate: string): DayHeaderInfo {
-  const date = new Date(dateStr + 'T00:00:00')
-  const start = new Date(tripStartDate + 'T00:00:00')
-  const end = new Date(tripEndDate + 'T00:00:00')
-  const dayNum = Math.floor((date.getTime() - start.getTime()) / 86400000) + 1
-  const label = date.toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'short' })
-
-  if (date < start) {
-    return { dayLabel: 'Pre-trip', label, dayNumber: null }
-  }
-  if (date > end) {
-    return { dayLabel: 'Post-trip', label, dayNumber: null }
-  }
-  return { dayLabel: `Day ${dayNum}`, label, dayNumber: dayNum }
+  const label = new Date(dateStr + 'T00:00:00Z').toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'short', timeZone: 'UTC',
+  })
+  const dayLabel = dayHeaderLabel(dateStr, tripStartDate, tripEndDate)
+  const during = placeDate(dateStr, tripStartDate, tripEndDate).place === 'during'
+  const dayNumber = during ? Number(dayLabel.replace('Day ', '')) : null
+  return { dayLabel, label, dayNumber }
 }
 
 /**
- * Full inclusive date range the timeline should render: the planned trip
- * dates, expanded to cover any events that fall outside that range (early
- * arrivals, late departures, post-trip debrief notes, etc).
+ * Full inclusive date range the timeline should render: the trip days, a
+ * continuous run out to the furthest event within a week either side, and
+ * any event further out on its own day (not filled in).
  */
 export function computeTimelineDateRange(
   events: Pick<TimelineEvent, 'event_date'>[],
   tripStartDate: string,
   tripEndDate: string
 ): string[] {
-  const eventDates = events.map((e) => e.event_date)
-  const minDate = [tripStartDate, ...eventDates].sort()[0]
-  const maxDate = [tripEndDate, ...eventDates].sort().pop()!
-  return generateDateRange(minDate, maxDate)
+  return boardDays(events.map((e) => e.event_date), tripStartDate, tripEndDate)
 }
 
 /** Group events by their event_date, preserving each day's existing order. */

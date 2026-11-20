@@ -4,6 +4,7 @@
  * tab so "my share"/"I paid" figures are consistent everywhere in the app,
  * plus category/day breakdowns specific to this tab's charts.
  */
+import { shortDayLabel } from '../../../lib/tripWindow'
 import { toMinorUnits, fromMinorUnits } from '../../../lib/money'
 import { computeBalances, withMoneyParticipants } from '../lib/balances'
 import { isItemizedExpense, type ExpenseCategory } from '../types'
@@ -123,6 +124,15 @@ export interface DayBreakdownEntry {
   tripTotalMajor: number
 }
 
+/** In-trip days are "Day n"; days outside the trip are "Before · 8 Dec" so several of them stay apart. */
+function dayEntryLabel(date: string, start: string, end: string): string {
+  const short = shortDayLabel(date, start, end)
+  if (short !== 'Before' && short !== 'After') return short
+  const [, m, d] = date.split('-').map(Number)
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return `${short} · ${d} ${months[m - 1]}`
+}
+
 export function computeDayBreakdown(
   expenses: ExpenseWithDetails[],
   userId: string,
@@ -156,9 +166,9 @@ export function computeDayBreakdown(
 
   return Array.from(byDate.entries())
     .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([date, v], i) => ({
+    .map(([date, v]) => ({
       date,
-      label: `Day ${i + 1}`,
+      label: dayEntryLabel(date, tripStartDate, tripEndDate),
       myTotalMajor: fromMinorUnits(v.myMinor, baseCurrency),
       tripTotalMajor: fromMinorUnits(v.tripMinor, baseCurrency),
     }))

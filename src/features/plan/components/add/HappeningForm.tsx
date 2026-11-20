@@ -2,6 +2,7 @@ import { Button, Chip, Input, SegmentedControl, Select, TextArea } from '../../.
 import { PlaceChip } from '../../../places'
 import { FREQUENT_CURRENCIES } from '../../../../lib/money'
 import type { Tables } from '../../../../types/database.types'
+import { dateNote } from '../../../../lib/tripWindow'
 import type { HappeningValues } from '../../lib/addFlow'
 import { MoreOptions } from './MoreOptions'
 import { TitleField } from './TitleField'
@@ -19,16 +20,29 @@ interface HappeningFormProps {
   onClearPlace: () => void
   attendees: Attendee[]
   onPullLink: (url: string) => void
+  /** Trip dates, for the quiet "N days before the trip starts" note under the day. */
+  tripStart: string
+  tripEnd: string
+  /**
+   * A member adding a plan for themselves (saved through `save_my_plan_item`): no attendees, no cost,
+   * and a line saying it is just for them.
+   */
+  justMe?: boolean
+  /** The viewer's id: organisers get a "Just me" attendee chip that sets `[selfId]`. */
+  selfId?: string
 }
 
 /** Minimum: what + day. Everything else is under More options. */
-export function HappeningForm({ values, onChange, pickedPlace, onPickPlace, onClearPlace, attendees, onPullLink }: HappeningFormProps) {
+export function HappeningForm({ values, onChange, pickedPlace, onPickPlace, onClearPlace, attendees, onPullLink, tripStart, tripEnd, justMe = false, selfId }: HappeningFormProps) {
   const toggleAttendee = (id: string) =>
     onChange({ attendeeIds: values.attendeeIds.includes(id) ? values.attendeeIds.filter((a) => a !== id) : [...values.attendeeIds, id] })
+  const note = values.day ? dateNote(values.day, tripStart, tripEnd) : null
+  const onlyMe = !!selfId && values.attendeeIds.length === 1 && values.attendeeIds[0] === selfId
   return (
     <div className="space-y-4">
       <TitleField label="What" value={values.title} onChange={(title) => onChange({ title })} placeholder="e.g. Dinner at Kumo" onPullLink={onPullLink} autoFocus />
-      <Input label="Day" type="date" value={values.day} onChange={(e) => onChange({ day: e.target.value })} required />
+      <Input label="Day" type="date" value={values.day} onChange={(e) => onChange({ day: e.target.value })} helperText={note?.text} required />
+      {justMe && <p className="text-sm text-[var(--text-muted)]">Just for you. Everyone can see it on the plan.</p>}
 
       <MoreOptions>
         <label className="flex min-h-[44px] cursor-pointer items-center gap-2">
@@ -58,6 +72,7 @@ export function HappeningForm({ values, onChange, pickedPlace, onPickPlace, onCl
           )}
         </div>
 
+        {!justMe && (
         <div className="space-y-2">
           <span className="block text-sm font-medium text-[var(--text-primary)]">Cost (optional)</span>
           <div className="grid grid-cols-[1fr_auto] gap-3">
@@ -82,14 +97,20 @@ export function HappeningForm({ values, onChange, pickedPlace, onPickPlace, onCl
             />
           )}
         </div>
+        )}
 
         <TextArea label="Notes (optional)" value={values.notes} onChange={(e) => onChange({ notes: e.target.value })} rows={2} />
 
-        {attendees.length > 1 && (
+        {!justMe && attendees.length > 1 && (
           <div>
             <span className="mb-1.5 block text-sm font-medium text-[var(--text-primary)]">Who’s going</span>
             <p className="mb-2 text-xs text-[var(--text-muted)]">{values.attendeeIds.length === 0 ? 'Everyone. Tap names to pick just some people.' : `${values.attendeeIds.length} chosen`}</p>
             <div className="flex flex-wrap gap-2">
+              {selfId && (
+                <Chip selected={onlyMe} onClick={() => onChange({ attendeeIds: onlyMe ? [] : [selfId] })}>
+                  Just me
+                </Chip>
+              )}
               {attendees.map((a) => (
                 <Chip key={a.id} selected={values.attendeeIds.includes(a.id)} onClick={() => toggleAttendee(a.id)}>
                   {a.name}

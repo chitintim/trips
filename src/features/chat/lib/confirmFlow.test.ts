@@ -4,7 +4,7 @@ vi.mock('../../../lib/supabase', () => ({ supabase: { from: vi.fn(), rpc: vi.fn(
 
 import { __resetInFlightForTests, canUndo, cardPhase, confirmAction, dismissAction, failureMessage, undoAction, UNDO_WINDOW_MS, STUCK_AFTER_MS, GENERIC_FAILURE } from './confirmFlow'
 import { ACTIONS_OFF_MESSAGE, ChatRpcError, DAILY_CAP_MESSAGE, describeChatRpcError, type ChatRpc } from './chatApi'
-import { envelope, expenseParams, liveFixture, ME, SAM, todoParams } from './chatFixtures'
+import { envelope, expenseParams, liveFixture, planItemParams, travelEvent, travelParams, ME, SAM, todoParams } from './chatFixtures'
 import { FROZEN_WRITE_MESSAGE } from '../../../lib/writeRefusals'
 import type { ChatDeps } from '../actions/deps'
 import type { ExecCtx } from '../actions/types'
@@ -241,6 +241,8 @@ describe('review fixes', () => {
   })
   it('stuck wording points at where to look', async () => {
     const { stuckMessage } = await import('./confirmFlow')
+    expect(stuckMessage('set_travel')).toBe("This didn't finish — check your travel details before trying again.")
+    expect(stuckMessage('add_plan_item')).toBe("This didn't finish — check the Plan tab before trying again.")
     expect(stuckMessage('add_expense')).toBe("This didn't finish — check the Money tab before trying again.")
   })
   it('undo is not offered when the server row says it was undone, or when the row changed', () => {
@@ -263,5 +265,34 @@ describe('review fixes', () => {
     await confirmAction(tap(), { rpc, ctx })
     expect(spy).toHaveBeenCalledWith(expect.any(Error), 'chat:tick_todo')
     spy.mockRestore()
+  })
+})
+
+describe('travel and plan item actions through the confirm flow', () => {
+  const travelTap = () => envelope('set_travel', travelParams(), { requires: 'tap', basis: { replaces_updated_at: null } })
+  it('a stale travel card is refused before anything is begun or written', async () => {
+    const { rpc, ctx, fns, deps } = setup({ live: liveFixture({ events: [travelEvent()] as never }) })
+    const out = await confirmAction(travelTap(), { rpc, ctx })
+    expect(out).toEqual({ kind: 'stale', reason: 'Your travel has changed since. Open travel details to check.' })
+    expect(fns.begin).not.toHaveBeenCalled()
+    expect(Object.keys(deps)).not.toContain('setMyTravel')
+  })
+  it('a travel save runs, finishes with the undo data, and Undo is offered only while the legs are as saved', async () => {
+    const { rpc, ctx, fns, deps } = setup()
+    ;(deps as unknown as Record<string, unknown>).setMyTravel = vi.fn(async (_t: string, legs: unknown[]) => ({ legs: legs.map((_, i) => ({ id: `n${i}`, direction: 'arrival', leg: 'main' })) }))
+    const out = await confirmAction(travelTap(), { rpc, ctx })
+    expect(out).toMatchObject({ kind: 'done', doneText: 'Travel saved.' })
+    expect(fns.finish).toHaveBeenCalledWith('act-set_travel', true, expect.objectContaining({ before: [], after_ids: ['n0'] }))
+    const result = (out as { result: Record<string, unknown> }).result
+    const now = Date.parse('2026-11-17T12:00:00Z')
+    const done = { ...travelTap(), status: 'done' as const, result, finished_at: new Date(now - 60_000).toISOString() }
+    const saved = liveFixture({ events: [travelEvent({ id: 'n0', event_date: '2026-12-03', start_time: '10:00:00' }, { flight_ref: 'JL044', airport_code: 'HND', set_off_date: '2026-12-02', set_off_time: '21:00' })] as never })
+    expect(canUndo(done, now, saved)).toBe(true)
+    expect(canUndo(done, now, liveFixture())).toBe(false)
+  })
+  it('a member cannot confirm an add-for-everyone card', async () => {
+    const { rpc, ctx } = setup({ live: liveFixture({ canManage: false }) })
+    const out = await confirmAction(envelope('add_plan_item', planItemParams({ for: 'everyone' })), { rpc, ctx })
+    expect(out).toEqual({ kind: 'stale', reason: 'Only organisers can add to the group plan.' })
   })
 })

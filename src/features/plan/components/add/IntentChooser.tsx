@@ -1,7 +1,16 @@
-import { INTENT_TILES, type AddIntent } from '../../lib/addFlow'
+import { INTENT_TILES, MEMBER_HAPPENING_HINT, type AddIntent } from '../../lib/addFlow'
 
 /** First screen: three large, plainly worded choices. */
-export function IntentChooser({ intents, onChoose }: { intents: AddIntent[]; onChoose: (intent: AddIntent) => void }) {
+export function IntentChooser({
+  intents,
+  onChoose,
+  memberHappening = false,
+}: {
+  intents: AddIntent[]
+  onChoose: (intent: AddIntent) => void
+  /** A member (not an organiser): the happening tile says it is their own plan. */
+  memberHappening?: boolean
+}) {
   return (
     <div className="space-y-3">
       <p className="text-sm text-[var(--text-secondary)]">What do you want to add?</p>
@@ -17,7 +26,7 @@ export function IntentChooser({ intents, onChoose }: { intents: AddIntent[]; onC
           </span>
           <span>
             <span className="block text-base font-semibold text-[var(--text-primary)]">{tile.title}</span>
-            <span className="block text-sm text-[var(--text-muted)]">{tile.hint}</span>
+            <span className="block text-sm text-[var(--text-muted)]">{memberHappening && tile.intent === 'happening' ? MEMBER_HAPPENING_HINT : tile.hint}</span>
           </span>
         </button>
       ))}

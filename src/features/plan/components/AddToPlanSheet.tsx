@@ -1,10 +1,8 @@
-import { isTripFinished } from '../../../lib/answers/answers'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Modal, Button, useToast, ConfirmDiscardSheet } from '../../../components/ui'
 import { useFormDraft, useUnsavedChangesGuard } from '../../../lib/forms'
 import { useAuth } from '../../../hooks/useAuth'
-import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { PlacePicker } from '../../places'
 import { PasteALinkSheet } from '../../decisions/components/PasteALinkSheet'
@@ -12,7 +10,6 @@ import { pricingFromDraft } from '../../decisions/lib/optionPricingForm'
 import {
   INTENT_TILES,
   applyTemplate,
-  availableIntents,
   emptyHappening,
   emptyIdea,
   emptyQuestion,
@@ -25,8 +22,7 @@ import {
   type IdeaValues,
   type QuestionValues,
 } from '../lib/addFlow'
-import { useAddToPlanSave } from '../lib/useAddToPlanSave'
-import { useCanSuggestIdea } from '../lib/useCanSuggestIdea'
+import { useAddToPlanSave, useAddIntents } from '../lib/useAddToPlanSave'
 import { validateSuggestion } from '../../decisions/lib/suggestOption'
 import { IntentChooser } from './add/IntentChooser'
 import { HappeningForm } from './add/HappeningForm'
@@ -66,9 +62,9 @@ export interface AddToPlanSheetProps {
 }
 
 /**
- * Add: three intents (proposal 5.5). A first screen of three plain choices; each form needs at most two
- * fields to save and keeps everything else behind "More options". Only people who can run the trip see it
- * (RLS rejects everyone else), so nobody is shown a form the server will refuse.
+ * Add: three intents (proposal 5.5). A first screen of plain choices; each form needs at most two
+ * fields to save and keeps everything else behind "More options". Organisers get all three; members who are
+ * coming get their own "just me" plan and an idea. Nobody is shown a form the server will refuse.
  */
 export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVote = false }: AddToPlanSheetProps) {
   const { user } = useAuth()
@@ -76,13 +72,12 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
   const navigate = useNavigate()
   const tripId = trip.id
   const baseCurrency = trip.base_currency || 'GBP'
-  const { canManageTrip, isLoading: permsLoading } = useTripPermissions(trip)
-  // People who are coming but cannot run the trip get exactly one intent, "An idea", wired to the suggest RPC.
-  const canSuggestIdea = useCanSuggestIdea(trip)
-  const intents = availableIntents(canManageTrip, isTripFinished(trip), canSuggestIdea)
-  const ideaOnly = !canManageTrip && canSuggestIdea
+  // People who are coming but cannot run the trip get their own plan ("just me", through save_my_plan_item)
+  // and "An idea" (through the suggest RPC); never a question or a plan for the group.
+  const { intents, isMember, canSuggestIdea, isLoading: permsLoading } = useAddIntents(trip)
+  const ideaOnly = isMember && canSuggestIdea
   const { data: participants } = useParticipants(tripId)
-  const save = useAddToPlanSave(tripId, user?.id, ideaOnly)
+  const save = useAddToPlanSave(tripId, user?.id, ideaOnly, isMember)
 
   const seed = seedState(baseCurrency, defaultDate || trip.start_date, defaultIsVote)
   const { values, setValues, clearDraft } = useFormDraft<AddFormState>(`add-to-plan:v2:${tripId}`, seed)
@@ -97,14 +92,16 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
     if (!isOpen) return
     setPickedPlace(null)
     if (defaultIsVote) setValues((prev) => ({ ...prev, intent: 'question' }))
+    // A day's "+" (or "Add something before the trip") must win over a restored draft's day.
+    if (defaultDate) setValues((prev) => ({ ...prev, happening: { ...prev.happening, day: defaultDate } }))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, defaultIsVote])
+  }, [isOpen, defaultIsVote, defaultDate])
 
   const isDirty = JSON.stringify({ ...values, intent: null }) !== JSON.stringify({ ...seed, intent: null })
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
   const handleClose = () => confirmClose(onClose)
 
-  const intent = values.intent && intents.includes(values.intent) ? values.intent : ideaOnly ? 'idea' : null
+  const intent = values.intent && intents.includes(values.intent) ? values.intent : isMember && intents.length === 1 ? intents[0] : null
   const tile = INTENT_TILES.find((t) => t.intent === intent) ?? null
 
   const patch = <K extends 'happening' | 'question' | 'idea'>(key: K, p: Partial<AddFormState[K]>) =>
@@ -195,7 +192,7 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
     <>
       <Modal isOpen={isOpen} onClose={handleClose} size="lg" title={tile ? tile.title : 'Add'}>
         <div className="space-y-4">
-          {!intent && <IntentChooser intents={intents} onChoose={(i) => setValues((prev) => ({ ...prev, intent: i }))} />}
+          {!intent && <IntentChooser intents={intents} memberHappening={isMember} onChoose={(i) => setValues((prev) => ({ ...prev, intent: i }))} />}
 
           {intent === 'happening' && (
             <HappeningForm
@@ -209,6 +206,10 @@ export function AddToPlanSheet({ isOpen, onClose, trip, defaultDate, defaultIsVo
               }}
               attendees={attendees}
               onPullLink={setPasteUrl}
+              tripStart={trip.start_date}
+              tripEnd={trip.end_date}
+              justMe={isMember}
+              selfId={isMember ? undefined : user?.id}
             />
           )}
           {intent === 'question' && (

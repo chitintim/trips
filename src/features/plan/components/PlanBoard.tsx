@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { EmptyState, useToast } from '../../../components/ui'
+import { useNavigate } from 'react-router-dom'
+import { Button, EmptyState, useToast } from '../../../components/ui'
 import { EmptyPlan } from '../../../components/ui/illustrations'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections } from '../../../lib/queries/usePlanning'
@@ -8,7 +9,10 @@ import { useBookings } from '../../../lib/queries/useBookings'
 import { useTimeline, useMaterializeMilestone } from '../../../lib/queries/useTimeline'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useTripActivityLog } from '../../organizer/lib/activity'
-import { generateDateRange, formatDayHeader } from '../../timeline/lib/dayGrouping'
+import { formatDayHeader } from '../../timeline/lib/dayGrouping'
+import { addDays, boardDays } from '../../../lib/tripWindow'
+import { getMyTravelEvents, travelLegSummary, isMainTravelLeg } from '../../people/lib/travelDetails'
+import { isViewerOut } from '../../decisions/lib/answerModel'
 import { PlanItemCard } from './PlanItemCard'
 import { notScheduledHeading } from '../lib/itemSheet'
 import { isTripFinished } from '../../../lib/answers/answers'
@@ -16,6 +20,8 @@ import { ConsolidatedTravelRow } from './ConsolidatedTravelRow'
 import { DerivedMilestoneRow } from './DerivedMilestoneRow'
 import { CompanionSuggestionCard } from './CompanionSuggestionCard'
 import { EventEditorSheet } from '../../timeline/components/EventEditorSheet'
+import { AddToPlanSheet } from './AddToPlanSheet'
+import { useAddIntents } from '../lib/useAddToPlanSave'
 import { groupPlanItemsByDate } from '../lib/planItems'
 import { selectDaysItems } from '../lib/questionsModel'
 import {
@@ -33,7 +39,7 @@ import {
   type DerivedMilestone,
 } from '../lib/derivedMilestones'
 import {
-  isOutsideTripDates,
+  isItemBeyondTravelWindow,
   shouldSkipDayGroupingChrome,
   isLongTrip,
   chunkIntoWeeks,
@@ -84,7 +90,10 @@ export interface PlanBoardProps {
  */
 export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: PlanBoardProps) {
   const { user } = useAuth()
+  const navigate = useNavigate()
   const { showToast } = useToast()
+  const { intents } = useAddIntents(trip)
+  const canAddHappening = intents.includes('happening')
   const { data: places } = usePlaces(trip.id)
   const { data: sections } = useSections(trip.id)
   const { data: bookings } = useBookings(trip.id)
@@ -100,6 +109,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
   const [expandedDenseDays, setExpandedDenseDays] = useState<Set<string>>(() => loadExpandedDays(trip.id))
   const [dismissedSuggestionKeys, setDismissedSuggestionKeys] = useState<Set<string>>(() => loadDismissedKeys(trip.id))
   const [acceptingSuggestion, setAcceptingSuggestion] = useState<CompanionSuggestion | null>(null)
+  // The date the Add sheet opens on (a day's "+", or "before"/"after the trip"); null = closed.
+  const [addOnDate, setAddOnDate] = useState<string | null>(null)
 
   const placesById = useMemo(() => new Map((places || []).map((p) => [p.id, p])), [places])
 
@@ -111,14 +122,10 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
   }, [items, sections])
   const shown = days.scheduled
 
-  const dayDates = useMemo(() => {
-    const eventDates = shown.filter((i) => i.date).map((i) => i.date as string)
-    if (eventDates.length === 0) return generateDateRange(trip.start_date, trip.end_date)
-    const minDate = [trip.start_date, ...eventDates].sort()[0]
-    const maxDate = [trip.end_date, ...eventDates].sort().pop()!
-    return generateDateRange(minDate, maxDate)
-  }, [shown, trip.start_date, trip.end_date])
-
+  const dayDates = useMemo(
+    () => boardDays(shown.filter((i) => i.date).map((i) => i.date as string), trip.start_date, trip.end_date),
+    [shown, trip.start_date, trip.end_date]
+  )
 
   const byDate = useMemo(() => groupPlanItemsByDate(shown), [shown])
   // Same-flight/same-minute travel consolidation (travelGrouping.ts):
@@ -160,13 +167,28 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
     return map
   }, [items])
 
+  // Per-event extras for the cards: a travel leg's "Sets off ... · lands next day" line.
+  const sublineFor = (item: PlanItem): string | null => {
+    const e = item.eventId ? eventsById.get(item.eventId) : undefined
+    return e && isMainTravelLeg(e) ? travelLegSummary(e) : null
+  }
+  const checkDateFor = (item: PlanItem) => isItemBeyondTravelWindow(item, trip.start_date, trip.end_date)
+
+  // "Your travel isn't on the plan yet": a coming viewer with no main arrival or departure.
+  const iAmComing = !!user && (participants ?? []).some((p) => p.user_id === user.id) && !isViewerOut(user.id, participants ?? [])
+  const myTravel = getMyTravelEvents(events || [], user?.id)
+  const showTravelRow = iAmComing && !!events && !isTripFinished(trip) && !myTravel.arrival && !myTravel.departure
+
   const materializedKeys = useMemo(() => materializedDerivedKeys(events || []), [events])
 
+  // Accepting a suggestion creates a timeline event, which only organisers may do (row-level security), so
+  // members are not shown the cards at all rather than a button that would be refused.
   const companionSuggestions = useMemo(() => {
+    if (!isOrganizer) return []
     const transferSuggestions = suggestTransfers(bookings || [], items, flightTimesByBookingId)
     const accommodationSuggestions = suggestAccommodationEvents(bookings || [], items, materializedKeys, trip.end_date)
     return [...transferSuggestions, ...accommodationSuggestions].filter((s) => !dismissedSuggestionKeys.has(s.key))
-  }, [bookings, items, flightTimesByBookingId, materializedKeys, trip.end_date, dismissedSuggestionKeys])
+  }, [isOrganizer, bookings, items, flightTimesByBookingId, materializedKeys, trip.end_date, dismissedSuggestionKeys])
 
   const timeClashFlags = useMemo(() => detectTimeClashes(shown), [shown])
   const clashedIds = useMemo(() => clashedItemIds(timeClashFlags), [timeClashFlags])
@@ -184,7 +206,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
   )
 
   const handleMaterialize = async (milestone: DerivedMilestone) => {
-    if (!user) return
+    // Creating an event is organiser-only (the button is hidden for members; this is the backstop).
+    if (!user || !isOrganizer) return
     // Guard against a second click on the same row while its own request is
     // still in flight (e.g. a slow connection) — a different row is fine,
     // each tracked independently in the Set above.
@@ -309,6 +332,17 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
         </div>
       )}
 
+      {showTravelRow && (
+        <div className="flex items-center justify-between gap-3 rounded-[var(--radius-lg)] border border-[var(--border-subtle)] bg-[var(--surface-raised)] px-3 py-2.5">
+          <p className="min-w-0 text-sm text-[var(--text-secondary)]">Your travel isn’t on the plan yet</p>
+          <Button size="sm" variant="secondary" className="shrink-0" onClick={() => navigate(`/${trip.id}?open=travel-details`)}>
+            Add your travel
+          </Button>
+        </div>
+      )}
+
+      {canAddHappening && <AddGhostButton label="＋ Add something before the trip" onClick={() => setAddOnDate(addDays(trip.start_date, -1))} />}
+
       {/* 1-day trips skip day-grouping chrome entirely (calendar edge case
           #5): a single flat list of the day's items/milestones with no
           "Day 1" header, sticky bar, or divider machinery. */}
@@ -346,7 +380,8 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
                         item={entry.item}
                         place={entry.item.placeId ? placesById.get(entry.item.placeId) : undefined}
                         onOpen={onOpenItem}
-                        outsideTripDates={isOutsideTripDates(entry.item, trip.start_date, trip.end_date)}
+                        checkDate={checkDateFor(entry.item)}
+                        subline={sublineFor(entry.item)}
                         timeClash={clashedIds.has(entry.item.id)}
                         dense={dense && isDensifiableStage(entry.item.stage)}
                       />
@@ -384,8 +419,6 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
                       placesById={placesById}
                       onOpenItem={onOpenItem}
                       isLast={globalIndex === dayDates.length - 1}
-                      tripStartDate={trip.start_date}
-                      tripEndDate={trip.end_date}
                       onMaterialize={handleMaterialize}
                       materializingKeys={materializingKeys}
                       canMaterialize={isOrganizer}
@@ -395,6 +428,9 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
                       onToggleExpand={() => toggleExpandedDenseDay(date)}
                       travelGrouping={travelByDate.get(date)}
                       travelUsersById={travelUsersById}
+                      checkDateFor={checkDateFor}
+                      sublineFor={sublineFor}
+                      onAdd={canAddHappening ? setAddOnDate : undefined}
                     />
                   )
                 })}
@@ -417,8 +453,6 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
               placesById={placesById}
               onOpenItem={onOpenItem}
               isLast={i === dayDates.length - 1}
-              tripStartDate={trip.start_date}
-              tripEndDate={trip.end_date}
               onMaterialize={handleMaterialize}
               materializingKeys={materializingKeys}
               canMaterialize={isOrganizer}
@@ -428,41 +462,52 @@ export function PlanBoard({ trip, items, isOrganizer = false, onOpenItem }: Plan
               onToggleExpand={() => toggleExpandedDenseDay(date)}
               travelGrouping={travelByDate.get(date)}
               travelUsersById={travelUsersById}
+              checkDateFor={checkDateFor}
+              sublineFor={sublineFor}
+              onAdd={canAddHappening ? setAddOnDate : undefined}
             />
           ))}
         </div>
       )}
 
 
+      {canAddHappening && <AddGhostButton label="＋ Add something after the trip" onClick={() => setAddOnDate(addDays(trip.end_date, 1))} />}
+
+      {canAddHappening && (
+        <AddToPlanSheet isOpen={addOnDate !== null} onClose={() => setAddOnDate(null)} trip={trip} defaultDate={addOnDate ?? undefined} />
+      )}
+
       {/* Companion suggestion "accept" (UX_REDESIGN.md Part 3 "Ambient AI"
           #3): opens the same create-event sheet everything else uses,
           prefilled from the suggestion, so the organizer still reviews/
           edits before it's saved — never a silent write. */}
-      <EventEditorSheet
-        isOpen={!!acceptingSuggestion}
-        onClose={() => {
-          // Whether saved or cancelled, the suggestion has been acted on —
-          // treat it like a dismissal so it doesn't linger (if the event
-          // was actually created, the underlying data change also makes
-          // the suggestion's own "not already present" condition false on
-          // next compute; this dismissal is the fast-path for the cancel
-          // case, where nothing changed).
-          if (acceptingSuggestion) handleDismissSuggestion(acceptingSuggestion)
-          setAcceptingSuggestion(null)
-        }}
-        trip={trip}
-        event={null}
-        defaultDate={acceptingSuggestion?.prefill.event_date}
-        defaults={
-          acceptingSuggestion
-            ? {
-                title: acceptingSuggestion.prefill.title,
-                category: acceptingSuggestion.prefill.category,
-                startTime: acceptingSuggestion.prefill.start_time,
-              }
-            : undefined
-        }
-      />
+      {isOrganizer && (
+        <EventEditorSheet
+          isOpen={!!acceptingSuggestion}
+          onClose={() => {
+            // Whether saved or cancelled, the suggestion has been acted on —
+            // treat it like a dismissal so it doesn't linger (if the event
+            // was actually created, the underlying data change also makes
+            // the suggestion's own "not already present" condition false on
+            // next compute; this dismissal is the fast-path for the cancel
+            // case, where nothing changed).
+            if (acceptingSuggestion) handleDismissSuggestion(acceptingSuggestion)
+            setAcceptingSuggestion(null)
+          }}
+          trip={trip}
+          event={null}
+          defaultDate={acceptingSuggestion?.prefill.event_date}
+          defaults={
+            acceptingSuggestion
+              ? {
+                  title: acceptingSuggestion.prefill.title,
+                  category: acceptingSuggestion.prefill.category,
+                  startTime: acceptingSuggestion.prefill.start_time,
+                }
+              : undefined
+          }
+        />
+      )}
     </div>
   )
 }
@@ -480,8 +525,6 @@ interface PlanDaySectionProps {
   placesById: Map<string, Tables<'places'>>
   onOpenItem: (item: PlanItem) => void
   isLast: boolean
-  tripStartDate: string
-  tripEndDate: string
   onMaterialize: (milestone: DerivedMilestone) => void
   materializingKeys: Set<string>
   /** Organizer-only gate on DerivedMilestoneRow's "+ Make it an event" button (developer call: milestones are informative for everyone, materializing them is an organizer action). */
@@ -496,6 +539,11 @@ interface PlanDaySectionProps {
   travelGrouping?: DayTravelGrouping
   /** user_id -> name/email lookup for the consolidated rows' traveller names. */
   travelUsersById: Map<string, TravelUserLike>
+  /** True when an item's date is more than a week from the trip (the quiet "Check the date" tag). */
+  checkDateFor: (item: PlanItem) => boolean
+  sublineFor: (item: PlanItem) => string | null
+  /** Opens the Add sheet on this day; undefined when the viewer cannot add a happening. */
+  onAdd?: (date: string) => void
 }
 
 /**
@@ -519,8 +567,6 @@ function PlanDaySection({
   placesById,
   onOpenItem,
   isLast,
-  tripStartDate,
-  tripEndDate,
   onMaterialize,
   materializingKeys,
   canMaterialize,
@@ -530,6 +576,9 @@ function PlanDaySection({
   onToggleExpand,
   travelGrouping,
   travelUsersById,
+  checkDateFor,
+  sublineFor,
+  onAdd,
 }: PlanDaySectionProps) {
   const swipe = useDaySwipe(
     () => nextDate && scrollToDay(nextDate),
@@ -562,6 +611,16 @@ function PlanDaySection({
             {header.dayNumber ? `Day ${header.dayNumber}` : header.dayLabel}
           </span>
           <span className="text-xs text-[var(--text-muted)]">{header.label}</span>
+          {onAdd && (
+            <button
+              type="button"
+              onClick={() => onAdd(date)}
+              aria-label={`Add to ${header.label}`}
+              className="ml-auto flex h-8 w-8 items-center justify-center rounded-full text-lg leading-none text-[var(--text-muted)] hover:bg-[var(--surface-sunken)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-600"
+            >
+              ＋
+            </button>
+          )}
         </div>
       </div>
       <div
@@ -591,7 +650,8 @@ function PlanDaySection({
                   item={item}
                   place={item.placeId ? placesById.get(item.placeId) : undefined}
                   onOpen={onOpenItem}
-                  outsideTripDates={isOutsideTripDates(item, tripStartDate, tripEndDate)}
+                  checkDate={checkDateFor(item)}
+                  subline={sublineFor(item)}
                   timeClash={clashedIds.has(item.id)}
                 />
               </div>
@@ -620,7 +680,8 @@ function PlanDaySection({
                         item={entry.item}
                         place={entry.item.placeId ? placesById.get(entry.item.placeId) : undefined}
                         onOpen={onOpenItem}
-                        outsideTripDates={isOutsideTripDates(entry.item, tripStartDate, tripEndDate)}
+                        checkDate={checkDateFor(entry.item)}
+                        subline={sublineFor(entry.item)}
                         timeClash={clashedIds.has(entry.item.id)}
                         dense={dense}
                       />
@@ -643,6 +704,18 @@ function PlanDaySection({
       </div>
       {!isLast && <div className="mt-3 border-b border-[var(--border-subtle)]" />}
     </div>
+  )
+}
+
+function AddGhostButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="w-full rounded-[var(--radius-md)] border border-dashed border-[var(--border-subtle)] px-3 py-2 text-left text-sm text-[var(--text-muted)] hover:border-[var(--border-default)] hover:text-[var(--text-secondary)]"
+    >
+      {label}
+    </button>
   )
 }
 

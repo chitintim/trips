@@ -10,7 +10,7 @@ const todo = (title: string, o: Record<string, unknown> = {}) => ({ title, notes
 
 Deno.test('tool list: fixed order and names', () => {
   assertEquals(PROPOSE_TOOLS.map((t) => t.name), [
-    'propose_add_todo', 'propose_tick_todo', 'propose_answer', 'propose_add_expense', 'propose_suggest_option', 'propose_create_question', 'propose_add_option', 'open_screen',
+    'propose_add_todo', 'propose_set_my_travel', 'propose_add_plan_item', 'propose_tick_todo', 'propose_answer', 'propose_add_expense', 'propose_suggest_option', 'propose_create_question', 'propose_add_option', 'open_screen',
   ])
 })
 
@@ -43,6 +43,8 @@ Deno.test('schemas are strict-mode safe: closed objects, everything required, no
 Deno.test('flag off: every propose tool answers "not switched on" and writes nothing (open_screen still works)', async () => {
   const inputs: Record<string, unknown> = {
     propose_add_todo: todo('x'),
+    propose_set_my_travel: { direction: 'arrival', leg: 'main', title: null, date: '2026-12-04', time: null, flight_ref: null, airport_code: null, set_off_date: null, set_off_time: null, home_date: null, home_time: null },
+    propose_add_plan_item: { title: 'Dinner', date: '2026-12-04', start_time: null, end_time: null, for: 'me', notes: null },
     propose_tick_todo: { todo_ref: { source: 'action', id: TODO_SAMS }, op: 'tick' },
     propose_answer: { question_id: SEC_OPEN, op: 'pass', option_ids: [], ranks: null, own_choice: null },
     propose_add_expense: { description: 'x', amount: '5', currency: 'GBP', paid_by: null, split_between: [ME], custom_split: null, date: null, category: 'other' },

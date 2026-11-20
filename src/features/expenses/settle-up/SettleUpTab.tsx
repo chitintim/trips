@@ -176,7 +176,8 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
   // NOTE: the settlements UPDATE and settlement_carryovers INSERT RLS policies use
   // is_trip_organizer() only, so a site admin who is not on the roster can freeze but
   // may be rejected on those writes; we deliberately do not add UI for them.
-  const { canManageTrip } = useTripPermissions(trip)
+  // Folding in is organiser-only in the database, so it follows isTripOrganizer, not canManageTrip.
+  const { canManageTrip, isTripOrganizer } = useTripPermissions(trip)
 
   const isFrozen = !!trip.settlement_snapshot
 
@@ -845,16 +846,20 @@ export function SettleUpTab({ trip, initialConfirmId, focusDuplicates }: SettleU
                   Carried from {c.sourceTripName}: {c.netAmount >= 0 ? 'owed to you' : 'you owe'} {formatMoney(Math.abs(c.netAmount), c.currency)}, not in this trip&apos;s balances yet
                 </p>
               </div>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => handleFoldInCarryover(c)}
-                disabled={createCarryover.isPending}
-                isLoading={createCarryover.isPending}
-                className="shrink-0"
-              >
-                Fold in
-              </Button>
+              {isTripOrganizer ? (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => handleFoldInCarryover(c)}
+                  disabled={createCarryover.isPending}
+                  isLoading={createCarryover.isPending}
+                  className="shrink-0"
+                >
+                  Fold in
+                </Button>
+              ) : (
+                <p className="text-xs text-[var(--text-muted)] shrink-0 max-w-[40%] text-right">An organiser can fold this in.</p>
+              )}
             </div>
           ))}
         </Card>

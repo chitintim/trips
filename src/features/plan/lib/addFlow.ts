@@ -17,6 +17,7 @@ import type { DecisionShape } from '../../decisions/lib/decisionShapes'
 import type { PriceBasis } from '../../../lib/cost/priceBasis'
 import type { Json, TablesInsert } from '../../../types/database.types'
 import type { TimelineEventCategory } from '../../../types'
+import type { MyPlanItemInput } from './myPlanItems'
 
 export type AddIntent = 'happening' | 'question' | 'idea'
 
@@ -35,13 +36,23 @@ export const INTENT_TILES: ReadonlyArray<{
 
 export { IDEAS_QUESTION_TITLE, IDEAS_BUCKET_KEY }
 
+/** The member version of the "happening" tile hint (members add plans for themselves only). */
+export const MEMBER_HAPPENING_HINT = 'Your own plans, like a dinner or a night somewhere. It goes on the plan as yours.'
+
 /**
- * The intents this viewer may save. People who can run the trip get all three. Everyone else who is coming
- * (`canSuggestIdea`, Phase 5A) gets exactly one, "An idea", which goes through the suggest RPC; they can
- * never create a happening or a question (RLS would refuse).
+ * The intents this viewer may save. People who can run the trip get all three. Everyone else gets up to two
+ * while the trip is not finished: "Something that's happening" if they are coming (`isComing`: it is saved
+ * as a "just me" plan through `save_my_plan_item`, never for the group), and "An idea" if `canSuggestIdea`
+ * (Phase 5A, through the suggest RPC). They can never create a question (RLS would refuse).
  */
-export function availableIntents(canManageTrip: boolean, tripFinished = false, canSuggestIdea = false): AddIntent[] {
-  if (!canManageTrip) return canSuggestIdea && !tripFinished ? ['idea'] : []
+export function availableIntents(canManageTrip: boolean, tripFinished = false, canSuggestIdea = false, isComing = true): AddIntent[] {
+  if (!canManageTrip) {
+    if (tripFinished) return []
+    const out: AddIntent[] = []
+    if (isComing) out.push('happening')
+    if (canSuggestIdea) out.push('idea')
+    return out
+  }
   // A finished trip has nothing left to ask or float: only recording what happened still makes sense.
   return tripFinished ? ['happening'] : ['happening', 'question', 'idea']
 }
@@ -151,6 +162,21 @@ export function buildEventInsert(v: HappeningValues, tripId: string, userId: str
     location: v.placeName,
     participant_ids: v.attendeeIds.length > 0 ? v.attendeeIds : null,
     metadata: withEventCost(null, amount > 0 ? { amount, currency: v.costCurrency, basis: v.costBasis } : null),
+  }
+}
+
+/** A member's "just me" happening: no attendees and no cost, saved through `save_my_plan_item`. */
+export function buildMyPlanItemInput(v: HappeningValues): MyPlanItemInput {
+  const timed = v.hasTime && !!v.startTime
+  return {
+    title: v.title.trim(),
+    date: v.day,
+    startTime: timed ? v.startTime : null,
+    endTime: timed ? v.endTime || null : null,
+    notes: v.notes.trim() || null,
+    placeId: v.placeId,
+    location: v.placeName,
+    category: guessCategory(v.title),
   }
 }
 

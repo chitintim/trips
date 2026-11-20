@@ -331,7 +331,7 @@ export function CreateTripWizard({ isOpen, onClose, editTrip = null, onSuccess }
                 </p>
                 {candidates.map((c, i) => (
                   <div key={i} className="flex items-end gap-2">
-                    <div className="grid grid-cols-2 gap-2 flex-1">
+                    <div className="grid grid-cols-2 gap-2 flex-1 min-w-0">
                       <Input label={i === 0 ? 'From' : undefined} type="date" value={c.start} onChange={(e) => updateCandidate(i, { start: e.target.value })} />
                       <Input label={i === 0 ? 'To' : undefined} type="date" value={c.end} onChange={(e) => updateCandidate(i, { end: e.target.value })} />
                     </div>

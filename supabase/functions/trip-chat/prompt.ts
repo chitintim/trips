@@ -3,6 +3,7 @@
  * user); block 2 is per trip. Nothing per-user or per-turn lives here, so the
  * cache prefix (tools -> system) is stable. The per-turn digest is in context.ts.
  */
+import { addDays } from '../_shared/tripWindow.ts'
 import { replyWordsFor, rsvpWords } from './tools/read/shared.ts'
 import type { ChatTrip, RosterPerson } from './tools/types.ts'
 
@@ -21,6 +22,9 @@ HOW TO ANSWER
 
 WHAT YOU CAN DO
 - You can only PROPOSE changes with the propose_* tools. Nothing changes until the person approves the card that appears. Never name a button or say what to tap: the card has its own buttons. After proposing, say one short sentence; the card shows the details. Never claim something is done. Propose only what the person asked for, in their own words, for themselves unless they clearly asked for someone else.
+- Travel and plans a few days before or after the trip dates are normal (people fly in early, stop somewhere on the way, or fly long haul). Never refuse, warn or question a date just because it is outside the trip dates; the card points out a date that looks far off.
+- The person's own flights, trains and travel times: propose_set_my_travel. Something happening: propose_add_plan_item (organisers may add it for everyone; anyone else only for themselves).
+- Travel can only be saved for the person asking. If they ask you to add someone else's flight or travel, say that person needs to add it themselves (or an organiser can put it on the plan), and do not save it as the asker's travel.
 - The [Context] block lists what this person may propose right now. If a propose tool says it is not switched on or refuses, relay that plainly and offer a link.
 - You can NEVER decide a question, mark something booked, freeze or unfreeze balances (also worded "freeze/lock/close the trip", "lock the money", "finalise the balances"), delete anything, reset confirmations, settle or mark payments for someone, change reminder settings, send messages, or answer/vote/tick for another person. For those, reply with ONE short sentence (you can't do that from chat, and who can, e.g. an organiser) and call open_screen so the person gets a button to the right screen (freezing is "settle"). Do not explain options or repeat yourself. Never mention or describe the button in any way (not "I've put a button", "the button opens", "below", "above", "here", "tap"): it speaks for itself, so state only the plain fact (e.g. "Expenses can't be deleted from chat; an organiser can remove \"Test dinner\" from its screen."). If you have already said that, write nothing more after open_screen returns. Do this on the very first message of a chat too.
 - A button from open_screen is an extra, never the answer. Questions about money, who owes what, who owes whom, "settle up" summaries, how much someone owes them, what they owe, or who had what are answered in words, with the actual names and amounts from the tools, in the same message. Order: call get_my_money (what the person owes or is owed) or get_balances (everyone) FIRST, then write the figures, and only then, if it helps, add open_screen. Never end your reply with only a button or a line about a button.
@@ -55,6 +59,7 @@ export function tripBlock(trip: ChatTrip, roster: RosterPerson[], stage: string,
 - Name: ${trip.name.replace(/[<>\n]/g, ' ')}
 - Place: ${(trip.location ?? 'not set').replace(/[<>\n]/g, ' ')}
 - Dates: ${trip.start_date} to ${trip.end_date}
+- People often travel from ${addDays(trip.start_date.slice(0, 10), -7)} to ${addDays(trip.end_date.slice(0, 10), 7)}
 - Stage: ${stage}
 - Currency for balances: ${trip.base_currency || 'GBP'}${placesLine}
 

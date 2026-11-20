@@ -1,4 +1,5 @@
 import { HTMLAttributes, forwardRef, useEffect } from 'react'
+import { TOAST_ANIMATION_CLASSES } from './toastLayout'
 
 // ============================================================================
 // TYPES
@@ -121,7 +122,7 @@ export const Toast = forwardRef<HTMLDivElement, ToastProps>(
         role="alert"
         className={`
           flex items-start gap-3 p-4 rounded-[var(--radius-md)] border-l-4 shadow-lg
-          animate-[fable-toast-in_0.2s_ease-out]
+          ${TOAST_ANIMATION_CLASSES}
           ${style.bg} ${style.border} ${style.text}
           ${className}
         `.trim().replace(/\s+/g, ' ')}

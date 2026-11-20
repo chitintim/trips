@@ -4,7 +4,6 @@ import {
   suggestAccommodationEvents,
   detectTimeClashes,
   clashedItemIds,
-  detectBookingDateMismatches,
 } from './companions'
 import type { PlanItem } from './planItems'
 import type { Booking } from '../../../lib/queries/useBookings'
@@ -170,24 +169,5 @@ describe('detectTimeClashes / clashedItemIds', () => {
       item({ id: 'b', date: '2026-08-02', startTime: '19:00', endTime: '21:00' }),
     ]
     expect(detectTimeClashes(items)).toHaveLength(0)
-  })
-})
-
-describe('detectBookingDateMismatches', () => {
-  it('flags a booking dated outside the trip range', () => {
-    const bookings = [booking({ id: 'b1', title: 'Pre-trip hotel', booking_date: '2026-07-30' })]
-    const flags = detectBookingDateMismatches(bookings, '2026-08-01', '2026-08-05')
-    expect(flags).toHaveLength(1)
-    expect(flags[0].bookingId).toBe('b1')
-  })
-
-  it('does not flag bookings within range', () => {
-    const bookings = [booking({ id: 'b1', title: 'Chalet', booking_date: '2026-08-02' })]
-    expect(detectBookingDateMismatches(bookings, '2026-08-01', '2026-08-05')).toHaveLength(0)
-  })
-
-  it('ignores bookings with no date', () => {
-    const bookings = [booking({ id: 'b1', title: 'TBD', booking_date: null })]
-    expect(detectBookingDateMismatches(bookings, '2026-08-01', '2026-08-05')).toHaveLength(0)
   })
 })

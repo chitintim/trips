@@ -141,7 +141,7 @@ export function withHistoryBreakpoint(history: AnthropicMessage[]): AnthropicMes
 }
 
 const KIND_WORDS: Record<string, string> = {
-  add_todo: 'add a to-do', tick_todo: 'update a to-do', answer: 'record an answer', add_expense: 'add an expense',
+  add_todo: 'add a to-do', tick_todo: 'update a to-do', set_travel: 'save travel', add_plan_item: 'add to the plan', answer: 'record an answer', add_expense: 'add an expense',
   suggest_option: 'suggest an option', create_question: 'create a question', add_option: 'add an option',
 }
 const STATUS_WORDS: Record<string, string> = {
@@ -169,11 +169,11 @@ export function capabilitiesText(viewer: ChatViewer, actionsEnabled: boolean, fr
   if (!actionsEnabled) {
     lines.push('Proposing changes is switched OFF for this trip. If asked, say you can look things up but cannot make changes from chat yet, and offer open_screen links.')
   } else {
-    const can = ['add a to-do (for themselves, someone, everyone or anyone)', 'tick/untick/claim their own to-do', "record their own answer to an open question", frozen ? null : 'add an expense', viewer.canManageTrip ? 'create a question with options, add an option to a question, add an idea to the Ideas list' : 'suggest an option or an idea'].filter(Boolean)
+    const can = ['add a to-do (for themselves, someone, everyone or anyone)', 'save their own travel (flights, trains, times)', viewer.canManageTrip ? 'add something to the plan (for themselves or everyone)' : 'add something to the plan for themselves', 'tick/untick/claim their own to-do', "record their own answer to an open question", frozen ? null : 'add an expense', viewer.canManageTrip ? 'create a question with options, add an option to a question, add an idea to the Ideas list' : 'suggest an option or an idea'].filter(Boolean)
     lines.push(`They may ask you to: ${can.join('; ')}.`)
     if (frozen) lines.push('Balances are FROZEN: expenses cannot be added. Say so and offer open_screen settle.')
   }
-  lines.push(viewer.canManageTrip ? 'Role: organiser (may see everyone\'s answers and who is still to answer).' : 'Role: participant (cannot see hidden answers or the waiting-on list; cannot create questions or options).')
+  lines.push(viewer.canManageTrip ? 'Role: organiser (may see everyone\'s answers and who is still to answer).' : 'Role: participant (cannot see hidden answers or the waiting-on list; cannot create questions or options; can add their own travel and their own plans).')
   return lines.join(' ')
 }
 

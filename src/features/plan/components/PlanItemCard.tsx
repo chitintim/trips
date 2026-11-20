@@ -53,6 +53,9 @@ function AnswerChipInner({ trip, section }: { trip: Trip; section: NonNullable<R
   )
 }
 
+const CHECK_DATE_TEXT = 'Check the date'
+const CHECK_DATE_TITLE = 'More than a week from the trip dates'
+
 export interface PlanItemCardProps {
   item: PlanItem
   place?: Tables<'places'>
@@ -75,12 +78,12 @@ export interface PlanItemCardProps {
    */
   dense?: boolean
   /**
-   * Calendar edge case #1 (UX_REDESIGN.md Part 3): the trip's dates changed
-   * after this item was scheduled and it now falls outside [start_date,
-   * end_date]. Never auto-moved/deleted — just flagged, with the card tap
-   * (onOpen -> the item sheet's Edit affordance) as the re-anchor path.
+   * The date is more than a week from the trip dates (`isBeyondTravelWindow`): a quiet grey "Check the date"
+   * tag, in case the trip dates changed or the year was mistyped. Never a warning, never auto-moved.
    */
-  outsideTripDates?: boolean
+  checkDate?: boolean
+  /** A short extra line, e.g. a travel leg's "Sets off Sat 21 Dec 21:00 · lands next day". */
+  subline?: string | null
   /** Companion-suggestions rule 3 (UX_REDESIGN.md Part 3 "Ambient AI" #3): this item's time overlaps another item on the same day. */
   timeClash?: boolean
 }
@@ -97,7 +100,8 @@ export function PlanItemCard({
   trip,
   compact = false,
   dense = false,
-  outsideTripDates = false,
+  checkDate = false,
+  subline = null,
   timeClash = false,
 }: PlanItemCardProps) {
   const category = item.category ? CATEGORY_CONFIG[item.category as keyof typeof CATEGORY_CONFIG] ?? CATEGORY_CONFIG.other : null
@@ -135,9 +139,9 @@ export function PlanItemCard({
           </span>
         )}
         {item.price && <PriceTag price={item.price} size="inline" compact className="shrink-0" />}
-        {outsideTripDates && (
-          <span className="shrink-0 text-xs" aria-hidden="true" title="Outside trip dates">
-            ⚠️
+        {checkDate && (
+          <span className="shrink-0 text-xs text-[var(--text-muted)]" title={CHECK_DATE_TITLE}>
+            {CHECK_DATE_TEXT}
           </span>
         )}
         {timeClash && (
@@ -189,9 +193,9 @@ export function PlanItemCard({
                 ⚠️ Booking cancelled — needs rebooking
               </Badge>
             )}
-            {outsideTripDates && (
-              <Badge variant="warning" size="sm">
-                ⚠️ Outside trip dates
+            {checkDate && (
+              <Badge variant="neutral" size="sm" title={CHECK_DATE_TITLE}>
+                {CHECK_DATE_TEXT}
               </Badge>
             )}
             {timeClash && (
@@ -204,6 +208,8 @@ export function PlanItemCard({
           <h4 className={`mt-1 font-medium text-[var(--text-primary)] ${compact ? 'text-sm' : ''}`}>
             {item.title}
           </h4>
+
+          {subline && <p className="mt-0.5 text-xs text-[var(--text-muted)]">{subline}</p>}
 
           {place && (
             <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>

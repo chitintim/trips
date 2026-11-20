@@ -18,6 +18,7 @@
  * when it misses.
  */
 import type { TimelineEvent } from '../../../types'
+import { isExtraTravelLeg, isMainTravelLeg, travelEventDirection } from '../../people/lib/travelDetails'
 
 export interface NightsWeightResult {
   participantId: string
@@ -47,9 +48,14 @@ function findParticipantEventDate(
   participantId: string,
   matcher: RegExp
 ): string | null {
-  const candidates = events.filter((e) => {
-    const involved = e.participant_ids ? e.participant_ids.includes(participantId) : true
-    if (!involved) return false
+  const wanted = matcher === ARRIVAL_RE ? 'arrival' : 'departure'
+  const involvedEvents = events.filter((e) => (e.participant_ids ? e.participant_ids.includes(participantId) : true))
+  // Saved travel details are exact: use them first. Extra journeys (a stop on
+  // the way) say nothing about the shared stay, so the title guess ignores them.
+  const main = involvedEvents.filter((e) => isMainTravelLeg(e) && travelEventDirection(e) === wanted)
+  const pool = main.length > 0 ? main : involvedEvents.filter((e) => !isExtraTravelLeg(e))
+  const candidates = pool.filter((e) => {
+    if (main.length > 0) return true
     if (!ARRIVAL_DEPARTURE_CATEGORIES.has(e.category) && !matcher.test(e.title)) return false
     return matcher.test(e.title)
   })

@@ -89,7 +89,7 @@ export function clearDraft(key: string): void {
 // HOOK
 // ============================================================================
 
-export interface UseFormDraftOptions {
+export interface UseFormDraftOptions<T = unknown> {
   /** Milliseconds a saved draft remains valid for restoration. Default 24h. */
   ttlMs?: number
   /**
@@ -99,6 +99,12 @@ export interface UseFormDraftOptions {
    * Standard §5.2). Default true.
    */
   enabled?: boolean
+  /**
+   * Optional gate: when it returns false for the current values, nothing is
+   * written and any stored draft for the key is removed. Use it to keep an
+   * untouched form from leaving an "empty" draft behind.
+   */
+  shouldPersist?: (values: T) => boolean
 }
 
 export interface UseFormDraftResult<T> {
@@ -120,7 +126,7 @@ export interface UseFormDraftResult<T> {
 export function useFormDraft<T>(
   key: string,
   initial: T,
-  opts: UseFormDraftOptions = {}
+  opts: UseFormDraftOptions<T> = {}
 ): UseFormDraftResult<T> {
   const ttlMs = opts.ttlMs ?? DEFAULT_DRAFT_TTL_MS
   const enabled = opts.enabled ?? true
@@ -132,6 +138,8 @@ export function useFormDraft<T>(
   })
 
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const shouldPersistRef = useRef(opts.shouldPersist)
+  shouldPersistRef.current = opts.shouldPersist
 
   // Debounced persistence whenever values change.
   useEffect(() => {
@@ -142,6 +150,10 @@ export function useFormDraft<T>(
     }
 
     saveTimeoutRef.current = setTimeout(() => {
+      if (shouldPersistRef.current && !shouldPersistRef.current(values)) {
+        clearDraft(key)
+        return
+      }
       saveDraft(key, values)
     }, SAVE_DEBOUNCE_MS)
 

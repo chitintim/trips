@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  isOutsideTripDates,
+  isItemBeyondTravelWindow,
+  isBeyondTravelWindow,
   longestCandidateRange,
   resolveBoardAnchorRange,
   isOvernightEvent,
@@ -14,17 +15,18 @@ import {
 } from './calendarEdgeCases'
 import type { SectionWithOptions } from '../../../lib/queries/usePlanning'
 
-describe('isOutsideTripDates', () => {
-  it('is false for undated items', () => {
-    expect(isOutsideTripDates({ date: null }, '2026-08-01', '2026-08-05')).toBe(false)
+describe('isItemBeyondTravelWindow', () => {
+  it('is false for undated items and for dates up to a week either side', () => {
+    expect(isItemBeyondTravelWindow({ date: null }, '2026-08-01', '2026-08-05')).toBe(false)
+    expect(isItemBeyondTravelWindow({ date: '2026-07-25' }, '2026-08-01', '2026-08-05')).toBe(false)
+    expect(isItemBeyondTravelWindow({ date: '2026-08-12' }, '2026-08-01', '2026-08-05')).toBe(false)
   })
-  it('is false for dates within range (inclusive)', () => {
-    expect(isOutsideTripDates({ date: '2026-08-01' }, '2026-08-01', '2026-08-05')).toBe(false)
-    expect(isOutsideTripDates({ date: '2026-08-05' }, '2026-08-01', '2026-08-05')).toBe(false)
+  it('is true from eight days out', () => {
+    expect(isItemBeyondTravelWindow({ date: '2026-07-24' }, '2026-08-01', '2026-08-05')).toBe(true)
+    expect(isItemBeyondTravelWindow({ date: '2026-08-13' }, '2026-08-01', '2026-08-05')).toBe(true)
   })
-  it('is true before start or after end', () => {
-    expect(isOutsideTripDates({ date: '2026-07-31' }, '2026-08-01', '2026-08-05')).toBe(true)
-    expect(isOutsideTripDates({ date: '2026-08-06' }, '2026-08-01', '2026-08-05')).toBe(true)
+  it('re-exports the plain date helper', () => {
+    expect(isBeyondTravelWindow('2026-08-13', '2026-08-01', '2026-08-05')).toBe(true)
   })
 })
 

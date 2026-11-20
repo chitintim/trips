@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useState, ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Toast, ToastProps } from './Toast'
+import { TOAST_CONTAINER_CLASSES } from './toastLayout'
 
 export interface ToastOptions {
   type?: ToastProps['type']
@@ -44,7 +45,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       {createPortal(
         <div
-          className="fixed bottom-4 right-4 left-4 sm:left-auto z-toast flex flex-col gap-2 sm:max-w-sm pointer-events-none"
+          className={TOAST_CONTAINER_CLASSES}
           aria-live="polite"
         >
           {toasts.map((t) => (

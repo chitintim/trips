@@ -8,6 +8,7 @@ import { usePlanItems } from '../../plan'
 import { formatTime } from '../../timeline'
 import { AnnouncementsSection } from './AnnouncementsSection'
 import { YourCostCard } from './YourCostCard'
+import { YourTravelCard } from './YourTravelCard'
 import { CountdownHero } from './CountdownHero'
 import { TripProgressStrip } from './TripProgressStrip'
 import { NowNextCard } from './NowNextCard'
@@ -68,6 +69,14 @@ export function TodayTab({
 
   const todos = <YourTodosCard tripId={trip.id} onOpenAll={() => onOpenActions('actions')} />
   const yourCost = <YourCostCard trip={trip} />
+  // Coming = on the trip; with RSVP tracking on, only once confirmed.
+  const status = brief.myParticipant?.confirmation_status
+  const isComing =
+    !!brief.myParticipant &&
+    (trip.confirmation_enabled === true
+      ? status === 'confirmed'
+      : status !== 'declined' && status !== 'cancelled' && status !== 'waitlist')
+  const yourTravel = <YourTravelCard trip={trip} effectiveStage={effectiveStage} isComing={isComing} />
   const announcements = <AnnouncementsSection trip={trip} isOrganizer={organiser} />
   const activity = <RecentActivitySection tripId={trip.id} />
   // Organiser-only: the summary, plus the two prompts that have no to-do yet
@@ -88,6 +97,7 @@ export function TodayTab({
         <>
           <BriefCover trip={trip} statusOverride={effectiveStage} />
           {todos}
+          {yourTravel}
           {yourCost}
           <OrganizerMessageCard message={trip.confirmation_message} />
           <CapacityCard
@@ -116,6 +126,7 @@ export function TodayTab({
       layout = (
         <>
           {todos}
+          {yourTravel}
           {yourCost}
           <KeyBookingsCard tripId={trip.id} />
           {announcements}
@@ -130,6 +141,7 @@ export function TodayTab({
         <>
           <CountdownHero trip={trip} />
           {todos}
+          {yourTravel}
           {yourCost}
           <KeyBookingsCard tripId={trip.id} />
           <ChecklistNudgeCard onOpen={() => onOpenActions('bring')} />
@@ -165,6 +177,7 @@ export function TodayTab({
       layout = (
         <>
           {todos}
+          {yourTravel}
           {yourCost}
           <RecapTeaserCard onOpenRecap={onOpenRecap} />
           {announcements}
@@ -178,6 +191,7 @@ export function TodayTab({
       layout = (
         <>
           {todos}
+          {yourTravel}
           {yourCost}
           {announcements}
           {organiserCards}

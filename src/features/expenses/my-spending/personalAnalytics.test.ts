@@ -123,4 +123,25 @@ describe('computeDayBreakdown', () => {
     expect(days.find((d) => d.date === '2026-08-01')!.myTotalMajor).toBe(0)
     expect(days.find((d) => d.date === '2026-08-02')!.myTotalMajor).toBe(50)
   })
+
+  it('labels days by date, so a pre-trip expense does not shift the trip days', () => {
+    const expenses = [
+      makeExpense({ id: 'pre', amount: 40, payment_date: '2026-07-28', splits: [makeSplit('alice', 40)] }),
+      makeExpense({ id: 'in', amount: 20, payment_date: '2026-08-02', splits: [makeSplit('alice', 20)] }),
+      makeExpense({ id: 'post', amount: 10, payment_date: '2026-08-06', splits: [makeSplit('alice', 10)] }),
+      makeExpense({ id: 'post2', amount: 5, payment_date: '2026-08-07', splits: [makeSplit('alice', 5)] }),
+    ]
+    const days = computeDayBreakdown(expenses, 'alice', 'GBP', '2026-08-01', '2026-08-03')
+    expect(days.map((d) => d.label)).toEqual([
+      'Before · 28 Jul',
+      'Day 1',
+      'Day 2',
+      'Day 3',
+      'After · 6 Aug',
+      'After · 7 Aug',
+    ])
+    expect(days.find((d) => d.date === '2026-07-28')!.myTotalMajor).toBe(40)
+    expect(days.find((d) => d.date === '2026-08-06')!.myTotalMajor).toBe(10)
+    expect(days.find((d) => d.date === '2026-08-02')!.label).toBe('Day 2')
+  })
 })

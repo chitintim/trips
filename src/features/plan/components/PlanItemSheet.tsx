@@ -1,5 +1,7 @@
 import { isIdeasBucket } from '../../../lib/ideasBucket'
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { Modal, Badge, Button, PriceTag, SelectionAvatars, useToast } from '../../../components/ui'
 import { usePlaces } from '../../../lib/queries/usePlaces'
 import { useSections, useVotes, useDeleteOption } from '../../../lib/queries/usePlanning'
@@ -12,6 +14,10 @@ import { useBookings } from '../../../lib/queries/useBookings'
 import { useExpenses } from '../../../lib/queries/useExpenses'
 import { useParticipants } from '../../../lib/queries/useTrip'
 import { useAuth } from '../../../hooks/useAuth'
+import { queryKeys } from '../../../lib/queries/queryKeys'
+import { dateNote } from '../../../lib/tripWindow'
+import { isTravelDetailsEvent } from '../../people/lib/travelDetails'
+import { isMyPlanItem, saveMyPlanItem, myPlanItemErrorMessage } from '../lib/myPlanItems'
 import { actualFromExpenses, matchOptionExpenses } from '../../../lib/cost/yourCost'
 import { isConfirmationEnabled } from '../../../lib/tripStatus'
 import type { InScopeHeadcount } from '../../people/lib/inScopePeople'
@@ -78,6 +84,9 @@ export function PlanItemSheet({
   const { data: ledgerPeople = [] } = useParticipants(tripId)
   const { user: viewer } = useAuth()
 
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [deletingOwn, setDeletingOwn] = useState(false)
   const deleteOption = useDeleteOption(tripId)
   const deleteEvent = useDeleteTimelineEvent(tripId)
 
@@ -134,8 +143,19 @@ export function PlanItemSheet({
   const tripFinished = isTripFinished(trip)
   const canSchedule = !tripFinished && !item.date && (isIdea ? !item.eventId && !!item.optionId : item.stage === 'decided' || item.stage === 'booked' || item.isUnscheduledWinner)
   const canMarkBooked = !tripFinished && item.stage === 'decided' && !!item.optionId && !!decisionSection && decisionSection.status === 'completed' && !decisionIsPersonal && !isIdea
-  // Organiser-only (RLS: timeline INSERT, booking edits and deletes are organiser-only server-side).
-  const menuActions = itemMenuActions({ isOrganizer, editTarget, hasBooking: !!booking, canSchedule, canMarkBooked })
+  // Organiser actions (RLS: timeline INSERT/UPDATE/DELETE, booking edits and deletes are organiser-only
+  // server-side). The one exception is a member's own "just me" item, which they edit and delete through
+  // save_my_plan_item (EventEditorSheet and handleDelete below), never by writing the table.
+  const viewerId = viewer?.id ?? ''
+  const ownJustMe = !isOrganizer && !!event && !!viewerId && isMyPlanItem(event, viewerId)
+  // A travel row belongs to its traveller's travel sheet; the generic editor cannot edit its journey fields.
+  const ownTravel =
+    !!event && !!viewerId && isTravelDetailsEvent(event) && !event.source_option_id && event.participant_ids?.length === 1 && event.participant_ids[0] === viewerId
+  const menuActions: ItemMenuAction[] = ownJustMe
+    ? ['edit_event', 'delete']
+    : itemMenuActions({ isOrganizer, editTarget, hasBooking: !!booking, canSchedule, canMarkBooked }).filter((a) => !(ownTravel && a === 'edit_event'))
+  const canEditDate = ownJustMe || (!ownTravel && menuActions.some((a) => a === 'edit_event' || a === 'edit_option'))
+  const note = item.date ? dateNote(item.date, trip.start_date, trip.end_date) : null
   const runMenuAction = (action: ItemMenuAction) => {
     setMenuOpen(false)
     if (action === 'edit_event') setEditEventOpen(true)
@@ -153,7 +173,15 @@ export function PlanItemSheet({
 
   const handleDelete = async () => {
     try {
-      if (item.idKind === 'event' && item.eventId) {
+      if (ownJustMe && item.eventId) {
+        setDeletingOwn(true)
+        try {
+          await saveMyPlanItem(tripId, item.eventId, null)
+          await queryClient.invalidateQueries({ queryKey: queryKeys.timeline(tripId) })
+        } finally {
+          setDeletingOwn(false)
+        }
+      } else if (item.idKind === 'event' && item.eventId) {
         await deleteEvent.mutateAsync(item.eventId)
       } else if (item.idKind === 'option' && item.optionId) {
         if (deletingDecidedOption) {
@@ -165,7 +193,7 @@ export function PlanItemSheet({
       setConfirmingDelete(false)
       onClose()
     } catch (err) {
-      showToast({ type: 'error', message: 'Could not delete', description: (err as Error).message })
+      showToast({ type: 'error', message: 'Could not delete', description: ownJustMe ? myPlanItemErrorMessage(err) : (err as Error).message })
     }
   }
 
@@ -205,6 +233,34 @@ export function PlanItemSheet({
               </Button>
             )}
           </div>
+
+          {note && (
+            <div className="flex flex-wrap items-center gap-2">
+              <p className={`text-sm ${note.tone === 'check' ? 'text-warning-700 dark:text-warning-400' : 'text-[var(--text-muted)]'}`}>{note.text}</p>
+              {note.tone === 'check' && canEditDate && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => (item.idKind === 'event' ? setEditEventOpen(true) : setEditOptionOpen(true))}
+                >
+                  Change date
+                </Button>
+              )}
+            </div>
+          )}
+
+          {ownTravel && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                onClose()
+                navigate(`/${tripId}?open=travel-details`)
+              }}
+            >
+              ✈️ Edit your travel
+            </Button>
+          )}
 
           {menuOpen && menuActions.length > 0 && (
             <div role="group" aria-label="Item actions" className="flex flex-wrap gap-2 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-2">
@@ -360,7 +416,7 @@ export function PlanItemSheet({
               <Button variant="ghost" onClick={() => setConfirmingDelete(false)}>
                 Cancel
               </Button>
-              <Button variant="danger" onClick={handleDelete} disabled={deletingDecidedOption} isLoading={deleteEvent.isPending || deleteOption.isPending}>
+              <Button variant="danger" onClick={handleDelete} disabled={deletingDecidedOption} isLoading={deleteEvent.isPending || deleteOption.isPending || deletingOwn}>
                 Delete
               </Button>
             </div>

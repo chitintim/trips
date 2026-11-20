@@ -10,6 +10,8 @@
 
 export type ActionKind =
   | 'add_todo'
+  | 'set_travel'
+  | 'add_plan_item'
   | 'tick_todo'
   | 'answer'
   | 'add_expense'
@@ -349,6 +351,89 @@ export interface AddOptionBasis extends BasisCommon {
   section_status: string
   section_updated_at: string | null
   option_count: number
+}
+
+// ---------------------------------------------------------------------------
+// set_travel (the caller's own travel: set_my_travel RPC via the client's setMyTravel)
+// ---------------------------------------------------------------------------
+
+/** One leg in the snake_case shape the set_my_travel RPC takes in p_legs, plus the id the card replaces. */
+export interface SetTravelParams {
+  /** The existing own row this replaces (main leg), else null = a new row. Same value as replaces_event_id. */
+  id: string | null
+  direction: 'arrival' | 'departure'
+  /** 'extra' = another journey before (arrival) or after (departure) the trip. */
+  leg: 'main' | 'extra'
+  /** Extra legs only (1-60 chars); null for main legs. */
+  title: string | null
+  /** YYYY-MM-DD (the landing day for an overnight arrival). */
+  date: string
+  /** HH:MM local, or null. */
+  time: string | null
+  flight_ref: string | null
+  /** 3 upper-case letters, or null. */
+  airport_code: string | null
+  /** Arrival only: 0-3 days before date. */
+  set_off_date: string | null
+  set_off_time: string | null
+  /** Departure only: 0-3 days after date. */
+  home_date: string | null
+  home_time: string | null
+  replaces_event_id: string | null
+}
+
+export interface SetTravelPreview {
+  /** "Arriving" / "Leaving" / the quoted extra-leg title, e.g. “Flight to Tokyo”. */
+  journey_label: string
+  /** "Tue 8 Dec 10:00 local · 2 days before the trip" (the relative part is omitted during the trip). */
+  when_label: string
+  /** Arrival: "Mon 7 Dec 21:00 · lands next day"; departure: "Mon 6 Jan 09:00". The card row is "Sets off" / "Gets home" (by params.direction). Null when none. */
+  other_end_label: string | null
+  ref: string | null
+  airport: string | null
+  /** The dateNote text for params.date, or null during the trip. */
+  date_note: string | null
+  /** params.date is more than 7 days outside the trip: show the quiet "check the date" warning. */
+  date_check: boolean
+  /** The current leg this replaces, e.g. "Mon 7 Dec 09:30 · BA117", else null. */
+  replaces_label: string | null
+}
+
+export interface SetTravelBasis extends BasisCommon {
+  /** updated_at of the row being replaced (null when nothing is replaced). */
+  replaces_updated_at: string | null
+}
+
+// ---------------------------------------------------------------------------
+// add_plan_item (a happening on the plan: just me, or everyone for organisers)
+// ---------------------------------------------------------------------------
+
+export interface AddPlanItemParams {
+  title: string
+  date: string
+  /** HH:MM or null. */
+  start_time: string | null
+  /** HH:MM or null; before start_time means it runs into the next day. */
+  end_time: string | null
+  for: 'me' | 'everyone'
+  notes: string | null
+}
+
+export interface AddPlanItemPreview {
+  title: string
+  notes: string | null
+  /** "Tue 8 Dec 19:00–21:00 · 2 days before the trip". */
+  when_label: string
+  /** "Just you" / "Everyone". */
+  for_label: string
+  date_note: string | null
+  date_check: boolean
+  content_origin: Record<string, ContentOrigin>
+}
+
+export interface AddPlanItemBasis extends BasisCommon {
+  /** The owner could manage the trip when proposed (false = organiser rights needed for 'everyone' are gone if it was true). */
+  can_manage_trip: boolean
 }
 
 // ---------------------------------------------------------------------------

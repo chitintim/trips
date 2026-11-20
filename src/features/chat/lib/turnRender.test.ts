@@ -50,6 +50,8 @@ describe('a reloaded finished card keeps its outcome line', () => {
     expect(outcomeLine(done('add_todo', todoParams()))).toBe('Added to your to-dos.')
     expect(outcomeLine(done('tick_todo', tick().params))).toBe('Ticked off.')
     expect(outcomeLine(done('suggest_option', { idea: true }))).toBe('Added to Ideas.')
+    expect(outcomeLine(done('set_travel', {}))).toBe('Travel saved.')
+    expect(outcomeLine(done('add_plan_item', {}))).toBe('Added to the plan.')
     expect(outcomeLine(envelope('add_todo', todoParams(), { status: 'dismissed' }))).toBeNull()
     expect(outcomeLine(envelope('add_todo', todoParams()))).toBeNull()
   })

@@ -76,6 +76,10 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
     this.filters.push((r) => r[col] !== val)
     return this
   }
+  contains(col: string, vals: unknown[]) {
+    this.filters.push((r) => Array.isArray(r[col]) && vals.every((v) => (r[col] as unknown[]).includes(v)))
+    return this
+  }
   in(col: string, vals: unknown[]) {
     this.filters.push((r) => vals.includes(r[col]))
     return this

@@ -13,10 +13,10 @@ import { DependencyGraph } from './DependencyGraph'
 import { WaitlistPanel } from './WaitlistPanel'
 import { StatusModal } from './StatusModal'
 import { ConfirmationSettingsSheet } from './ConfirmationSettingsSheet'
-import { TravelDetailsSheet } from './TravelDetailsSheet'
 import { ManageParticipantSheet } from './ManageParticipantSheet'
 import { AddParticipantModal } from '../../../components/AddParticipantModal'
-import { getMyTravelEvents, travelEventFlightRef, travelEventAirportCode } from '../lib/travelDetails'
+import { isOwnTravelRow } from '../lib/myTravel'
+import { getMyTravelEvents, getMyExtraTravelLegs, travelEventFlightRef, travelEventAirportCode, travelLegSummary } from '../lib/travelDetails'
 import { formatTime } from '../../timeline'
 import { RsvpStandingNotice } from './RsvpStandingNotice'
 import { useRsvpStandings } from '../lib/useRsvpStanding'
@@ -26,6 +26,8 @@ import type { RsvpAnswer } from '../lib/rsvpAnswers'
 
 interface PeopleTabProps {
   tripId: string
+  /** Opens the one travel sheet that TripDetail renders (the same one the ?open=travel-details link uses). */
+  onOpenTravel: () => void
 }
 
 /**
@@ -41,7 +43,7 @@ interface PeopleTabProps {
  * useful: a plain participant list, the self-service travel-details card,
  * and the Checklist tab all stay regardless.
  */
-export function PeopleTab({ tripId }: PeopleTabProps) {
+export function PeopleTab({ tripId, onOpenTravel }: PeopleTabProps) {
   const { user } = useAuth()
   const { data: trip, isLoading: tripLoading, isError: tripError, refetch: refetchTrip } = useTrip(tripId)
   const {
@@ -56,12 +58,17 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
   const [statusModalParticipant, setStatusModalParticipant] = useState<ParticipantWithUser | null>(null)
   const [statusPreset, setStatusPreset] = useState<RsvpAnswer | undefined>(undefined)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [travelOpen, setTravelOpen] = useState(false)
   const [addParticipantOpen, setAddParticipantOpen] = useState(false)
   const [manageParticipant, setManageParticipant] = useState<ParticipantWithUser | null>(null)
   const [view, setView] = useState<'list' | 'graph' | 'waitlist'>('list')
 
   const myTravel = useMemo(() => getMyTravelEvents(timelineEvents, user?.id), [timelineEvents, user?.id])
+  const myExtraCount = useMemo(() => {
+    const extra = getMyExtraTravelLegs(timelineEvents, user?.id)
+    return extra.before.length + extra.after.length
+  }, [timelineEvents, user?.id])
+  const sharedTravel = !!user?.id && [myTravel.arrival, myTravel.departure].some((e) => e && !isOwnTravelRow(e, user.id))
+  const hasAnyTravel = !!(myTravel.arrival || myTravel.departure) || myExtraCount > 0
 
   const myParticipant = useMemo(
     () => participants?.find((p) => p.user_id === user?.id) ?? null,
@@ -211,7 +218,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-[var(--text-primary)]">Your travel details</h3>
-                {myTravel.arrival || myTravel.departure ? (
+                {hasAnyTravel ? (
                   <div className="text-sm text-[var(--text-secondary)] mt-1 space-y-0.5">
                     {myTravel.arrival && (
                       <p>
@@ -219,6 +226,9 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                         {myTravel.arrival.start_time ? ` · ${formatTime(myTravel.arrival.start_time)} local` : ''}
                         {travelEventFlightRef(myTravel.arrival) ? ` · ${travelEventFlightRef(myTravel.arrival)}` : ''}
                         {travelEventAirportCode(myTravel.arrival) ? ` · ${travelEventAirportCode(myTravel.arrival)}` : ''}
+                        {travelLegSummary(myTravel.arrival) && (
+                          <span className="block text-xs text-[var(--text-muted)]">{travelLegSummary(myTravel.arrival)}</span>
+                        )}
                       </p>
                     )}
                     {myTravel.departure && (
@@ -227,6 +237,17 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                         {myTravel.departure.start_time ? ` · ${formatTime(myTravel.departure.start_time)} local` : ''}
                         {travelEventFlightRef(myTravel.departure) ? ` · ${travelEventFlightRef(myTravel.departure)}` : ''}
                         {travelEventAirportCode(myTravel.departure) ? ` · ${travelEventAirportCode(myTravel.departure)}` : ''}
+                        {travelLegSummary(myTravel.departure) && (
+                          <span className="block text-xs text-[var(--text-muted)]">{travelLegSummary(myTravel.departure)}</span>
+                        )}
+                      </p>
+                    )}
+                    {sharedTravel && (
+                      <p className="text-xs text-[var(--text-muted)]">Added by an organiser for more than one person.</p>
+                    )}
+                    {myExtraCount > 0 && (
+                      <p className="text-xs text-[var(--text-muted)]">
+                        +{myExtraCount} more {myExtraCount === 1 ? 'journey' : 'journeys'}
                       </p>
                     )}
                   </div>
@@ -236,8 +257,8 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                   </p>
                 )}
               </div>
-              <Button variant="outline" size="sm" onClick={() => setTravelOpen(true)}>
-                {myTravel.arrival || myTravel.departure ? 'Edit' : 'Add'}
+              <Button variant="outline" size="sm" onClick={onOpenTravel}>
+                {hasAnyTravel ? 'Edit' : 'Add'}
               </Button>
             </div>
           </Card.Content>
@@ -312,7 +333,6 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
         isOrganizer={isOrganizer}
       />
 
-      <TravelDetailsSheet isOpen={travelOpen} onClose={() => setTravelOpen(false)} tripId={tripId} />
 
       {isOrganizer && (
         <AddParticipantModal

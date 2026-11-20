@@ -7,6 +7,7 @@ import { usePlaces, type Place } from '../../../lib/queries/usePlaces'
 import { ensureLeafletDefaultIcon, emojiDivIcon, PlacePicker } from '../../places'
 import { colorForDayIndex } from '../../places/lib/mapMarkers'
 import { placesWithoutCoordinates } from '../../places/lib/unpinnedPlaces'
+import { placeDate } from '../../../lib/tripWindow'
 import { CATEGORY_CONFIG } from '../../timeline/lib/categoryConfig'
 import type { PlanItem } from '../lib/planItems'
 import type { Trip } from '../../../types'
@@ -17,9 +18,11 @@ ensureLeafletDefaultIcon()
 function dayIndexFor(dateStr: string, tripStartDateStr: string): number {
   const date = new Date(`${dateStr}T00:00:00`)
   const start = new Date(`${tripStartDateStr}T00:00:00`)
-  const diffMs = date.getTime() - start.getTime()
-  return Math.max(0, Math.round(diffMs / (1000 * 60 * 60 * 24)))
+  return Math.round((date.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
 }
+
+/** Pins for days outside the trip are one muted grey, not a day colour (no clamping to Day 1). */
+const OUTSIDE_PIN_COLOR = '#6b7280'
 
 function FitBounds({ bounds }: { bounds: LatLngBoundsExpression | null }) {
   const map = useMap()
@@ -86,6 +89,8 @@ function UnpinnedPlacesSection({ places, onFix }: UnpinnedPlacesSectionProps) {
 export interface PlanMapLensProps {
   trip: Trip
   items: PlanItem[]
+  /** Fixing an unpinned place updates the `places` row, which only organisers may do. */
+  isOrganizer?: boolean
   onOpenItem: (item: PlanItem) => void
 }
 
@@ -95,7 +100,7 @@ export interface PlanMapLensProps {
  * as "not settled yet". Tapping a pin opens the same PlanItemSheet used
  * everywhere else, via `onOpenItem`.
  */
-export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
+export function PlanMapLens({ trip, items, isOrganizer = false, onOpenItem }: PlanMapLensProps) {
   const placesQuery = usePlaces(trip.id)
   const { data: places, isLoading: placesLoading, isError: placesError } = placesQuery
   const placesById = useMemo(() => new Map((places || []).map((p) => [p.id, p])), [places])
@@ -106,25 +111,25 @@ export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
       .map((item) => ({ item, place: placesById.get(item.placeId!) }))
       .filter((x): x is { item: PlanItem; place: NonNullable<typeof x.place> } => !!x.place && x.place.lat != null && x.place.lng != null)
       .map(({ item, place }) => {
-        const dayIndex = item.date ? dayIndexFor(item.date, trip.start_date) : 0
-        const color = colorForDayIndex(dayIndex)
+        const where = item.date ? placeDate(item.date, trip.start_date, trip.end_date).place : 'during'
+        const outside = where === 'before' || where === 'way_before' ? 'Before the trip' : where === 'after' || where === 'way_after' ? 'After the trip' : null
+        const color = outside ? OUTSIDE_PIN_COLOR : colorForDayIndex(item.date ? dayIndexFor(item.date, trip.start_date) : 0)
         const emoji = item.category ? CATEGORY_CONFIG[item.category as keyof typeof CATEGORY_CONFIG]?.emoji ?? '📍' : '📍'
         const isSolid = item.stage === 'decided' || item.stage === 'booked'
-        return { item, place, color, emoji, isSolid }
+        return { item, place, color, emoji, isSolid, outside }
       })
-  }, [items, placesById, trip.start_date])
+  }, [items, placesById, trip.start_date, trip.end_date])
 
   const points: LatLngTuple[] = pins.map((p) => [p.place.lat!, p.place.lng!])
   const bounds: LatLngBoundsExpression | null = points.length > 0 ? points : null
 
   // Places on this trip with no lat/lng (name-only PlacePicker entries, or
   // an unresolved link paste) — they can never render as pins. Any
-  // participant can fix one via the same PlacePicker used to create it
-  // (existingPlace mode); there's no existing permission pattern
-  // restricting place edits elsewhere (AddToPlanSheet/EventEditorSheet/
-  // BookingEditorSheet all let any participant create/attach places), so
-  // this stays consistent rather than inventing a new gate.
-  const unpinnedPlaces = useMemo(() => placesWithoutCoordinates(places), [places])
+  // organiser can fix one via the same PlacePicker used to create it
+  // (existingPlace mode). That updates the `places` row, which row-level
+  // security allows organisers only, so members are not offered it (a member's
+  // own just-me item cannot repoint to a fixed place without that update).
+  const unpinnedPlaces = useMemo(() => (isOrganizer ? placesWithoutCoordinates(places) : []), [places, isOrganizer])
   const [fixPlace, setFixPlace] = useState<Place | null>(null)
 
   // Loading gate (UPGRADE_MASTER_PLAN.md audit item 3): without this, "no
@@ -180,7 +185,7 @@ export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
           <FitBounds bounds={bounds} />
-          {pins.map(({ item, place, color, emoji, isSolid }) => (
+          {pins.map(({ item, place, color, emoji, isSolid, outside }) => (
             <Marker
               key={item.id}
               position={[place.lat!, place.lng!]}
@@ -192,6 +197,7 @@ export function PlanMapLens({ trip, items, onOpenItem }: PlanMapLensProps) {
                   {item.title}
                   {!isSolid && ' (proposed)'}
                 </span>
+                {outside && <span className="block text-xs text-[var(--text-muted)]">{outside}</span>}
               </Popup>
             </Marker>
           ))}

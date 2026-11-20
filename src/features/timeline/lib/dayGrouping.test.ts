@@ -53,16 +53,20 @@ describe('formatDayHeader', () => {
   const start = '2026-07-05'
   const end = '2026-07-10'
 
-  it('labels a date before the trip start as Pre-trip', () => {
+  it('labels a date before the trip start as Before the trip', () => {
     const info = formatDayHeader('2026-07-04', start, end)
-    expect(info.dayLabel).toBe('Pre-trip')
+    expect(info.dayLabel).toBe('Before the trip')
     expect(info.dayNumber).toBeNull()
   })
 
-  it('labels a date after the trip end as Post-trip', () => {
+  it('labels a date after the trip end as After the trip', () => {
     const info = formatDayHeader('2026-07-11', start, end)
-    expect(info.dayLabel).toBe('Post-trip')
+    expect(info.dayLabel).toBe('After the trip')
     expect(info.dayNumber).toBeNull()
+  })
+
+  it('uses en-GB weekday and date wording', () => {
+    expect(formatDayHeader('2026-07-05', start, end).label).toBe('Sunday 5 Jul')
   })
 
   it('labels the first day of the trip as Day 1', () => {
@@ -92,6 +96,18 @@ describe('computeTimelineDateRange', () => {
   it('expands to include a late-departure event after trip end', () => {
     const range = computeTimelineDateRange([event({ id: '1', event_date: '2026-07-09' })], '2026-07-05', '2026-07-07')
     expect(range[range.length - 1]).toBe('2026-07-09')
+  })
+})
+
+describe('computeTimelineDateRange beyond the window', () => {
+  it('adds a far-out event on its own day without filling the gap', () => {
+    const range = computeTimelineDateRange([event({ id: '1', event_date: '2026-07-25' })], '2026-07-05', '2026-07-07')
+    expect(range).toEqual(['2026-07-05', '2026-07-06', '2026-07-07', '2026-07-25'])
+  })
+
+  it('fills in a continuous run out to an in-window event', () => {
+    const range = computeTimelineDateRange([event({ id: '1', event_date: '2026-07-12' })], '2026-07-05', '2026-07-07')
+    expect(range).toEqual(['2026-07-05', '2026-07-06', '2026-07-07', '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-11', '2026-07-12'])
   })
 })
 

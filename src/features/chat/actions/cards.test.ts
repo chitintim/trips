@@ -8,7 +8,7 @@ import { moduleFor } from './index'
 import { ActionCardView } from '../components/ActionCardView'
 import { LinkCard } from '../components/LinkCard'
 import { resolveLink } from '../lib/linkTargets'
-import { answerParams, envelope, expenseParams, liveFixture, ANA, BEN, ME, SAM, todoParams } from '../lib/chatFixtures'
+import { answerParams, envelope, expenseParams, liveFixture, planItemParams, travelParams, ANA, BEN, ME, SAM, todoParams } from '../lib/chatFixtures'
 import type { ActionKind, ChatActionEnvelope } from '../lib/payload'
 import type { CardPhase } from '../lib/confirmFlow'
 
@@ -165,9 +165,63 @@ describe('link cards', () => {
   })
 })
 
+describe('travel and plan item cards', () => {
+  const proseOn = (a: ChatActionEnvelope): ChatActionEnvelope => ({ ...a, preview: { ...a.preview, summary: PROSE, reason: PROSE } })
+  const travelPreview = { journey_label: 'Arriving', when_label: 'Thu 3 Dec 10:00 local · 2 days before the trip', other_end_label: 'Wed 2 Dec 21:00 · lands next day', ref: 'JL044', airport: 'HND', date_note: null, date_check: false, replaces_label: null }
+  it('new travel: labelled rows from the preview labels, tap button, no warning for a few days outside the trip', () => {
+    const t = render(proseOn(envelope('set_travel', travelParams(), { preview: travelPreview })), 'proposed')
+    for (const s of ['Add your travel', 'Journey', 'Arriving', 'Thu 3 Dec 10:00 local · 2 days before the trip', 'Sets off', 'Wed 2 Dec 21:00 · lands next day', 'Flight or train', 'JL044', 'Airport', 'HND']) expect(t).toContain(s)
+    expect(t).not.toContain('Replaces')
+    expect(t).not.toContain('MODEL PROSE')
+    expect(t).toContain('Save travel')
+    expect(render(envelope('set_travel', travelParams(), { requires: 'tap', preview: travelPreview }))).toContain('Save your travel: Arriving, Thu 3 Dec 10:00 local')
+  })
+  it('a departure labels the other end "Gets home"; an extra leg shows the quoted title', () => {
+    const t = render(envelope('set_travel', travelParams({ direction: 'departure', set_off_date: null, home_date: '2026-12-14', home_time: '09:00' }), { preview: { ...travelPreview, journey_label: 'Leaving', other_end_label: 'Mon 14 Dec 09:00' } }))
+    expect(t).toContain('Gets home')
+    expect(t).toContain('Mon 14 Dec 09:00')
+    const x = render(envelope('set_travel', travelParams({ leg: 'extra', title: 'Flight to Tokyo' }), { preview: { ...travelPreview, journey_label: '“Flight to Tokyo”' } }))
+    expect(x).toContain('“Flight to Tokyo”')
+  })
+  it('changing a saved leg says so and shows what it replaces', () => {
+    const t = render(envelope('set_travel', travelParams({ id: 'ev1', replaces_event_id: 'ev1' }), { preview: { ...travelPreview, replaces_label: 'Fri 4 Dec 09:30 · BA117' } }))
+    expect(t).toContain('Change your travel')
+    expect(t).toContain('Replaces')
+    expect(t).toContain('Fri 4 Dec 09:30 · BA117')
+    expect(t).toContain('Save travel')
+  })
+  it('a warning appears only when the server flags the date as far off', () => {
+    const note = 'That is 23 days after the trip ends. Check it is right.'
+    expect(render(envelope('set_travel', travelParams(), { preview: { ...travelPreview, date_note: note, date_check: false } }))).not.toContain('Check it is right')
+    expect(render(envelope('set_travel', travelParams(), { preview: { ...travelPreview, date_note: note, date_check: true } }))).toContain('Check it is right')
+  })
+  it('still draws a card when the preview is missing', () => {
+    const t = render(envelope('set_travel', travelParams()))
+    expect(t).toContain('Arriving')
+    expect(t).toContain('Thu 3 Dec 10:00 local')
+  })
+  it('plan item: What, When, For, and the right button', () => {
+    const pv = { title: 'Dinner in Tokyo', notes: null, when_label: 'Wed 2 Dec 19:00–21:00 · 3 days before the trip', for_label: 'Just you', date_note: null, date_check: false }
+    const compact = render(envelope('add_plan_item', planItemParams(), { requires: 'tap', preview: pv }))
+    expect(compact).toContain('Add "Dinner in Tokyo" to the plan, Wed 2 Dec 19:00–21:00')
+    const me = render(proseOn(envelope('add_plan_item', planItemParams(), { preview: pv })))
+    for (const s of ['Add to the plan', 'What', 'Dinner in Tokyo', 'When', 'Wed 2 Dec 19:00–21:00 · 3 days before the trip', 'For', 'Just you']) expect(me).toContain(s)
+    expect(me).not.toContain('MODEL PROSE')
+    const all = render(envelope('add_plan_item', planItemParams({ for: 'everyone', notes: 'Booked' }), { preview: { ...pv, for_label: 'Everyone' } }))
+    expect(all).toContain('Everyone')
+    expect(all).toContain('Booked')
+    expect(all).toContain('Add to plan')
+  })
+  it('plan item warning only when the date is far off', () => {
+    const pv = { when_label: 'Sat 2 Jan', date_note: 'Far off.', date_check: true }
+    expect(render(envelope('add_plan_item', planItemParams(), { preview: pv }))).toContain('Far off.')
+    expect(render(envelope('add_plan_item', planItemParams(), { preview: { ...pv, date_check: false } }))).not.toContain('Far off.')
+  })
+})
+
 describe('kinds', () => {
   it('every stored kind has an executor; open_screen has none', () => {
-    for (const k of ['add_todo', 'tick_todo', 'answer', 'add_expense', 'suggest_option', 'create_question', 'add_option'] as ActionKind[]) expect(moduleFor(k)).toBeTruthy()
+    for (const k of ['add_todo', 'tick_todo', 'answer', 'add_expense', 'suggest_option', 'create_question', 'add_option', 'set_travel', 'add_plan_item'] as ActionKind[]) expect(moduleFor(k)).toBeTruthy()
     expect(moduleFor('open_screen')).toBeNull()
   })
   it('validate rejects malformed params', () => {

@@ -3,6 +3,7 @@
 //   1. 20261124090000_receipt_claims_v2.sql       + rehearsal.template.sql         -> 20261124090000_receipt_claims_rehearsal.sql   (phase 1; already applied live)
 //   2. 20261126090000_receipt_deadline_tokens.sql + rehearsal_phase2.template.sql  -> 20261126090000_receipt_deadline_rehearsal.sql (phase 2; applies ONLY the phase-2 file)
 //   5. 20261130090000_chat_settings.sql + rehearsal_chat_settings.template.sql -> 20261130090000_chat_settings_rehearsal.sql (trip chat switches; applies ONLY that file)
+//   6. 20261201090000_own_travel_and_plans.sql + rehearsal_own_travel.template.sql -> 20261201090000_own_travel_rehearsal.sql (own travel and plans RPCs; applies ONLY that file)
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 import path from 'node:path'
@@ -95,4 +96,15 @@ const phase2src = fs.readFileSync(rel('supabase/migrations/20261126090000_receip
   const text = tpl.replace('@@MIGRATION@@', () => m.trimEnd())
   fs.writeFileSync(rel('supabase/rehearsal/20261130090000_chat_settings_rehearsal.sql'), text)
   console.log(JSON.stringify({ out: 'supabase/rehearsal/20261130090000_chat_settings_rehearsal.sql', bytes: text.length }))
+}
+
+// 6. own travel and plans (20261201090000): one new migration, embedded verbatim
+{
+  const m = fs.readFileSync(rel('supabase/migrations/20261201090000_own_travel_and_plans.sql'), 'utf8')
+  guardMigration(m)
+  const tpl = fs.readFileSync(rel('supabase/rehearsal/rehearsal_own_travel.template.sql'), 'utf8')
+  if (!tpl.includes('@@MIGRATION@@')) throw new Error('rehearsal_own_travel.template.sql lacks @@MIGRATION@@')
+  const text = tpl.replace('@@MIGRATION@@', () => m.trimEnd())
+  fs.writeFileSync(rel('supabase/rehearsal/20261201090000_own_travel_rehearsal.sql'), text)
+  console.log(JSON.stringify({ out: 'supabase/rehearsal/20261201090000_own_travel_rehearsal.sql', bytes: text.length }))
 }

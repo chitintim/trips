@@ -61,6 +61,7 @@ const FILE_PAIRS = [
     '../../../lib/queries/useExpenses': './balanceTypes',
     '../../../lib/queries/useSettlements': './balanceTypes',
   }],
+  ['src/lib/tripWindow.ts', 'supabase/functions/_shared/tripWindow.ts', 'tripWindow', {}],
   ['src/lib/ideasBucket.ts', 'supabase/functions/_shared/ideasBucket.ts', 'ideas', {}],
   ['src/lib/todos/types.ts', 'supabase/functions/_shared/todos/types.ts', 'todos', {
     '../../types/database.types': './deps/json',

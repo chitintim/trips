@@ -412,6 +412,48 @@ Deno.test('get_people: replies in plain words, travel details presence', async (
   assertFalse(text(c).includes('declined'))
 })
 
+Deno.test('get_people: other_end shows set-off and get-home days, and is absent when there is none', async () => {
+  const db = baseDb()
+  const events = db.tables.trip_timeline_events as Any[]
+  events[1].metadata = { ...events[1].metadata, set_off_date: '2026-12-09', set_off_time: '22:30:00' }
+  events.push({
+    id: 'e0000000-0000-4000-8000-000000001010', trip_id: IDS.trip, title: 'Depart: flight BA456', category: 'flight', event_date: '2026-12-14', start_time: '09:00:00', end_time: null,
+    all_day: false, location: null, description: null, metadata: { travel_details: true, direction: 'departure', home_date: '2026-12-15', home_time: '06:15:00' }, participant_ids: [IDS.ana], sort_order: 0,
+  })
+  const c = content(await call('get_people', {}, makeCtx(db, 'tim')))
+  const byName = Object.fromEntries(c.people.map((p: Any) => [p.person === 'You' ? 'Tim' : p.person, p]))
+  assertStringIncludes(byName.Sam.travel_details.other_end.arrival, 'Sets off Wed 9 Dec 22:30')
+  assertStringIncludes(byName.Sam.travel_details.other_end.arrival, 'lands next day')
+  assertFalse('departure' in byName.Sam.travel_details.other_end)
+  assertStringIncludes(byName.Ana.travel_details.other_end.departure, 'Gets home Tue 15 Dec 06:15')
+  assertFalse('other_end' in byName.Tim.travel_details)
+  assertFalse('other_journeys' in byName.Tim.travel_details)
+})
+
+Deno.test('get_people: other journeys before and after the trip are listed, in date order, and main legs stay out of them', async () => {
+  const db = baseDb()
+  const extra = (n: number, title: string, direction: string, date: string) => ({
+    id: `e0000000-0000-4000-8000-00000000${2000 + n}`, trip_id: IDS.trip, title, category: 'transfer', event_date: date, start_time: '08:00:00', end_time: null, all_day: false,
+    location: null, description: null, metadata: { travel_details: true, leg: 'extra', direction }, participant_ids: [IDS.sam], sort_order: 0,
+  })
+  ;(db.tables.trip_timeline_events as Any[]).push(
+    extra(2, 'Arrive: ferry', 'arrival', '2026-12-09'),
+    extra(1, 'Arrive: train', 'arrival', '2026-12-08'),
+    extra(3, 'Depart: coach', 'departure', '2026-12-15'),
+  )
+  const c = content(await call('get_people', {}, makeCtx(db, 'tim')))
+  const sam = c.people.find((p: Any) => p.person === 'Sam')
+  const journeys = sam.travel_details.other_journeys as string[]
+  assertEquals(journeys.length, 3)
+  assertStringIncludes(journeys[0], 'train')
+  assertStringIncludes(journeys[1], 'ferry')
+  assertStringIncludes(journeys[2], 'coach')
+  assertStringIncludes(journeys[0], 'on the way there')
+  assertStringIncludes(journeys[2], 'on the way home')
+  assertStringIncludes(sam.travel_details.arrival, 'BA123')
+  assertFalse('other_journeys' in c.people.find((p: Any) => p.person === 'Ana').travel_details)
+})
+
 Deno.test('get_people: when reply tracking is off the replies are not shown', async () => {
   const db = baseDb()
   db.tables.trips[0].confirmation_enabled = false

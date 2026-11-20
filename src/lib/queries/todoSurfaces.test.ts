@@ -108,6 +108,23 @@ const FIXTURES: Record<string, TripSnapshot> = {
     checklists: [{ id: 'c1', title: 'Speaker', assigned_to: 'sam', done: false }],
     settlements: [{ id: 's1', from_user_id: 'sam', to_user_id: 'tim', amount: 20, currency: 'GBP', status: 'suggested' }],
   }),
+  // Trip full (8 of 8 going), reply-by passed 2 days ago, the organiser is a maybe: nobody is asked "Are you coming?".
+  fullLapsed: snap({
+    trip: { ...baseTrip, id: 'full', capacity_limit: 8, confirmation_deadline: '2026-11-14T00:00:00.000Z' },
+    participants: [
+      person('tim', 'Tim', { role: 'organizer', confirmation_status: 'interested' }),
+      ...Array.from({ length: 8 }, (_, i) => person(`g${i}`, `G${i}`)),
+      person('late', 'Late', { confirmation_status: 'pending' }),
+    ],
+  }),
+  // A place is free, the waitlist is empty and the reply-by has passed: the maybe is asked again, with no due date.
+  freePlaceLate: snap({
+    trip: { ...baseTrip, id: 'freeplace', capacity_limit: 8, confirmation_deadline: '2026-11-14T00:00:00.000Z' },
+    participants: [
+      person('tim', 'Tim', { role: 'organizer', confirmation_status: 'interested' }),
+      ...Array.from({ length: 7 }, (_, i) => person(`g${i}`, `G${i}`)),
+    ],
+  }),
   // Finished, open questions never count, legacy booked option.
   japan2026: snap({
     trip: { ...baseTrip, id: 'japan', status: 'trip_completed', start_date: '2026-03-01', end_date: '2026-03-14' },
@@ -214,6 +231,25 @@ describe('one count on every surface', () => {
     expect(total(FIXTURES.sicily)).toBeGreaterThan(0)
     // Someone with more than five personal rows exercises the "See all" path.
     expect(todayListModel(todoSurfaceCore(FIXTURES.japow, 'chai', NOW).todos, false).seeAllCount).not.toBeNull()
+  })
+
+  it('fullLapsed: the maybe organiser and the no-reply person are not asked on any surface', () => {
+    const s = FIXTURES.fullLapsed
+    for (const id of ['tim', 'late']) {
+      expect(todoSurfaceCore(s, id, NOW).todos.map((t) => t.kind)).not.toContain('rsvp')
+      expect(tripCardBadgeCount(s, id, NOW) ?? 0).toBe(todoSurfaceCore(s, id, NOW).count ?? 0)
+    }
+    expect(computeWaitingOn(s, NOW).byItem.some((i) => i.kind === 'rsvp')).toBe(false)
+  })
+
+  it('freePlaceLate: the maybe is asked once more, with no due date and not overdue, on every surface', () => {
+    const s = FIXTURES.freePlaceLate
+    const core = todoSurfaceCore(s, 'tim', NOW)
+    const rsvp = core.todos.find((t) => t.kind === 'rsvp')
+    expect(rsvp?.due).toBeNull()
+    expect(rsvp?.overdue).toBe(false)
+    expect(tripCardBadgeCount(s, 'tim', NOW)).toBe(core.count)
+    expect(computeWaitingOn(s, NOW).byItem.find((i) => i.kind === 'rsvp')?.userIds).toEqual(['tim'])
   })
 
   it('disputed: payer is asked to respond, receiver is not asked to confirm, organiser sees it under the payer', () => {

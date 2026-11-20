@@ -135,7 +135,7 @@ describe('Japow: upcoming trip, RSVP pending, question with no deadline', () => 
     expect(kinds(interested(null), 'c')).toEqual([])
     const withDeadline = computeTodos(interested('2026-12-01T12:00:00.000Z'), 'c', NOW)
     expect(withDeadline.map((t) => t.kind)).toEqual(['rsvp'])
-    expect(withDeadline[0].due).toBe('2026-12-01T12:00:00.000Z')
+    expect(withDeadline[0].due).toBe('2026-12-01')
   })
 })
 
@@ -881,5 +881,97 @@ describe('Ideas bucket and own-choice bookings', () => {
 
   it('org_tie action label is "Choose winner"', () => {
     expect(TODO_ACTION_LABEL.org_tie).toBe('Choose winner')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// "Are you coming?" for maybes when the trip is full / replies have closed
+// ---------------------------------------------------------------------------
+describe('rsvp standing in the engine', () => {
+  const DEADLINE_2_DAYS_AGO = '2026-11-14T00:00:00.000Z'
+  const fullTrip = (over: Partial<TripSnapshot['trip']> = {}): TripSnapshot['trip'] => ({
+    ...snap().trip,
+    capacity_limit: 8,
+    confirmation_deadline: DEADLINE_2_DAYS_AGO,
+    ...over,
+  })
+  // 8 of 8 going (Tim is the organiser and is one of the eight? no: Tim is the maybe organiser).
+  const going = Array.from({ length: 8 }, (_, i) => person(`g${i}`, `G${i}`))
+  const tim = person('tim', 'Tim', { role: 'organizer', confirmation_status: 'interested', confirmation_note: 'depends on work' } as Partial<SnapshotParticipant>)
+  const live = (participants: SnapshotParticipant[], tripOver: Partial<TripSnapshot['trip']> = {}) =>
+    snap({ trip: fullTrip(tripOver), participants })
+
+  it('live fixture: 8 of 8 going, deadline passed, organiser is a maybe: no rsvp to-do and not waiting on rsvp', () => {
+    const s = live([tim, ...going])
+    const todos = computeTodos(s, 'tim', NOW)
+    expect(todos.map((t) => t.kind)).not.toContain('rsvp')
+    const w = computeWaitingOn(s, NOW)
+    expect(w.byItem.find((i) => i.kind === 'rsvp')).toBeUndefined()
+    expect((w.byUser.get('tim') ?? []).map((t) => t.kind)).not.toContain('rsvp')
+  })
+
+  it('keeps organiser and answer to-dos for the lapsed organiser', () => {
+    const s = snap({
+      trip: fullTrip(),
+      participants: [tim, ...going],
+      sections: [question('q', 'Where to stay', { vote_deadline: new Date(2026, 10, 1, 12).toISOString() })],
+    })
+    const kinds2 = computeTodos(s, 'tim', NOW).map((t) => t.kind)
+    expect(kinds2).toContain('answer')
+    expect(kinds2).not.toContain('rsvp')
+  })
+
+  it('one person cancels, empty waitlist: late to-do with no due and not overdue', () => {
+    const s = live([tim, ...going.slice(1), person('g0', 'G0', { confirmation_status: 'cancelled' })])
+    const rsvp = computeTodos(s, 'tim', NOW).find((t) => t.kind === 'rsvp')
+    expect(rsvp).toBeDefined()
+    expect(rsvp?.id).toBe('rsvp:trip1')
+    expect(rsvp?.title).toBe("There's still a place on Japow 2027 — are you coming?")
+    expect(rsvp?.due).toBeNull()
+    expect(rsvp?.overdue).toBe(false)
+    expect(computeWaitingOn(s, NOW).byItem.some((i) => i.kind === 'rsvp')).toBe(true)
+  })
+
+  it('one person cancels but someone is on the waitlist: nothing', () => {
+    const s = live([tim, ...going.slice(1), person('g0', 'G0', { confirmation_status: 'cancelled' }), person('w', 'W', { confirmation_status: 'waitlist' })])
+    expect(computeTodos(s, 'tim', NOW).map((t) => t.kind)).not.toContain('rsvp')
+  })
+
+  it('pending person on a trip with places and a future deadline: ask title, date-only due', () => {
+    const s = snap({ trip: { ...snap().trip, confirmation_deadline: '2026-11-20T00:00:00.000Z' } })
+    const rsvp = computeTodos(s, 'chai', NOW).find((t) => t.kind === 'rsvp')
+    expect(rsvp?.title).toBe('Are you coming to Japow 2027?')
+    expect(rsvp?.due).toBe('2026-11-20')
+    expect(rsvp?.overdue).toBe(false)
+  })
+
+  it('reply-by today is not overdue yet', () => {
+    const s = snap({ trip: { ...snap().trip, confirmation_deadline: '2026-11-16T00:00:00.000Z' } })
+    const rsvp = computeTodos(s, 'chai', NOW).find((t) => t.kind === 'rsvp')
+    expect(rsvp?.due).toBe('2026-11-16')
+    expect(rsvp?.overdue).toBe(false)
+  })
+
+  it('ongoing trip with a pending person: no rsvp to-do', () => {
+    const s = snap({ trip: { ...snap().trip, status: 'trip_ongoing' } })
+    expect(kinds(s, 'chai')).not.toContain('rsvp')
+  })
+
+  it('booked trip with a pending person: no rsvp to-do', () => {
+    const s = snap({ trip: { ...snap().trip, status: 'booked_awaiting_departure' } })
+    expect(kinds(s, 'chai')).not.toContain('rsvp')
+  })
+
+  it('NULL status keeps today: no rsvp to-do', () => {
+    const s = snap({ participants: [person('tim', 'Tim', { role: 'organizer' }), person('n', 'N', { confirmation_status: null })] })
+    expect(kinds(s, 'n')).not.toContain('rsvp')
+  })
+
+  it('conditional on a date that has not arrived stays quiet after the deadline', () => {
+    const s = snap({
+      trip: { ...snap().trip, confirmation_deadline: DEADLINE_2_DAYS_AGO },
+      participants: [person('tim', 'Tim', { role: 'organizer' }), person('c', 'C', { confirmation_status: 'conditional', conditional_type: 'date', conditional_date: '2026-12-01' })],
+    })
+    expect(kinds(s, 'c')).not.toContain('rsvp')
   })
 })

@@ -129,6 +129,9 @@ export function answerActionLabel(shape: 'group' | 'own'): string {
 
 export const rsvpTitle = (tripName: string) => `Are you coming to ${tripName}?`
 
+/** Replies are closed but a place is still free: no due date, never overdue. */
+export const rsvpLateTitle = (tripName: string) => `There's still a place on ${tripName} — are you coming?`
+
 /** "Group choice · 4 of 9 answered · closes Fri" / "Choose your own · 3 of 9 done". */
 export function answerSubtitle(
   shape: 'group' | 'own',

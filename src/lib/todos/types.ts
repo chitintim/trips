@@ -21,6 +21,8 @@ export interface SnapshotTrip {
   end_date: string
   confirmation_enabled: boolean | null
   confirmation_deadline: string | null
+  /** `trips.capacity_limit`; null/<=0 = no limit. */
+  capacity_limit?: number | null
   base_currency: string
   created_by?: string | null
   /**
@@ -42,6 +44,7 @@ export interface SnapshotParticipant {
   /** `false` = removed from the trip (money to-dos only). */
   active?: boolean | null
   confirmation_status?: string | null
+  conditional_type?: string | null
   conditional_date?: string | null
   waitlist_offer_expires_at?: string | null
   user?: SnapshotUser | null

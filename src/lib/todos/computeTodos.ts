@@ -19,6 +19,7 @@
  */
 import { isIdeasBucket } from '../ideasBucket'
 import { effectiveTripStage, tripStageRank } from '../tripStage'
+import { rsvpStanding, tripPlaces, type TripPlaces } from '../../features/people/lib/rsvpStanding'
 import {
   buildAnsweredSectionVoters,
   answerCounts,
@@ -73,6 +74,7 @@ import {
   orgTieTitle,
   payTitle,
   rsvpTitle,
+  rsvpLateTitle,
   settleUpTitle,
   settleUpInfoText,
   confirmPaymentGroupTitle,
@@ -160,7 +162,9 @@ interface Ctx {
   today: string
   confirmationEnabled: boolean
   finished: boolean
+  stage: ReturnType<typeof effectiveTripStage>
   stageRank: number
+  places: TripPlaces
   answerInputs: AnswerInputs
   index: AnswerIndex
   sectionVoters: SectionVoterIds
@@ -193,7 +197,9 @@ function buildCtx(snapshot: TripSnapshot, now: Date): Ctx {
     today: localDate(now),
     confirmationEnabled: s.trip.confirmation_enabled === true,
     finished: stage === 'trip_completed',
+    stage,
     stageRank: tripStageRank(stage),
+    places: tripPlaces(s.trip, s.participants),
     answerInputs,
     index,
     sectionVoters,
@@ -245,18 +251,15 @@ function finish(ctx: Ctx, userId: string, d: Draft): Todo {
 }
 
 function rsvpTodos(ctx: Ctx, userId: string, p: SnapshotParticipant): Todo[] {
-  if (!ctx.confirmationEnabled) return []
   const { trip } = ctx.s
-  const status = p.confirmation_status
-  const dueConditional = status === 'conditional' && !!p.conditional_date && p.conditional_date.slice(0, 10) <= ctx.today
-  const interestedWithDeadline = status === 'interested' && !!trip.confirmation_deadline
-  if (!(status === 'pending' || dueConditional || interestedWithDeadline)) return []
+  const st = rsvpStanding({ trip, stage: ctx.stage, person: p, places: ctx.places, today: ctx.today, now: ctx.now })
+  if (!st.todo) return []
   return [
     finish(ctx, userId, {
       kind: 'rsvp',
       entityId: trip.id,
-      title: rsvpTitle(trip.name),
-      due: trip.confirmation_deadline,
+      title: st.todo.variant === 'late' ? rsvpLateTitle(trip.name) : rsvpTitle(trip.name),
+      due: st.todo.due,
       link: DEEP_LINKS.rsvp(),
     }),
   ]

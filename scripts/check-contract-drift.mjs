@@ -70,12 +70,17 @@ const FILE_PAIRS = [
   ['src/lib/todos/computeTodos.ts', 'supabase/functions/_shared/todos/computeTodos.ts', 'todos', {
     '../tripStage': './deps/tripStage',
     '../../features/people/lib/inScopePeople': './deps/inScopePeople',
+    '../../features/people/lib/rsvpStanding': './deps/rsvpStanding',
     '../../features/actions/lib/actionStatus': './deps/actionStatus',
     '../../features/people/lib/travelDetails': './deps/travelDetails',
     '../../features/decisions/lib/resolveDecision': './deps/resolveDecision',
   }],
   ['src/lib/tripStage.ts', `${D}/tripStage.ts`, 'todos-deps', { '../types': './tripStatus' }],
   ['src/features/people/lib/inScopePeople.ts', `${D}/inScopePeople.ts`, 'todos-deps', {}],
+  ['src/features/people/lib/rsvpStanding.ts', `${D}/rsvpStanding.ts`, 'todos-deps', {
+    '../../../lib/tripStatus': './tripStatus',
+    '../../../lib/tripStage': './tripStage',
+  }],
   ['src/features/decisions/lib/optionMetadata.ts', `${D}/optionMetadata.ts`, 'todos-deps', { '../../../types/database.types': './json' }],
   ['src/features/decisions/lib/decisionShapes.ts', `${D}/decisionShapes.ts`, 'todos-deps', {
     '../../../lib/money': '../../money/minorUnits',

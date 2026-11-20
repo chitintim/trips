@@ -153,12 +153,15 @@ import {
   claimEmailLink,
   DEEP_LINKS,
   emailLink,
+  engineRsvpStandings,
   engineTodoIds,
   isOwnChoiceSection,
   rsvpTodoId,
   toEngineSections,
   travelTodoId,
+  withinRsvpChaseWindow,
 } from './chaseEngine.ts'
+import { confirmationDeadlineDate, tripPlaces } from '../_shared/todos/deps/rsvpStanding.ts'
 import {
   answerDescription,
   claimDescription,
@@ -668,16 +671,16 @@ Deno.serve(async (req) => {
 
       // ---- c. Pending RSVPs near the confirmation deadline ----
       if (tripOpen && trip.confirmation_deadline) {
-        const deadline = new Date(trip.confirmation_deadline)
-        const within72h = deadline.getTime() - now.getTime() < 72 * 3600_000 && deadline.getTime() > now.getTime()
+        // The window runs to the END of the deadline's calendar day (UTC).
+        const within72h = withinRsvpChaseWindow(trip.confirmation_deadline, now)
         if (within72h) {
-          // "Are you coming?" is a to-do only while RSVP tracking is on, and
-          // 'interested' people only because a reply-by deadline exists (the
-          // outer condition). The engine confirms both.
           const rsvpOwed = engineTodoIds({ trip, participants: activeParticipants }, activeParticipants.map((p) => p.user_id), now)
+          // Only people who can still change something: not when the trip is full or replies have closed.
+          const standings = engineRsvpStandings({ trip, participants: activeParticipants }, now)
           for (const p of activeParticipants) {
             if (p.confirmation_status === 'pending' || p.confirmation_status === 'interested') {
               if (!rsvpOwed.get(p.user_id)?.has(rsvpTodoId(trip.id))) continue
+              if (!standings.get(p.user_id)?.chaseable) continue
               items.push({
                 tripId: trip.id,
                 tripName: trip.name,
@@ -685,7 +688,7 @@ Deno.serve(async (req) => {
                 kind: 'pending_rsvp',
                 entityType: 'trip_participant',
                 entityId: trip.id,
-                description: rsvpDescription(trip.name, trip.confirmation_deadline),
+                description: rsvpDescription(trip.name, confirmationDeadlineDate(trip.confirmation_deadline) ?? trip.confirmation_deadline),
                 deepLink: emailLink(APP_BASE_URL, trip.id, DEEP_LINKS.rsvp()),
               })
             }
@@ -697,8 +700,11 @@ Deno.serve(async (req) => {
       if (tripOpen) {
         const todayStr = now.toISOString().split('T')[0]
         const conditionalOwed = engineTodoIds({ trip, participants: activeParticipants }, activeParticipants.map((p) => p.user_id), now)
+        const conditionalStandings = engineRsvpStandings({ trip, participants: activeParticipants }, now)
         for (const p of activeParticipants) {
           if (!conditionalOwed.get(p.user_id)?.has(rsvpTodoId(trip.id))) continue
+          // No chase after the reply-by date or when the trip is full: the answer can no longer change anything.
+          if (!conditionalStandings.get(p.user_id)?.chaseable) continue
           if (
             p.confirmation_status === 'conditional' &&
             (p.conditional_type === 'date' || p.conditional_type === 'both') &&
@@ -721,7 +727,7 @@ Deno.serve(async (req) => {
 
       // ---- e. Waitlist lifecycle (feature-detected) ----
       if (tripOpen && hasWaitlistColumn && trip.capacity_limit) {
-        const confirmedCount = activeParticipants.filter((p) => p.confirmation_status === 'confirmed').length
+        const confirmedCount = tripPlaces(trip, activeParticipants).going
         const freeSpots = trip.capacity_limit - confirmedCount
         if (freeSpots > 0) {
           // Re-read with the offer column (only selectable when it exists).

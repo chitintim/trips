@@ -49,7 +49,7 @@ Deno.test('deadlines read like people say them, in UTC, never a raw UTC string',
   assertEquals(humanDay('2026-12-11T23:30:00Z'), 'Fri 11 Dec')
   assertEquals(humanDay('2026-12-12T00:30:00Z'), 'Sat 12 Dec')
   assertEquals(humanDayTime('2026-12-12T14:05:00Z'), 'Sat 12 Dec, 14:05 UTC')
-  assertStringIncludes(rsvpDescription('Japow', '2026-12-12T09:00:00Z'), 'Please reply before Sat 12 Dec.')
+  assertStringIncludes(rsvpDescription('Japow', '2026-12-12T09:00:00Z'), 'Please reply by Sat 12 Dec.')
   assertStringIncludes(waitlistOfferDescription('Japow', '2026-12-12T14:05:00Z'), 'Respond before Sat 12 Dec, 14:05 UTC or')
   for (const line of [answerDescription('Q', true, D), rsvpDescription('T', D), waitlistOfferDescription('T', D)]) {
     assertEquals(/GMT|:00 /.test(line.replace(/\d\d:\d\d UTC/, '')), false, line)

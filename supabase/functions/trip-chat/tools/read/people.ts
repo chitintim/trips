@@ -2,7 +2,7 @@
 import type { ToolModule } from '../types.ts'
 import { getMyTravelEvents, travelEventAirportCode, travelEventFlightRef } from '../../../_shared/todos/deps/travelDetails.ts'
 import type { TimelineEvent } from '../../../_shared/todos/deps/timelineEvent.ts'
-import { S, dateWords, failed, loadData, nameOf, readTool, rsvpWords, timeWords, z } from './shared.ts'
+import { S, dateWords, failed, loadData, nameOf, readTool, replyWordsFor, timeWords, z } from './shared.ts'
 import { wrap } from './questions.ts'
 
 function travelLine(event: TimelineEvent & { event_date?: string; start_time?: string | null }): string {
@@ -24,13 +24,14 @@ export const getPeopleTool: ToolModule = readTool({
     const data = await loadData(ctx)
     if (!data) return failed()
     const tracking = data.trip.confirmation_enabled === true
+    const reply = replyWordsFor(data.trip, data.participants, ctx.now)
     const events = data.timeline as unknown as Array<TimelineEvent & { event_date?: string; start_time?: string | null }>
     const people = data.participants.map((p) => {
       const mine = getMyTravelEvents(events, p.user_id)
       const row: Record<string, unknown> = { person: nameOf(ctx, p.user_id) }
       if (p.role === 'organizer') row.role = 'Organiser'
       if (tracking) {
-        row.reply = rsvpWords(p.confirmation_status)
+        row.reply = reply.words(p.user_id)
         const waitingOn: string[] = Array.isArray(p.conditional_user_ids) ? p.conditional_user_ids : []
         if (p.confirmation_status === 'conditional' && waitingOn.length > 0) row.depends_on = waitingOn.map((id) => nameOf(ctx, id))
         if (p.confirmation_status === 'conditional' && p.conditional_date) row.will_decide_by = dateWords(p.conditional_date)
@@ -42,7 +43,7 @@ export const getPeopleTool: ToolModule = readTool({
       return row
     })
     const counts: Record<string, number> = {}
-    if (tracking) for (const p of data.participants) counts[rsvpWords(p.confirmation_status)] = (counts[rsvpWords(p.confirmation_status)] ?? 0) + 1
+    if (tracking) for (const p of data.participants) counts[reply.words(p.user_id)] = (counts[reply.words(p.user_id)] ?? 0) + 1
     return {
       content: {
         reply_tracking: tracking ? 'on' : 'off: replies to "Are you coming?" are not being tracked for this trip',

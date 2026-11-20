@@ -13,7 +13,9 @@ import {
   type ChaseSectionRow,
   DEEP_LINKS,
   emailLink,
+  engineRsvpStandings,
   engineTodoIds,
+  withinRsvpChaseWindow,
   isOwnChoiceSection,
   rsvpTodoId,
   toEngineSections,
@@ -246,4 +248,53 @@ Deno.test('passes: section-linked action reminders skip people who passed on the
   // No passes: the very same map comes back untouched.
   assertEquals(addPassesToSectionVoters(voters, [], meta), voters)
   assertEquals(outstandingTargets(['u1', 'u2', 'u3'], 's1', new Set(), voters), ['u2', 'u3'])
+})
+
+// ---- "Maybe" rule: chase only people who can still change something ----
+const full = { ...trip, capacity_limit: 2 }
+const crowd = [person('g1'), person('g2'), person('m', 'interested'), person('p', 'pending')]
+
+Deno.test('rsvp chase (c): no_place people are skipped inside the 72h window', () => {
+  assert(withinRsvpChaseWindow(trip.confirmation_deadline, NOW))
+  const st = engineRsvpStandings({ trip: full, participants: crowd }, NOW)
+  assertEquals(st.get('m')!.kind, 'no_place')
+  assertEquals(st.get('p')!.kind, 'no_place')
+  assert(!st.get('m')!.chaseable)
+  assert(!st.get('p')!.chaseable)
+})
+
+Deno.test('rsvp chase (c): open people are still chased when places are free', () => {
+  const st = engineRsvpStandings({ trip: { ...trip, capacity_limit: 8 }, participants: crowd }, NOW)
+  assert(st.get('m')!.chaseable)
+  assert(st.get('p')!.chaseable)
+  assert(!st.get('g1')!.chaseable)
+})
+
+Deno.test('rsvp chase (c): the window runs to the end of the deadline day (UTC)', () => {
+  const d = '2026-11-18T09:00:00Z'
+  assert(withinRsvpChaseWindow(d, new Date('2026-11-18T23:00:00Z'))) // same day, hours after the stored time
+  assert(!withinRsvpChaseWindow(d, new Date('2026-11-19T00:00:00Z'))) // next day
+  assert(withinRsvpChaseWindow(d, new Date('2026-11-16T00:01:00Z'))) // just under 72h before the end
+  assert(!withinRsvpChaseWindow(d, new Date('2026-11-15T23:00:00Z'))) // 72h+ before the end
+  assert(withinRsvpChaseWindow('2026-11-18', new Date('2026-11-18T23:00:00Z'))) // date-only value
+})
+
+Deno.test('rsvp chase (d): a stated date that arrived is not chased after the deadline or when full', () => {
+  const cond = person('c', 'conditional', { conditional_type: 'date', conditional_date: '2026-11-10' })
+  const open = engineRsvpStandings({ trip: { ...trip, confirmation_deadline: null }, participants: [cond] }, NOW)
+  assert(open.get('c')!.chaseable)
+  const after = engineRsvpStandings({ trip: { ...trip, confirmation_deadline: '2026-11-15T00:00:00Z' }, participants: [cond] }, NOW)
+  assertEquals(after.get('c')!.kind, 'late')
+  assert(!after.get('c')!.chaseable)
+  const fullTrip = engineRsvpStandings({ trip: { ...trip, confirmation_deadline: null, capacity_limit: 1 }, participants: [person('g'), cond] }, NOW)
+  assertEquals(fullTrip.get('c')!.kind, 'no_place')
+  assert(!fullTrip.get('c')!.chaseable)
+})
+
+Deno.test('rsvp chase (d): still fires with no deadline and places free; users-only never', () => {
+  const cond = person('c', 'conditional', { conditional_type: 'both', conditional_date: '2026-11-16' })
+  const usersOnly = person('u', 'conditional', { conditional_type: 'users', conditional_date: '2026-11-01' })
+  const st = engineRsvpStandings({ trip: { ...trip, confirmation_deadline: null, capacity_limit: 10 }, participants: [cond, usersOnly] }, NOW)
+  assert(st.get('c')!.chaseable)
+  assert(!st.get('u')!.chaseable)
 })

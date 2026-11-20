@@ -152,7 +152,7 @@ export async function handleChat(req: Request, deps: ChatDeps = realDeps): Promi
     ]
     const system = [
       { type: 'text' as const, text: STATIC_SYSTEM, cache_control: { type: 'ephemeral' as const } },
-      { type: 'text' as const, text: tripBlock(trip, roster, stageWords(trip, ctx.today)), cache_control: { type: 'ephemeral' as const } },
+      { type: 'text' as const, text: tripBlock(trip, roster, stageWords(trip, ctx.today), ctx.now), cache_control: { type: 'ephemeral' as const } },
     ]
     const tools = buildToolDefs()
 

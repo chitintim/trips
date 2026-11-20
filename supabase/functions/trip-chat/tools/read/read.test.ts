@@ -188,7 +188,7 @@ Deno.test('get_waiting_on: only organisers; participants get a refusal', async (
   assertEquals(sam.is_error, true)
   assertStringIncludes(text(sam.content), 'organisers')
   const tim = content(await call('get_waiting_on', { question_id: null }, makeCtx(baseDb(), 'tim')))
-  assert(tim.by_person.some((p: Any) => p.person === 'Ana'))
+  assert(tim.by_person.some((p: Any) => String(p.person).includes('Ana')))
   const one = content(await call('get_waiting_on', { question_id: IDS.stay }, makeCtx(baseDb(), 'tim')))
   assertEquals(one.waiting_for, ['Ana'])
 })
@@ -581,4 +581,58 @@ Deno.test('shared-thread fallback: the waiting-on list is refused, and a visible
 Deno.test('private thread: the organiser view is unchanged', async () => {
   const c = content(await call('get_question', { question_id: IDS.stay }, makeCtx(baseDb(), 'tim', { private: true })))
   assert('everyones_answers' in c)
+})
+
+// ---------------------------------------------------------------------------
+// "Maybe" rule: the assistant follows the one shared reply-standing rule
+// ---------------------------------------------------------------------------
+
+Deno.test('get_people: a not-sure or no-reply person on a full trip says "trip full, no place"', async () => {
+  const db = baseDb()
+  db.tables.trips[0].capacity_limit = 2 // Tim and Sam are going
+  db.tables.trip_participants.find((p: Any) => p.user_id === IDS.ana)!.confirmation_status = 'interested'
+  const ctx = makeCtx(db, 'sam', { trip: { ...makeCtx(db, 'sam').trip, capacity_limit: 2 } })
+  const c = content(await call('get_people', {}, ctx))
+  const ana = c.people.find((p: Any) => String(p.person).includes('Ana'))
+  assertEquals(ana.reply, 'Not sure (trip full, no place)')
+  assertEquals(c.people.find((p: Any) => p.role === 'Organiser').reply, 'Going')
+})
+
+Deno.test('get_people: after the reply-by date a no-reply person says "replies closed"', async () => {
+  const db = baseDb()
+  db.tables.trips[0].confirmation_deadline = '2026-11-10T00:00:00Z'
+  const base = makeCtx(db, 'sam')
+  const ctx = makeCtx(db, 'sam', { trip: { ...base.trip, confirmation_deadline: '2026-11-10T00:00:00Z' } })
+  const c = content(await call('get_people', {}, ctx))
+  assertEquals(c.people.find((p: Any) => String(p.person).includes('Ana')).reply, 'No reply yet (replies closed)')
+})
+
+Deno.test('get_my_todos / get_waiting_on follow the engine: the lapsed maybe has no "Are you coming?" to-do', async () => {
+  const db = baseDb()
+  db.tables.trips[0].capacity_limit = 2
+  db.tables.trip_participants.find((p: Any) => p.user_id === IDS.ana)!.confirmation_status = 'interested'
+  const ctx = makeCtx(db, 'ana')
+  const snapshot = await buildTripSnapshot(fakeClient(db), IDS.trip, NOW)
+  const engine = computeTodos(snapshot!, IDS.ana, NOW)
+  assert(!engine.some((t) => t.id === `rsvp:${IDS.trip}`))
+  const c = content(await call('get_my_todos', {}, ctx))
+  assertEquals(c.count, engine.length)
+  assertFalse(text(c).includes('Are you coming'))
+  const w = computeWaitingOn(snapshot!, NOW)
+  const tim = content(await call('get_waiting_on', { question_id: null }, makeCtx(db, 'tim')))
+  assertEquals(tim.total_to_dos, w.totalTodos)
+})
+
+Deno.test('trip block: roster uses the standing words and a places line when tracking is on', async () => {
+  const { tripBlock } = await import('../../prompt.ts')
+  const db = baseDb()
+  db.tables.trips[0].capacity_limit = 2
+  const ctx = makeCtx(db, 'sam')
+  const trip = { ...ctx.trip, capacity_limit: 2 }
+  const roster = ctx.roster.map((p) => (p.userId === IDS.ana ? { ...p, confirmationStatus: 'interested' } : p))
+  const block = tripBlock(trip, roster, 'Booking', NOW)
+  assertStringIncludes(block, 'Places: 2 of 2 taken (full)')
+  assertStringIncludes(block, 'Not sure (trip full, no place)')
+  const off = tripBlock({ ...trip, confirmation_enabled: false }, roster, 'Booking', NOW)
+  assertFalse(off.includes('Places:'))
 })

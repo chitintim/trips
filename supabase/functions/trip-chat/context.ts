@@ -34,8 +34,8 @@ export function historyWindowStart(total: number): number {
 
 export async function loadTripAndRoster(client: SupabaseClient, tripId: string, userId: string): Promise<{ trip: ChatTrip; roster: RosterPerson[]; viewer: ChatViewer }> {
   const [tripRes, rosterRes, userRes] = await Promise.all([
-    client.from('trips').select('id, name, location, start_date, end_date, status, base_currency, created_by, confirmation_enabled, confirmation_deadline, settlement_snapshot').eq('id', tripId).single(),
-    client.from('trip_participants').select('user_id, role, active, confirmation_status, user:user_id(full_name, email)').eq('trip_id', tripId),
+    client.from('trips').select('id, name, location, start_date, end_date, status, base_currency, created_by, confirmation_enabled, confirmation_deadline, capacity_limit, settlement_snapshot').eq('id', tripId).single(),
+    client.from('trip_participants').select('user_id, role, active, confirmation_status, conditional_type, conditional_date, waitlist_offer_expires_at, user:user_id(full_name, email)').eq('trip_id', tripId),
     client.from('users').select('full_name, email, role').eq('id', userId).maybeSingle(),
   ])
   if (tripRes.error || !tripRes.data) throw new Error('Trip not found')
@@ -47,6 +47,9 @@ export async function loadTripAndRoster(client: SupabaseClient, tripId: string, 
     role: p.role ?? null,
     active: p.active !== false,
     confirmationStatus: p.confirmation_status ?? null,
+    conditionalType: p.conditional_type ?? null,
+    conditionalDate: p.conditional_date ?? null,
+    waitlistOfferExpiresAt: p.waitlist_offer_expires_at ?? null,
   }))
   return { trip, roster, viewer: computeViewer(userId, userRes.data as { full_name?: string; email?: string; role?: string } | null, trip, roster) }
 }

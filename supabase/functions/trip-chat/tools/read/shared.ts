@@ -10,6 +10,7 @@ import { z } from 'npm:zod@3'
 import { memoize, refuse, type ChatTrip, type ToolCtx, type ToolModule, type ToolResult } from '../types.ts'
 import { effectiveTripStage } from '../../../_shared/todos/deps/tripStage.ts'
 import type { TripStatus } from '../../../_shared/todos/deps/tripStatus.ts'
+import { type RsvpPersonInput, rsvpStanding, rsvpStandingWords, tripPlaces } from '../../../_shared/todos/deps/rsvpStanding.ts'
 import { assembleTripSnapshot, fetchSnapshotData, type SnapshotData } from '../../../_shared/todos/snapshot.ts'
 import type { TripSnapshot } from '../../../_shared/todos/types.ts'
 import { formatMoney as formatMoneyWords } from '../../../_shared/todos/copy.ts'
@@ -110,6 +111,37 @@ const RSVP_WORDS: Record<string, string> = {
 }
 export function rsvpWords(status: string | null | undefined): string {
   return RSVP_WORDS[status ?? 'pending'] ?? 'No reply yet'
+}
+
+/**
+ * Reply words that follow the one shared rule (rsvpStanding): the same as `rsvpWords`, plus
+ * "(trip full, no place)" / "(replies closed)" for someone who is down as not sure or has not
+ * replied and is no longer being asked. Also returns the trip's places for the roster line.
+ */
+export function replyWordsFor(
+  trip: Pick<ChatTrip, 'status' | 'start_date' | 'end_date' | 'confirmation_enabled' | 'confirmation_deadline' | 'capacity_limit'>,
+  people: ReadonlyArray<RsvpPersonInput>,
+  now: Date
+): { words: (userId: string) => string; places: ReturnType<typeof tripPlaces>; repliesClosed: boolean } {
+  const tripInput = {
+    confirmation_enabled: trip.confirmation_enabled,
+    confirmation_deadline: trip.confirmation_deadline,
+    capacity_limit: trip.capacity_limit ?? null,
+  }
+  const places = tripPlaces(tripInput, people)
+  const stage = effectiveTripStage({ status: trip.status as TripStatus, start_date: trip.start_date, end_date: trip.end_date }, now)
+  const today = now.toISOString().slice(0, 10)
+  const standingOf = (p: RsvpPersonInput) => rsvpStanding({ trip: tripInput, stage, person: p, places, today, now })
+  const byId = new Map(people.map((p) => [p.user_id, p]))
+  const probe = people[0] ? standingOf(people[0]) : null
+  return {
+    words: (userId) => {
+      const p = byId.get(userId)
+      return p ? rsvpStandingWords(standingOf(p)) : 'No reply yet'
+    },
+    places,
+    repliesClosed: probe?.repliesClosed ?? false,
+  }
 }
 
 const CATEGORY_WORDS: Record<string, string> = {

@@ -39,7 +39,7 @@ export function answerDescription(title: string, ownChoice: boolean, voteDeadlin
 }
 
 export function rsvpDescription(tripName: string, deadlineIso: string): string {
-  return `${rsvpTitle(tripName)} Please reply before ${humanDay(deadlineIso)}.`
+  return `${rsvpTitle(tripName)} Please reply by ${humanDay(deadlineIso)}.`
 }
 
 export function conditionalDateDescription(tripName: string, conditionalDate: string): string {

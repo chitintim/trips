@@ -21,6 +21,8 @@
 
 import { computeTodos } from '../_shared/todos/computeTodos.ts'
 import { DEEP_LINKS } from '../_shared/todos/copy.ts'
+import { type RsvpStanding, rsvpStanding, tripPlaces } from '../_shared/todos/deps/rsvpStanding.ts'
+import { effectiveTripStage } from '../_shared/todos/deps/tripStage.ts'
 import type { SnapshotSection, SnapshotTravelEvent, SnapshotVote, TripSnapshot } from '../_shared/todos/types.ts'
 import { isOwnChoice, passKindFor, type AnswerPass } from '../_shared/answers/answers.ts'
 import type { SectionVoterIds } from '../_shared/actionCompletion/sectionVoters.ts'
@@ -84,6 +86,7 @@ export interface EngineTripRow {
   end_date: string
   confirmation_enabled: boolean | null
   confirmation_deadline: string | null
+  capacity_limit?: number | null
   base_currency?: string | null
 }
 
@@ -91,6 +94,7 @@ export interface EngineParticipantRow {
   user_id: string
   active?: boolean | null
   confirmation_status?: string | null
+  conditional_type?: string | null
   conditional_date?: string | null
 }
 
@@ -123,6 +127,7 @@ export function engineTodoIds(input: EngineInput, userIds: string[], now: Date):
       end_date: input.trip.end_date,
       confirmation_enabled: input.trip.confirmation_enabled,
       confirmation_deadline: input.trip.confirmation_deadline,
+      capacity_limit: input.trip.capacity_limit ?? null,
       base_currency: input.trip.base_currency ?? 'GBP',
       created_by: null, // never an organiser: see header
     },
@@ -131,6 +136,7 @@ export function engineTodoIds(input: EngineInput, userIds: string[], now: Date):
       role: null,
       active: p.active,
       confirmation_status: p.confirmation_status,
+      conditional_type: p.conditional_type,
       conditional_date: p.conditional_date,
     })),
     sections: input.sections ?? [],
@@ -148,6 +154,40 @@ export function engineTodoIds(input: EngineInput, userIds: string[], now: Date):
   const out = new Map<string, Set<string>>()
   for (const uid of userIds) out.set(uid, new Set(computeTodos(snapshot, uid, now).map((t) => t.id)))
   return out
+}
+
+/**
+ * Who still owes an answer to "Are you coming?", per the one shared rule
+ * (_shared/todos/deps/rsvpStanding.ts). `chaseable` is true only for `open`:
+ * nobody is chased for an answer that can no longer change anything (trip
+ * full, replies closed). Keyed by user id; includes every participant given.
+ */
+export function engineRsvpStandings(input: EngineInput, now: Date): Map<string, RsvpStanding> {
+  const trip = input.trip
+  const stage = effectiveTripStage(
+    { status: trip.status as Parameters<typeof effectiveTripStage>[0]['status'], start_date: trip.start_date, end_date: trip.end_date },
+    now
+  )
+  const places = tripPlaces({ ...trip, capacity_limit: trip.capacity_limit ?? null }, input.participants)
+  const today = now.toISOString().slice(0, 10) // the server runs in UTC, like the engine's own local date
+  const out = new Map<string, RsvpStanding>()
+  for (const p of input.participants) {
+    out.set(p.user_id, rsvpStanding({ trip: { ...trip, capacity_limit: trip.capacity_limit ?? null }, stage, person: p, places, today, now }))
+  }
+  return out
+}
+
+/**
+ * Is `now` inside the reminder window for a reply-by deadline: not yet past the
+ * END of the deadline's calendar day (UTC), and at most 72h before that end.
+ * A deadline stored at any time of day counts as its whole date.
+ */
+export function withinRsvpChaseWindow(deadlineIso: string, now: Date): boolean {
+  const day = deadlineIso.slice(0, 10)
+  const end = Date.parse(`${day}T00:00:00Z`) + 24 * 3600_000
+  if (Number.isNaN(end)) return false
+  const left = end - now.getTime()
+  return left > 0 && left <= 72 * 3600_000
 }
 
 /** Claims are locked once balances are frozen (`trips.settlement_snapshot` set), so nobody is chased to claim. */

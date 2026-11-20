@@ -22,6 +22,10 @@ export interface RosterPerson {
   role: string | null
   active: boolean
   confirmationStatus: string | null
+  /** Only what the reply-standing rule needs (optional: absent = not stated / no live offer). */
+  conditionalType?: string | null
+  conditionalDate?: string | null
+  waitlistOfferExpiresAt?: string | null
 }
 
 /** The signed-in user, with the SAME rules as the app's useTripPermissions. */
@@ -50,6 +54,7 @@ export interface ChatTrip {
   created_by: string | null
   confirmation_enabled: boolean | null
   confirmation_deadline: string | null
+  capacity_limit?: number | null
   settlement_snapshot: Json | null
   hide_votes_until_close?: boolean | null
 }

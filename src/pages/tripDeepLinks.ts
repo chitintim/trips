@@ -27,6 +27,7 @@ export type OpenTarget =
   | { kind: 'item'; id: string }
   | { kind: 'claim'; id: string }
   | { kind: 'setup' }
+  | { kind: 'waitlist' }
   | { kind: 'decide'; id: string }
   | { kind: 'book'; id: string }
   | { kind: 'actions'; segment: 'actions' | 'bring' }
@@ -44,6 +45,7 @@ const BARE_KINDS: Record<string, OpenTarget> = {
   settle: { kind: 'settle' },
   'travel-details': { kind: 'travel-details' },
   setup: { kind: 'setup' },
+  waitlist: { kind: 'waitlist' },
   ask: { kind: 'ask' },
   // Older links (action notes, emails sent before the to-dos engine).
   actions: { kind: 'actions', segment: 'actions' },
@@ -275,6 +277,10 @@ export function planDeepLink(target: OpenTarget, ctx: DeepLinkContext): DeepLink
       if (!ctx.isOrganizer || ctx.tripFinished || !option || !section || option.booked || section.status !== 'completed' || ctx.ownChoiceSectionIds.has(section.id)) return soft(DEEP_LINK_TOASTS.organiserGone)
       return { space: 'plan', open: { sheet: 'manage-question', id: section.id, mode: 'book', optionId: option.id } }
     }
+
+    case 'waitlist':
+      // The waitlist tab lives on People; only an organiser can offer a place.
+      return ctx.isOrganizer ? { space: 'people' } : { space: 'today' }
 
     case 'setup': {
       if (!ctx.isOrganizer) return { space: 'today' }

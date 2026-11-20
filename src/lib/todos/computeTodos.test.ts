@@ -975,3 +975,55 @@ describe('rsvp standing in the engine', () => {
     expect(kinds(s, 'c')).not.toContain('rsvp')
   })
 })
+
+// ---------------------------------------------------------------------------
+// A freed place held for the waitlist with nobody offered it
+// ---------------------------------------------------------------------------
+describe('place free for the waitlist', () => {
+  const OFFER_ID = 'org_setup:offer_place'
+  const OFFER_TITLE = 'A place is free on Japow 2027 — offer it to the waitlist'
+  const crew = (n: number) => Array.from({ length: n }, (_, i) => person(`g${i}`, `G${i}`))
+  const org = person('tim', 'Tim', { role: 'organizer' })
+  const waiter = (over: Partial<SnapshotParticipant> = {}) => person('w', 'W', { confirmation_status: 'waitlist', ...over })
+  const maybe = person('m', 'M', { confirmation_status: 'interested' })
+  const held = (waitlister: SnapshotParticipant, tripOver: Partial<TripSnapshot['trip']> = {}) =>
+    snap({
+      trip: { ...snap().trip, capacity_limit: 8, ...tripOver },
+      participants: [org, ...crew(6), waitlister, maybe],
+      sections: [question('q', 'Where?')],
+    })
+  const offerOf = (s: TripSnapshot, uid: string) => computeTodos(s, uid, NOW).find((t) => t.id === OFFER_ID)
+
+  it('the organiser is asked to offer the place when the waitlister has no offer', () => {
+    const t = offerOf(held(waiter()), 'tim')
+    expect(t?.title).toBe(OFFER_TITLE)
+    expect(t?.group).toBe('organiser')
+    expect(t?.due).toBeNull()
+    expect(t?.overdue).toBe(false)
+    expect(t?.link).toBe(DEEP_LINKS.waitlist())
+    expect(t?.link).toBe('?open=waitlist')
+  })
+
+  it('also when the only offer has expired, and the maybe is not asked', () => {
+    const s = held(waiter({ waitlist_offer_expires_at: new Date(2026, 10, 15).toISOString() }))
+    expect(offerOf(s, 'tim')?.title).toBe(OFFER_TITLE)
+    expect(computeTodos(s, 'm', NOW).map((t) => t.kind)).not.toContain('rsvp')
+  })
+
+  it('not once someone holds a live offer', () => {
+    const s = held(waiter({ waitlist_offer_expires_at: new Date(2026, 10, 17).toISOString() }))
+    expect(offerOf(s, 'tim')).toBeUndefined()
+  })
+
+  it('not for a non-organiser, with tracking off, with no capacity or with no free place', () => {
+    expect(offerOf(held(waiter()), 'g0')).toBeUndefined()
+    expect(offerOf(held(waiter(), { confirmation_enabled: false }), 'tim')).toBeUndefined()
+    expect(offerOf(held(waiter(), { capacity_limit: null }), 'tim')).toBeUndefined()
+    expect(offerOf(held(waiter(), { capacity_limit: 7 }), 'tim')).toBeUndefined()
+  })
+
+  it('shows in the Waiting-on board against the organiser', () => {
+    const w = computeWaitingOn(held(waiter()), NOW)
+    expect(w.byItem.find((i) => i.id === `org_setup:trip1:offer_place`)?.title).toBe(OFFER_TITLE)
+  })
+})

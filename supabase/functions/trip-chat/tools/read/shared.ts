@@ -10,7 +10,7 @@ import { z } from 'npm:zod@3'
 import { memoize, refuse, type ChatTrip, type ToolCtx, type ToolModule, type ToolResult } from '../types.ts'
 import { effectiveTripStage } from '../../../_shared/todos/deps/tripStage.ts'
 import type { TripStatus } from '../../../_shared/todos/deps/tripStatus.ts'
-import { type RsvpPersonInput, rsvpStanding, rsvpStandingWords, tripPlaces } from '../../../_shared/todos/deps/rsvpStanding.ts'
+import { type RsvpPersonInput, rsvpStanding, rsvpStandingWords, rsvpStatusWords, tripPlaces } from '../../../_shared/todos/deps/rsvpStanding.ts'
 import { assembleTripSnapshot, fetchSnapshotData, type SnapshotData } from '../../../_shared/todos/snapshot.ts'
 import type { TripSnapshot } from '../../../_shared/todos/types.ts'
 import { formatMoney as formatMoneyWords } from '../../../_shared/todos/copy.ts'
@@ -99,18 +99,9 @@ export function shapeWords(own: boolean): string {
   return own ? SHAPE_WORDS.own : SHAPE_WORDS.group
 }
 
-/** The five RSVP chips (src/features/people/lib/rsvpLabels.ts). */
-const RSVP_WORDS: Record<string, string> = {
-  confirmed: 'Going',
-  interested: 'Not sure',
-  conditional: 'Not sure',
-  declined: 'Not going',
-  cancelled: 'Not going',
-  pending: 'No reply yet',
-  waitlist: 'On the waitlist',
-}
+/** Reply words come from the one shared table (rsvpStanding). */
 export function rsvpWords(status: string | null | undefined): string {
-  return RSVP_WORDS[status ?? 'pending'] ?? 'No reply yet'
+  return rsvpStatusWords(status)
 }
 
 /**

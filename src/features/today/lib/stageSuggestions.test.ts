@@ -23,7 +23,7 @@ function standingsFor(
   )
 }
 
-const confirming = { storedStatus: 'confirming_participants', effectiveStage: 'confirming_participants' } as const
+const confirming = { storedStatus: 'confirming_participants', effectiveStage: 'confirming_participants', confirmationEnabled: true } as const
 
 const base: StageSuggestionInput = {
   storedStatus: 'gathering_interest',
@@ -93,6 +93,39 @@ describe('computeStageSuggestion', () => {
     })
     expect(s?.to).toBe('booking_details')
     expect(s?.detail).toBe('Everyone with a place has answered. 2 not sure or not replied, but the trip is full.')
+  })
+
+  it('does not fire while a freed place is held for the waitlist, with or without an offer', () => {
+    const offer = { waitlist_offer_expires_at: new Date(NOW.getTime() + 3600_000).toISOString() }
+    for (const extra of [{}, offer, { waitlist_offer_expires_at: new Date(NOW.getTime() - 3600_000).toISOString() }]) {
+      const standings = standingsFor([['confirmed'], ['confirmed'], ['waitlist', extra]], { capacity: 3 })
+      expect(computeStageSuggestion({ ...base, ...confirming, standings })).toBeNull()
+    }
+  })
+
+  describe('with confirmation tracking off', () => {
+    const off = (roster: Array<[string | null]>) =>
+      roster.map(([status]) =>
+        rsvpStanding({
+          trip: { confirmation_enabled: false, confirmation_deadline: null, capacity_limit: null },
+          stage: 'confirming_participants',
+          person: { user_id: 'x', confirmation_status: status },
+          places: tripPlaces({ confirmation_enabled: false, confirmation_deadline: null }, []),
+          today: '2026-11-16',
+          now: NOW,
+        })
+      )
+    const input = (standings: RsvpStanding[]) => ({ ...base, ...confirming, confirmationEnabled: false, standings })
+
+    it('fires from the stored answers, as before', () => {
+      expect(computeStageSuggestion(input(off([['confirmed'], ['confirmed'], ['declined']])))?.to).toBe('booking_details')
+    })
+    it('still waits for pending, interested, conditional and waitlist answers, and for a first confirmed', () => {
+      for (const straggler of ['pending', 'interested', 'conditional', 'waitlist']) {
+        expect(computeStageSuggestion(input(off([['confirmed'], [straggler]]))), straggler).toBeNull()
+      }
+      expect(computeStageSuggestion(input(off([['declined']])))).toBeNull()
+    })
   })
 
   it('suggests booked_awaiting_departure after the first booking', () => {

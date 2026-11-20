@@ -29,9 +29,8 @@ import {
   type WaitingOnAnswer,
 } from '../lib/rsvpAnswers'
 import { buildRsvpCostLine } from '../lib/roughCost'
-import { useMyRsvpStanding } from '../lib/useRsvpStanding'
 import { formatReplyByDate } from '../lib/replyBy'
-import { rsvpStandingLine } from '../lib/rsvpStanding'
+import { joinBlockedByWaitlist, PLACE_HELD_TEXT, tripPlaces } from '../lib/rsvpStanding'
 import { RSVP_PROMPT, RSVP_BUTTON_LABELS } from '../lib/rsvpLabels'
 
 // ============================================================================
@@ -200,9 +199,9 @@ function StatusModalBody({
   const { data: trip } = useTrip(tripId)
   const costLine = buildRsvpCostLine(trip, yourCostText, roughConversion)
   // A freed place is being offered to the waitlist first: "I'm in" would jump the queue.
-  const myStanding = useMyRsvpStanding(trip, participants, participant?.user_id)
-  const inBlocked = myStanding?.kind === 'no_place' && myStanding.placeBeingOffered
-  const inBlockedText = myStanding && inBlocked ? rsvpStandingLine(myStanding, trip?.name ?? '')?.text : null
+  // Applies to anyone who is not going and not already queued (undecided, declined or cancelled).
+  const inBlocked = !!trip && trip.confirmation_enabled === true && joinBlockedByWaitlist(participant?.confirmation_status, tripPlaces(trip, participants))
+  const inBlockedText = inBlocked ? PLACE_HELD_TEXT : null
   const updateStatus = useUpdateConfirmationStatus(tripId)
   const { showToast } = useToast()
 

@@ -257,7 +257,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
               <ParticipantList
                 participants={participants || []}
                 currentUserId={user?.id}
-                standings={standings}
+                standings={isOrganizer ? standings : undefined}
                 groupByStatus
                 onSelect={(p) => {
                   // Only the current user can edit their own status --

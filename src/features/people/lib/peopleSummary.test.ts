@@ -28,6 +28,20 @@ describe('notSureSummary', () => {
   })
 })
 
+describe('a place held for the waitlist', () => {
+  const held = () => {
+    const t = trip()
+    const list = people('confirmed', 'waitlist', 'interested')
+    return rsvpStanding({ trip: t, stage: t.status, person: list[2], places: tripPlaces(t, list), today: '2026-11-16', now: NOW })
+  }
+  it('is not described as the trip being full', () => {
+    expect(held().placeHeld).toBe(true)
+    expect(notAskingLine([{ name: 'Tim', standing: held() }])).toBe('Not asking: Tim — not sure, a free place goes to the waitlist first.')
+    const standings = computeRsvpStandings(trip(), people('confirmed', 'waitlist', 'interested'), NOW)
+    expect(notSureSummary(1, standings)).toBe('1 not sure')
+  })
+})
+
 describe('notAskingLine', () => {
   const standing = (status: string, over: Partial<ReturnType<typeof trip>> = {}): RsvpStanding => {
     const t = trip(over)

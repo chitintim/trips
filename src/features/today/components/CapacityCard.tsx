@@ -24,7 +24,7 @@ export interface CapacityCardProps {
  */
 export function CapacityCard({ trip, participants, myParticipant, confirmedCount, onOpenStatusModal }: CapacityCardProps) {
   const standing = useMyRsvpStanding(trip, participants, myParticipant?.user_id)
-    const replied = !!myParticipant?.confirmation_status && myParticipant.confirmation_status !== 'pending'
+  const replied = !!myParticipant?.confirmation_status && myParticipant.confirmation_status !== 'pending'
   return (
     <Card>
       <Card.Content className="space-y-3">

@@ -153,8 +153,9 @@ import {
   claimEmailLink,
   DEEP_LINKS,
   emailLink,
-  engineRsvpStandings,
+  conditionalDateChaseRecipients,
   engineTodoIds,
+  pendingRsvpChaseRecipients,
   isOwnChoiceSection,
   rsvpTodoId,
   toEngineSections,
@@ -674,13 +675,10 @@ Deno.serve(async (req) => {
         // The window runs to the END of the deadline's calendar day (UTC).
         const within72h = withinRsvpChaseWindow(trip.confirmation_deadline, now)
         if (within72h) {
-          const rsvpOwed = engineTodoIds({ trip, participants: activeParticipants }, activeParticipants.map((p) => p.user_id), now)
           // Only people who can still change something: not when the trip is full or replies have closed.
-          const standings = engineRsvpStandings({ trip, participants: activeParticipants }, now)
+          const recipients = new Set(pendingRsvpChaseRecipients({ trip, participants: activeParticipants }, now))
           for (const p of activeParticipants) {
-            if (p.confirmation_status === 'pending' || p.confirmation_status === 'interested') {
-              if (!rsvpOwed.get(p.user_id)?.has(rsvpTodoId(trip.id))) continue
-              if (!standings.get(p.user_id)?.chaseable) continue
+            if (recipients.has(p.user_id)) {
               items.push({
                 tripId: trip.id,
                 tripName: trip.name,
@@ -698,19 +696,10 @@ Deno.serve(async (req) => {
 
       // ---- d. Stated-date conditionals: conditional_date arrived ----
       if (tripOpen) {
-        const todayStr = now.toISOString().split('T')[0]
-        const conditionalOwed = engineTodoIds({ trip, participants: activeParticipants }, activeParticipants.map((p) => p.user_id), now)
-        const conditionalStandings = engineRsvpStandings({ trip, participants: activeParticipants }, now)
+        // No chase after the reply-by date or when the trip is full: the answer can no longer change anything.
+        const dateArrived = new Set(conditionalDateChaseRecipients({ trip, participants: activeParticipants }, now))
         for (const p of activeParticipants) {
-          if (!conditionalOwed.get(p.user_id)?.has(rsvpTodoId(trip.id))) continue
-          // No chase after the reply-by date or when the trip is full: the answer can no longer change anything.
-          if (!conditionalStandings.get(p.user_id)?.chaseable) continue
-          if (
-            p.confirmation_status === 'conditional' &&
-            (p.conditional_type === 'date' || p.conditional_type === 'both') &&
-            p.conditional_date &&
-            p.conditional_date <= todayStr
-          ) {
+          if (dateArrived.has(p.user_id) && p.conditional_date) {
             items.push({
               tripId: trip.id,
               tripName: trip.name,

@@ -6,7 +6,7 @@ import type { RsvpStanding } from './rsvpStanding'
  */
 export function notSureSummary(count: number, standings: ReadonlyMap<string, RsvpStanding>): string {
   const base = `${count} not sure`
-  const fullCount = [...standings.values()].filter((s) => (s.status === 'interested' || s.status === 'conditional') && s.kind === 'no_place').length
+  const fullCount = [...standings.values()].filter((s) => (s.status === 'interested' || s.status === 'conditional') && s.kind === 'no_place' && !s.placeHeld).length
   return count > 0 && fullCount === count ? `${base} (trip full)` : base
 }
 
@@ -25,7 +25,7 @@ export function notAskingLine(people: ReadonlyArray<NotAskedPerson>): string | n
     .filter(({ standing }) => standing.kind === 'no_place' || standing.kind === 'closed')
     .map(({ name, standing }) => {
       const answer = standing.status === 'interested' || standing.status === 'conditional' ? 'not sure' : 'no reply'
-      const why = standing.kind === 'no_place' ? 'but the trip is full' : 'and replies have closed'
+      const why = standing.kind === 'closed' ? 'and replies have closed' : standing.placeHeld ? 'a free place goes to the waitlist first' : 'but the trip is full'
       return `${name} — ${answer}, ${why}`
     })
   return parts.length ? `Not asking: ${parts.join('; ')}.` : null
@@ -33,5 +33,5 @@ export function notAskingLine(people: ReadonlyArray<NotAskedPerson>): string | n
 
 /** True when the notice stands in for the usual "Update my answer" button (a plain waitlister keeps it). */
 export function standingReplacesAnswerButton(standing: RsvpStanding): boolean {
-  return standing.kind === 'no_place' || standing.kind === 'closed'
+  return (standing.kind === 'no_place' || standing.kind === 'closed') && !standing.underway
 }

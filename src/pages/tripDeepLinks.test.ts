@@ -115,7 +115,7 @@ describe('formatOpenParam', () => {
   it('round-trips every target', () => {
     const values = [
       'todos', 'rsvp', 'question:s1', 'answer-all', 'todo:a1', 'bring:c1', 'settle',
-      'payment:p1', 'travel-details', 'item:e1', 'claim:x1', 'setup', 'decide:s1', 'book:o1', 'actions', 'actions-bring',
+      'payment:p1', 'travel-details', 'item:e1', 'claim:x1', 'setup', 'waitlist', 'decide:s1', 'book:o1', 'actions', 'actions-bring',
     ]
     for (const v of values) {
       const target = resolveOpenParam(v)
@@ -323,6 +323,13 @@ describe('planDeepLink', () => {
       open: { sheet: 'plan-item', id: 'evt-1' },
     })
     expect(planDeepLink({ kind: 'item', id: 'gone' }, ctx())).toEqual({ space: 'today', toast: DEEP_LINK_TOASTS.item })
+  })
+
+  describe('waitlist', () => {
+    it('sends an organiser to People and anyone else to Today', () => {
+      expect(planDeepLink({ kind: 'waitlist' }, ctx({ isOrganizer: true }))).toEqual({ space: 'people' })
+      expect(planDeepLink({ kind: 'waitlist' }, ctx({ isOrganizer: false }))).toEqual({ space: 'today' })
+    })
   })
 
   describe('setup', () => {

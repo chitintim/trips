@@ -21,7 +21,7 @@ export function RsvpStandingNotice({ standing, tripName, onAnswer }: RsvpStandin
   const line = rsvpStandingLine(standing, tripName)
   if (!line) return null
   // A freed place goes to the waitlist first, so "I'd still like to come" would jump the queue.
-  const canJoin = !standing.placeBeingOffered
+  const canJoin = !standing.placeHeld
   return (
     <div className="space-y-3 rounded-[var(--radius-md)] bg-[var(--surface-sunken)] p-3" data-rsvp-standing={standing.kind}>
       <div className="space-y-1">

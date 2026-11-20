@@ -19,7 +19,7 @@
  */
 import { isIdeasBucket } from '../ideasBucket'
 import { effectiveTripStage, tripStageRank } from '../tripStage'
-import { rsvpStanding, tripPlaces, type TripPlaces } from '../../features/people/lib/rsvpStanding'
+import { placeAwaitingOffer, rsvpStanding, tripPlaces, type TripPlaces } from '../../features/people/lib/rsvpStanding'
 import {
   buildAnsweredSectionVoters,
   answerCounts,
@@ -43,6 +43,7 @@ import {
   TRAVEL_TITLE,
   ORG_SETUP_INVITE_TITLE,
   ORG_SETUP_QUESTION_TITLE,
+  orgOfferPlaceTitle,
   answerActionLabel,
   answerSubtitle,
   bringTitle,
@@ -964,6 +965,21 @@ function organiserTodos(ctx: Ctx, userId: string): Todo[] {
   }
   if (ctx.s.sections.length === 0) {
     out.push(finish(ctx, userId, { ...g, kind: 'org_setup', id: 'org_setup:question', entityId: `${ctx.s.trip.id}:question`, title: ORG_SETUP_QUESTION_TITLE, due: null, link: DEEP_LINKS.setup() }))
+  }
+  // A place is free and people are waiting for it, but nobody holds a live offer: someone has to offer it
+  // (auto-chase does it only when reminders are on). True-in-the-data, so it clears itself once an offer is made.
+  if (placeAwaitingOffer(ctx.s.trip, ctx.s.participants, ctx.now)) {
+    out.push(
+      finish(ctx, userId, {
+        ...g,
+        kind: 'org_setup',
+        id: 'org_setup:offer_place',
+        entityId: `${ctx.s.trip.id}:offer_place`,
+        title: orgOfferPlaceTitle(ctx.s.trip.name),
+        due: null,
+        link: DEEP_LINKS.waitlist(),
+      })
+    )
   }
   return out
 }

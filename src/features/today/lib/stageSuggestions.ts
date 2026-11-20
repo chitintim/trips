@@ -68,22 +68,39 @@ export function computeStageSuggestion(input: StageSuggestionInput): StageSugges
   }
 
   if (storedStatus === 'confirming_participants') {
-    // Nobody still owes an answer that matters: lapsed maybes (trip full or
-    // replies closed), late replies, declined/cancelled people and plain
-    // waitlisters don't hold the trip back. A live waitlist offer does.
-    const blocked = standings.some((s) => s.blocksBooking)
-    const going = standings.filter((s) => s.kind === 'going').length
-    if (!blocked && going > 0) {
-      const noPlace = standings.filter((s) => s.kind === 'no_place').length
-      return {
-        key: 'advance-confirming_participants-booking_details',
-        to: 'booking_details',
-        title: 'Everyone has answered — move to booking',
-        detail:
-          noPlace > 0
-            ? `Everyone with a place has answered. ${noPlace} not sure or not replied, but the trip is full.`
-            : 'Everyone who is still in is going. Time to decide and book the details.',
-        kind: 'advance',
+    if (!confirmationEnabled) {
+      // Tracking is off, so there is no "Are you coming?" rule to apply: judge by the stored answers, as before.
+      const statuses = standings.map((s) => s.status)
+      const undecided = statuses.filter((s) => s !== 'confirmed' && s !== 'declined')
+      if (undecided.length === 0 && statuses.some((s) => s === 'confirmed')) {
+        return {
+          key: 'advance-confirming_participants-booking_details',
+          to: 'booking_details',
+          title: 'Everyone has answered — move to booking',
+          detail: 'Everyone who is still in is going. Time to decide and book the details.',
+          kind: 'advance',
+        }
+      }
+    } else {
+      // Nobody still owes an answer that matters: lapsed maybes (trip full or
+      // replies closed), late replies, declined/cancelled people and plain
+      // waitlisters don't hold the trip back. A live waitlist offer does, and
+      // so does a freed place that is held for the waitlist: the trip is not
+      // settled until that place is taken or released.
+      const blocked = standings.some((s) => s.blocksBooking || s.placeHeld)
+      const going = standings.filter((s) => s.kind === 'going').length
+      if (!blocked && going > 0) {
+        const noPlace = standings.filter((s) => s.kind === 'no_place').length
+        return {
+          key: 'advance-confirming_participants-booking_details',
+          to: 'booking_details',
+          title: 'Everyone has answered — move to booking',
+          detail:
+            noPlace > 0
+              ? `Everyone with a place has answered. ${noPlace} not sure or not replied, but the trip is full.`
+              : 'Everyone who is still in is going. Time to decide and book the details.',
+          kind: 'advance',
+        }
       }
     }
   }

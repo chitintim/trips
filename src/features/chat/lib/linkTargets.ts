@@ -21,6 +21,7 @@ const COPY: Partial<Record<OpenTarget['kind'], LinkCopy>> = {
   claim: { message: 'Opens the receipt.', button: 'Open the receipt' },
   item: { message: 'Opens the item on the plan.', button: 'Open it' },
   setup: { message: 'Opens trip setup.', button: 'Open setup' },
+  waitlist: { message: 'Opens the people and the waitlist.', button: 'Open the waitlist' },
 }
 
 export interface ResolvedLink {

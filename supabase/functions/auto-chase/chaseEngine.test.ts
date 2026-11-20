@@ -10,6 +10,7 @@ import {
   answerTodoId,
   claimChaseOpen,
   claimEmailLink,
+  conditionalDateChaseRecipients,
   type ChaseSectionRow,
   DEEP_LINKS,
   emailLink,
@@ -17,6 +18,7 @@ import {
   engineTodoIds,
   withinRsvpChaseWindow,
   isOwnChoiceSection,
+  pendingRsvpChaseRecipients,
   rsvpTodoId,
   toEngineSections,
   travelTodoId,
@@ -297,4 +299,34 @@ Deno.test('rsvp chase (d): still fires with no deadline and places free; users-o
   const st = engineRsvpStandings({ trip: { ...trip, confirmation_deadline: null, capacity_limit: 10 }, participants: [cond, usersOnly] }, NOW)
   assert(st.get('c')!.chaseable)
   assert(!st.get('u')!.chaseable)
+})
+
+Deno.test('rsvp chase (c) selection applies the chaseable gate: only open people are chosen', () => {
+  const free = pendingRsvpChaseRecipients({ trip: { ...trip, capacity_limit: 8 }, participants: crowd }, NOW)
+  assertEquals([...free].sort(), ['m', 'p'])
+  // Full: the same people are still pending/interested and still listed by the old rule, but nobody is chosen.
+  assertEquals(pendingRsvpChaseRecipients({ trip: full, participants: crowd }, NOW), [])
+  // Replies closed (deadline passed, places free): late, not chaseable.
+  const closed = { ...trip, capacity_limit: 8, confirmation_deadline: '2026-11-15T00:00:00Z' }
+  assertEquals(pendingRsvpChaseRecipients({ trip: closed, participants: crowd }, NOW), [])
+  // A freed place held for the waitlist: maybes are not chased either.
+  const held = [person('g1'), person('w', 'waitlist'), person('m', 'interested')]
+  assertEquals(pendingRsvpChaseRecipients({ trip: { ...trip, capacity_limit: 2 }, participants: held }, NOW), [])
+})
+
+Deno.test('rsvp chase (d) selection applies the chaseable gate', () => {
+  const cond = person('c', 'conditional', { conditional_type: 'date', conditional_date: '2026-11-10' })
+  const noDeadline = { ...trip, confirmation_deadline: null }
+  assertEquals(conditionalDateChaseRecipients({ trip: noDeadline, participants: [cond] }, NOW), ['c'])
+  assertEquals(conditionalDateChaseRecipients({ trip: { ...trip, confirmation_deadline: '2026-11-15T00:00:00Z' }, participants: [cond] }, NOW), [])
+  assertEquals(conditionalDateChaseRecipients({ trip: { ...noDeadline, capacity_limit: 1 }, participants: [person('g'), cond] }, NOW), [])
+  const future = person('f', 'conditional', { conditional_type: 'date', conditional_date: '2026-12-01' })
+  assertEquals(conditionalDateChaseRecipients({ trip: noDeadline, participants: [future] }, NOW), [])
+})
+
+Deno.test('the organiser offer-a-place to-do is never produced for chasing', () => {
+  const t = { ...trip, capacity_limit: 8, confirmation_deadline: null }
+  const people = [person('g1'), person('w', 'waitlist'), person('m', 'interested')]
+  const ids = engineTodoIds({ trip: t, participants: people }, people.map((p) => p.user_id), NOW)
+  for (const set of ids.values()) assert(![...set].some((id) => id.includes('offer_place')))
 })

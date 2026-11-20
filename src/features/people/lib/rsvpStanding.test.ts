@@ -6,6 +6,10 @@ import {
   rsvpStandingLine,
   rsvpStandingTag,
   rsvpStandingWords,
+  rsvpStatusWords,
+  joinBlockedByWaitlist,
+  placeAwaitingOffer,
+  placeIsHeld,
   tripPlaces,
   type RsvpPersonInput,
   type RsvpStanding,
@@ -40,6 +44,7 @@ interface Case {
 const LATE = { variant: 'late', due: null } as const
 const ask = (due: string | null) => ({ variant: 'ask', due }) as const
 
+const HELD_LINE = "A place has come free and goes to the waitlist first. If nobody there takes it, we'll ask you here."
 const FULL_DETAIL = "If a place comes free and nobody on the waitlist takes it, we'll ask you here."
 
 const CASES: Case[] = [
@@ -53,7 +58,7 @@ const CASES: Case[] = [
     status: 'waitlist',
     expect: { kind: 'waitlist', todo: null, chaseable: false, blocksBooking: false },
     line: "You're on the waitlist for Japow. If a place is offered to you, you'll see it here.",
-    words: 'Waitlist',
+    words: 'On the waitlist',
   },
   {
     name: 'G5 waitlist, expired offer',
@@ -76,7 +81,7 @@ const CASES: Case[] = [
     capacity: 8,
     going: 8,
     deadline: OPEN_DEADLINE,
-    expect: { kind: 'no_place', todo: null, chaseable: false, noPlace: true, placeBeingOffered: false, repliesClosed: false, blocksBooking: false },
+    expect: { kind: 'no_place', todo: null, chaseable: false, noPlace: true, placeHeld: false, repliesClosed: false, blocksBooking: false },
     line: "Japow is full. You're down as not sure, so there's nothing you need to do.",
     detail: FULL_DETAIL,
     tag: 'Trip full',
@@ -117,16 +122,45 @@ const CASES: Case[] = [
     going: 7,
     waitlisted: 1,
     deadline: OPEN_DEADLINE,
-    expect: { kind: 'no_place', todo: null, noPlace: true, placeBeingOffered: true },
-    line: "A place has come free and is being offered to the waitlist first. If nobody takes it, we'll ask you here.",
+    expect: { kind: 'no_place', todo: null, noPlace: true, placeHeld: true },
+    line: HELD_LINE,
     detail: null,
+  },
+  {
+    name: 'U1b with the reply-by date passed',
+    status: 'interested',
+    capacity: 8,
+    going: 7,
+    waitlisted: 1,
+    deadline: PASSED_DEADLINE,
+    expect: { kind: 'no_place', todo: null, placeHeld: true, repliesClosed: true, chaseable: false },
+    line: HELD_LINE,
+  },
+  {
+    name: 'U1b where the only waitlister has an expired offer',
+    status: 'pending',
+    capacity: 8,
+    going: 7,
+    waitlisted: 1,
+    expect: { kind: 'no_place', todo: null, placeHeld: true },
+    line: HELD_LINE,
+  },
+  {
+    name: 'U1b while the trip is under way shows nothing',
+    status: 'pending',
+    capacity: 8,
+    going: 7,
+    waitlisted: 1,
+    stage: 'trip_ongoing',
+    expect: { kind: 'no_place', placeHeld: true, underway: true },
+    line: null,
   },
   {
     name: 'U1 capacity lowered below going',
     status: 'pending',
     capacity: 6,
     going: 8,
-    expect: { kind: 'no_place', noPlace: true, placeBeingOffered: false },
+    expect: { kind: 'no_place', noPlace: true, placeHeld: false },
   },
   // U2 / U3
   {
@@ -174,8 +208,8 @@ const CASES: Case[] = [
     name: 'U4 pending, unlimited, ongoing',
     status: 'pending',
     stage: 'trip_ongoing',
-    expect: { kind: 'closed', todo: null },
-    line: "Replies for Japow have closed. You didn't reply.",
+    expect: { kind: 'closed', todo: null, underway: true },
+    line: null,
     words: 'No reply yet (replies closed)',
   },
   {
@@ -289,6 +323,8 @@ const CASES: Case[] = [
   { name: 'stage booked', status: 'pending', stage: 'booked_awaiting_departure', expect: { kind: 'closed' } },
   { name: 'stage ongoing', status: 'pending', stage: 'trip_ongoing', expect: { kind: 'closed', todo: null } },
   // NULL status: keeps today's behaviour (no to-do), never chased
+  { name: 'NULL status on a booked trip is closed', status: null, stage: 'booked_awaiting_departure', expect: { kind: 'closed', todo: null, status: 'pending' }, words: 'No reply yet (replies closed)' },
+  { name: 'unknown status string is treated as out', status: 'mystery', expect: { kind: 'out', todo: null }, words: 'No reply yet' },
   { name: 'NULL status, places free', status: null, expect: { kind: 'thinking', status: 'pending', todo: null, chaseable: false } },
   { name: 'NULL status, deadline passed', status: null, deadline: PASSED_DEADLINE, expect: { kind: 'thinking', todo: null } },
 ]
@@ -365,5 +401,69 @@ describe('blocksBooking', () => {
   })
   it('a late person does not block', () => {
     expect(stand('pending', {}, { ...base, confirmation_deadline: PASSED_DEADLINE }).blocksBooking).toBe(false)
+  })
+})
+
+describe('inactive people', () => {
+  it('an inactive confirmed person does not make a maybe no_place', () => {
+    const trip: RsvpTripInput = { confirmation_enabled: true, confirmation_deadline: null, capacity_limit: 2 }
+    const people: RsvpPersonInput[] = [
+      { user_id: 'a', confirmation_status: 'confirmed' },
+      { user_id: 'gone', confirmation_status: 'confirmed', active: false },
+      { user_id: 'me', confirmation_status: 'interested' },
+    ]
+    const places = tripPlaces(trip, people)
+    expect(places.going).toBe(1)
+    const s = rsvpStanding({ trip, stage: 'confirming_participants', person: people[2], places, today: TODAY, now: NOW })
+    expect(s.kind).toBe('thinking')
+    expect(s.noPlace).toBe(false)
+  })
+})
+
+describe('the place held for the waitlist', () => {
+  const trip = (capacity_limit: number | null, enabled = true): RsvpTripInput => ({ confirmation_enabled: enabled, confirmation_deadline: null, capacity_limit })
+  const going = (n: number) => Array.from({ length: n }, (_, i): RsvpPersonInput => ({ user_id: `g${i}`, confirmation_status: 'confirmed' }))
+  const live = new Date(NOW.getTime() + 3600_000).toISOString()
+  const expired = new Date(NOW.getTime() - 3600_000).toISOString()
+  const waiter = (extra: Partial<RsvpPersonInput> = {}): RsvpPersonInput => ({ user_id: 'w', confirmation_status: 'waitlist', ...extra })
+
+  it('placeAwaitingOffer: a waitlister without an offer, or with an expired one', () => {
+    expect(placeAwaitingOffer(trip(8), [...going(7), waiter()], NOW)).toBe(true)
+    expect(placeAwaitingOffer(trip(8), [...going(7), waiter({ waitlist_offer_expires_at: expired })], NOW)).toBe(true)
+  })
+  it('placeAwaitingOffer: not with a live offer, nobody waiting, a full trip, no capacity or tracking off', () => {
+    expect(placeAwaitingOffer(trip(8), [...going(7), waiter({ waitlist_offer_expires_at: live })], NOW)).toBe(false)
+    expect(placeAwaitingOffer(trip(8), [...going(7), waiter({ active: false })], NOW)).toBe(false)
+    expect(placeAwaitingOffer(trip(8), going(7), NOW)).toBe(false)
+    expect(placeAwaitingOffer(trip(8), [...going(8), waiter()], NOW)).toBe(false)
+    expect(placeAwaitingOffer(trip(null), [...going(7), waiter()], NOW)).toBe(false)
+    expect(placeAwaitingOffer(trip(8, false), [...going(7), waiter()], NOW)).toBe(false)
+  })
+  it('placeAwaitingOffer: one live offer among several waitlisters is enough', () => {
+    const second = { ...waiter({ waitlist_offer_expires_at: live }), user_id: 'w2' }
+    expect(placeAwaitingOffer(trip(8), [...going(6), waiter(), second], NOW)).toBe(false)
+  })
+  it('joinBlockedByWaitlist blocks everyone but the going and the queued, including declined and cancelled', () => {
+    const places = tripPlaces(trip(8), [...going(7), waiter()])
+    expect(placeIsHeld(places)).toBe(true)
+    for (const status of ['declined', 'cancelled', 'pending', 'interested', 'conditional', null]) {
+      expect(joinBlockedByWaitlist(status, places), String(status)).toBe(true)
+    }
+    expect(joinBlockedByWaitlist('confirmed', places)).toBe(false)
+    expect(joinBlockedByWaitlist('waitlist', places)).toBe(false)
+  })
+  it('joinBlockedByWaitlist does not block when no place is held', () => {
+    expect(joinBlockedByWaitlist('declined', tripPlaces(trip(8), going(5)))).toBe(false)
+    expect(joinBlockedByWaitlist('declined', tripPlaces(trip(8), going(8)))).toBe(false) // full: the server queues them
+    expect(joinBlockedByWaitlist('declined', tripPlaces(trip(null), going(3)))).toBe(false)
+  })
+})
+
+describe('reply words', () => {
+  it('say "On the waitlist" and fall back to "No reply yet"', () => {
+    expect(rsvpStatusWords('waitlist')).toBe('On the waitlist')
+    expect(rsvpStatusWords('mystery')).toBe('No reply yet')
+    expect(rsvpStatusWords(null)).toBe('No reply yet')
+    expect(rsvpStatusWords(undefined)).toBe('No reply yet')
   })
 })

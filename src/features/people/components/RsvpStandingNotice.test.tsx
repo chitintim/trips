@@ -7,11 +7,11 @@ import { rsvpStanding, tripPlaces, type RsvpPersonInput } from '../lib/rsvpStand
 const NOW = new Date(2026, 10, 16, 12, 0, 0)
 const trip = { confirmation_enabled: true, confirmation_deadline: null, capacity_limit: 2 }
 
-function standingFor(status: string, others: string[]) {
+function standingFor(status: string, others: string[], stage: 'confirming_participants' | 'trip_ongoing' | 'trip_completed' = 'confirming_participants') {
   const list: RsvpPersonInput[] = [...others, status].map((s, i) => ({ user_id: `u${i}`, active: true, confirmation_status: s }))
   return rsvpStanding({
     trip,
-    stage: 'confirming_participants',
+    stage,
     person: list[list.length - 1],
     places: tripPlaces(trip, list),
     today: '2026-11-16',
@@ -33,10 +33,20 @@ describe('RsvpStandingNotice', () => {
 
   it('offers only "I\'m out" while a freed place is going to the waitlist first', () => {
     const s = standingFor('interested', ['confirmed', 'waitlist'])
-    expect(s.placeBeingOffered).toBe(true)
+    expect(s.placeHeld).toBe(true)
     const html = render(s)
     expect(html).not.toContain('still like to come')
     expect(html).toContain('I&#x27;m out')
+  })
+
+  it('shows no closed line and no buttons once the trip is under way or over', () => {
+    for (const stage of ['trip_ongoing', 'trip_completed'] as const) {
+      for (const others of [['confirmed', 'confirmed'], ['confirmed']]) {
+        const s = standingFor('pending', others, stage)
+        expect(standingReplacesAnswerButton(s), stage).toBe(false)
+        expect(render(s), stage).toBe('')
+      }
+    }
   })
 
   it('renders nothing when there is no line (an open question)', () => {

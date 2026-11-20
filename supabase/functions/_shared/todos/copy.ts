@@ -44,6 +44,8 @@ export const DEEP_LINKS = {
   setup: () => open('setup'),
   /** Slice 4E: Manage > Decide for one open question (org_decide / org_tie). */
   decide: (sectionId: string) => open(`decide:${sectionId}`),
+  /** Organiser: People, where the waitlist lives and a free place can be offered. */
+  waitlist: () => open('waitlist'),
   /** Slice 4E: Mark booked for one decided option (org_book). */
   book: (optionId: string) => open(`book:${optionId}`),
 } as const
@@ -226,6 +228,8 @@ export const orgCloseAnswersTitle = (question: string) => `Close answers for ${q
 /** Subline of a tie to-do: the options that share the top score. */
 export const orgTieSubtitle = (optionTitles: ReadonlyArray<string>) => `Tied: ${optionTitles.join(' · ')}`
 export const ORG_SETUP_INVITE_TITLE = 'Invite people to the trip'
+/** A place is free, people are waiting for it, and nobody has been offered it. */
+export const orgOfferPlaceTitle = (tripName: string) => `A place is free on ${tripName} — offer it to the waitlist`
 export const ORG_SETUP_QUESTION_TITLE = 'Ask the group your first question'
 
 // ---------------------------------------------------------------------------

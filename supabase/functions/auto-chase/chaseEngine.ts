@@ -178,6 +178,43 @@ export function engineRsvpStandings(input: EngineInput, now: Date): Map<string, 
 }
 
 /**
+ * Loop (c): who gets the "pending RSVP" reminder (the 72h window is checked by the caller). Needs
+ * all three: a pending/interested answer, the engine still lists "Are you coming?" for them, and the
+ * shared rule says they are `chaseable` (not when the trip is full or replies have closed).
+ */
+export function pendingRsvpChaseRecipients(input: EngineInput, now: Date): string[] {
+  const ids = input.participants.map((p) => p.user_id)
+  const owed = engineTodoIds(input, ids, now)
+  const standings = engineRsvpStandings(input, now)
+  return input.participants
+    .filter((p) => p.confirmation_status === 'pending' || p.confirmation_status === 'interested')
+    .filter((p) => owed.get(p.user_id)?.has(rsvpTodoId(input.trip.id)) === true)
+    .filter((p) => standings.get(p.user_id)?.chaseable === true)
+    .map((p) => p.user_id)
+}
+
+/**
+ * Loop (d): who gets the "your date has arrived" reminder: a conditional answer whose stated date has
+ * arrived (today, UTC), still a to-do for them, and `chaseable` under the shared rule.
+ */
+export function conditionalDateChaseRecipients(input: EngineInput, now: Date): string[] {
+  const todayStr = now.toISOString().split('T')[0]
+  const owed = engineTodoIds(input, input.participants.map((p) => p.user_id), now)
+  const standings = engineRsvpStandings(input, now)
+  return input.participants
+    .filter((p) => owed.get(p.user_id)?.has(rsvpTodoId(input.trip.id)) === true)
+    .filter((p) => standings.get(p.user_id)?.chaseable === true)
+    .filter(
+      (p) =>
+        p.confirmation_status === 'conditional' &&
+        (p.conditional_type === 'date' || p.conditional_type === 'both') &&
+        !!p.conditional_date &&
+        p.conditional_date <= todayStr
+    )
+    .map((p) => p.user_id)
+}
+
+/**
  * Is `now` inside the reminder window for a reply-by deadline: not yet past the
  * END of the deadline's calendar day (UTC), and at most 72h before that end.
  * A deadline stored at any time of day counts as its whole date.

@@ -18,6 +18,11 @@ import { ManageParticipantSheet } from './ManageParticipantSheet'
 import { AddParticipantModal } from '../../../components/AddParticipantModal'
 import { getMyTravelEvents, travelEventFlightRef, travelEventAirportCode } from '../lib/travelDetails'
 import { formatTime } from '../../timeline'
+import { RsvpStandingNotice } from './RsvpStandingNotice'
+import { useRsvpStandings } from '../lib/useRsvpStanding'
+import { replyByEnd } from '../lib/replyBy'
+import { notSureSummary, standingReplacesAnswerButton } from '../lib/peopleSummary'
+import type { RsvpAnswer } from '../lib/rsvpAnswers'
 
 interface PeopleTabProps {
   tripId: string
@@ -49,6 +54,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
   const { data: timelineEvents = [] } = useTimeline(tripId)
 
   const [statusModalParticipant, setStatusModalParticipant] = useState<ParticipantWithUser | null>(null)
+  const [statusPreset, setStatusPreset] = useState<RsvpAnswer | undefined>(undefined)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [travelOpen, setTravelOpen] = useState(false)
   const [addParticipantOpen, setAddParticipantOpen] = useState(false)
@@ -64,6 +70,12 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
   // One rule for "can run this trip" (organiser / creator / site admin).
   const { canManageTrip: isOrganizer } = useTripPermissions(trip)
   const confirmationEnabled = isConfirmationEnabled(trip)
+  const standings = useRsvpStandings(trip, participants)
+  const myStanding = user?.id ? (standings.get(user.id) ?? null) : null
+  const openStatus = (p: ParticipantWithUser, answer?: RsvpAnswer) => {
+    setStatusPreset(answer)
+    setStatusModalParticipant(p)
+  }
 
   const counts = useMemo(() => {
     const list = participants || []
@@ -125,7 +137,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                 <h2 className="text-lg font-semibold text-[var(--text-primary)]">Who's coming</h2>
                 <p className="text-sm text-[var(--text-secondary)] mt-0.5">
                   {counts.confirmed} going
-                  {counts.interested + counts.conditional > 0 && ` · ${counts.interested + counts.conditional} not sure`}
+                  {counts.interested + counts.conditional > 0 && ` · ${notSureSummary(counts.interested + counts.conditional, standings)}`}
                   {counts.waitlist > 0 && ` · ${counts.waitlist} on the waitlist`}
                 </p>
               </div>
@@ -153,12 +165,16 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
             {trip.confirmation_deadline && (
               <div className="flex items-center gap-2">
                 <span className="text-sm text-[var(--text-secondary)]">Reply by</span>
-                <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />
+                <Deadline date={replyByEnd(trip.confirmation_deadline) ?? trip.confirmation_deadline} kind="deadline" size="sm" />
               </div>
             )}
 
-            {myParticipant && (
-              <Button fullWidth onClick={() => setStatusModalParticipant(myParticipant)}>
+            {myParticipant && myStanding && (
+              <RsvpStandingNotice standing={myStanding} tripName={trip.name} onAnswer={(a) => openStatus(myParticipant, a)} />
+            )}
+
+            {myParticipant && !(myStanding && standingReplacesAnswerButton(myStanding)) && (
+              <Button fullWidth onClick={() => openStatus(myParticipant)}>
                 {rsvpButtonLabel(myParticipant.confirmation_status)}
               </Button>
             )}
@@ -241,6 +257,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
               <ParticipantList
                 participants={participants || []}
                 currentUserId={user?.id}
+                standings={standings}
                 groupByStatus
                 onSelect={(p) => {
                   // Only the current user can edit their own status --
@@ -248,7 +265,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
                   // button (grouped view) or nothing at all (flat view when
                   // confirmation tracking is off), so onSelect is only ever
                   // invoked for `user`'s own row.
-                  setStatusModalParticipant(p)
+                  openStatus(p)
                 }}
                 canManage={isOrganizer}
                 onManage={(p) => setManageParticipant(p)}
@@ -269,7 +286,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
           participants={participants || []}
           currentUserId={user?.id}
           groupByStatus={false}
-          onSelect={(p) => setStatusModalParticipant(p)}
+          onSelect={(p) => openStatus(p)}
           canManage={isOrganizer}
           onManage={(p) => setManageParticipant(p)}
         />
@@ -284,6 +301,7 @@ export function PeopleTab({ tripId }: PeopleTabProps) {
           participants={participants || []}
           capacityLimit={trip.capacity_limit}
           confirmedCount={counts.confirmed}
+          initialAnswer={statusPreset}
         />
       )}
 

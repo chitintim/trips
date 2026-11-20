@@ -1,7 +1,9 @@
 import { useState } from 'react'
 import { Modal, Button, useToast } from '../../../components/ui'
-import { useParticipants } from '../../../lib/queries/useTrip'
+import { useParticipants, useTrip } from '../../../lib/queries/useTrip'
 import { useResetConfirmations } from '../../../lib/queries/useConfirmations'
+import { confirmationDeadlineDate } from '../lib/rsvpStanding'
+import { todayLocal } from '../../../lib/localDate'
 import { countDeclined, countResettableConfirmations, describeResetCount } from '../lib/resetConfirmations'
 
 interface ResetConfirmationsSheetProps {
@@ -17,6 +19,7 @@ interface ResetConfirmationsSheetProps {
  */
 export function ResetConfirmationsSheet({ isOpen, onClose, tripId }: ResetConfirmationsSheetProps) {
   const { data: participants } = useParticipants(tripId)
+  const { data: trip } = useTrip(tripId)
   const reset = useResetConfirmations(tripId)
   const { showToast } = useToast()
   const [includeDeclined, setIncludeDeclined] = useState(false)
@@ -24,6 +27,8 @@ export function ResetConfirmationsSheet({ isOpen, onClose, tripId }: ResetConfir
   const list = participants ?? []
   const count = countResettableConfirmations(list, includeDeclined)
   const declined = countDeclined(list)
+  const deadlineDate = confirmationDeadlineDate(trip?.confirmation_deadline)
+  const deadlinePassed = !!deadlineDate && deadlineDate < todayLocal()
 
   const handleReset = async () => {
     try {
@@ -45,6 +50,10 @@ export function ResetConfirmationsSheet({ isOpen, onClose, tripId }: ResetConfir
           undone. The reset itself sends no email; normal reminders resume, so people may get a reminder if the
           confirmation deadline is close.
         </p>
+
+        {deadlinePassed && (
+          <p className="text-sm text-[var(--text-secondary)]">The reply-by date has passed. Set a new one so people are asked again.</p>
+        )}
 
         {declined > 0 && (
           <label className="flex items-start gap-2 text-sm text-[var(--text-primary)]">

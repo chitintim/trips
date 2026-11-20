@@ -1,6 +1,7 @@
 import { UserAvatar, Badge, ConfirmationStatusBadge, Deadline, EmptyState } from '../../../components/ui'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import { getWaitlistQueue } from '../lib/waitlist'
+import { rsvpStandingTag, type RsvpStanding } from '../lib/rsvpStanding'
 import { RSVP_CHIP_ORDER, rsvpChipFor, rsvpChipLabel } from '../lib/rsvpLabels'
 
 
@@ -22,6 +23,8 @@ interface ParticipantListProps {
   /** Organizer/admin viewing this list -- shows a per-row "Manage" affordance (remove from trip, etc). */
   canManage?: boolean
   onManage?: (participant: ParticipantWithUser) => void
+  /** Standing per user id (see useRsvpStandings). When given, lapsed rows get a "Trip full" / "Replies closed" tag beside the badge. */
+  standings?: ReadonlyMap<string, RsvpStanding>
 }
 
 /** Small per-row affordance, shown only when the viewer can manage the roster. A sibling of the row's own button/div (never nested inside it) to keep the markup valid. */
@@ -45,7 +48,7 @@ function ManageButton({ participant, onManage }: { participant: ParticipantWithU
  * Status-grouped participant list: avatars, notes, waitlist queue
  * position + live offer countdown where relevant.
  */
-export function ParticipantList({ participants, currentUserId, onSelect, groupByStatus = true, canManage = false, onManage }: ParticipantListProps) {
+export function ParticipantList({ participants, currentUserId, onSelect, groupByStatus = true, canManage = false, onManage, standings }: ParticipantListProps) {
   if (participants.length === 0) {
     return <EmptyState compact icon="👥" title="No participants yet" />
   }
@@ -99,6 +102,8 @@ export function ParticipantList({ participants, currentUserId, onSelect, groupBy
             {group.members.map((p) => {
               const waitlistEntry = group.chip === 'waitlist' ? positionByUserId.get(p.user_id) : undefined
               const isSelf = p.user_id === currentUserId
+              const standing = standings?.get(p.user_id)
+              const tag = standing ? rsvpStandingTag(standing) : null
               const rowContent = (
                 <>
                   <UserAvatar avatarData={p.user} size="md" />
@@ -133,7 +138,10 @@ export function ParticipantList({ participants, currentUserId, onSelect, groupBy
                       </div>
                     )}
                   </div>
-                  <ConfirmationStatusBadge status={p.confirmation_status || 'pending'} size="sm" />
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <ConfirmationStatusBadge status={p.confirmation_status || 'pending'} size="sm" />
+                    {tag && <span className="text-xs text-[var(--text-muted)]">{tag}</span>}
+                  </div>
                 </>
               )
               return (

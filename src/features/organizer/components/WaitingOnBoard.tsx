@@ -23,6 +23,8 @@ import {
   type Blocker,
 } from '../lib/blockers'
 import { parseChaseSettings } from '../lib/chaseSettings'
+import { useRsvpStandings } from '../../people/lib/useRsvpStanding'
+import { notAskingLine } from '../../people/lib/peopleSummary'
 import { NudgeDraftSheet } from './NudgeDraftSheet'
 import type { Trip } from '../../../types'
 
@@ -94,6 +96,17 @@ export function WaitingOnBoard({ trip }: WaitingOnBoardProps) {
     [notifications, trip.chase_settings]
   )
   const deadlines = useMemo(() => upcomingCancellationDeadlines(bookings ?? []), [bookings])
+  const standings = useRsvpStandings(trip, participants)
+  const notAsking = useMemo(
+    () =>
+      notAskingLine(
+        (participants ?? []).flatMap((p) => {
+          const standing = standings.get(p.user_id)
+          return standing ? [{ name: p.user?.full_name || p.user?.email || 'Someone', standing }] : []
+        })
+      ),
+    [participants, standings]
+  )
 
   if (isLoading) {
     return (
@@ -171,6 +184,8 @@ export function WaitingOnBoard({ trip }: WaitingOnBoardProps) {
       )}
 
       {nothing && <EmptyState icon="🎉" title={WAITING_ON_EMPTY} />}
+
+      {notAsking && <p className="text-xs text-[var(--text-muted)]">{notAsking}</p>}
 
       {!nothing && view === 'person' &&
         waitingOn.byPerson.map((person) => {

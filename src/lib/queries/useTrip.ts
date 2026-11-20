@@ -40,6 +40,7 @@ export function useTrips() {
               .from('trip_participants')
               .select('*', { count: 'exact', head: true })
               .eq('trip_id', trip.id)
+              .eq('active', true)
               .eq('confirmation_status', 'confirmed'),
             supabase
               .from('trip_participants')

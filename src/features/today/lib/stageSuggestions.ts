@@ -1,5 +1,6 @@
 import { tripStageRank } from '../../../lib/tripStage'
 import type { TripStatus } from '../../../types'
+import type { RsvpStanding } from '../../people/lib/rsvpStanding'
 
 /**
  * Stage-advance SUGGESTION cards (UX_REDESIGN.md "Trip status: derived,
@@ -23,14 +24,14 @@ export interface StageSuggestionInput {
   storedStatus: TripStatus
   effectiveStage: TripStatus
   confirmationEnabled: boolean
-  /** Active participants' confirmation statuses. */
-  participantStatuses: string[]
+  /** Every active participant's "Are you coming?" standing (see rsvpStanding). */
+  standings: RsvpStanding[]
   /** Count of non-cancelled bookings recorded. */
   bookingCount: number
 }
 
 export function computeStageSuggestion(input: StageSuggestionInput): StageSuggestion | null {
-  const { storedStatus, effectiveStage, confirmationEnabled, participantStatuses, bookingCount } = input
+  const { storedStatus, effectiveStage, confirmationEnabled, standings, bookingCount } = input
 
   // Date-driven sync first: if the dates already carried us into
   // ongoing/completed, the only useful action is syncing the stored value.
@@ -67,16 +68,21 @@ export function computeStageSuggestion(input: StageSuggestionInput): StageSugges
   }
 
   if (storedStatus === 'confirming_participants') {
-    const undecided = participantStatuses.filter(
-      (s) => s !== 'confirmed' && s !== 'declined'
-    )
-    const confirmed = participantStatuses.filter((s) => s === 'confirmed')
-    if (undecided.length === 0 && confirmed.length > 0) {
+    // Nobody still owes an answer that matters: lapsed maybes (trip full or
+    // replies closed), late replies, declined/cancelled people and plain
+    // waitlisters don't hold the trip back. A live waitlist offer does.
+    const blocked = standings.some((s) => s.blocksBooking)
+    const going = standings.filter((s) => s.kind === 'going').length
+    if (!blocked && going > 0) {
+      const noPlace = standings.filter((s) => s.kind === 'no_place').length
       return {
         key: 'advance-confirming_participants-booking_details',
         to: 'booking_details',
         title: 'Everyone has answered — move to booking',
-        detail: 'Everyone who is still in is going. Time to decide and book the details.',
+        detail:
+          noPlace > 0
+            ? `Everyone with a place has answered. ${noPlace} not sure or not replied, but the trip is full.`
+            : 'Everyone who is still in is going. Time to decide and book the details.',
         kind: 'advance',
       }
     }

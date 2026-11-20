@@ -3,6 +3,7 @@ import { Button, Card, Skeleton } from '../../../components/ui'
 import { useBriefData, BriefCover, OrganizerMessageCard, WhosInRow } from '../../brief'
 import { useTripPermissions } from '../../../hooks/useTripPermissions'
 import { StatusModal } from '../../people'
+import type { RsvpAnswer } from '../../people/lib/rsvpAnswers'
 import { usePlanItems } from '../../plan'
 import { formatTime } from '../../timeline'
 import { AnnouncementsSection } from './AnnouncementsSection'
@@ -52,6 +53,7 @@ export function TodayTab({
 }: TodayTabProps) {
   const brief = useBriefData(trip.id)
   const [rsvpOpen, setRsvpOpen] = useState(false)
+  const [rsvpPreset, setRsvpPreset] = useState<RsvpAnswer | undefined>(undefined)
   const { canManageTrip } = useTripPermissions(trip)
   const organiser = isOrganizer || canManageTrip
 
@@ -93,7 +95,10 @@ export function TodayTab({
             participants={brief.participants}
             myParticipant={brief.myParticipant}
             confirmedCount={brief.confirmedCount}
-            onOpenStatusModal={() => setRsvpOpen(true)}
+            onOpenStatusModal={(answer) => {
+              setRsvpPreset(answer)
+              setRsvpOpen(true)
+            }}
           />
           <WhosInRow
             participants={brief.participants}
@@ -194,6 +199,7 @@ export function TodayTab({
           participants={brief.participants}
           capacityLimit={trip.capacity_limit}
           confirmedCount={brief.confirmedCount}
+          initialAnswer={rsvpPreset}
         />
       )}
     </div>

@@ -29,6 +29,9 @@ import {
   type WaitingOnAnswer,
 } from '../lib/rsvpAnswers'
 import { buildRsvpCostLine } from '../lib/roughCost'
+import { useMyRsvpStanding } from '../lib/useRsvpStanding'
+import { formatReplyByDate } from '../lib/replyBy'
+import { rsvpStandingLine } from '../lib/rsvpStanding'
 import { RSVP_PROMPT, RSVP_BUTTON_LABELS } from '../lib/rsvpLabels'
 
 // ============================================================================
@@ -98,6 +101,8 @@ interface StatusModalProps {
   participants: ParticipantWithUser[]
   capacityLimit: number | null
   confirmedCount: number
+  /** Preselects this answer when the modal opens (e.g. "I'd still like to come" -> 'in'). */
+  initialAnswer?: RsvpAnswer
   /**
    * Optional. The pre-formatted "Your cost" headline (e.g. `yourCostHeadline(buildYourCost(...))`,
    * "≈£400 – £580") for this person. When given it is shown in the "What 'I'm in' means" step as an
@@ -140,12 +145,12 @@ interface StatusFormValues {
   agreedToTerms: boolean
 }
 
-function seedFromParticipant(participant: ParticipantWithUser | null): StatusFormValues {
+function seedFromParticipant(participant: ParticipantWithUser | null, initialAnswer?: RsvpAnswer): StatusFormValues {
   const status = (participant?.confirmation_status as ConfirmationStatus) || 'pending'
   const conditionalType = (participant?.conditional_type as ConditionalType) || 'none'
   return {
-    answer: answerFromStatus(status),
-    waitingOn: waitingOnFromStatus(status, conditionalType),
+    answer: initialAnswer ?? answerFromStatus(status),
+    waitingOn: initialAnswer ? null : waitingOnFromStatus(status, conditionalType),
     conditionalDate: participant?.conditional_date || '',
     conditionalUserIds: participant?.conditional_user_ids || [],
     note: participant?.confirmation_note || '',
@@ -188,11 +193,16 @@ function StatusModalBody({
   participants,
   capacityLimit,
   confirmedCount,
+  initialAnswer,
   yourCostText,
   roughConversion,
 }: StatusModalProps) {
   const { data: trip } = useTrip(tripId)
   const costLine = buildRsvpCostLine(trip, yourCostText, roughConversion)
+  // A freed place is being offered to the waitlist first: "I'm in" would jump the queue.
+  const myStanding = useMyRsvpStanding(trip, participants, participant?.user_id)
+  const inBlocked = myStanding?.kind === 'no_place' && myStanding.placeBeingOffered
+  const inBlockedText = myStanding && inBlocked ? rsvpStandingLine(myStanding, trip?.name ?? '')?.text : null
   const updateStatus = useUpdateConfirmationStatus(tripId)
   const { showToast } = useToast()
 
@@ -208,7 +218,7 @@ function StatusModalBody({
   const draftKey = participant ? `status-modal:${tripId}:${participant.user_id}` : 'status-modal:inactive'
   const { values, setValues, updateField, clearDraft } = useFormDraft<StatusFormValues>(
     draftKey,
-    seedFromParticipant(participant),
+    seedFromParticipant(participant, initialAnswer),
     { enabled: false }
   )
   const { answer, waitingOn, conditionalDate, conditionalUserIds, note, agreedToTerms } = values
@@ -233,13 +243,13 @@ function StatusModalBody({
     if (isOpen && participant) {
       setStep('answer')
       setValidationError(null)
-      setValues(seedFromParticipant(participant))
+      setValues(seedFromParticipant(participant, initialAnswer))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, participant?.user_id])
+  }, [isOpen, participant?.user_id, initialAnswer])
 
   const isDirty = participant
-    ? JSON.stringify(values) !== JSON.stringify(seedFromParticipant(participant))
+    ? JSON.stringify(values) !== JSON.stringify(seedFromParticipant(participant, initialAnswer))
     : false
   const { confirmClose, guardProps } = useUnsavedChangesGuard(isOpen && isDirty)
 
@@ -324,6 +334,10 @@ function StatusModalBody({
     if (step === 'answer') {
       if (!answer) {
         setValidationError('Please choose one of the three options')
+        return
+      }
+      if (answer === 'in' && inBlocked) {
+        setValidationError(inBlockedText ?? null)
         return
       }
       if (answer === 'cant-say-yet') {
@@ -453,8 +467,7 @@ function StatusModalBody({
 
         {capacityWillWaitlist && (
           <div className="bg-warn-50 border border-warn-200 rounded-[var(--radius-md)] p-3 text-sm text-warn-800">
-            This trip is at capacity ({confirmedCount}/{capacityLimit}). If you say you're in, you'll automatically be
-            added to the waitlist.
+            The trip is full, so you'll go on the waitlist. If a place is offered to you, you'll have 48 hours to take it.
           </div>
         )}
 
@@ -463,13 +476,15 @@ function StatusModalBody({
           <div className="space-y-2.5">
             {rsvpAnswerOptions(!!capacityLimit).map((option) => {
               const isSelected = answer === option.value
+              const blocked = option.value === 'in' && inBlocked
               return (
                 <button
                   key={option.value}
                   type="button"
+                  disabled={blocked}
                   onClick={() => setAnswer(option.value)}
                   className={`w-full text-left p-4 rounded-[var(--radius-md)] border-2 transition-all press-scale ${
-                    isSelected ? 'border-accent-500 bg-accent-50' : 'border-[var(--border-default)] hover:border-[var(--border-subtle)] bg-[var(--surface-raised)]'
+                    blocked ? 'opacity-60 cursor-not-allowed border-[var(--border-default)] bg-[var(--surface-raised)]' : isSelected ? 'border-accent-500 bg-accent-50' : 'border-[var(--border-default)] hover:border-[var(--border-subtle)] bg-[var(--surface-raised)]'
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-1">
@@ -478,7 +493,7 @@ function StatusModalBody({
                     </span>
                     <h4 className="font-semibold text-[var(--text-primary)]">{option.label}</h4>
                   </div>
-                  <p className="text-sm text-[var(--text-secondary)]">{option.description}</p>
+                  <p className="text-sm text-[var(--text-secondary)]">{blocked && inBlockedText ? inBlockedText : option.description}</p>
                 </button>
               )
             })}
@@ -606,8 +621,7 @@ function StatusModalBody({
                   )}
                   {trip?.confirmation_deadline && (
                     <li>
-                      Reply by{' '}
-                      {new Date(trip.confirmation_deadline).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}.
+                      Reply by {formatReplyByDate(trip.confirmation_deadline)}.
                     </li>
                   )}
                   {COMMITMENT_TERMS.map((term) => (

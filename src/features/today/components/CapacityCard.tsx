@@ -1,5 +1,10 @@
 import { Button, Card, CapacityProgressBar, Deadline } from '../../../components/ui'
 import { rsvpButtonLabel } from '../../people/lib/rsvpButtonLabel'
+import { useMyRsvpStanding } from '../../people/lib/useRsvpStanding'
+import { standingReplacesAnswerButton } from '../../people/lib/peopleSummary'
+import { replyByEnd } from '../../people/lib/replyBy'
+import type { RsvpAnswer } from '../../people/lib/rsvpAnswers'
+import { RsvpStandingNotice } from '../../people/components/RsvpStandingNotice'
 import type { ParticipantWithUser } from '../../../lib/queries/useTrip'
 import type { Trip } from '../../../types'
 
@@ -8,7 +13,8 @@ export interface CapacityCardProps {
   participants: ParticipantWithUser[]
   myParticipant: ParticipantWithUser | null
   confirmedCount: number
-  onOpenStatusModal: () => void
+  /** Opens the RSVP sheet; the optional answer is preselected. */
+  onOpenStatusModal: (answer?: RsvpAnswer) => void
 }
 
 /**
@@ -17,7 +23,8 @@ export interface CapacityCardProps {
  * only offers the button once you have replied.
  */
 export function CapacityCard({ trip, participants, myParticipant, confirmedCount, onOpenStatusModal }: CapacityCardProps) {
-  const replied = !!myParticipant?.confirmation_status && myParticipant.confirmation_status !== 'pending'
+  const standing = useMyRsvpStanding(trip, participants, myParticipant?.user_id)
+    const replied = !!myParticipant?.confirmation_status && myParticipant.confirmation_status !== 'pending'
   return (
     <Card>
       <Card.Content className="space-y-3">
@@ -30,11 +37,14 @@ export function CapacityCard({ trip, participants, myParticipant, confirmedCount
         {trip.confirmation_deadline && (
           <div className="flex items-center gap-2">
             <span className="text-sm text-[var(--text-secondary)]">Reply by</span>
-            <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />
+            <Deadline date={replyByEnd(trip.confirmation_deadline) ?? trip.confirmation_deadline} kind="deadline" size="sm" />
           </div>
         )}
-        {trip.confirmation_enabled && replied && (
-          <Button variant="secondary" fullWidth onClick={onOpenStatusModal}>
+        {standing && (
+          <RsvpStandingNotice standing={standing} tripName={trip.name} onAnswer={(a) => onOpenStatusModal(a)} />
+        )}
+        {trip.confirmation_enabled && replied && !(standing && standingReplacesAnswerButton(standing)) && (
+          <Button variant="secondary" fullWidth onClick={() => onOpenStatusModal()}>
             {rsvpButtonLabel(myParticipant?.confirmation_status)}
           </Button>
         )}

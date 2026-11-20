@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Badge, Card, Deadline } from '../../../components/ui'
+import { replyByEnd } from '../../people/lib/replyBy'
 import { StageRail, getTripAccentStyle } from '../../../components/layout'
 import { useTodoCount } from '../../../lib/queries/useTodos'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
@@ -90,7 +91,7 @@ export function TripCard({ trip, onAttentionCount }: TripCardProps) {
                 ⏳ {daysToGo === 0 ? 'Today' : `${daysToGo} day${daysToGo === 1 ? '' : 's'} to go`}
               </Badge>
             )}
-            {isUpcoming && trip.confirmation_deadline && <Deadline date={trip.confirmation_deadline} kind="deadline" size="sm" />}
+            {isUpcoming && trip.confirmation_deadline && <Deadline date={replyByEnd(trip.confirmation_deadline) ?? trip.confirmation_deadline} kind="deadline" size="sm" />}
             <span className="text-xs text-[var(--text-muted)]">{confirmedCountLabel(trip)}</span>
           </div>
         </Card.Content>

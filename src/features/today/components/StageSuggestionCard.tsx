@@ -3,6 +3,7 @@ import { Button, Card, useToast } from '../../../components/ui'
 import { useParticipants, useOptimisticUpdateTrip } from '../../../lib/queries/useTrip'
 import { useBookings } from '../../../lib/queries/useBookings'
 import { useTripActivityLog } from '../../organizer'
+import { useRsvpStandings } from '../../people/lib/useRsvpStanding'
 import { computeStageSuggestion } from '../lib/stageSuggestions'
 import { isCardDismissed, dismissCard } from '../lib/dismissals'
 import { getTripStatusLabel } from '../../../lib/tripStatus'
@@ -26,6 +27,7 @@ export function StageSuggestionCard({ trip, effectiveStage }: StageSuggestionCar
   const updateTrip = useOptimisticUpdateTrip(trip.id)
   const logActivity = useTripActivityLog(trip.id)
   const [dismissedKey, setDismissedKey] = useState<string | null>(null)
+  const standings = useRsvpStandings(trip, participants)
 
   const suggestion = useMemo(
     () =>
@@ -33,10 +35,10 @@ export function StageSuggestionCard({ trip, effectiveStage }: StageSuggestionCar
         storedStatus: trip.status,
         effectiveStage,
         confirmationEnabled: trip.confirmation_enabled === true,
-        participantStatuses: participants.map((p) => p.confirmation_status ?? 'pending'),
+        standings: [...standings.values()],
         bookingCount: bookings.filter((b) => b.status !== 'cancelled').length,
       }),
-    [trip.status, effectiveStage, trip.confirmation_enabled, participants, bookings]
+    [trip.status, effectiveStage, trip.confirmation_enabled, standings, bookings]
   )
 
   if (!suggestion) return null

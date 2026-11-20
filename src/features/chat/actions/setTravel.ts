@@ -4,8 +4,8 @@ import type { SetTravelParams } from '../lib/payload'
 import type { ActionModule } from './types'
 import { FINISHED_CARD_MESSAGE, formatDay, isDay, isNonEmptyStr, isObj, isStrOrNull } from './common'
 
-export const TRAVEL_CHANGED_MESSAGE = 'Your travel has changed since. Open travel details to check.'
-export const TRAVEL_UNCHECKED_MESSAGE = "Your travel couldn't be checked just now. Open travel details to check."
+export const TRAVEL_CHANGED_MESSAGE = 'Your travel has changed since. Open your travel to check.'
+export const TRAVEL_UNCHECKED_MESSAGE = "Your travel couldn't be checked just now. Open your travel to check."
 
 /** Plain words for a failed travel save; the server's "stale" refusal reads as the changed-since card message. */
 function saveError(err: unknown): Error {

@@ -241,7 +241,7 @@ describe('review fixes', () => {
   })
   it('stuck wording points at where to look', async () => {
     const { stuckMessage } = await import('./confirmFlow')
-    expect(stuckMessage('set_travel')).toBe("This didn't finish — check your travel details before trying again.")
+    expect(stuckMessage('set_travel')).toBe("This didn't finish — check your travel before trying again.")
     expect(stuckMessage('add_plan_item')).toBe("This didn't finish — check the Plan tab before trying again.")
     expect(stuckMessage('add_expense')).toBe("This didn't finish — check the Money tab before trying again.")
   })
@@ -273,7 +273,7 @@ describe('travel and plan item actions through the confirm flow', () => {
   it('a stale travel card is refused before anything is begun or written', async () => {
     const { rpc, ctx, fns, deps } = setup({ live: liveFixture({ events: [travelEvent()] as never }) })
     const out = await confirmAction(travelTap(), { rpc, ctx })
-    expect(out).toEqual({ kind: 'stale', reason: 'Your travel has changed since. Open travel details to check.' })
+    expect(out).toEqual({ kind: 'stale', reason: 'Your travel has changed since. Open your travel to check.' })
     expect(fns.begin).not.toHaveBeenCalled()
     expect(Object.keys(deps)).not.toContain('setMyTravel')
   })

@@ -59,6 +59,8 @@
       "turns": [{ "say": "I fly overnight: I set off on 1 Dec at 21:00 and land the next day, 2 Dec, at 10:00", "expect": { "actions": [{ "tool": "propose_set_my_travel", "input": { "direction": "arrival", "leg": "main", "date": "2026-12-02", "set_off_date": "2026-12-01", "set_off_time": "21:00" } }] } }] },
     { "id": "travel-three-weeks-out", "group": "travel", "as": "participant",
       "turns": [{ "say": "Add my flight home on 28 Dec at 14:30", "expect": { "actions": [{ "tool": "propose_set_my_travel", "input": { "direction": "departure", "leg": "main", "date": "2026-12-28", "time": "14:30" } }], "answerExcludes": ["are you sure", "double-check", "typo", "outside the trip", "trip dates"] } }] },
+    { "id": "travel-no-guessed-airport", "group": "travel", "as": "participant",
+      "turns": [{ "say": "Add my flight home: JL043 leaving Tokyo on 8 Dec at 11:30.", "expect": { "actions": [{ "tool": "propose_set_my_travel", "input": { "direction": "departure", "date": "2026-12-08", "time": "11:30", "flight_ref": "JL043", "airport_code": null } }], "answerExcludes": ["HND", "NRT", "guessed"] } }] },
     { "id": "travel-not-for-others", "group": "travel", "as": "participant",
       "turns": [{ "say": "Add Ana's flight, she lands on 3 Dec at 09:00", "expect": { "noActions": true } }] },
     { "id": "plan-dinner-member", "group": "plan", "as": "participant",

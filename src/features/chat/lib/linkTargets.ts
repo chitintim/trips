@@ -17,7 +17,7 @@ const COPY: Partial<Record<OpenTarget['kind'], LinkCopy>> = {
   bring: { message: 'Opens the to-do.', button: 'Open the to-do' },
   todos: { message: 'Opens your to-dos.', button: 'Open my to-dos' },
   rsvp: { message: 'Opens your reply.', button: 'Open my reply' },
-  'travel-details': { message: 'Opens your travel details.', button: 'Open travel details' },
+  'travel-details': { message: 'Opens your travel.', button: 'Open your travel' },
   claim: { message: 'Opens the receipt.', button: 'Open the receipt' },
   item: { message: 'Opens the item on the plan.', button: 'Open it' },
   setup: { message: 'Opens trip setup.', button: 'Open setup' },

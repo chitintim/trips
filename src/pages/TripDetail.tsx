@@ -24,6 +24,8 @@ import { queryKeys } from '../lib/queries/queryKeys'
 import { getTripStatusLabel } from '../lib/tripStatus'
 import { effectiveTripStage } from '../lib/tripStage'
 import { daysUntil } from '../lib/dates'
+import { earliestOwnTravelDate } from '../features/people/lib/travelDetails'
+import { setOffLine } from '../features/people/lib/setOffLine'
 import {
   planDeepLink,
   deepLinkMustWait,
@@ -411,6 +413,10 @@ export function TripDetail() {
   }, [overflowOpen])
 
   const countdown = trip ? getCountdown(trip.start_date, trip.end_date) : null
+  const setOffText =
+    trip && countdown && daysUntil(trip.start_date) > 0
+      ? setOffLine(earliestOwnTravelDate(timelineData ?? [], user?.id), trip.start_date)
+      : null
   const effectiveStage = useMemo(() => (trip ? effectiveTripStage(trip) : 'gathering_interest'), [trip])
 
   if (loading) {
@@ -646,6 +652,9 @@ export function TripDetail() {
               </span>
               {countdown && (
                 <span className="flex items-center gap-1 text-accent-700 dark:text-accent-400 font-medium">{countdown}</span>
+              )}
+              {setOffText && (
+                <span className="flex items-center gap-1 text-accent-700 dark:text-accent-400">{setOffText}</span>
               )}
             </div>
 

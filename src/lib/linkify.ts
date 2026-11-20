@@ -57,7 +57,7 @@ export function shortenUrl(url: string): string {
  * into the app. Falls back to the raw pathname when nothing matches.
  */
 const INTERNAL_LINK_LABELS: Array<[test: (params: URLSearchParams) => boolean, label: string]> = [
-  [(p) => p.get('open') === 'travel-details', 'Your travel details'],
+  [(p) => p.get('open') === 'travel-details', 'Your travel'],
   [(p) => p.get('open') === 'actions-bring', 'To-dos'],
   [(p) => p.get('open') === 'actions', 'To-dos'],
   [(p) => p.get('tab') === 'decisions', 'Plan'],

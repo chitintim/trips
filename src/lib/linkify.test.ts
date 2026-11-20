@@ -56,12 +56,12 @@ describe('linkifySegments', () => {
 
   it('renders app-origin URLs as internal links with a friendly label', () => {
     const segments = linkifySegments(
-      'Open People → "Your travel details" → Add. https://trips.fontem.ai/46efa496-11b6-49c8-b229-c72161f59126?tab=people&open=travel-details'
+      'Open People → "Your travel" → Add. https://trips.fontem.ai/46efa496-11b6-49c8-b229-c72161f59126?tab=people&open=travel-details'
     )
     expect(segments[1]).toEqual({
       type: 'internal-link',
       href: '/46efa496-11b6-49c8-b229-c72161f59126?tab=people&open=travel-details',
-      label: 'Your travel details',
+      label: 'Your travel',
     })
   })
 
@@ -107,10 +107,10 @@ describe('internalLinkLabel', () => {
       ['https://trips.fontem.ai/abc?tab=money', 'Money'],
       ['https://trips.fontem.ai/abc?tab=plan', 'Plan'],
       ['https://trips.fontem.ai/abc?tab=today', 'Today'],
-      ['https://trips.fontem.ai/abc?open=travel-details', 'Your travel details'],
+      ['https://trips.fontem.ai/abc?open=travel-details', 'Your travel'],
       ['https://trips.fontem.ai/abc?open=actions-bring', 'To-dos'],
       ['https://trips.fontem.ai/abc?open=actions', 'To-dos'],
-      ['https://trips.fontem.ai/abc?tab=people&open=travel-details', 'Your travel details'],
+      ['https://trips.fontem.ai/abc?tab=people&open=travel-details', 'Your travel'],
     ]
     for (const [url, label] of cases) {
       expect(internalLinkLabel(new URL(url))).toBe(label)

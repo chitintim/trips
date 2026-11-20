@@ -301,12 +301,12 @@ describe('set_travel', () => {
   })
   it('refuses a replace when the live main leg is not the one the card was made against', () => {
     expect(mod.recheck(replacing(), withSaved())).toBeNull()
-    expect(mod.recheck(replacing({ replaces_event_id: 'ev-other' }), withSaved())).toBe('Your travel has changed since. Open travel details to check.')
-    expect(mod.recheck(replacing(), liveFixture())).toBe('Your travel has changed since. Open travel details to check.')
+    expect(mod.recheck(replacing({ replaces_event_id: 'ev-other' }), withSaved())).toBe('Your travel has changed since. Open your travel to check.')
+    expect(mod.recheck(replacing(), liveFixture())).toBe('Your travel has changed since. Open your travel to check.')
     const edited = liveFixture({ events: [travelEvent({ updated_at: '2026-11-05T10:00:00Z' })] as never })
-    expect(mod.recheck(replacing(), edited)).toBe('Your travel has changed since. Open travel details to check.')
+    expect(mod.recheck(replacing(), edited)).toBe('Your travel has changed since. Open your travel to check.')
     // a card made for a new leg, but one has been saved since
-    expect(mod.recheck(tapped(), withSaved())).toBe('Your travel has changed since. Open travel details to check.')
+    expect(mod.recheck(tapped(), withSaved())).toBe('Your travel has changed since. Open your travel to check.')
   })
   it('re-check: finished trip, and too many extra journeys, in plain words', () => {
     expect(mod.recheck(tapped(), liveFixture({ finished: true }))).toMatch(/finished/)
@@ -353,7 +353,7 @@ describe('set_travel', () => {
   })
   it('refuses when the timeline is not loaded, and never writes', async () => {
     const live = liveFixture({ events: undefined })
-    const msg = "Your travel couldn't be checked just now. Open travel details to check."
+    const msg = "Your travel couldn't be checked just now. Open your travel to check."
     expect(mod.recheck(tapped(), live)).toBe(msg)
     const { ctx, deps } = mkCtx({ live })
     await expect(mod.execute(tapped(), ctx)).rejects.toThrow(msg)
@@ -365,7 +365,7 @@ describe('set_travel', () => {
     const deps = fakeDeps()
     deps.setMyTravel.mockRejectedValueOnce({ message: 'Your travel has changed since you opened this. Close it, open it again and check.', hint: 'stale' })
     const { ctx } = mkCtx({ deps })
-    await expect(mod.execute(tapped(), ctx)).rejects.toThrow('Your travel has changed since. Open travel details to check.')
+    await expect(mod.execute(tapped(), ctx)).rejects.toThrow('Your travel has changed since. Open your travel to check.')
   })
   it('validate fails closed on malformed params', () => {
     expect(mod.validate(travelParams())).toBe(true)

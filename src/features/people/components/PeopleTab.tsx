@@ -217,7 +217,7 @@ export function PeopleTab({ tripId, onOpenTravel }: PeopleTabProps) {
           <Card.Content className="space-y-2">
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-sm font-semibold text-[var(--text-primary)]">Your travel details</h3>
+                <h3 className="text-sm font-semibold text-[var(--text-primary)]">Your travel</h3>
                 {hasAnyTravel ? (
                   <div className="text-sm text-[var(--text-secondary)] mt-1 space-y-0.5">
                     {myTravel.arrival && (

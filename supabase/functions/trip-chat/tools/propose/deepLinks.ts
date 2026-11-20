@@ -36,7 +36,7 @@ export const TARGET_LABELS: Record<OpenTargetName, string> = {
   rsvp: 'Open the "Are you coming?" reply',
   'answer-all': 'Answer the open questions',
   settle: 'Open Settle up',
-  'travel-details': 'Open travel details',
+  'travel-details': 'Open your travel',
   setup: 'Open trip setup',
   actions: 'Open the to-dos',
   'actions-bring': 'Open the bring list',

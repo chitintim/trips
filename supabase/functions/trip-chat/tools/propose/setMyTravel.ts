@@ -36,8 +36,8 @@ export const setMyTravelSchema = {
     title: { type: ['string', 'null'], description: 'Extra legs only, up to 60 characters, e.g. "Flight to Tokyo". Null for main legs.' },
     date: { type: 'string', format: 'date', description: 'YYYY-MM-DD. For an arrival that is the day they land; for a departure the day they leave.' },
     time: { type: ['string', 'null'], description: 'HH:MM (24-hour, local time at the place), or null if not known.' },
-    flight_ref: { type: ['string', 'null'], description: 'Flight or train number, up to 12 characters, e.g. JL044.' },
-    airport_code: { type: ['string', 'null'], description: '3-letter airport code, e.g. LHR.' },
+    flight_ref: { type: ['string', 'null'], description: 'Flight or train number, up to 12 characters, e.g. JL044. Only what the person wrote; null if they did not give one.' },
+    airport_code: { type: ['string', 'null'], description: '3-letter airport code, e.g. LHR. Only when the person gave the code or named the airport (e.g. "Heathrow"). A city name alone is not enough: null. Never guess or pick one for them.' },
     set_off_date: { type: ['string', 'null'], format: 'date', description: 'Arrival only, overnight travel: the day they set off (0 to 3 days before date), YYYY-MM-DD.' },
     set_off_time: { type: ['string', 'null'], description: 'Arrival only: HH:MM they set off.' },
     home_date: { type: ['string', 'null'], format: 'date', description: 'Departure only: the day they get home if later than date (0 to 3 days after), YYYY-MM-DD.' },
@@ -134,7 +134,7 @@ async function run(raw: unknown, ctx: ToolCtx): Promise<ToolResult> {
   const own = await ownTravel(ctx)
   const sameDir = (own ?? []).filter((l) => l.direction === v.direction)
   if (v.leg === 'extra' && sameDir.filter((l) => !l.main).length >= MAX_EXTRA_LEGS) {
-    return refuse(`You can add up to ${MAX_EXTRA_LEGS} extra journeys each way. Open travel details to remove one first.`)
+    return refuse(`You can add up to ${MAX_EXTRA_LEGS} extra journeys each way. Open your travel to remove one first.`)
   }
   const replaced = v.leg === 'main'
     ? [...sameDir.filter((l) => l.main)].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)) || a.id.localeCompare(b.id))[0] ?? null

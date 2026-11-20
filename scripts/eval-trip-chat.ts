@@ -368,6 +368,8 @@ async function main() {
         row.failedChecks += g.failed.length + (finished ? 0 : 1)
         for (const f of g.failed) failures.push(`turn ${ti + 1}: ${f}`)
         if (g.failed.length) failures.push(`turn ${ti + 1}: tools called: ${recorded.map((r) => r.tool).join(', ') || '(none)'}; answer length ${answer.trim().length} chars`)
+        // Opt-in: tool inputs come from fixture data and the case's own message, so they are safe to print when asked.
+        if (g.failed.length && Deno.env.get('EVAL_DEBUG')) failures.push(`turn ${ti + 1}: tool inputs: ${JSON.stringify(recorded.map((r) => r.input))}`)
       }
       row.ok = row.failedChecks === 0
     } catch (err) {

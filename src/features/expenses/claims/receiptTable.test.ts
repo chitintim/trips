@@ -38,7 +38,8 @@ describe('partial rows and unread replies', () => {
 describe('phases', () => {
   it('draft can send; open can reply and shows the status; closed only shows the status', () => {
     expect(receiptTableSupport({ expense: draft, responsesAvailable: true })).toMatchObject({ canSend: true, canReply: false, hasStatus: false, phase: 'draft' })
-    expect(receiptTableSupport({ expense: open, responsesAvailable: true })).toMatchObject({ canSend: false, canReply: true, hasStatus: true, phase: 'open' })
+    // A fixed clock: the fixture's reply-by time is a real date, so the real clock would make this fail once it passes.
+    expect(receiptTableSupport({ expense: open, responsesAvailable: true, now: new Date('2026-11-18T10:00:00Z') })).toMatchObject({ canSend: false, canReply: true, hasStatus: true, phase: 'open' })
     expect(receiptTableSupport({ expense: closed, responsesAvailable: true })).toMatchObject({ canSend: false, canReply: false, hasStatus: true, phase: 'closed' })
   })
 })
